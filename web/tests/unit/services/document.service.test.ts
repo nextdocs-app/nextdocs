@@ -13,7 +13,7 @@ describe('document.service', () => {
       const { ydoc, meta } = await documentService.createDocument();
 
       expect(ydoc).toBeInstanceOf(Y.Doc);
-      expect(meta.title).toBe('Untitled Document');
+      expect(meta.title).toBe('Untitled');
       expect(meta.createdAt).toBeDefined();
       expect(meta.updatedAt).toBeDefined();
     });
@@ -141,7 +141,7 @@ describe('document.service', () => {
       const result = await documentService.getOrCreateDocument('new-id');
 
       expect(result.ydoc).toBeInstanceOf(Y.Doc);
-      expect(result.meta.title).toBe('Untitled Document');
+      expect(result.meta.title).toBe('Untitled');
 
       const stored = await indexedDBService.getDocument('new-id');
       expect(stored).toBeDefined();
