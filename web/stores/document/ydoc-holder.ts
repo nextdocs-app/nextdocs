@@ -13,5 +13,10 @@ export function getYDoc(): Y.Doc | null {
 }
 
 export function setYDoc(doc: Y.Doc | null): void {
+  // Destroy the previous Y.Doc to free resources and prevent
+  // stale update listeners from firing on the wrong document
+  if (currentYDoc && currentYDoc !== doc) {
+    currentYDoc.destroy();
+  }
   currentYDoc = doc;
 }
