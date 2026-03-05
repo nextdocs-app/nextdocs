@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
@@ -7,8 +7,9 @@ import {
   setError,
   updateMeta as updateMetaAction,
 } from '@/stores/document/document.slice';
-import { setYDoc, getYDoc } from '@/stores/document/ydoc-holder';
+import { setYDoc } from '@/stores/document/ydoc-holder';
 import type { DocumentMeta } from '@/types/document.types';
+import type * as Y from 'yjs';
 
 const DEFAULT_DOC_ID = 'default-doc';
 
@@ -17,20 +18,24 @@ export function useDocument(documentId?: string) {
   const dispatch = useAppDispatch();
   const { meta, isLoading, error } = useAppSelector((state) => state.document);
 
+  // Track ydoc in local state so the component re-renders
+  // when a new document is loaded (instead of reading from
+  // the module-level singleton at render time, which may be stale)
+  const [ydoc, setLocalYDoc] = useState<Y.Doc | null>(null);
+
   useEffect(() => {
-    let currentRequestId = 0;
+    let cancelled = false;
 
     async function loadDoc() {
-      const thisRequest = ++currentRequestId;
-
       try {
         dispatch(setLoading(true));
         dispatch(setError(null));
 
         const result = await documentService.getOrCreateDocument(id);
 
-        if (thisRequest === currentRequestId) {
+        if (!cancelled) {
           setYDoc(result.ydoc);
+          setLocalYDoc(result.ydoc);
           dispatch(
             setCurrentDocument({
               id,
@@ -41,20 +46,22 @@ export function useDocument(documentId?: string) {
       } catch (err) {
         console.error('Failed to load document:', err);
 
-        if (thisRequest === currentRequestId) {
+        if (!cancelled) {
           dispatch(setError(err instanceof Error ? err.message : 'Failed to load document'));
         }
       } finally {
-        if (thisRequest === currentRequestId) {
+        if (!cancelled) {
           dispatch(setLoading(false));
         }
       }
     }
 
+    // Clear stale ydoc immediately so the editor shows loading state
+    setLocalYDoc(null);
     loadDoc();
 
     return () => {
-      currentRequestId++;
+      cancelled = true;
     };
   }, [id, dispatch]);
 
@@ -67,8 +74,17 @@ export function useDocument(documentId?: string) {
 
       const previousMeta = { ...meta };
       const updatedAt = new Date().toISOString();
+      const updatedMeta = { ...meta, ...updates, updatedAt };
 
       dispatch(updateMetaAction({ ...updates, updatedAt }));
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('document-meta-updated', {
+            detail: { id, meta: updatedMeta },
+          })
+        );
+      }
 
       documentService.updateMetadata(id, updates).catch((err) => {
         console.error('Failed to persist metadata update:', err);
@@ -79,7 +95,7 @@ export function useDocument(documentId?: string) {
   );
 
   return {
-    ydoc: getYDoc(),
+    ydoc,
     meta,
     isLoading,
     error: error ? new Error(error) : null,
