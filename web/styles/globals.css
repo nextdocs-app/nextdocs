@@ -112,3 +112,67 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  .document-title-input {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-family: Inter, SF Pro Display, -apple-system, BlinkMacSystemFont, Open Sans, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+    font-size: 3em; /* BlockNote H1 size */
+    font-weight: 700;
+    line-height: 1.5; /* Matches .bn-block-outer */
+    color: #3f3f3f; /* --bn-colors-editor-text light mode */
+    background: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+    width: 100%;
+    margin: 0;
+    padding: 3px 0; /* Matches BlockNote heading internal padding */
+    display: block; /* Remove inline descender gap */
+    box-sizing: border-box; /* Include padding in height correctly */
+  }
+
+  /* BlockNote aligns its content 54px from the edges for handles */
+  .document-title-container {
+    padding-inline: 54px;
+    padding-top: 0;
+    padding-bottom: 0;
+    width: 100%;
+    display: flex; /* Prevent wrapper from adding extra line height or gaps */
+    flex-direction: column;
+  }
+
+  .document-title-input::placeholder {
+    color: rgba(63, 63, 63, 0.3);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .document-title-input {
+      color: #f2f2f2; /* Custom dark mode text color */
+    }
+    .document-title-input::placeholder {
+      color: rgba(242, 242, 242, 0.3);
+    }
+  }
+
+  /* Support explicit .dark class too */
+  .dark .document-title-input {
+    color: #f2f2f2;
+  }
+  .dark .document-title-input::placeholder {
+    color: rgba(242, 242, 242, 0.3);
+  }
+
+  /* Override BlockNote default text color for dark mode */
+  .dark .bn-container,
+  .bn-container[data-color-scheme="dark"] {
+    --bn-colors-editor-text: #f2f2f2 !important;
+  }
+  
+  @media (prefers-color-scheme: dark) {
+    .bn-container {
+      --bn-colors-editor-text: #f2f2f2 !important;
+    }
+  }
+}
