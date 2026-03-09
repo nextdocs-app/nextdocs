@@ -4,8 +4,8 @@ import { documentService } from '@/services/document.service';
 
 // Mock next/navigation
 jest.mock('next/navigation', () => ({
-  useSearchParams: () => ({
-    get: jest.fn().mockReturnValue('doc-1'),
+  useParams: () => ({
+    id: 'doc-1',
   }),
 }));
 
