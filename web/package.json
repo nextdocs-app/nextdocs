@@ -12,9 +12,9 @@
     "format:fix": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@blocknote/core": "^0.47.0",
-    "@blocknote/react": "^0.47.0",
-    "@blocknote/shadcn": "^0.47.0",
+    "@blocknote/core": "^0.47.1",
+    "@blocknote/react": "^0.47.1",
+    "@blocknote/shadcn": "^0.47.1",
     "@monaco-editor/react": "^4.7.0",
     "@reduxjs/toolkit": "^2.11.2",
     "idb": "^8.0.3",
