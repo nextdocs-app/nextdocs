@@ -82,6 +82,16 @@ class DocumentService {
     return { ydoc, meta };
   }
 
+  public async getAllDocumentsMeta(): Promise<{ id: string; meta: DocumentMeta }[]> {
+    try {
+      const docs = await indexedDBService.getAllDocuments();
+      return docs.map((doc) => ({ id: doc.id, meta: doc.meta }));
+    } catch (error) {
+      console.error('Failed to get all documents:', error);
+      return [];
+    }
+  }
+
   public async updateMetadata(id: string, updates: Partial<DocumentMeta>): Promise<void> {
     try {
       const storedDoc = await indexedDBService.getDocument(id);

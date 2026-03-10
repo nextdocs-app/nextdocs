@@ -10,6 +10,7 @@ import { setYDoc } from '@/stores/document/ydoc-holder';
 describe('useDocument', () => {
   let getOrCreateDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
+  let dispatchEventSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -17,11 +18,13 @@ describe('useDocument', () => {
       .spyOn(documentService, 'getOrCreateDocument')
       .mockImplementation(jest.fn());
     updateMetadataSpy = jest.spyOn(documentService, 'updateMetadata').mockImplementation(jest.fn());
+    dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
   });
 
   afterEach(() => {
     getOrCreateDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
+    dispatchEventSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -142,6 +145,17 @@ describe('useDocument', () => {
     expect(updateMetadataSpy).toHaveBeenCalledWith('test-id', {
       title: 'Updated Title',
     });
+
+    // Check if CustomEvent was dispatched
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Updated Title' }),
+        }),
+      })
+    );
   });
 
   it('should not update metadata if meta is null', async () => {

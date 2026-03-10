@@ -13,7 +13,7 @@ describe('document.service', () => {
       const { ydoc, meta } = await documentService.createDocument();
 
       expect(ydoc).toBeInstanceOf(Y.Doc);
-      expect(meta.title).toBe('Untitled Document');
+      expect(meta.title).toBe('Untitled');
       expect(meta.createdAt).toBeDefined();
       expect(meta.updatedAt).toBeDefined();
     });
@@ -141,7 +141,7 @@ describe('document.service', () => {
       const result = await documentService.getOrCreateDocument('new-id');
 
       expect(result.ydoc).toBeInstanceOf(Y.Doc);
-      expect(result.meta.title).toBe('Untitled Document');
+      expect(result.meta.title).toBe('Untitled');
 
       const stored = await indexedDBService.getDocument('new-id');
       expect(stored).toBeDefined();
@@ -201,6 +201,48 @@ describe('document.service', () => {
         documentService.updateMetadata('non-existent', { title: 'Test' })
       ).rejects.toThrow('Document not found');
 
+      consoleErrorSpy.mockRestore();
+    });
+  });
+
+  describe('getAllDocumentsMeta', () => {
+    it('should return meta for all stored documents', async () => {
+      const doc1 = await documentService.createDocument('Doc 1');
+      await documentService.saveDocument('id-1', doc1.ydoc, doc1.meta);
+
+      const doc2 = await documentService.createDocument('Doc 2');
+      await documentService.saveDocument('id-2', doc2.ydoc, doc2.meta);
+
+      const allMeta = await documentService.getAllDocumentsMeta();
+
+      expect(allMeta).toHaveLength(2);
+      expect(allMeta).toContainEqual({
+        id: 'id-1',
+        meta: expect.objectContaining({ title: 'Doc 1' }),
+      });
+      expect(allMeta).toContainEqual({
+        id: 'id-2',
+        meta: expect.objectContaining({ title: 'Doc 2' }),
+      });
+    });
+
+    it('should return empty array if no documents exist', async () => {
+      const allMeta = await documentService.getAllDocumentsMeta();
+      expect(allMeta).toEqual([]);
+    });
+
+    it('should handle errors and return empty array', async () => {
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const spy = jest
+        .spyOn(indexedDBService, 'getAllDocuments')
+        .mockRejectedValue(new Error('DB Error'));
+
+      const allMeta = await documentService.getAllDocumentsMeta();
+
+      expect(allMeta).toEqual([]);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+
+      spy.mockRestore();
       consoleErrorSpy.mockRestore();
     });
   });

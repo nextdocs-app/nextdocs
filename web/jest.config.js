@@ -8,6 +8,8 @@ const createJestConfig = nextJest({
 const customJestConfig = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   testEnvironment: 'jest-environment-jsdom',
+  // Prevent Jest from clearing module cache between tests
+  resetModules: false,
 };
 
 module.exports = createJestConfig(customJestConfig);

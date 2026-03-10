@@ -65,7 +65,7 @@ describe('yjs.util', () => {
       const meta = createDefaultDocumentMeta();
 
       expect(meta).toMatchObject({
-        title: 'Untitled Document',
+        title: 'Untitled',
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       });

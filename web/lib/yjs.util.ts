@@ -18,7 +18,7 @@ export function decodeYjsState(state: Uint8Array): Y.Doc {
 export function createDefaultDocumentMeta(title?: string): DocumentMeta {
   const now = new Date().toISOString();
   return {
-    title: title || 'Untitled Document',
+    title: title || 'Untitled',
     createdAt: now,
     updatedAt: now,
   };
