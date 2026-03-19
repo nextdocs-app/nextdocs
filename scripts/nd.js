@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { spawnSync, spawn } = require('child_process');
+const { randomBytes } = require('crypto');
 const path = require('path');
 
 const args = process.argv.slice(2);
@@ -19,14 +20,66 @@ const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
 
 const POSTGRES_CONTAINER = 'nextdocs-postgres';
 const POSTGRES_IMAGE = 'postgres:15-alpine';
-const POSTGRES_PORT = '5432';
+const POSTGRES_PORT = '5433'; // 5432 is typically taken by a local PostgreSQL install
 const POSTGRES_USER = 'nextdocs';
 const POSTGRES_PASSWORD = 'nextdocs';
 const POSTGRES_DB = 'nextdocs';
 
+// TODO: If the number of keys that need to be generated this way are more,
+// we may need to find a more generalizable pattern.
+let generatedDevOAuthTokenKey = null;
+let generatedDevJwtSecret = null;
+
+function getOrCreateDevOAuthTokenEncryptionKey() {
+  if (!generatedDevOAuthTokenKey) {
+    generatedDevOAuthTokenKey = randomBytes(32).toString('base64');
+  }
+  return generatedDevOAuthTokenKey;
+}
+
+function getOrCreateDevJwtSecret() {
+  if (!generatedDevJwtSecret) {
+    generatedDevJwtSecret = randomBytes(32).toString('base64');
+  }
+  return generatedDevJwtSecret;
+}
+
+const PLACEHOLDER = 'CHANGE_ME_IN_PRODUCTION';
+
+function buildApiDevEnv(overrides = {}) {
+  const env = {
+    ...process.env,
+    ...overrides,
+  };
+
+  // Keep required API dev env defaults in one place so ./nd dev is zero-setup.
+  const isKeyEmptyOrPlaceholder = (val) => !val || !val.trim() || val === PLACEHOLDER;
+
+  if (isKeyEmptyOrPlaceholder(env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64)) {
+    env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 = getOrCreateDevOAuthTokenEncryptionKey();
+    console.warn(
+      '\x1b[33mWARNING: OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 was not set. Using an ephemeral dev key for this ./nd session.\n'
+      + '  Set OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 for stable token decryption across restarts.\x1b[0m');
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.JWT_SECRET)) {
+    env.JWT_SECRET = getOrCreateDevJwtSecret();
+    console.warn(
+      '\x1b[33mWARNING: JWT_SECRET was not set. Using an ephemeral dev key for this ./nd session.\n'
+      + '  Set JWT_SECRET for stable token validation across restarts.\x1b[0m');
+  }
+
+  return env;
+}
+
 function run(cmd, opts = {}) {
   console.log(`\x1b[34m> ${cmd}\x1b[0m`);
-  const result = spawnSync(cmd, { stdio: 'inherit', shell: true, cwd: opts.cwd || ROOT });
+  const result = spawnSync(cmd, {
+    stdio: 'inherit',
+    shell: true,
+    cwd: opts.cwd || ROOT,
+    env: opts.env || process.env,
+  });
   if (opts.exitOnError !== false && result.status !== 0) {
     process.exit(result.status);
   }
@@ -112,7 +165,11 @@ function runForService(task, svc) {
       console.error(`Command '${task}' not supported for api`);
       process.exit(1);
     }
-    return run(API_COMMANDS[task], { cwd: path.join(ROOT, 'api') });
+    const opts = { cwd: path.join(ROOT, 'api') };
+    if (task === 'dev') {
+      opts.env = buildApiDevEnv();
+    }
+    return run(API_COMMANDS[task], opts);
   }
   return turbo(task, svc);
 }
@@ -147,7 +204,7 @@ switch (command) {
         shell: true,
         cwd: path.join(ROOT, 'api'),
         env: {
-          ...process.env,
+          ...buildApiDevEnv(),
           SPRING_OUTPUT_ANSI_ENABLED: 'ALWAYS',
         }
       });
