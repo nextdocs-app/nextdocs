@@ -8,6 +8,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { useDocument } from '@/hooks/useDocument.hook';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
+import { useTheme } from '@/hooks/useTheme.hook';
 import type { DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 
@@ -74,6 +75,7 @@ function EditorContent({
   updateMeta: (updates: Partial<DocumentMeta>) => void;
 }) {
   useYjsPersistence(documentId, ydoc, meta);
+  const { resolvedTheme } = useTheme();
 
   const editor = useCreateBlockNote({
     collaboration: {
@@ -182,7 +184,7 @@ function EditorContent({
       </div>
       {isEditorVisible && (
         <div className="animate-in fade-in duration-300">
-          <BlockNoteView editor={editor} shadCNComponents={{}} />
+          <BlockNoteView editor={editor} theme={resolvedTheme} shadCNComponents={{}} />
         </div>
       )}
     </div>

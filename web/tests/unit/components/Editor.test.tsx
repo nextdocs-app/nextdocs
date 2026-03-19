@@ -9,6 +9,9 @@ import * as Y from 'yjs';
 jest.mock('../../../hooks/useDocument.hook');
 jest.mock('../../../hooks/useYjsPersistence.hook');
 jest.mock('next/navigation');
+jest.mock('../../../hooks/useTheme.hook', () => ({
+  useTheme: jest.fn(() => ({ theme: 'system', setTheme: jest.fn(), resolvedTheme: 'light' })),
+}));
 
 // Mock BlockNote
 jest.mock('@blocknote/react', () => ({
