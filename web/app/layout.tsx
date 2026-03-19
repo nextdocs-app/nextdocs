@@ -2,8 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import '@/styles/globals.css';
 import { StoreProvider } from '@/stores/StoreProvider';
-import Sidebar from '@/components/Sidebar';
-import { Suspense } from 'react';
+import { AppShell } from '@/components/AppShell';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -27,17 +26,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('theme')||'system';var d=document.documentElement;var dark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(dark)d.classList.add('dark');d.setAttribute('data-theme',t);}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <StoreProvider>
-          <div className="flex h-screen">
-            <Sidebar />
-            <main className="flex-1 overflow-auto bg-background text-foreground">
-              <div className="max-w-4xl mx-auto py-8 px-4">
-                <Suspense>{children}</Suspense>
-              </div>
-            </main>
-          </div>
+          <AppShell>{children}</AppShell>
         </StoreProvider>
       </body>
     </html>

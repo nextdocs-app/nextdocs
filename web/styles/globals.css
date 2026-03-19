@@ -31,14 +31,47 @@
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent: oklch(0.925 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* System dark — only when no explicit override is set */
 @media (prefers-color-scheme: dark) {
-  :root {
+  html:not([data-theme="light"]):not([data-theme="dark"]) {
+    --background: #1f1f1f;
+    --foreground: oklch(0.985 0 0);
+    --card: #1e1e1e;
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --sidebar: #181818;
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+}
+
+/* Explicit dark override */
+html[data-theme="dark"] {
   --background: #1f1f1f;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
@@ -66,7 +99,6 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
-  }
 }
 
 @theme inline {
@@ -113,6 +145,71 @@
   }
 }
 
+/* Scrollbars Style */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]):not([data-theme="dark"]) * {
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  }
+}
+
+html[data-theme="dark"] * {
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+html[data-theme="light"] * {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Webkit dark – system preference */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]):not([data-theme="dark"]) ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  html:not([data-theme="light"]):not([data-theme="dark"]) ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+}
+
+/* Webkit dark – explicit override */
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Webkit light – explicit override */
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
 @layer components {
   .document-title-input {
     -webkit-font-smoothing: antialiased;
@@ -148,20 +245,30 @@
   }
 
   @media (prefers-color-scheme: dark) {
-    .document-title-input {
-      color: #f2f2f2; /* Custom dark mode text color */
+    html:not([data-theme="light"]):not([data-theme="dark"]) .document-title-input {
+      color: #f2f2f2;
     }
-    .document-title-input::placeholder {
+    html:not([data-theme="light"]):not([data-theme="dark"]) .document-title-input::placeholder {
       color: rgba(242, 242, 242, 0.3);
     }
   }
 
-  /* Support explicit .dark class too */
+  /* Support explicit .dark class and data-theme="dark" */
+  html[data-theme="dark"] .document-title-input,
   .dark .document-title-input {
     color: #f2f2f2;
   }
+  html[data-theme="dark"] .document-title-input::placeholder,
   .dark .document-title-input::placeholder {
     color: rgba(242, 242, 242, 0.3);
+  }
+
+  /* Explicit light override — beats any stale dark rules */
+  html[data-theme="light"] .document-title-input {
+    color: #3f3f3f;
+  }
+  html[data-theme="light"] .document-title-input::placeholder {
+    color: rgba(63, 63, 63, 0.3);
   }
 
   /* Override BlockNote default text color for dark mode */
@@ -169,10 +276,15 @@
   .bn-container[data-color-scheme="dark"] {
     --bn-colors-editor-text: #f2f2f2 !important;
   }
-  
+
   @media (prefers-color-scheme: dark) {
-    .bn-container {
+    html:not([data-theme="light"]):not([data-theme="dark"]) .bn-container {
       --bn-colors-editor-text: #f2f2f2 !important;
     }
+  }
+
+  /* Explicit light override for BlockNote — beats stale data-color-scheme="dark" */
+  html[data-theme="light"] .bn-container {
+    --bn-colors-editor-text: #3f3f3f !important;
   }
 }
