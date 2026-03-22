@@ -15,6 +15,8 @@ public enum ErrorCode {
     // General
     VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "Request validation failed."),
     NOT_FOUND(HttpStatus.NOT_FOUND, "The requested resource was not found."),
+    FORBIDDEN(HttpStatus.FORBIDDEN, "You do not have permission to perform this action."),
+    CONFLICT(HttpStatus.CONFLICT, "The request conflicts with the current state of the resource."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred."),
     RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "Too many requests. Please try again later.");
 
