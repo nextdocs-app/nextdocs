@@ -191,6 +191,8 @@ export interface DocumentMeta {
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
+  deletedAt?: string;
+  purgeAt?: string;
 }
 
 export interface Document {
