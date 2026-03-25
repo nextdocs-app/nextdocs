@@ -23,16 +23,39 @@ interface Limits {
 interface Config {
   port: number;
   host: string;
+  apiBaseUrl: string;
   corsOrigins: string[];
   logLevel: LogLevel;
   roomCleanupInterval: number;
   roomInactiveTimeout: number;
+  accessRevalidationIntervalMs: number;
+  fetchTimeoutMs: number;
+  enforceMemoryThreshold: boolean;
   limits: Limits;
 }
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+
+  return fallback;
+}
+
+const isProd = process.env.NODE_ENV === 'production';
 
 const config: Config = {
   port: parseInt(process.env.PORT || '1234', 10),
   host: process.env.HOST || '0.0.0.0',
+  apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:8080',
 
   corsOrigins: process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',')
@@ -44,6 +67,9 @@ const config: Config = {
 
   roomCleanupInterval: parseInt(process.env.ROOM_CLEANUP_INTERVAL || '300000', 10),
   roomInactiveTimeout: parseInt(process.env.ROOM_INACTIVE_TIMEOUT || '3600000', 10),
+  accessRevalidationIntervalMs: parseInt(process.env.ACCESS_REVALIDATION_INTERVAL_MS || '5000', 10),
+  fetchTimeoutMs: parseInt(process.env.FETCH_TIMEOUT_MS || '5000', 10),
+  enforceMemoryThreshold: parseBoolean(process.env.ENFORCE_MEMORY_THRESHOLD, isProd),
 
   limits: {
     maxPayload: parseInt(process.env.MAX_PAYLOAD || '5242880', 10),
@@ -51,7 +77,7 @@ const config: Config = {
     maxGlobalConns: parseInt(process.env.MAX_GLOBAL_CONNS || '10000', 10),
     maxConnRatePerMin: parseInt(process.env.MAX_CONN_RATE_PER_MIN || '100', 10),
     maxMsgRatePerSec: parseInt(process.env.MAX_MSG_RATE_PER_SEC || '100', 10),
-    memoryThreshold: parseFloat(process.env.MEMORY_THRESHOLD || '0.8'),
+    memoryThreshold: parseFloat(process.env.MEMORY_THRESHOLD || (isProd ? '0.8' : '0.95')),
   },
 };
 
@@ -68,6 +94,18 @@ if (Number.isNaN(config.roomCleanupInterval) || config.roomCleanupInterval <= 0)
 if (Number.isNaN(config.roomInactiveTimeout) || config.roomInactiveTimeout <= 0) {
   throw new Error(
     `Invalid ROOM_INACTIVE_TIMEOUT: ${process.env.ROOM_INACTIVE_TIMEOUT}. Must be a positive number (milliseconds).`
+  );
+}
+
+if (Number.isNaN(config.accessRevalidationIntervalMs) || config.accessRevalidationIntervalMs <= 0) {
+  throw new Error(
+    `Invalid ACCESS_REVALIDATION_INTERVAL_MS: ${process.env.ACCESS_REVALIDATION_INTERVAL_MS}. Must be a positive number (milliseconds).`
+  );
+}
+
+if (Number.isNaN(config.fetchTimeoutMs) || config.fetchTimeoutMs <= 0) {
+  throw new Error(
+    `Invalid FETCH_TIMEOUT_MS: ${process.env.FETCH_TIMEOUT_MS}. Must be a positive number (milliseconds).`
   );
 }
 

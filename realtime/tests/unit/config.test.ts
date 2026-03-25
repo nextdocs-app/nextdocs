@@ -19,6 +19,7 @@ describe('Config', () => {
     delete process.env.LOG_LEVEL;
     delete process.env.ROOM_CLEANUP_INTERVAL;
     delete process.env.ROOM_INACTIVE_TIMEOUT;
+    delete process.env.ACCESS_REVALIDATION_INTERVAL_MS;
 
     const config = (await import('../../src/config')).default;
 
@@ -28,6 +29,7 @@ describe('Config', () => {
     expect(config.logLevel).toBe('info');
     expect(config.roomCleanupInterval).toBe(300000);
     expect(config.roomInactiveTimeout).toBe(3600000);
+    expect(config.accessRevalidationIntervalMs).toBe(5000);
   });
 
   it('should parse environment variables correctly', async () => {
@@ -37,6 +39,7 @@ describe('Config', () => {
     process.env.LOG_LEVEL = 'debug';
     process.env.ROOM_CLEANUP_INTERVAL = '60000';
     process.env.ROOM_INACTIVE_TIMEOUT = '120000';
+    process.env.ACCESS_REVALIDATION_INTERVAL_MS = '15000';
 
     const config = (await import('../../src/config')).default;
 
@@ -46,6 +49,7 @@ describe('Config', () => {
     expect(config.logLevel).toBe('debug');
     expect(config.roomCleanupInterval).toBe(60000);
     expect(config.roomInactiveTimeout).toBe(120000);
+    expect(config.accessRevalidationIntervalMs).toBe(15000);
   });
 
   it('should trim CORS origins', async () => {
@@ -87,6 +91,13 @@ describe('Config', () => {
   it('should throw error for invalid ROOM_INACTIVE_TIMEOUT', async () => {
     process.env.ROOM_INACTIVE_TIMEOUT = '0';
     await expect(import('../../src/config')).rejects.toThrow('Invalid ROOM_INACTIVE_TIMEOUT');
+  });
+
+  it('should throw error for invalid ACCESS_REVALIDATION_INTERVAL_MS', async () => {
+    process.env.ACCESS_REVALIDATION_INTERVAL_MS = '0';
+    await expect(import('../../src/config')).rejects.toThrow(
+      'Invalid ACCESS_REVALIDATION_INTERVAL_MS'
+    );
   });
 
   it('should throw error for invalid MAX_PAYLOAD', async () => {

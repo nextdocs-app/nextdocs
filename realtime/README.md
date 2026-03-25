@@ -23,22 +23,26 @@ Server runs on `http://localhost:1234`.
 
 Edit `.env`:
 
-| Variable                | Default                 | Description                     |
-| ----------------------- | ----------------------- | ------------------------------- |
-| `PORT`                  | `1234`                  | Server port                     |
-| `HOST`                  | `0.0.0.0`               | Server host                     |
-| `CORS_ORIGINS`          | `http://localhost:3000` | Comma-separated allowed origins |
-| `LOG_LEVEL`             | `info`                  | error/warn/info/debug           |
-| `ROOM_CLEANUP_INTERVAL` | `300000`                | Cleanup interval (ms)           |
-| `ROOM_INACTIVE_TIMEOUT` | `3600000`               | Inactive room timeout (ms)      |
+| Variable                | Default                 | Description                         |
+| ----------------------- | ----------------------- | ----------------------------------- |
+| `PORT`                  | `1234`                  | Server port                         |
+| `HOST`                  | `0.0.0.0`               | Server host                         |
+| `API_BASE_URL`          | `http://localhost:8080` | API base URL for auth/access checks |
+| `CORS_ORIGINS`          | `http://localhost:3000` | Comma-separated allowed origins     |
+| `LOG_LEVEL`             | `info`                  | error/warn/info/debug               |
+| `ROOM_CLEANUP_INTERVAL` | `300000`                | Cleanup interval (ms)               |
+| `ROOM_INACTIVE_TIMEOUT` | `3600000`               | Inactive room timeout (ms)          |
 
 ## API
 
 ### WebSocket
 
 ```
-ws://localhost:1234/{roomId}
+ws://localhost:1234/{roomId}?token=<access-token>
 ```
+
+Connections are authenticated. The realtime server validates that the JWT is valid
+and that the user can access `/{roomId}` by calling the API.
 
 ### Health Check
 
