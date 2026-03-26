@@ -44,6 +44,7 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           user: null,
           accessToken: null,
           expiresAt: null,
+          lastAuthAction: null,
           isLoading: false,
           isInitializing: true,
           error: null,
@@ -188,5 +189,14 @@ describe('auth slice', () => {
     expect(auth.user).toBeNull();
     expect(auth.accessToken).toBeNull();
     expect(auth.expiresAt).toBeNull();
+  });
+
+  it('logoutThunk sends current access token to backend logout endpoint', async () => {
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+    const store = makeStore({ user: mockUser, accessToken: 'tok-logout', expiresAt: 99999 });
+
+    await store.dispatch(logoutThunk());
+
+    expect(authApiService.logout).toHaveBeenCalledWith('tok-logout');
   });
 });

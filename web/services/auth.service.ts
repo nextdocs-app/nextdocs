@@ -41,6 +41,10 @@ async function request<T>(
     },
   });
 
+  if (options.allowEmptyData && res.ok && res.status === 204) {
+    return undefined as T;
+  }
+
   const responseClone = res.clone();
   let body: ApiEnvelope<T>;
 
