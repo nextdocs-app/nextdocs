@@ -6,19 +6,36 @@ import documentReducer from '@/stores/document/document.slice';
 import type { DocumentMeta } from '@/types/document.types';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
 import { documentService } from '@/services/document.service';
+import { useAuth } from '../../../hooks/useAuth.hook';
+
+jest.mock('../../../hooks/useAuth.hook', () => ({
+  useAuth: jest.fn(() => ({
+    isAuthenticated: false,
+    accessToken: null,
+  })),
+}));
 
 describe('useYjsPersistence', () => {
   let saveDocumentSpy: jest.SpyInstance;
+  let saveCloudDocumentSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
+    saveCloudDocumentSpy = jest
+      .spyOn(documentService, 'saveCloudDocument')
+      .mockImplementation(jest.fn());
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+    });
   });
 
   afterEach(() => {
     jest.useRealTimers();
     saveDocumentSpy.mockRestore();
+    saveCloudDocumentSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -198,5 +215,35 @@ describe('useYjsPersistence', () => {
     });
 
     expect(result.current.lastSaved).toBeInstanceOf(Date);
+  });
+
+  it('should save to cloud when authenticated', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Cloud Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveCloudDocumentSpy.mockResolvedValue(undefined);
+
+    renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, 'token-1');
+    });
+
+    expect(saveDocumentSpy).not.toHaveBeenCalled();
   });
 });
