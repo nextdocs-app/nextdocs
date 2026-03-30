@@ -109,3 +109,21 @@ it('calls onClose when the Escape key is pressed', async () => {
   await user.keyboard('{Escape}');
   expect(mockOnClose).toHaveBeenCalled();
 });
+
+it('keeps input focus when rerendered with a new onClose callback', async () => {
+  const user = userEvent.setup();
+  const onCloseA = jest.fn();
+  const onCloseB = jest.fn();
+  const { rerender } = render(<AuthModal onClose={onCloseA} />);
+
+  const emailInput = screen.getByLabelText('Email');
+  await user.click(emailInput);
+  expect(emailInput).toHaveFocus();
+
+  rerender(<AuthModal onClose={onCloseB} />);
+  expect(emailInput).toHaveFocus();
+
+  await user.type(emailInput, 'u');
+  expect(emailInput).toHaveValue('u');
+  expect(emailInput).toHaveFocus();
+});

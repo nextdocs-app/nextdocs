@@ -16,12 +16,17 @@ export function AuthModal({ onClose }: Props) {
   const { login, register, isLoading, error } = useAuth();
   const overlayRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
   const titleId = useId();
 
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -33,7 +38,7 @@ export function AuthModal({ onClose }: Props) {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -73,7 +78,7 @@ export function AuthModal({ onClose }: Props) {
       dialog.removeEventListener('keydown', onKeyDown);
       previousActive?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   function switchMode(next: Mode) {
     dispatch(clearError());
@@ -268,9 +273,11 @@ function OAuthButton({ provider }: { provider: 'google' | 'github' }) {
       type="button"
       title="Coming soon"
       disabled
-      className="w-full flex items-center justify-center gap-2.5 rounded-md border border-border bg-background px-4 py-2 text-sm text-foreground/50 cursor-not-allowed opacity-60"
+      className="w-full flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm text-foreground/50 cursor-not-allowed opacity-60"
     >
-      {provider === 'google' ? <GoogleIcon /> : <GitHubIcon />}
+      <span className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center">
+        {provider === 'google' ? <GoogleIcon /> : <GitHubIcon />}
+      </span>
       Continue with {provider === 'google' ? 'Google' : 'GitHub'}
     </button>
   );
