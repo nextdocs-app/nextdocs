@@ -1,6 +1,7 @@
 package com.nextdocs.api.auth.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -12,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.ObjectMapper;
@@ -36,7 +39,7 @@ class RateLimitFilterTest {
         mockMvc.perform(post("/api/v1/auth/login").remoteAddress("10.0.0.1")).andExpect(status().isOk());
 
         assertThat(rateLimiter.invocationCount).isEqualTo(1);
-        assertThat(rateLimiter.lastKey).isEqualTo("10.0.0.1");
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.1");
     }
 
     @Test
@@ -56,6 +59,35 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void publicDocumentPath_whenAllowed_isPassedThrough() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}/public", "11111111-1111-1111-1111-111111111111")
+                        .remoteAddress("10.0.0.4"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-doc:10.0.0.4");
+    }
+
+    @Test
+    void publicDocumentPath_whenRejected_returnsTooManyRequests() throws Exception {
+        rateLimiter.allowed = false;
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public", "11111111-1111-1111-1111-111111111111")
+                        .remoteAddress("10.0.0.5"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void publicDocumentPath_withEncodedSlashInId_isNotRateLimited() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/11111111-1111-1111-1111-111111111111%2Fchild/public")
+                        .remoteAddress("10.0.0.6"))
+                .andReturn();
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
     void xForwardedForHeader_isIgnored_whenRemoteAddressIsNotTrustedProxy() throws Exception {
         // No trusted proxies configured (default) — X-Forwarded-For must not be trusted
         mockMvc.perform(post("/api/v1/auth/login")
@@ -63,7 +95,7 @@ class RateLimitFilterTest {
                         .remoteAddress("10.0.0.1"))
                 .andExpect(status().isOk());
 
-        assertThat(rateLimiter.lastKey).isEqualTo("10.0.0.1");
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.1");
     }
 
     @Test
@@ -77,7 +109,7 @@ class RateLimitFilterTest {
                         .remoteAddress("10.0.0.1"))
                 .andExpect(status().isOk());
 
-        assertThat(rateLimiter.lastKey).isEqualTo("203.0.113.5");
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
     }
 
     private static final class StubRateLimiter implements RateLimiter {
@@ -102,6 +134,11 @@ class RateLimitFilterTest {
 
         @PostMapping("/other/endpoint")
         ResponseEntity<String> other() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/documents/{id}/public")
+        ResponseEntity<String> getPublic(@PathVariable String id) {
             return ResponseEntity.ok("ok");
         }
     }

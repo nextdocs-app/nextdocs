@@ -37,10 +37,12 @@ jest.mock('../../src/config', () => ({
   default: {
     port: 1234,
     host: '0.0.0.0',
+    apiBaseUrl: 'http://localhost:8080',
     corsOrigins: ['*'],
     logLevel: 'info',
     roomCleanupInterval: 300000,
     roomInactiveTimeout: 3600000,
+    accessRevalidationIntervalMs: 5000,
     limits: {
       maxPayload: 5 * 1024 * 1024,
       maxConnsPerIp: 200,
@@ -54,14 +56,35 @@ jest.mock('../../src/config', () => ({
 
 import { WebSocket } from 'ws';
 
+const waitForConnectionProcessing = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 describe('Server', () => {
   let server: any;
   let wss: any;
   let setupWSConnectionMock: any;
   let memoryUsageSpy: any;
+  let fetchMock: jest.MockedFunction<typeof fetch>;
 
   beforeEach(async () => {
     jest.resetModules();
+
+    fetchMock = jest.fn() as jest.MockedFunction<typeof fetch>;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+        },
+        error: null,
+      }),
+    } as Response);
+    (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
 
     memoryUsageSpy = jest.spyOn(process, 'memoryUsage').mockReturnValue({
       rss: 100,
@@ -113,7 +136,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1',
+        url: '/room1?token=test-token',
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
@@ -123,15 +146,38 @@ describe('Server', () => {
       wss.clients.size = 0;
     });
 
-    it('should accept connection with valid room ID', () => {
+    it('should accept connection with valid room ID', async () => {
       wss.emit('connection', mockConn, mockReq);
-      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1');
+      await waitForConnectionProcessing();
+      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1', 'EDIT');
       expect(mockConn.close).not.toHaveBeenCalled();
     });
 
-    it('should reject connection with missing room ID', () => {
+    it('should reject connection when access-check denies access', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            allowed: false,
+            accessLevel: null,
+            owner: false,
+          },
+          error: null,
+        }),
+      } as Response);
+
+      wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
+
+      expect(mockConn.close).toHaveBeenCalledWith(1008, 'Access denied');
+      expect(setupWSConnectionMock).not.toHaveBeenCalled();
+    });
+
+    it('should reject connection with missing room ID', async () => {
       mockReq.url = '/';
       wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
       expect(mockConn.close).toHaveBeenCalledWith(
         1008,
         expect.stringContaining('Room ID required')
@@ -145,8 +191,9 @@ describe('Server', () => {
       });
 
       wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
 
-      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1');
+      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1', 'EDIT');
       // valid connection rejected due to internal error
       expect(mockConn.close).toHaveBeenCalledWith(1011, 'Internal server error');
 
@@ -170,7 +217,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1',
+        url: '/room1?token=test-token',
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
@@ -181,13 +228,14 @@ describe('Server', () => {
       wss.clients.size = 0;
     });
 
-    it('should reject when global connection limit is reached', () => {
+    it('should reject when global connection limit is reached', async () => {
       wss.clients.size = 10001;
       wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
       expect(mockConn.close).toHaveBeenCalledWith(1008, 'Server busy');
     });
 
-    it('should reject when IP connection limit is reached', () => {
+    it('should reject when IP connection limit is reached', async () => {
       jest.useFakeTimers();
       try {
         const ip = '10.0.0.1';
@@ -199,6 +247,7 @@ describe('Server', () => {
           const conn: any = new EventEmitter();
           conn.close = jest.fn();
           wss.emit('connection', conn, mockReq);
+          await waitForConnectionProcessing();
         }
 
         // Advance time by 1 minute to clear rate limit window
@@ -209,20 +258,23 @@ describe('Server', () => {
           const conn: any = new EventEmitter();
           conn.close = jest.fn();
           wss.emit('connection', conn, mockReq);
+          await waitForConnectionProcessing();
         }
 
         // 201st connection (should hit IP limit, not rate limit)
         const rejectedConn: any = new EventEmitter();
         rejectedConn.close = jest.fn();
         wss.emit('connection', rejectedConn, mockReq);
+        await waitForConnectionProcessing();
 
+        expect(rejectedConn.close).toHaveBeenCalledTimes(1);
         expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Too many connections');
       } finally {
         jest.useRealTimers();
       }
     });
 
-    it('should reject when IP connection rate limit is exceeded', () => {
+    it('should reject when IP connection rate limit is exceeded', async () => {
       const ip = '10.0.0.2';
       mockReq.socket.remoteAddress = ip;
 
@@ -239,14 +291,16 @@ describe('Server', () => {
       const rejectedConn: any = new EventEmitter();
       rejectedConn.close = jest.fn();
       wss.emit('connection', rejectedConn, mockReq);
+      await waitForConnectionProcessing();
 
       expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Rate limit exceeded');
     });
 
-    it('should enforce message rate limits', () => {
+    it('should enforce message rate limits', async () => {
       const ip = '10.0.0.3';
       mockReq.socket.remoteAddress = ip;
       wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
 
       // Since wss is a mock event emitter, wss.emit call runs synchronously.
       // The 'connection' handler in server.ts calls conn.on('message', ...).
@@ -263,10 +317,11 @@ describe('Server', () => {
       expect(mockConn.close).toHaveBeenCalledWith(1008, 'Message rate limit exceeded');
     });
 
-    it('should enforce payload size limits', () => {
+    it('should enforce payload size limits', async () => {
       const ip = '10.0.0.4';
       mockReq.socket.remoteAddress = ip;
       wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
 
       const largeBuffer = Buffer.alloc(5 * 1024 * 1024 + 1);
       mockConn.emit('message', largeBuffer, false);
@@ -280,7 +335,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1',
+        url: '/room1?token=test-token',
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
@@ -290,7 +345,7 @@ describe('Server', () => {
       wss.clients.size = 0;
     });
 
-    it('should use X-Forwarded-For header if present', () => {
+    it('should use X-Forwarded-For header if present', async () => {
       // Test that rate limits are applied per-IP extracted from header
 
       const ip1 = '10.0.0.5';
@@ -308,6 +363,7 @@ describe('Server', () => {
       const rejectedConn: any = new EventEmitter();
       rejectedConn.close = jest.fn();
       wss.emit('connection', rejectedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Rate limit exceeded');
 
       // Connection from ip2 should succeed (different IP)
@@ -315,10 +371,11 @@ describe('Server', () => {
       allowedConn.close = jest.fn();
       mockReq.headers['x-forwarded-for'] = ip2;
       wss.emit('connection', allowedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(allowedConn.close).not.toHaveBeenCalled();
     });
 
-    it('should use first IP in comma-separated X-Forwarded-For header', () => {
+    it('should use first IP in comma-separated X-Forwarded-For header', async () => {
       const realIp1 = '10.0.0.7';
       const realIp2 = '10.0.0.8';
       const proxyIp = '192.168.1.1';
@@ -335,6 +392,7 @@ describe('Server', () => {
       const rejectedConn: any = new EventEmitter();
       rejectedConn.close = jest.fn();
       wss.emit('connection', rejectedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Rate limit exceeded');
 
       // Connection from realIp2 should succeed even with same proxy IP suffix
@@ -342,10 +400,11 @@ describe('Server', () => {
       allowedConn.close = jest.fn();
       mockReq.headers['x-forwarded-for'] = `${realIp2}, ${proxyIp}`;
       wss.emit('connection', allowedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(allowedConn.close).not.toHaveBeenCalled();
     });
 
-    it('should fallback to socket remoteAddress if header is missing', () => {
+    it('should fallback to socket remoteAddress if header is missing', async () => {
       delete mockReq.headers['x-forwarded-for'];
       const ip1 = '10.0.0.9';
       const ip2 = '10.0.0.10';
@@ -362,6 +421,7 @@ describe('Server', () => {
       const rejectedConn: any = new EventEmitter();
       rejectedConn.close = jest.fn();
       wss.emit('connection', rejectedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Rate limit exceeded');
 
       // Connection from ip2 should succeed
@@ -369,6 +429,7 @@ describe('Server', () => {
       allowedConn.close = jest.fn();
       mockReq.socket.remoteAddress = ip2;
       wss.emit('connection', allowedConn, mockReq);
+      await waitForConnectionProcessing();
       expect(allowedConn.close).not.toHaveBeenCalled();
     });
   });

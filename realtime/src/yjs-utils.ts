@@ -10,12 +10,36 @@ import logger from './logger';
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
+const MESSAGE_ACCESS_LEVEL = 2;
+
+const SYNC_MESSAGE_STEP_2 = syncProtocol.messageYjsSyncStep2;
+const SYNC_MESSAGE_UPDATE = syncProtocol.messageYjsUpdate;
 
 const docs = new Map<string, WSSharedDoc>();
 
+export type RealtimeAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
+
+// Levels that cannot write to document content
+const DOCUMENT_WRITE_BLOCKED = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT']);
+// Levels that cannot send awareness (cursor presence)
+const NO_AWARENESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW']);
+
+interface ConnectionState {
+  clientIds: Set<number>;
+  accessLevel: RealtimeAccessLevel;
+}
+
+function canWriteDocument(level: RealtimeAccessLevel): boolean {
+  return !DOCUMENT_WRITE_BLOCKED.has(level);
+}
+
+function canSendAwareness(level: RealtimeAccessLevel): boolean {
+  return !NO_AWARENESS_LEVELS.has(level);
+}
+
 class WSSharedDoc extends Y.Doc {
   name: string;
-  conns: Map<WebSocket, Set<number>>;
+  conns: Map<WebSocket, ConnectionState>;
   awareness: awarenessProtocol.Awareness;
 
   constructor(name: string) {
@@ -51,14 +75,25 @@ class WSSharedDoc extends Y.Doc {
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown
   ): void {
+    if (origin instanceof WebSocket) {
+      const originState = this.conns.get(origin);
+      if (originState && !canSendAwareness(originState.accessLevel)) {
+        logger.warn('Blocked awareness update from read-only connection', {
+          docName: this.name,
+          accessLevel: originState.accessLevel,
+        });
+        return;
+      }
+    }
+
     const changedClients = added.concat(updated).concat(removed);
 
     // Track which client IDs each connection controls
     if (origin instanceof WebSocket) {
-      const clientIds = this.conns.get(origin);
-      if (clientIds) {
-        added.forEach((id) => clientIds.add(id));
-        removed.forEach((id) => clientIds.delete(id));
+      const state = this.conns.get(origin);
+      if (state) {
+        added.forEach((id) => state.clientIds.add(id));
+        removed.forEach((id) => state.clientIds.delete(id));
       }
     }
 
@@ -97,8 +132,70 @@ function getYDoc(docName: string): WSSharedDoc {
   });
 }
 
+function shouldRejectSyncMessage(
+  doc: WSSharedDoc,
+  conn: WebSocket,
+  syncMessageType: number
+): boolean {
+  const state = doc.conns.get(conn);
+  if (!state) {
+    return true;
+  }
+
+  // Only EDIT/OWNER can write document content
+  if (!canWriteDocument(state.accessLevel)) {
+    // COMMENT connections may only complete initial sync acknowledgement.
+    // Update messages require explicit server-side validation before acceptance.
+    if (state.accessLevel === 'COMMENT') {
+      if (syncMessageType === SYNC_MESSAGE_STEP_2) {
+        return false;
+      }
+
+      if (syncMessageType === SYNC_MESSAGE_UPDATE) {
+        return true;
+      }
+
+      return true;
+    }
+
+    // VIEW users cannot send any sync messages
+    if (state.accessLevel === 'VIEW') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function handleMessage(conn: WebSocket, doc: WSSharedDoc, message: Uint8Array): void {
   try {
+    const inspectionDecoder = decoding.createDecoder(message);
+    const inspectionMessageType = decoding.readVarUint(inspectionDecoder);
+
+    if (inspectionMessageType === MESSAGE_SYNC) {
+      const syncMessageType = decoding.readVarUint(inspectionDecoder);
+      if (shouldRejectSyncMessage(doc, conn, syncMessageType)) {
+        const state = doc.conns.get(conn);
+        logger.warn('Blocked sync write message from read-only connection', {
+          docName: doc.name,
+          accessLevel: state?.accessLevel,
+          syncMessageType,
+        });
+        return;
+      }
+    }
+
+    if (inspectionMessageType === MESSAGE_AWARENESS) {
+      const state = doc.conns.get(conn);
+      if (!state || !canSendAwareness(state.accessLevel)) {
+        logger.warn('Blocked awareness message from view-only connection', {
+          docName: doc.name,
+          accessLevel: state?.accessLevel,
+        });
+        return;
+      }
+    }
+
     const encoder = encoding.createEncoder();
     const decoder = decoding.createDecoder(message);
     const messageType = decoding.readVarUint(decoder);
@@ -132,10 +229,14 @@ function handleMessage(conn: WebSocket, doc: WSSharedDoc, message: Uint8Array): 
   }
 }
 
-export function setupWSConnection(conn: WebSocket, docName: string): void {
+export function setupWSConnection(
+  conn: WebSocket,
+  docName: string,
+  accessLevel: RealtimeAccessLevel = 'EDIT'
+): void {
   const doc = getYDoc(docName);
 
-  doc.conns.set(conn, new Set());
+  doc.conns.set(conn, { clientIds: new Set(), accessLevel });
 
   // Send sync step 1 (full document state)
   const encoder = encoding.createEncoder();
@@ -160,7 +261,7 @@ export function setupWSConnection(conn: WebSocket, docName: string): void {
   });
 
   conn.on('close', () => {
-    const controlledIds = doc.conns.get(conn);
+    const controlledIds = doc.conns.get(conn)?.clientIds;
     doc.conns.delete(conn);
 
     if (controlledIds) {
@@ -176,6 +277,38 @@ export function setupWSConnection(conn: WebSocket, docName: string): void {
   });
 }
 
+export function updateConnectionAccessLevel(
+  conn: WebSocket,
+  docName: string,
+  accessLevel: RealtimeAccessLevel
+): void {
+  const doc = docs.get(docName);
+  if (!doc) {
+    return;
+  }
+
+  const state = doc.conns.get(conn);
+  if (!state) {
+    return;
+  }
+
+  const oldAccessLevel = state.accessLevel;
+  state.accessLevel = accessLevel;
+
+  // Notify client of access level change so they can update permissions immediately
+  if (oldAccessLevel !== accessLevel && conn.readyState === WebSocket.OPEN) {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_ACCESS_LEVEL);
+    encoding.writeVarString(encoder, accessLevel);
+    conn.send(encoding.toUint8Array(encoder), { binary: true });
+    logger.info('Sent access level update to client', {
+      docName,
+      oldLevel: oldAccessLevel,
+      newLevel: accessLevel,
+    });
+  }
+}
+
 export function getDocsStats(): Array<{ name: string; connections: number }> {
   return Array.from(docs.entries()).map(([name, doc]) => ({
     name,
@@ -183,4 +316,4 @@ export function getDocsStats(): Array<{ name: string; connections: number }> {
   }));
 }
 
-export { docs };
+export { docs, MESSAGE_ACCESS_LEVEL };
