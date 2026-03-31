@@ -11,6 +11,7 @@ const initialState: AuthState = {
   user: null,
   accessToken: null,
   expiresAt: null,
+  lastAuthAction: null,
   isLoading: false,
   isInitializing: true,
   error: null,
@@ -54,15 +55,19 @@ export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
   }
 );
 
-export const logoutThunk = createAsyncThunk<void>('auth/logout', async () => {
-  // Best-effort: revoke the server-side refresh token. Swallow errors so the
-  // client-side state is always cleared regardless of API reachability.
-  try {
-    await authApiService.logout();
-  } catch {
-    // ignore
+export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthState } }>(
+  'auth/logout',
+  async (_, { getState }) => {
+    const accessToken = getState().auth.accessToken ?? undefined;
+    // Best-effort: revoke the server-side refresh token. Swallow errors so the
+    // client-side state is always cleared regardless of API reachability.
+    try {
+      await authApiService.logout(accessToken);
+    } catch {
+      // ignore
+    }
   }
-});
+);
 
 const authSlice = createSlice({
   name: 'auth',
@@ -73,12 +78,14 @@ const authSlice = createSlice({
       state.user = user;
       state.accessToken = accessToken;
       state.expiresAt = Date.now() + expiresIn * 1000;
+      state.lastAuthAction = null;
       state.error = null;
     },
     clearAuth(state) {
       state.user = null;
       state.accessToken = null;
       state.expiresAt = null;
+      state.lastAuthAction = null;
       state.error = null;
     },
     clearError(state) {
@@ -99,6 +106,7 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
+        state.lastAuthAction = 'login';
         state.error = null;
       })
       .addCase(loginThunk.rejected, (state, action) => {
@@ -116,6 +124,7 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
+        state.lastAuthAction = 'register';
         state.error = null;
       })
       .addCase(registerThunk.rejected, (state, action) => {
@@ -131,6 +140,7 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
+        state.lastAuthAction = null;
         if (state.isInitializing) {
           state.isInitializing = false;
         }
@@ -140,6 +150,7 @@ const authSlice = createSlice({
           state.user = null;
           state.accessToken = null;
           state.expiresAt = null;
+          state.lastAuthAction = null;
         }
         if (state.isInitializing) {
           state.isInitializing = false;
@@ -150,6 +161,7 @@ const authSlice = createSlice({
       state.user = null;
       state.accessToken = null;
       state.expiresAt = null;
+      state.lastAuthAction = null;
       state.error = null;
     });
   },

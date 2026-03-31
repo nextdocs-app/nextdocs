@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from '../../../components/Sidebar';
 import { useLocalDocuments } from '../../../hooks/useLocalDocuments.hook';
@@ -23,6 +23,13 @@ jest.mock('../../../components/SettingsModal', () => ({
 
 const mockPush = jest.fn();
 const mockRefresh = jest.fn();
+const mockShowAllDocuments = jest.fn();
+const mockShowAllSharedDocuments = jest.fn();
+const mockLoadMore = jest.fn();
+const mockLoadMoreSharedDocuments = jest.fn();
+const mockShowTrashDocuments = jest.fn();
+const mockLoadMoreTrashDocuments = jest.fn();
+const mockRefreshTrash = jest.fn();
 const mockLogout = jest.fn();
 const mockOnOpenAuth = jest.fn();
 
@@ -46,13 +53,34 @@ function setupDefault() {
   (useParams as jest.Mock).mockReturnValue({ id: 'id-1' });
   (useLocalDocuments as jest.Mock).mockReturnValue({
     documents: mockDocs,
+    sharedDocuments: [],
     isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: false,
+    isShowingAllShared: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
     refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
   });
   (useTheme as jest.Mock).mockReturnValue({ resolvedTheme: 'light' });
   (useAuth as jest.Mock).mockReturnValue({
     user: null,
     isAuthenticated: false,
+    accessToken: null,
     logout: mockLogout,
   });
 }
@@ -124,6 +152,7 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
       emailVerified: false,
     },
     isAuthenticated: true,
+    accessToken: 'token-1',
     logout: mockLogout,
   });
   const user = userEvent.setup();
@@ -150,4 +179,545 @@ it('closes the account menu when Escape is pressed', async () => {
   expect(screen.getByRole('menu')).toBeInTheDocument();
   await user.keyboard('{Escape}');
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
+it('calls showAllDocuments when "show all documents" is clicked', async () => {
+  const user = userEvent.setup();
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: true,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: true,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+
+  expect(mockShowAllDocuments).toHaveBeenCalledTimes(1);
+});
+
+it('opens all documents panel with search and closes with back', async () => {
+  const user = userEvent.setup();
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: true,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: true,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+
+  const dialog = screen.getByRole('dialog', { name: /Private documents/i });
+  expect(dialog).toBeInTheDocument();
+  expect(within(dialog).getByPlaceholderText(/Search documents/i)).toBeInTheDocument();
+
+  await user.type(within(dialog).getByPlaceholderText(/Search documents/i), 'Doc 1');
+  expect(within(dialog).getByRole('button', { name: /Doc 1/i })).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: /Back/i }));
+  expect(screen.queryByRole('dialog', { name: /Private documents/i })).not.toBeInTheDocument();
+});
+
+it('opens shared documents panel from shared section show all', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-collab-1',
+        relationship: 'collaborator',
+        meta: {
+          title: 'Collaborator Shared Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: true,
+    isShowingAllShared: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+
+  expect(mockShowAllSharedDocuments).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('dialog', { name: /Shared documents/i })).toBeInTheDocument();
+});
+
+it('lets collaborator leave shared document from shared panel row actions menu', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-collab-1',
+        relationship: 'collaborator',
+        meta: {
+          title: 'Collaborator Shared Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: true,
+    isShowingAllShared: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.leaveSharedDocument as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+
+  const dialog = screen.getByRole('dialog', { name: /Shared documents/i });
+  await user.click(
+    within(dialog).getByRole('button', { name: /Document actions for Collaborator Shared Doc/i })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Leave shared document/i }));
+
+  await waitFor(() => {
+    expect(documentService.leaveSharedDocument).toHaveBeenCalledWith('shared-collab-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+});
+
+it('shows trash option for authenticated user and opens trash panel', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    trashedDocuments: mockDocs,
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /Alice/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+
+  expect(mockShowTrashDocuments).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('dialog', { name: /Trash documents/i })).toBeInTheDocument();
+});
+
+it('moves a document to trash from row actions menu', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (documentService.moveCloudDocumentToTrash as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /Document actions for Doc 1/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Move to Trash/i }));
+
+  await waitFor(() => {
+    expect(documentService.moveCloudDocumentToTrash).toHaveBeenCalledWith('id-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+  expect(mockRefreshTrash).toHaveBeenCalled();
+});
+
+it('moves a document to trash from show all documents panel row actions menu', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: true,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: true,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.moveCloudDocumentToTrash as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+
+  const dialog = screen.getByRole('dialog', { name: /Private documents/i });
+  await user.click(within(dialog).getByRole('button', { name: /Document actions for Doc 1/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Move to Trash/i }));
+
+  await waitFor(() => {
+    expect(documentService.moveCloudDocumentToTrash).toHaveBeenCalledWith('id-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+  expect(mockRefreshTrash).toHaveBeenCalled();
+});
+
+it('restores a document from trash panel row actions', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    trashedDocuments: mockDocs,
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.restoreCloudDocumentFromTrash as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /Alice/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /Restore Doc 1/i }));
+
+  await waitFor(() => {
+    expect(documentService.restoreCloudDocumentFromTrash).toHaveBeenCalledWith('id-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+  expect(mockRefreshTrash).toHaveBeenCalled();
+});
+
+it('permanently deletes a document from trash panel after confirmation', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    trashedDocuments: mockDocs,
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.deleteCloudDocumentPermanently as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /Alice/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /Delete permanently Doc 1/i }));
+
+  const confirmationDialog = screen.getByRole('dialog', { name: /Delete permanently\?/i });
+  expect(confirmationDialog).toBeInTheDocument();
+  await user.click(
+    within(confirmationDialog).getByRole('button', { name: /^Delete Permanently$/i })
+  );
+
+  await waitFor(() => {
+    expect(documentService.deleteCloudDocumentPermanently).toHaveBeenCalledWith('id-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+  expect(mockRefreshTrash).toHaveBeenCalled();
+});
+
+it('moves an owner-shared document to trash from shared section row actions menu', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-owner-1',
+        relationship: 'owner',
+        meta: {
+          title: 'Owner Shared Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.moveCloudDocumentToTrash as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /Document actions for Owner Shared Doc/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Move to Trash/i }));
+
+  await waitFor(() => {
+    expect(documentService.moveCloudDocumentToTrash).toHaveBeenCalledWith(
+      'shared-owner-1',
+      'token-1'
+    );
+  });
+  expect(mockRefresh).toHaveBeenCalled();
+  expect(mockRefreshTrash).toHaveBeenCalled();
+});
+
+it('lets collaborator leave shared document from shared section row actions menu', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useLocalDocuments as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-collab-1',
+        relationship: 'collaborator',
+        meta: {
+          title: 'Collaborator Shared Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.leaveSharedDocument as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(
+    screen.getByRole('button', { name: /Document actions for Collaborator Shared Doc/i })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Leave shared document/i }));
+
+  await waitFor(() => {
+    expect(documentService.leaveSharedDocument).toHaveBeenCalledWith('shared-collab-1', 'token-1');
+  });
+  expect(mockRefresh).toHaveBeenCalled();
 });

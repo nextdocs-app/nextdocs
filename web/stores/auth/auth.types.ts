@@ -11,6 +11,7 @@ export interface AuthState {
   accessToken: string | null;
   /** Expiry as Unix milliseconds */
   expiresAt: number | null;
+  lastAuthAction: 'login' | 'register' | null;
   isLoading: boolean;
   isInitializing: boolean;
   error: string | null;

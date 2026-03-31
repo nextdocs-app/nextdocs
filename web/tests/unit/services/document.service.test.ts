@@ -246,4 +246,84 @@ describe('document.service', () => {
       consoleErrorSpy.mockRestore();
     });
   });
+
+  describe('bulkImportLocalDocuments', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    it('should call backend and return imported mappings', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            imported: [{ localId: 'id-1', documentId: 'server-1', title: 'Doc 1' }],
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const { ydoc, meta } = await documentService.createDocument('Doc 1');
+      await documentService.saveDocument('id-1', ydoc, meta);
+      const docs = await documentService.getAllLocalDocuments();
+
+      const result = await documentService.bulkImportLocalDocuments('access-token', docs);
+
+      expect(result.imported).toHaveLength(1);
+      expect(result.imported[0].localId).toBe('id-1');
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it('should throw when backend import fails', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({
+          success: false,
+          data: null,
+          error: 'Import failed',
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const { ydoc, meta } = await documentService.createDocument('Doc 1');
+      await documentService.saveDocument('id-1', ydoc, meta);
+      const docs = await documentService.getAllLocalDocuments();
+
+      await expect(documentService.bulkImportLocalDocuments('access-token', docs)).rejects.toThrow(
+        'Import failed'
+      );
+    });
+  });
+
+  describe('deleteLocalDocumentsByIds', () => {
+    it('should remove matching local documents and emit change event', async () => {
+      const { ydoc: ydoc1, meta: meta1 } = await documentService.createDocument('Doc 1');
+      await documentService.saveDocument('id-1', ydoc1, meta1);
+
+      const { ydoc: ydoc2, meta: meta2 } = await documentService.createDocument('Doc 2');
+      await documentService.saveDocument('id-2', ydoc2, meta2);
+
+      const listener = jest.fn();
+      window.addEventListener('local-documents-changed', listener);
+
+      await documentService.deleteLocalDocumentsByIds(['id-1']);
+
+      const doc1 = await indexedDBService.getDocument('id-1');
+      const doc2 = await indexedDBService.getDocument('id-2');
+
+      expect(doc1).toBeUndefined();
+      expect(doc2).toBeDefined();
+      expect(listener).toHaveBeenCalled();
+
+      window.removeEventListener('local-documents-changed', listener);
+    });
+  });
 });

@@ -4,12 +4,27 @@ import { configureStore } from '@reduxjs/toolkit';
 import * as Y from 'yjs';
 import documentReducer from '@/stores/document/document.slice';
 import { useDocument } from '@/hooks/useDocument.hook';
-import { documentService } from '@/services/document.service';
+import { documentService, DocumentServiceApiError } from '@/services/document.service';
 import { setYDoc } from '@/stores/document/ydoc-holder';
+import { useAuth } from '../../../hooks/useAuth.hook';
+
+jest.mock('../../../hooks/useAuth.hook', () => ({
+  useAuth: jest.fn(() => ({
+    isAuthenticated: false,
+    accessToken: null,
+  })),
+}));
 
 describe('useDocument', () => {
   let getOrCreateDocumentSpy: jest.SpyInstance;
+  let getCloudDocumentSpy: jest.SpyInstance;
+  let getPublicDocumentSpy: jest.SpyInstance;
+  let getMyAccessSpy: jest.SpyInstance;
+  let loadDocumentSpy: jest.SpyInstance;
+  let createCloudDocumentSpy: jest.SpyInstance;
+  let saveCloudDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
+  let updateCloudMetadataSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
 
   beforeEach(() => {
@@ -17,13 +32,48 @@ describe('useDocument', () => {
     getOrCreateDocumentSpy = jest
       .spyOn(documentService, 'getOrCreateDocument')
       .mockImplementation(jest.fn());
+    getCloudDocumentSpy = jest
+      .spyOn(documentService, 'getCloudDocument')
+      .mockImplementation(jest.fn());
+    getPublicDocumentSpy = jest
+      .spyOn(documentService, 'getPublicDocument')
+      .mockRejectedValue(new DocumentServiceApiError('Not found', 404));
+    getMyAccessSpy = jest
+      .spyOn(documentService, 'getMyAccess')
+      .mockImplementation(async (documentId: string) => ({
+        documentId,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      }));
+    loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
+    createCloudDocumentSpy = jest
+      .spyOn(documentService, 'createCloudDocument')
+      .mockImplementation(jest.fn());
+    saveCloudDocumentSpy = jest
+      .spyOn(documentService, 'saveCloudDocument')
+      .mockImplementation(jest.fn());
     updateMetadataSpy = jest.spyOn(documentService, 'updateMetadata').mockImplementation(jest.fn());
+    updateCloudMetadataSpy = jest
+      .spyOn(documentService, 'updateCloudMetadata')
+      .mockImplementation(jest.fn());
     dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+    });
   });
 
   afterEach(() => {
     getOrCreateDocumentSpy.mockRestore();
+    getCloudDocumentSpy.mockRestore();
+    getPublicDocumentSpy.mockRestore();
+    getMyAccessSpy.mockRestore();
+    loadDocumentSpy.mockRestore();
+    createCloudDocumentSpy.mockRestore();
+    saveCloudDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
+    updateCloudMetadataSpy.mockRestore();
     dispatchEventSpy.mockRestore();
   });
 
@@ -93,6 +143,56 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('default-doc');
   });
 
+  it('should load shared public document in guest mode as read-only', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Shared Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('shared-id', { isSharedDocument: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getPublicDocumentSpy).toHaveBeenCalledWith('shared-id');
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(result.current.accessLevel).toBe('VIEW');
+    expect(result.current.isReadOnly).toBe(true);
+  });
+
+  it('should load public cloud document for guest direct doc URL when no local copy exists', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Public Shared Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValueOnce(null);
+    getPublicDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('shared-public-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(loadDocumentSpy).toHaveBeenCalledWith('shared-public-id');
+    expect(getPublicDocumentSpy).toHaveBeenCalledWith('shared-public-id');
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(result.current.accessLevel).toBe('VIEW');
+    expect(result.current.isReadOnly).toBe(true);
+  });
+
   it('should handle load errors', async () => {
     getOrCreateDocumentSpy.mockRejectedValue(new Error('Load failed'));
 
@@ -104,7 +204,13 @@ describe('useDocument', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.error).toEqual(new Error('Load failed'));
+    expect(result.current.error).toEqual(
+      new Error('An unexpected error occurred while loading this document.')
+    );
+    expect(result.current.errorState).toMatchObject({
+      kind: 'generic',
+      title: 'Unable to open this document',
+    });
     expect(result.current.meta).toBeNull();
 
     consoleErrorSpy.mockRestore();
@@ -156,6 +262,168 @@ describe('useDocument', () => {
         }),
       })
     );
+  });
+
+  it('should load cloud document when authenticated', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', 'token-1');
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+  });
+
+  it('should update cloud metadata when authenticated', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-2',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Cloud Updated' });
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        { title: 'Cloud Updated' },
+        'token-2'
+      );
+    });
+
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should show restricted state when authenticated explicit document URL returns 404', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-404',
+    });
+
+    getCloudDocumentSpy.mockRejectedValueOnce(new DocumentServiceApiError('Not found', 404));
+
+    const { result } = renderHook(() => useDocument('local-id-1'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.documentId).toBe('local-id-1');
+    expect(result.current.ydoc).toBeNull();
+    expect(result.current.meta).toBeNull();
+    expect(result.current.errorState).toMatchObject({
+      kind: 'restricted',
+      statusCode: 404,
+    });
+    expect(loadDocumentSpy).not.toHaveBeenCalled();
+    expect(createCloudDocumentSpy).not.toHaveBeenCalled();
+    expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('should promote most recent local doc when default route has no cloud docs', async () => {
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Recent Local',
+      createdAt: '2024-01-03T00:00:00.000Z',
+      updatedAt: '2024-01-04T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-default',
+    });
+
+    const getAllLocalDocumentsSpy = jest
+      .spyOn(documentService, 'getAllLocalDocuments')
+      .mockResolvedValue([
+        {
+          id: 'local-a',
+          meta: {
+            title: 'Old Local',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          yjsState: new Uint8Array([1]),
+          version: 1,
+        },
+        {
+          id: 'local-b',
+          meta: {
+            title: 'Recent Local',
+            createdAt: '2024-01-03T00:00:00.000Z',
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+          yjsState: new Uint8Array([2]),
+          version: 1,
+        },
+      ]);
+
+    const listCloudDocumentsSpy = jest
+      .spyOn(documentService, 'listCloudDocuments')
+      .mockResolvedValue({
+        items: [],
+        page: 0,
+        size: 1,
+        totalElements: 0,
+        totalPages: 0,
+        hasMore: false,
+      });
+
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+    createCloudDocumentSpy.mockResolvedValue({
+      id: 'cloud-from-local',
+      ydoc: new Y.Doc(),
+      meta: localMeta,
+    });
+    saveCloudDocumentSpy.mockResolvedValue(undefined);
+    getCloudDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument(), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getAllLocalDocumentsSpy).toHaveBeenCalled();
+    expect(createCloudDocumentSpy).toHaveBeenCalledWith('token-default', 'Recent Local', 'local-b');
+    expect(result.current.documentId).toBe('cloud-from-local');
+
+    getAllLocalDocumentsSpy.mockRestore();
+    listCloudDocumentsSpy.mockRestore();
   });
 
   it('should not update metadata if meta is null', async () => {

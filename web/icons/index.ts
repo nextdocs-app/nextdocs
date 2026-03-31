@@ -4,4 +4,7 @@ export { ChevronRight } from './ChevronRight';
 export { NewDocument } from './NewDocument';
 export { Settings } from './Settings';
 export { Login } from './Login';
+export { MoreHorizontal } from './MoreHorizontal';
+export { Trash } from './Trash';
+export { Restore } from './Restore';
 export type { IconProps } from './IconBase';
