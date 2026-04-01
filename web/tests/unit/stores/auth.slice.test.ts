@@ -6,6 +6,7 @@ import authReducer, {
   logoutThunk,
   clearAuth,
   setAuthFromResponse,
+  AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
 import type { AuthApiResponse, AuthState } from '../../../stores/auth/auth.types';
@@ -198,5 +199,71 @@ describe('auth slice', () => {
     await store.dispatch(logoutThunk());
 
     expect(authApiService.logout).toHaveBeenCalledWith('tok-logout');
+  });
+
+  describe('persistence', () => {
+    beforeEach(() => {
+      window.sessionStorage.clear();
+      jest.clearAllMocks();
+    });
+
+    it('saves state to sessionStorage on setAuthFromResponse', () => {
+      const store = makeStore();
+      store.dispatch(setAuthFromResponse(mockAuthResponse));
+
+      const raw = window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+      expect(raw).toBeTruthy();
+      const stored = JSON.parse(raw!);
+      expect(stored.user).toEqual(mockUser);
+      expect(stored.accessToken).toBe(mockAuthResponse.accessToken);
+    });
+
+    it('clears sessionStorage on clearAuth', () => {
+      const snapshot = {
+        user: mockUser,
+        accessToken: 'stored-token',
+        expiresAt: Date.now() + 1000 * 60,
+      };
+      window.sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+
+      const store = makeStore();
+      store.dispatch(clearAuth());
+
+      expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+    });
+
+    it('initializes from sessionStorage if valid', async () => {
+      const snapshot = {
+        user: mockUser,
+        accessToken: 'stored-token',
+        expiresAt: Date.now() + 1000 * 60,
+      };
+      window.sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+
+      // We need to re-evaluate the module to check its top-level initialization code
+      await jest.isolateModulesAsync(async () => {
+        const authModule = await import('../../../stores/auth/auth.slice');
+        const store = configureStore({ reducer: { auth: authModule.default } });
+        const state = store.getState().auth;
+        expect(state.user).toEqual(mockUser);
+        expect(state.accessToken).toBe('stored-token');
+      });
+    });
+
+    it('removes expired session on initialization', async () => {
+      const expiredSnapshot = {
+        user: mockUser,
+        accessToken: 'stale-token',
+        expiresAt: Date.now() - 1000,
+      };
+      window.sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(expiredSnapshot));
+
+      await jest.isolateModulesAsync(async () => {
+        const authModule = await import('../../../stores/auth/auth.slice');
+        const store = configureStore({ reducer: { auth: authModule.default } });
+        expect(store.getState().auth.user).toBeNull();
+        expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+      });
+    });
   });
 });
