@@ -18,6 +18,20 @@ export const metadata: Metadata = {
   title: 'NextDocs',
   description:
     'An open-source block-based document editor for structured and collaborative writing.',
+  icons: {
+    icon: [
+      {
+        url: '/nextdocs-icon.svg',
+        type: 'image/svg+xml',
+      },
+      {
+        url: '/nextdocs-favicon.ico',
+        sizes: 'any',
+      },
+    ],
+    shortcut: '/nextdocs-icon.svg',
+    apple: '/nextdocs-icon.png',
+  },
 };
 
 export default function RootLayout({
