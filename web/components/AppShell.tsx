@@ -81,6 +81,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [isImportingLocalDocs, setIsImportingLocalDocs] = useState(false);
   const [localDocsError, setLocalDocsError] = useState<string | null>(null);
   const [isRegistrationSyncOverlayOpen, setIsRegistrationSyncOverlayOpen] = useState(false);
+  const openAuthModal = useCallback(() => {
+    setIsAuthOpen(true);
+  }, []);
   const { user, isTokenExpiringSoon, isAuthenticated, accessToken, lastAuthAction } = useAuth();
   const didPromptImportRef = useRef(false);
   const ownsLocalImportLockRef = useRef(false);
@@ -365,7 +368,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen">
-      <Sidebar onOpenAuth={() => setIsAuthOpen(true)} />
+      <Sidebar onOpenAuth={openAuthModal} />
       <main className="nd-app-shell-main flex-1 overflow-auto bg-background text-foreground">
         <div className="max-w-4xl mx-auto py-8 px-4">
           <Suspense>{children}</Suspense>
