@@ -5,13 +5,22 @@ import * as Y from 'yjs';
 import documentReducer from '@/stores/document/document.slice';
 import { useDocument } from '@/hooks/useDocument.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
+import { writeCachedDocumentAccessLevel } from '@/lib/document-access.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
     isAuthenticated: false,
     accessToken: null,
+  })),
+}));
+
+jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
+  useNetworkStatus: jest.fn(() => ({
+    isOnline: true,
+    isOffline: false,
   })),
 }));
 
@@ -23,12 +32,14 @@ describe('useDocument', () => {
   let loadDocumentSpy: jest.SpyInstance;
   let createCloudDocumentSpy: jest.SpyInstance;
   let saveCloudDocumentSpy: jest.SpyInstance;
+  let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     getOrCreateDocumentSpy = jest
       .spyOn(documentService, 'getOrCreateDocument')
       .mockImplementation(jest.fn());
@@ -53,6 +64,7 @@ describe('useDocument', () => {
     saveCloudDocumentSpy = jest
       .spyOn(documentService, 'saveCloudDocument')
       .mockImplementation(jest.fn());
+    saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     updateMetadataSpy = jest.spyOn(documentService, 'updateMetadata').mockImplementation(jest.fn());
     updateCloudMetadataSpy = jest
       .spyOn(documentService, 'updateCloudMetadata')
@@ -62,9 +74,14 @@ describe('useDocument', () => {
       isAuthenticated: false,
       accessToken: null,
     });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: true,
+      isOffline: false,
+    });
   });
 
   afterEach(() => {
+    window.localStorage.clear();
     getOrCreateDocumentSpy.mockRestore();
     getCloudDocumentSpy.mockRestore();
     getPublicDocumentSpy.mockRestore();
@@ -72,6 +89,7 @@ describe('useDocument', () => {
     loadDocumentSpy.mockRestore();
     createCloudDocumentSpy.mockRestore();
     saveCloudDocumentSpy.mockRestore();
+    saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
     dispatchEventSpy.mockRestore();
@@ -228,7 +246,7 @@ describe('useDocument', () => {
       ydoc,
       meta,
     });
-    updateMetadataSpy.mockResolvedValue(undefined);
+    saveDocumentSpy.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
 
@@ -248,9 +266,12 @@ describe('useDocument', () => {
       expect(result.current.meta?.title).toBe('Updated Title');
     });
 
-    expect(updateMetadataSpy).toHaveBeenCalledWith('test-id', {
-      title: 'Updated Title',
-    });
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'test-id',
+      expect.objectContaining({
+        title: 'Updated Title',
+      })
+    );
 
     // Check if CustomEvent was dispatched
     expect(dispatchEventSpy).toHaveBeenCalledWith(
@@ -285,7 +306,208 @@ describe('useDocument', () => {
     });
 
     expect(getCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', 'token-1');
+    expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, {
+      touchUpdatedAt: false,
+    });
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+  });
+
+  it('should fallback to local document when authenticated cloud fetch fails due to connectivity', async () => {
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Local Offline Copy',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+
+    getCloudDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+    getMyAccessSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(loadDocumentSpy).toHaveBeenCalledWith('cloud-id');
+    expect(result.current.documentId).toBe('cloud-id');
+    expect(result.current.meta?.title).toBe('Local Offline Copy');
+
+    consoleWarnSpy.mockRestore();
+  });
+
+  it('should keep local document state on reconnect when pending sync edits exist', async () => {
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Local Pending Changes',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    const networkState = {
+      isOnline: false,
+      isOffline: true,
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-reconnect',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
+
+    window.localStorage.setItem('nextdocs:pending-sync:cloud-id', '2');
+
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+    getCloudDocumentSpy.mockResolvedValue({
+      ydoc: new Y.Doc(),
+      meta: {
+        title: 'Stale Server Copy',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    });
+
+    const { result, rerender } = renderHook(() => useDocument('cloud-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.meta?.title).toBe('Local Pending Changes');
+
+    networkState.isOnline = true;
+    networkState.isOffline = false;
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(loadDocumentSpy).toHaveBeenCalledWith('cloud-id');
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
+    expect(result.current.meta?.title).toBe('Local Pending Changes');
+  });
+
+  it('should not create a new untitled placeholder when authenticated offline doc is not cached', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+
+    getCloudDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    loadDocumentSpy.mockResolvedValueOnce(null);
+
+    const { result } = renderHook(() => useDocument('cloud-missing-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.errorState?.title).toBe('Document unavailable offline');
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('should persist metadata locally while offline for authenticated users', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Untitled',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Renamed Offline' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Renamed Offline');
+    });
+
+    expect(updateMetadataSpy).toHaveBeenCalled();
+    expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should preserve cached shared access level when authenticated offline fallback loads local copy', async () => {
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Shared Offline Copy',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    writeCachedDocumentAccessLevel('shared-id', 'VIEW');
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    getCloudDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument('shared-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('VIEW');
+    expect(result.current.isReadOnly).toBe(true);
+    expect(getMyAccessSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Should Stay Read Only' });
+    });
+
+    expect(saveDocumentSpy).not.toHaveBeenCalled();
+    expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
+
+    consoleWarnSpy.mockRestore();
   });
 
   it('should update cloud metadata when authenticated', async () => {
@@ -321,7 +543,101 @@ describe('useDocument', () => {
       );
     });
 
-    expect(updateMetadataSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'cloud-id',
+      expect.objectContaining({ title: 'Cloud Updated' })
+    );
+  });
+
+  it('should not reload the document when access token rotates for the same user session', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    const authState = {
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    };
+
+    (useAuth as jest.Mock).mockImplementation(() => authState);
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result, rerender } = renderHook(() => useDocument('cloud-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(getCloudDocumentSpy).toHaveBeenLastCalledWith('cloud-id', 'token-1');
+
+    authState.accessToken = 'token-2';
+    rerender();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(result.current.documentId).toBe('cloud-id');
+    expect(result.current.meta?.title).toBe('Cloud Document');
+  });
+
+  it('should not reload the document when network status toggles after initial load', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    const networkState = {
+      isOnline: true,
+      isOffline: false,
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-network',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result, rerender } = renderHook(() => useDocument('cloud-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
+
+    networkState.isOnline = false;
+    networkState.isOffline = true;
+    rerender();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    networkState.isOnline = true;
+    networkState.isOffline = false;
+    rerender();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(result.current.meta?.title).toBe('Cloud Document');
   });
 
   it('should show restricted state when authenticated explicit document URL returns 404', async () => {
