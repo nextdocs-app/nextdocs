@@ -205,7 +205,7 @@ it('calls showAllDocuments when "show all documents" is clicked', async () => {
   });
 
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   expect(mockShowAllDocuments).toHaveBeenCalledTimes(1);
 });
@@ -235,7 +235,7 @@ it('opens all documents panel with search and closes with back', async () => {
 
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   expect(dialog).toBeInTheDocument();
@@ -246,6 +246,43 @@ it('opens all documents panel with search and closes with back', async () => {
 
   await user.click(screen.getByRole('button', { name: /Back/i }));
   expect(screen.queryByRole('dialog', { name: /Private documents/i })).not.toBeInTheDocument();
+});
+
+it('renders skeleton rows instead of a loading badge while loading more in the documents panel', async () => {
+  const user = userEvent.setup();
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: false,
+    isShowingAllShared: false,
+    isLoadingMore: true,
+    hasMore: true,
+    isShowingAll: true,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: true,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all/i }));
+
+  expect(screen.getByRole('dialog', { name: /Private documents/i })).toBeInTheDocument();
+  expect(screen.getByTestId('documents-panel-loading-more-skeleton')).toBeInTheDocument();
+  expect(screen.queryByText(/Loading more/i)).not.toBeInTheDocument();
 });
 
 it('opens shared documents panel from shared section show all', async () => {
@@ -301,7 +338,7 @@ it('opens shared documents panel from shared section show all', async () => {
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   expect(mockShowAllSharedDocuments).toHaveBeenCalledTimes(1);
   expect(screen.getByRole('dialog', { name: /Shared documents/i })).toBeInTheDocument();
@@ -361,7 +398,7 @@ it('lets collaborator leave shared document from shared panel row actions menu',
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Shared documents/i });
   await user.click(
@@ -485,7 +522,7 @@ it('moves a document to trash from show all documents panel row actions menu', a
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   await user.click(within(dialog).getByRole('button', { name: /Document actions for Doc 1/i }));
