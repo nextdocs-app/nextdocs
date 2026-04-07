@@ -7,6 +7,7 @@ import type { DocumentMeta } from '@/types/document.types';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
 import { documentService } from '@/services/document.service';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
@@ -15,27 +16,48 @@ jest.mock('../../../hooks/useAuth.hook', () => ({
   })),
 }));
 
+jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
+  useNetworkStatus: jest.fn(() => ({
+    isOnline: true,
+    isOffline: false,
+  })),
+}));
+
 describe('useYjsPersistence', () => {
+  let loadDocumentSpy: jest.SpyInstance;
   let saveDocumentSpy: jest.SpyInstance;
   let saveCloudDocumentSpy: jest.SpyInstance;
+  let emitLocalDocumentsChangedSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    window.localStorage.clear();
+    loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     saveCloudDocumentSpy = jest
       .spyOn(documentService, 'saveCloudDocument')
+      .mockImplementation(jest.fn());
+    emitLocalDocumentsChangedSpy = jest
+      .spyOn(documentService, 'emitLocalDocumentsChanged')
       .mockImplementation(jest.fn());
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
     });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: true,
+      isOffline: false,
+    });
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    window.localStorage.clear();
+    loadDocumentSpy.mockRestore();
     saveDocumentSpy.mockRestore();
     saveCloudDocumentSpy.mockRestore();
+    emitLocalDocumentsChangedSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -73,7 +95,15 @@ describe('useYjsPersistence', () => {
     });
 
     await waitFor(() => {
-      expect(saveDocumentSpy).toHaveBeenCalledWith('test-id', ydoc, meta);
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'test-id',
+        ydoc,
+        expect.objectContaining({
+          title: meta.title,
+          createdAt: meta.createdAt,
+          updatedAt: expect.any(String),
+        })
+      );
     });
   });
 
@@ -244,6 +274,161 @@ describe('useYjsPersistence', () => {
       expect(saveCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, 'token-1');
     });
 
-    expect(saveDocumentSpy).not.toHaveBeenCalled();
+    expect(saveDocumentSpy).toHaveBeenCalledWith(
+      'cloud-id',
+      ydoc,
+      expect.objectContaining({
+        title: 'Cloud Test',
+      }),
+      {
+        touchUpdatedAt: false,
+      }
+    );
+    expect(emitLocalDocumentsChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('should fall back to local save when cloud write fails due to connectivity', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Offline Cloud Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+    saveCloudDocumentSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        ydoc,
+        expect.objectContaining({
+          title: meta.title,
+          createdAt: meta.createdAt,
+          updatedAt: expect.any(String),
+        })
+      );
+      expect(result.current.lastSaved).not.toBeNull();
+    });
+
+    expect(result.current.isSaving).toBe(false);
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('should track pending edits while offline', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Pending Sync Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(1);
+      expect(result.current.hasPendingSync).toBe(true);
+    });
+  });
+
+  it('should sync pending edits automatically when back online', async () => {
+    const ydoc = new Y.Doc();
+    const pendingYdoc = new Y.Doc();
+    pendingYdoc.getXmlFragment('blocknote').push([new Y.XmlElement('paragraph')]);
+    const meta: DocumentMeta = {
+      title: 'Reconnect Sync Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const pendingMeta: DocumentMeta = {
+      title: 'Reconnect Sync Test (Local Pending)',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    const networkState = {
+      isOnline: false,
+      isOffline: true,
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
+    saveDocumentSpy.mockResolvedValue(undefined);
+    saveCloudDocumentSpy.mockResolvedValue(undefined);
+    loadDocumentSpy.mockResolvedValue({ ydoc: pendingYdoc, meta: pendingMeta });
+
+    const { result, rerender } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), {
+      wrapper,
+    });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(1);
+    });
+
+    networkState.isOnline = true;
+    networkState.isOffline = false;
+    rerender();
+
+    await waitFor(() => {
+      expect(saveCloudDocumentSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        pendingYdoc,
+        pendingMeta,
+        'token-1'
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(0);
+      expect(result.current.hasPendingSync).toBe(false);
+    });
   });
 });

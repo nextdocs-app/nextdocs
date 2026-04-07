@@ -45,7 +45,7 @@ describe('document.service', () => {
       expect(stored?.meta.title).toBe('Test Document');
     });
 
-    it('should update updatedAt timestamp', async () => {
+    it('should update updatedAt timestamp by default', async () => {
       const ydoc = new Y.Doc();
       const meta = {
         title: 'Test',
@@ -57,6 +57,20 @@ describe('document.service', () => {
 
       const stored = await indexedDBService.getDocument('test-id');
       expect(stored?.meta.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('should respect touchUpdatedAt: false option', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Test',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      await documentService.saveDocument('test-id', ydoc, meta, { touchUpdatedAt: false });
+
+      const stored = await indexedDBService.getDocument('test-id');
+      expect(stored?.meta.updatedAt).toBe('2024-01-01T00:00:00.000Z');
     });
   });
 
