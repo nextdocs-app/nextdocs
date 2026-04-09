@@ -28,6 +28,8 @@ import { PopupMenuItem } from '@/components/PopupMenuItem';
 import { SettingsModal } from '@/components/SettingsModal';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
+import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_VISIBLE_COUNT = 7;
@@ -313,7 +315,7 @@ function ProfileMenuPopup({
 function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   const router = useRouter();
   const params = useParams();
-  const activeDocId = (params?.id as string) || 'default-doc';
+  const routeActiveDocId = (params?.id as string) || 'default-doc';
   const {
     documents,
     sharedDocuments = [],
@@ -365,7 +367,9 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   } | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
+  const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const accountMenuPopupRef = useRef<HTMLDivElement>(null);
   const documentsPanelScrollRef = useRef<HTMLDivElement>(null);
   const documentsPanelSentinelRef = useRef<HTMLLIElement>(null);
 
@@ -434,6 +438,15 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
   const handleSelectDocument = useCallback(
     (id: string) => {
+      if (typeof window !== 'undefined' && navigator.onLine === false) {
+        window.dispatchEvent(
+          new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+            detail: { id },
+          })
+        );
+        return;
+      }
+
       if (id === 'default-doc') {
         router.push('/');
       } else {
@@ -442,6 +455,18 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     },
     [router]
   );
+
+  useOfflineDocumentSelect(setOfflineSelectedDocumentId);
+
+  useEffect(() => {
+    if (!offlineSelectedDocumentId) {
+      return;
+    }
+
+    if (routeActiveDocId === offlineSelectedDocumentId) {
+      setOfflineSelectedDocumentId(null);
+    }
+  }, [routeActiveDocId, offlineSelectedDocumentId]);
 
   useEffect(() => {
     if (!isAccountMenuOpen) {

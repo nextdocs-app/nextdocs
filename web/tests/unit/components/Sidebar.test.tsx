@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from '../../../components/Sidebar';
 import { useDocumentList } from '../../../hooks/useDocumentList.hook';
@@ -6,6 +6,7 @@ import { documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
+import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
 
 jest.mock('../../../hooks/useDocumentList.hook');
@@ -101,6 +102,57 @@ it('navigates to the selected document', async () => {
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
   await user.click(screen.getByRole('button', { name: /Untitled/i }));
   expect(mockPush).toHaveBeenCalledWith('/doc/id-2');
+});
+
+it('dispatches offline document select event instead of route navigation when browser is offline', async () => {
+  const user = userEvent.setup();
+  const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+  const originalOnLine = navigator.onLine;
+
+  Object.defineProperty(window.navigator, 'onLine', {
+    configurable: true,
+    value: false,
+  });
+
+  try {
+    render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+    await user.click(screen.getByRole('button', { name: /Untitled/i }));
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'nextdocs-open-local-document',
+        detail: { id: 'id-2' },
+      })
+    );
+  } finally {
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: originalOnLine,
+    });
+    dispatchEventSpy.mockRestore();
+  }
+});
+
+it('updates sidebar active focus from offline document selection event without route change', () => {
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  const docOneButton = screen.getByRole('button', { name: /Doc 1/i });
+  const docTwoButton = screen.getByRole('button', { name: /Untitled/i });
+
+  expect(docOneButton).toHaveClass('bg-sidebar-accent/70');
+  expect(docTwoButton).not.toHaveClass('bg-sidebar-accent/70');
+
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+        detail: { id: 'id-2' },
+      })
+    );
+  });
+
+  expect(docTwoButton).toHaveClass('bg-sidebar-accent/70');
+  expect(docOneButton).not.toHaveClass('bg-sidebar-accent/70');
 });
 
 it('creates a new document and navigates to it', async () => {

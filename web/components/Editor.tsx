@@ -23,6 +23,8 @@ import { DocumentErrorPanel } from '@/components/DocumentErrorPanel';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useDocument } from '@/hooks/useDocument.hook';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
+import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
 import { Send } from '@/icons/Send';
@@ -122,9 +124,14 @@ export default function Editor() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const routeDocumentId = (params?.id as string) || 'default-doc';
+  const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
+  const effectiveOfflineSelectedDocumentId =
+    offlineSelectedDocumentId === routeDocumentId ? null : offlineSelectedDocumentId;
+  const effectiveDocumentId = effectiveOfflineSelectedDocumentId ?? routeDocumentId;
   const searchParamsString = searchParams.toString();
   const isSharedDocument = searchParams.get('share') === '1';
   const { isAuthenticated, accessToken, user } = useAuth();
+  const { isOnline } = useNetworkStatus();
   const {
     documentId,
     ydoc,
@@ -137,27 +144,51 @@ export default function Editor() {
     isLoading,
     error,
     updateMeta,
-  } = useDocument(routeDocumentId, { isSharedDocument });
+  } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
   const [showCommentsSidebar, setShowCommentsSidebar] = useState(false);
+  const [showRealtimeOfflineBadge, setShowRealtimeOfflineBadge] = useState(false);
   const [commentsFilter, setCommentsFilter] = useState<CommentsFilter>('open');
   const [commentsSort, setCommentsSort] = useState<CommentsSort>('position');
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
     Record<string, CommentThreadStats>
   >({});
   const isGuestSharedView =
-    !isAuthenticated && routeDocumentId !== 'default-doc' && accessLevel === 'VIEW';
+    !isAuthenticated && effectiveDocumentId !== 'default-doc' && accessLevel === 'VIEW';
+  const isOffline = !isOnline || showRealtimeOfflineBadge;
+  const { pendingEdits } = useYjsPersistence(
+    documentId,
+    ydoc,
+    meta,
+    isReadOnly || isGuestSharedView,
+    !(isReadOnly || isGuestSharedView)
+  );
 
   const openAuthModal = useCallback(() => {
     window.dispatchEvent(new CustomEvent('open-auth-modal'));
   }, []);
 
+  // Look at the comment in useOfflineDocumentSelect file to know why we need this workaround.
+  useOfflineDocumentSelect(setOfflineSelectedDocumentId);
+
   useEffect(() => {
+    if (!isOnline) {
+      return;
+    }
+
     if (!isLoading && documentId && routeDocumentId !== documentId) {
       const preservedQuery = isSharedDocument && searchParamsString ? `?${searchParamsString}` : '';
       router.replace(`/doc/${documentId}${preservedQuery}`);
     }
-  }, [isLoading, routeDocumentId, documentId, router, isSharedDocument, searchParamsString]);
+  }, [
+    isLoading,
+    routeDocumentId,
+    documentId,
+    router,
+    isOnline,
+    isSharedDocument,
+    searchParamsString,
+  ]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -167,7 +198,22 @@ export default function Editor() {
       timer = setTimeout(() => setShowLoading(false), 0);
     }
     return () => clearTimeout(timer);
-  }, [routeDocumentId, isLoading]);
+  }, [effectiveDocumentId, isLoading]);
+
+  useEffect(() => {
+    const timer = setTimeout(
+      () => {
+        if (!isAuthenticated || !isOnline || isRealtimeConnected) {
+          setShowRealtimeOfflineBadge(false);
+        } else {
+          setShowRealtimeOfflineBadge(true);
+        }
+      },
+      isAuthenticated && isOnline && !isRealtimeConnected ? 1500 : 0
+    );
+
+    return () => clearTimeout(timer);
+  }, [documentId, isAuthenticated, isOnline, isRealtimeConnected]);
 
   const commentsFeatureEnabled = accessLevel !== null;
   const showCommentsButton = !!user?.id && accessLevel !== 'VIEW';
@@ -242,7 +288,8 @@ export default function Editor() {
         documentId={documentId}
         isShareEnabled={isAuthenticated}
         updatedAt={meta.updatedAt}
-        isOffline={!isRealtimeConnected && isAuthenticated}
+        isOffline={isOffline}
+        pendingEdits={pendingEdits}
         showGuestNotice={isGuestSharedView}
         onGuestNoticeCtaClick={openAuthModal}
         showCommentsButton={showCommentsButton}
@@ -336,7 +383,6 @@ function EditorContent({
   onCommentsClose: () => void;
   onCommentsThreadStatsChange: (stats: CommentThreadStats) => void;
 }) {
-  useYjsPersistence(documentId, ydoc, meta, isReadOnly, !isReadOnly);
   const { resolvedTheme } = useTheme();
   const sendIconTemplateRef = useRef<HTMLSpanElement>(null);
 
