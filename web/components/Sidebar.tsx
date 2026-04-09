@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
-  useLocalDocuments,
+  useDocumentList,
   type LocalDocumentEntry,
   type SharedDocumentEntry,
-} from '@/hooks/useLocalDocuments.hook';
+} from '@/hooks/useDocumentList.hook';
 import { documentService } from '@/services/document.service';
 import {
   NewDocument,
@@ -337,7 +337,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     loadMore,
     loadMoreSharedDocuments = async () => {},
     loadMoreTrashDocuments,
-  } = useLocalDocuments();
+  } = useDocumentList();
   const { resolvedTheme } = useTheme();
   const { user, isAuthenticated, accessToken, logout, isInitializing } = useAuth();
   const userInitial =

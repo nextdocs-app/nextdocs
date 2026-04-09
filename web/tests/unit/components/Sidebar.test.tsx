@@ -1,14 +1,14 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from '../../../components/Sidebar';
-import { useLocalDocuments } from '../../../hooks/useLocalDocuments.hook';
+import { useDocumentList } from '../../../hooks/useDocumentList.hook';
 import { documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
 import * as Y from 'yjs';
 
-jest.mock('../../../hooks/useLocalDocuments.hook');
+jest.mock('../../../hooks/useDocumentList.hook');
 jest.mock('next/navigation');
 jest.mock('../../../services/document.service');
 jest.mock('../../../hooks/useAuth.hook');
@@ -51,7 +51,7 @@ const mockDocs = [
 function setupDefault() {
   (useRouter as jest.Mock).mockReturnValue({ push: mockPush });
   (useParams as jest.Mock).mockReturnValue({ id: 'id-1' });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -183,7 +183,7 @@ it('closes the account menu when Escape is pressed', async () => {
 
 it('calls showAllDocuments when "show all documents" is clicked', async () => {
   const user = userEvent.setup();
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -212,7 +212,7 @@ it('calls showAllDocuments when "show all documents" is clicked', async () => {
 
 it('opens all documents panel with search and closes with back', async () => {
   const user = userEvent.setup();
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -299,7 +299,7 @@ it('opens shared documents panel from shared section show all', async () => {
     logout: mockLogout,
   });
 
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -358,7 +358,7 @@ it('lets collaborator leave shared document from shared panel row actions menu',
     logout: mockLogout,
   });
 
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -425,7 +425,7 @@ it('shows trash option for authenticated user and opens trash panel', async () =
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -497,7 +497,7 @@ it('moves a document to trash from show all documents panel row actions menu', a
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -548,7 +548,7 @@ it('restores a document from trash panel row actions', async () => {
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -597,7 +597,7 @@ it('permanently deletes a document from trash panel after confirmation', async (
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -652,7 +652,7 @@ it('moves an owner-shared document to trash from shared section row actions menu
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -713,7 +713,7 @@ it('lets collaborator leave shared document from shared section row actions menu
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
