@@ -1,41 +1,182 @@
-# Nextdocs
+<p align="center">
+  <a href="https://github.com/santhoshh-kumar/nextdocs">
+      <img alt="NextDocs" src="https://github.com/user-attachments/assets/a9db63a7-fe89-418c-aefc-c183e6e427a4" />
+  </a>
+</p>
 
-## Development
+<h3 align="center">
+  <em>An open-source, block-based collaborative document editor for individuals and teams.</em>
+</h3>
 
-Use `./nd` — a unified CLI that wraps Maven (api), Turborepo (web, realtime), and Docker (postgres).
+<p align="center">
+  <a href="https://github.com/santhoshh-kumar/nextdocs/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-3B82F6?style=flat-square" alt="License"></a> 
+  <a href="https://www.blocknotejs.org/"><img src="https://img.shields.io/badge/Powered--by-BlockNote-7C3AED?style=flat-square" alt="BlockNote"></a> 
+  <a href="https://yjs.dev/"><img src="https://img.shields.io/badge/Collaboration-Yjs-F59E0B?style=flat-square" alt="Yjs"></a>
+  <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Production--ready-Not%20yet-red?style=flat-square" alt="Production Status"></a> 
+  <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Release-Pre--alpha-orange?style=flat-square" alt="Release Status"></a>
+</p>
+
+<p align="center">
+  <a href="#getting-started">Getting Started</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#roadmap">Roadmap</a>
+</p>
+
+## Overview
+
+Platforms like Notion for document editing are powerful — until you realize you don't own your data. Centralized document platforms create vendor lock-in and reduce your control over how information is stored, shared, and governed.
+
+This is where **NextDocs** becomes relevant.
+
+For privacy-conscious individuals and organizations handling sensitive information, it's fully self-hostable, runs entirely on open technologies, and requires zero dependency on proprietary services. You deploy it. You control it. You own your data — end to end.
+
+> Own your documents. Not just access them.
+
+### Block-Based Editing
+
+A structured, Notion-like editing experience powered by [BlockNote](https://www.blocknotejs.org/). Compose documents using rich block types — paragraphs, headings, quotes, bullet and numbered lists, checklists, toggle lists, code blocks, tables, and embedded media. Inline formatting includes bold, italic, underline, strikethrough, text color, and links.
+
+### Real-Time Collaboration
+
+Multiple people edit the same document simultaneously with live cursors, presence indicators, and conflict-free merging — powered by [Yjs](https://yjs.dev/) CRDTs over a dedicated WebSocket server. See who's editing, where they're focused, and what they're typing, all in real time.
+
+### Access Control
+
+Per-collaborator access levels (Owner, Edit, Comment, View), link-based sharing with configurable permissions, and the ability to restrict access to specific collaborators only.
+
+### Threaded Comments
+
+Add contextual, threaded comments directly on document blocks. Comments are stored collaboratively in the Yjs document itself — no separate backend needed — so they sync in real time alongside content. Filter by open, resolved, or all; sort by position or date.
+
+### Offline-First
+
+Every document is persisted locally in [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API). Edit anywhere, anytime — even without connectivity. When you're back online, changes sync to the cloud automatically with conflict resolution. Bulk-import local documents when you sign in — means you can start creating documents without even signing up.
+
+<br>
+
+> [!IMPORTANT]
+> This project is currently **unreleased** and **not yet hosted** online. It is under active development and not ready for production use.
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) >= 18
+- [Java](https://openjdk.org/) 21
+- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/) (for PostgreSQL)
+- [npm](https://www.npmjs.com/) (comes with Node.js)
+
+### Quick Start
+
+The fastest way to get NextDocs running locally:
 
 ```bash
-./nd dev              # start everything (api + web + realtime + postgres)
-./nd dev api          # start only the api
-./nd dev web          # start only the web
+# Build all services
+./nd build
 
-./nd test             # run all tests
-./nd test api         # run api tests only
-
-./nd lint             # lint all
-./nd lint web --fix   # lint + auto-fix web
-
-./nd format           # format all
-./nd build            # build all
-
-./nd db               # open a psql shell
+# Start all services — API, web, realtime server, and PostgreSQL
+./nd dev
 ```
 
-Services: `api`, `web`, `realtime`. Omit the service to run across all.
+That's it. The `./nd` CLI auto-starts a PostgreSQL container, generates ephemeral dev keys if needed, and launches all services with hot-reload.
 
-> `./nd dev` auto-starts and stops a Postgres Docker container for you.  
-> If secrets are not set, ephemeral dev values are generated — they won't survive restarts.
-> `./nd --help` to know more about the commands.
+| Service | URL |
+|---------|-----|
+| Web app | http://localhost:3000 |
+| API | http://localhost:8080 |
+| Realtime WebSocket | ws://localhost:1234 |
 
-Overall, `./nd` CLI makes developer's life easier in nextdocs. 
+### Development Commands
 
----
-
-## Docker setup
-
-Some values in `docker-compose.yml` are intentionally set to `CHANGE_ME_IN_PRODUCTION`.  
-**The application will not start with these values outside of local dev** — see `.env.example` for all required variables and how to generate secure values.
+Use the `./nd` CLI for all development tasks:
 
 ```bash
+./nd dev              # Start all services (auto-manages PostgreSQL)
+./nd dev api          # Start only the API
+./nd dev web          # Start only the web frontend
+
+./nd test             # Run all tests
+./nd test api         # Run API tests only
+
+./nd lint             # Lint all code
+./nd lint web --fix   # Lint + auto-fix frontend
+
+./nd format           # Format all code (Prettier + Spotless)
+./nd build            # Build all packages
+
+./nd db               # Open a psql shell to the database
+./nd --help           # See all available commands
+```
+
+> [!TIP]
+> If `./nd` doesn't have permission to execute, run `chmod +x nd` first. On Windows, use `nd.cmd` instead.
+
+### Manual Setup
+
+If you prefer to run services manually with no development CLI:
+
+```bash
+# 1. Start PostgreSQL
+docker compose up -d postgres
+
+# 2. Copy and configure environment variables
 cp .env.example .env
+
+# 3. Start the API (from api/ directory)
+./mvnw spring-boot:run
+
+# 4. Start the web frontend (from web/ directory)
+npm run dev
+
+# 5. Start the realtime server (from realtime/ directory)
+npm run dev
 ```
+
+## Architecture
+
+NextDocs is a monorepo with three core services:
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                                 NextDocs                                      │
+├────────────────────────┬────────────────────────┬─────────────────────────────┤
+│          Web           │          API           │          Realtime           │
+│────────────────────────│────────────────────────│─────────────────────────────│
+│ Next.js 16             │ Spring Boot (Java 21)  │ Node.js + Yjs               │
+│ React 19               │ Flyway (Migrations)    │ WebSocket                   │
+│ BlockNote Editor       │ Bucket4j (Rate limit)  │ CRDT Sync                   │
+│ Redux Toolkit          │ ┌────────────────────┐ │                             │
+│ IndexedDB (Offline)    │ │      In-Memory     │ │                             │
+│                        │ │────────────────────│ │                             │
+│                        │ │ Caffeine (Cache)   │ │                             │
+│                        │ └────────────────────┘ │                             │
+│ :3000                  │ :8080                  │ :1234                       │
+└────────────────────────┴───────────┬────────────┴─────────────────────────────┘
+                                     │
+                                     │
+                            ┌────────▼────────┐
+                            │   PostgreSQL    │
+                            │     :5433       │
+                            └─────────────────┘
+```
+
+1. **Web frontend** serves the UI and BlockNote editor. Documents are cached locally in IndexedDB for offline access.
+2. **API server** handles authentication, document metadata, sharing permissions, and persistent Yjs state in PostgreSQL.
+3. **Realtime server** manages WebSocket connections for live collaborative editing using Yjs CRDTs — ensuring conflict-free concurrent edits. When multiple users edit a document, changes flow through the WebSocket server in real time, while periodic snapshots are saved to the database via the API.
+4. **[Caffeine](https://github.com/ben-manes/caffeine) cache** provides in-memory caching with TTL and bounded size — keeping rate limiter buckets and hot data fast. Optimized for single-instance, self-hosted deployments, with a swappable interface that allows seamless migration to Redis for multi-instance setups.
+5. **[Bucket4j](https://github.com/bucket4j/bucket4j)** enforces rate limiting on the API using the token bucket algorithm. Also optimized for single-instance deployments (since buckets are kept in Caffeine), with a swappable interface — simple by default, adaptable as scaling needs evolve.
+
+> More detailed architecture will be available via Documentation soon before V1 release.
+
+## Roadmap
+
+- [x] Core features listed in <a href="#overview">overview</a>.
+- [x] Trash documents with recovery and auto-delete after 30 days.
+- [ ] Search Documents by content.
+- [ ] Polish blocknote editor.
+- [ ] OAuth login (Google, GitHub).
+- [ ] Document options like Export, font-options, etc.
+- [ ] Responsive design for all screen sizes.
+- [ ] Jitsi video call integration during collaboration.
+- [ ] Document version history and snapshots (Coming soon in blocknote itself).
+- [ ] Workspace and team permission management.
