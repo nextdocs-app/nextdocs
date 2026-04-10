@@ -23,8 +23,11 @@ import { DocumentErrorPanel } from '@/components/DocumentErrorPanel';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useDocument } from '@/hooks/useDocument.hook';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
+import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
+import { Send } from '@/icons/Send';
 import { getPresenceColor } from '@/lib/realtime.util';
 import { documentService, type DocumentAccessLevel } from '@/services/document.service';
 import type { AuthUser } from '@/stores/auth/auth.types';
@@ -121,9 +124,14 @@ export default function Editor() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const routeDocumentId = (params?.id as string) || 'default-doc';
+  const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
+  const effectiveOfflineSelectedDocumentId =
+    offlineSelectedDocumentId === routeDocumentId ? null : offlineSelectedDocumentId;
+  const effectiveDocumentId = effectiveOfflineSelectedDocumentId ?? routeDocumentId;
   const searchParamsString = searchParams.toString();
   const isSharedDocument = searchParams.get('share') === '1';
   const { isAuthenticated, accessToken, user } = useAuth();
+  const { isOnline } = useNetworkStatus();
   const {
     documentId,
     ydoc,
@@ -136,27 +144,51 @@ export default function Editor() {
     isLoading,
     error,
     updateMeta,
-  } = useDocument(routeDocumentId, { isSharedDocument });
+  } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
   const [showCommentsSidebar, setShowCommentsSidebar] = useState(false);
+  const [showRealtimeOfflineBadge, setShowRealtimeOfflineBadge] = useState(false);
   const [commentsFilter, setCommentsFilter] = useState<CommentsFilter>('open');
   const [commentsSort, setCommentsSort] = useState<CommentsSort>('position');
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
     Record<string, CommentThreadStats>
   >({});
   const isGuestSharedView =
-    !isAuthenticated && routeDocumentId !== 'default-doc' && accessLevel === 'VIEW';
+    !isAuthenticated && effectiveDocumentId !== 'default-doc' && accessLevel === 'VIEW';
+  const isOffline = !isOnline || showRealtimeOfflineBadge;
+  const { pendingEdits } = useYjsPersistence(
+    documentId,
+    ydoc,
+    meta,
+    isReadOnly || isGuestSharedView,
+    !(isReadOnly || isGuestSharedView)
+  );
 
   const openAuthModal = useCallback(() => {
     window.dispatchEvent(new CustomEvent('open-auth-modal'));
   }, []);
 
+  // Look at the comment in useOfflineDocumentSelect file to know why we need this workaround.
+  useOfflineDocumentSelect(setOfflineSelectedDocumentId);
+
   useEffect(() => {
+    if (!isOnline) {
+      return;
+    }
+
     if (!isLoading && documentId && routeDocumentId !== documentId) {
       const preservedQuery = isSharedDocument && searchParamsString ? `?${searchParamsString}` : '';
       router.replace(`/doc/${documentId}${preservedQuery}`);
     }
-  }, [isLoading, routeDocumentId, documentId, router, isSharedDocument, searchParamsString]);
+  }, [
+    isLoading,
+    routeDocumentId,
+    documentId,
+    router,
+    isOnline,
+    isSharedDocument,
+    searchParamsString,
+  ]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -166,7 +198,22 @@ export default function Editor() {
       timer = setTimeout(() => setShowLoading(false), 0);
     }
     return () => clearTimeout(timer);
-  }, [routeDocumentId, isLoading]);
+  }, [effectiveDocumentId, isLoading]);
+
+  useEffect(() => {
+    const timer = setTimeout(
+      () => {
+        if (!isAuthenticated || !isOnline || isRealtimeConnected) {
+          setShowRealtimeOfflineBadge(false);
+        } else {
+          setShowRealtimeOfflineBadge(true);
+        }
+      },
+      isAuthenticated && isOnline && !isRealtimeConnected ? 1500 : 0
+    );
+
+    return () => clearTimeout(timer);
+  }, [documentId, isAuthenticated, isOnline, isRealtimeConnected]);
 
   const commentsFeatureEnabled = accessLevel !== null;
   const showCommentsButton = !!user?.id && accessLevel !== 'VIEW';
@@ -241,7 +288,8 @@ export default function Editor() {
         documentId={documentId}
         isShareEnabled={isAuthenticated}
         updatedAt={meta.updatedAt}
-        isOffline={!isRealtimeConnected && isAuthenticated}
+        isOffline={isOffline}
+        pendingEdits={pendingEdits}
         showGuestNotice={isGuestSharedView}
         onGuestNoticeCtaClick={openAuthModal}
         showCommentsButton={showCommentsButton}
@@ -335,8 +383,8 @@ function EditorContent({
   onCommentsClose: () => void;
   onCommentsThreadStatsChange: (stats: CommentThreadStats) => void;
 }) {
-  useYjsPersistence(documentId, ydoc, meta, isReadOnly, !isReadOnly);
   const { resolvedTheme } = useTheme();
+  const sendIconTemplateRef = useRef<HTMLSpanElement>(null);
 
   const collaboratorCache = useRef<Map<string, CommentUser>>(new Map());
   const collaboratorCacheUpdatedAt = useRef(0);
@@ -506,25 +554,136 @@ function EditorContent({
       return;
     }
 
-    const selector = '.nd-floating-composer .bn-comment-actions button';
+    const selector =
+      '.nd-floating-composer .bn-comment-actions button, .bn-thread .bn-thread-composer .bn-comment-actions button';
 
-    const syncFloatingComposerSendLabels = () => {
+    const normalizeComposerText = (value: string): string => {
+      const lines = value
+        .replace(/\r\n?/g, '\n')
+        .replace(/\u00A0/g, ' ')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+$/g, ''));
+
+      while (lines.length > 0 && lines[0].trim().length === 0) {
+        lines.shift();
+      }
+      while (lines.length > 0 && lines[lines.length - 1].trim().length === 0) {
+        lines.pop();
+      }
+
+      if (lines.length > 0) {
+        lines[0] = lines[0].replace(/^[ \t]+/g, '');
+      }
+
+      return lines.join('\n');
+    };
+
+    const getComposerRawText = (editorSurface: HTMLElement | null): string => {
+      if (!editorSurface) {
+        return '';
+      }
+      return (editorSurface.innerText || editorSurface.textContent || '').replace(/\r\n?/g, '\n');
+    };
+
+    const getComposerEditorSurface = (button: HTMLButtonElement): HTMLElement | null => {
+      const composerRoot = button.closest<HTMLElement>(
+        '.bn-thread-composer, .nd-floating-composer .bn-thread'
+      );
+      return composerRoot?.querySelector<HTMLElement>('.bn-comment-editor .bn-editor') ?? null;
+    };
+
+    const hasComposerContent = (button: HTMLButtonElement): boolean => {
+      const editorSurface = getComposerEditorSurface(button);
+      const rawText = getComposerRawText(editorSurface);
+      const normalized = normalizeComposerText(rawText);
+      return normalized.length > 0;
+    };
+
+    const syncComposerSendButtons = () => {
       document.querySelectorAll<HTMLButtonElement>(selector).forEach((button) => {
-        button.setAttribute('aria-label', 'Send comment');
+        button.setAttribute('data-nd-send-icon-only', 'true');
 
-        if (button.textContent?.trim() !== 'Send') {
-          button.textContent = 'Send';
+        if (!button.querySelector('.nd-comment-send-icon')) {
+          const iconTemplate = sendIconTemplateRef.current?.querySelector('svg');
+          if (iconTemplate) {
+            const wrapper = document.createElement('span');
+            wrapper.className = 'nd-comment-send-icon';
+            wrapper.setAttribute('aria-hidden', 'true');
+            wrapper.append(iconTemplate.cloneNode(true));
+            button.replaceChildren(wrapper);
+          }
+        }
+
+        if (button.dataset.ndNormalizeBound !== 'true') {
+          button.dataset.ndNormalizeBound = 'true';
+          button.addEventListener(
+            'click',
+            (event) => {
+              if (button.dataset.ndNormalizeBypass === 'true') {
+                button.dataset.ndNormalizeBypass = 'false';
+                return;
+              }
+
+              const editorSurface = getComposerEditorSurface(button);
+              if (!editorSurface) {
+                return;
+              }
+
+              const rawText = getComposerRawText(editorSurface);
+              const normalized = normalizeComposerText(rawText);
+
+              if (normalized.length === 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
+
+              if (normalized !== rawText) {
+                event.preventDefault();
+                event.stopPropagation();
+                editorSurface.textContent = normalized;
+                editorSurface.dispatchEvent(new Event('input', { bubbles: true }));
+
+                // Submit on next microtask so BlockNote can ingest the normalized draft first.
+                button.dataset.ndNormalizeBypass = 'true';
+                queueMicrotask(() => {
+                  button.click();
+                });
+              }
+            },
+            true
+          );
+        }
+
+        const hasContent = hasComposerContent(button);
+        const actionsWrapper = button.closest<HTMLElement>('.bn-comment-actions-wrapper');
+        button.hidden = !hasContent;
+        button.setAttribute('aria-hidden', String(!hasContent));
+        if (actionsWrapper) {
+          actionsWrapper.hidden = !hasContent;
         }
       });
     };
 
     // WORKAROUND: BlockNote's floating composer can still render a hardcoded
-    // "Save" label even when dictionary.save_button_text is set. We patch
-    // the live button text until upstream exposes a reliable API override.
-    syncFloatingComposerSendLabels();
-
+    // text label. We patch the live button to icon-only until upstream
+    // exposes a reliable API override.
+    //
+    // TODO: Maybe we can create our own implemenentation instead of relying on
+    // blocknote to overcome these difficulties.
+    //
+    // Throttle sync to avoid excessive processing during rapid mutations.
+    // BlockNote composers are portal-rendered to document.body, so we must
+    // observe body — but we batch sync calls to reduce overhead.
+    let syncScheduled = false;
     const observer = new MutationObserver(() => {
-      syncFloatingComposerSendLabels();
+      if (syncScheduled) return;
+      syncScheduled = true;
+      requestAnimationFrame(() => {
+        syncScheduled = false;
+        syncComposerSendButtons();
+      });
     });
 
     observer.observe(document.body, {
@@ -685,6 +844,9 @@ function EditorContent({
             emojiPicker={!isViewer}
             comments={false}
           >
+            <span ref={sendIconTemplateRef} className="sr-only" aria-hidden="true">
+              <Send size={14} strokeWidth={1.75} />
+            </span>
             {commentsUiEnabled && (
               <FloatingComposerController
                 floatingUIOptions={{

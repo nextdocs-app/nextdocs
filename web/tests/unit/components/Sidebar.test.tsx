@@ -1,14 +1,15 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from '../../../components/Sidebar';
-import { useLocalDocuments } from '../../../hooks/useLocalDocuments.hook';
+import { useDocumentList } from '../../../hooks/useDocumentList.hook';
 import { documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
+import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
 
-jest.mock('../../../hooks/useLocalDocuments.hook');
+jest.mock('../../../hooks/useDocumentList.hook');
 jest.mock('next/navigation');
 jest.mock('../../../services/document.service');
 jest.mock('../../../hooks/useAuth.hook');
@@ -51,7 +52,7 @@ const mockDocs = [
 function setupDefault() {
   (useRouter as jest.Mock).mockReturnValue({ push: mockPush });
   (useParams as jest.Mock).mockReturnValue({ id: 'id-1' });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -101,6 +102,57 @@ it('navigates to the selected document', async () => {
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
   await user.click(screen.getByRole('button', { name: /Untitled/i }));
   expect(mockPush).toHaveBeenCalledWith('/doc/id-2');
+});
+
+it('dispatches offline document select event instead of route navigation when browser is offline', async () => {
+  const user = userEvent.setup();
+  const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+  const originalOnLine = navigator.onLine;
+
+  Object.defineProperty(window.navigator, 'onLine', {
+    configurable: true,
+    value: false,
+  });
+
+  try {
+    render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+    await user.click(screen.getByRole('button', { name: /Untitled/i }));
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'nextdocs-open-local-document',
+        detail: { id: 'id-2' },
+      })
+    );
+  } finally {
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: originalOnLine,
+    });
+    dispatchEventSpy.mockRestore();
+  }
+});
+
+it('updates sidebar active focus from offline document selection event without route change', () => {
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  const docOneButton = screen.getByRole('button', { name: /Doc 1/i });
+  const docTwoButton = screen.getByRole('button', { name: /Untitled/i });
+
+  expect(docOneButton).toHaveClass('bg-sidebar-accent/70');
+  expect(docTwoButton).not.toHaveClass('bg-sidebar-accent/70');
+
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+        detail: { id: 'id-2' },
+      })
+    );
+  });
+
+  expect(docTwoButton).toHaveClass('bg-sidebar-accent/70');
+  expect(docOneButton).not.toHaveClass('bg-sidebar-accent/70');
 });
 
 it('creates a new document and navigates to it', async () => {
@@ -183,7 +235,7 @@ it('closes the account menu when Escape is pressed', async () => {
 
 it('calls showAllDocuments when "show all documents" is clicked', async () => {
   const user = userEvent.setup();
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -205,14 +257,14 @@ it('calls showAllDocuments when "show all documents" is clicked', async () => {
   });
 
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   expect(mockShowAllDocuments).toHaveBeenCalledTimes(1);
 });
 
 it('opens all documents panel with search and closes with back', async () => {
   const user = userEvent.setup();
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -235,7 +287,7 @@ it('opens all documents panel with search and closes with back', async () => {
 
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   expect(dialog).toBeInTheDocument();
@@ -246,6 +298,43 @@ it('opens all documents panel with search and closes with back', async () => {
 
   await user.click(screen.getByRole('button', { name: /Back/i }));
   expect(screen.queryByRole('dialog', { name: /Private documents/i })).not.toBeInTheDocument();
+});
+
+it('renders skeleton rows instead of a loading badge while loading more in the documents panel', async () => {
+  const user = userEvent.setup();
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: false,
+    isShowingAllShared: false,
+    isLoadingMore: true,
+    hasMore: true,
+    isShowingAll: true,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: true,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(screen.getByRole('button', { name: /show all/i }));
+
+  expect(screen.getByRole('dialog', { name: /Private documents/i })).toBeInTheDocument();
+  expect(screen.getByTestId('documents-panel-loading-more-skeleton')).toBeInTheDocument();
+  expect(screen.queryByText(/Loading more/i)).not.toBeInTheDocument();
 });
 
 it('opens shared documents panel from shared section show all', async () => {
@@ -262,7 +351,7 @@ it('opens shared documents panel from shared section show all', async () => {
     logout: mockLogout,
   });
 
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -301,7 +390,7 @@ it('opens shared documents panel from shared section show all', async () => {
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   expect(mockShowAllSharedDocuments).toHaveBeenCalledTimes(1);
   expect(screen.getByRole('dialog', { name: /Shared documents/i })).toBeInTheDocument();
@@ -321,7 +410,7 @@ it('lets collaborator leave shared document from shared panel row actions menu',
     logout: mockLogout,
   });
 
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -361,7 +450,7 @@ it('lets collaborator leave shared document from shared panel row actions menu',
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Shared documents/i });
   await user.click(
@@ -388,7 +477,7 @@ it('shows trash option for authenticated user and opens trash panel', async () =
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -460,7 +549,7 @@ it('moves a document to trash from show all documents panel row actions menu', a
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     isLoading: false,
@@ -485,7 +574,7 @@ it('moves a document to trash from show all documents panel row actions menu', a
   const user = userEvent.setup();
   render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
 
-  await user.click(screen.getByRole('button', { name: /show all documents/i }));
+  await user.click(screen.getByRole('button', { name: /show all/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   await user.click(within(dialog).getByRole('button', { name: /Document actions for Doc 1/i }));
@@ -511,7 +600,7 @@ it('restores a document from trash panel row actions', async () => {
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -560,7 +649,7 @@ it('permanently deletes a document from trash panel after confirmation', async (
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
     trashedDocuments: mockDocs,
@@ -615,7 +704,7 @@ it('moves an owner-shared document to trash from shared section row actions menu
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {
@@ -676,7 +765,7 @@ it('lets collaborator leave shared document from shared section row actions menu
     accessToken: 'token-1',
     logout: mockLogout,
   });
-  (useLocalDocuments as jest.Mock).mockReturnValue({
+  (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [
       {

@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
-  useLocalDocuments,
+  useDocumentList,
   type LocalDocumentEntry,
   type SharedDocumentEntry,
-} from '@/hooks/useLocalDocuments.hook';
+} from '@/hooks/useDocumentList.hook';
 import { documentService } from '@/services/document.service';
 import {
   NewDocument,
@@ -15,15 +16,20 @@ import {
   DocumentText,
   Settings,
   Login,
+  Logout,
   MoreHorizontal,
   Trash,
   Restore,
+  Hamburger,
+  NextDocs,
 } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { PopupMenuItem } from '@/components/PopupMenuItem';
 import { SettingsModal } from '@/components/SettingsModal';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
+import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_VISIBLE_COUNT = 7;
@@ -61,13 +67,56 @@ function DocumentActionsButton({
       type="button"
       aria-label={`Document actions for ${documentTitle || 'Untitled'}`}
       onClick={(event) => onToggle(event, documentId, actionType)}
-      className={`absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/70 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer ${
+      className={`absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer ${
         isOpen ? 'opacity-100' : 'opacity-0 group-hover/doc:opacity-100 focus-visible:opacity-100'
       }`}
       data-doc-actions-root={documentId}
     >
-      <MoreHorizontal className="opacity-90" />
+      <MoreHorizontal className="opacity-80" />
     </button>
+  );
+}
+
+function DocumentsPanelSkeleton({
+  rows = 6,
+  compact = false,
+}: {
+  rows?: number;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col ${compact ? 'gap-2 py-2' : 'gap-2.5 py-1'}`}
+      data-testid={compact ? 'documents-panel-loading-more-skeleton' : 'documents-panel-skeleton'}
+      aria-hidden="true"
+    >
+      {Array.from({ length: rows }, (_, index) => (
+        <div
+          key={`documents-panel-skeleton-${compact ? 'compact' : 'default'}-${index + 1}`}
+          className={`rounded-xl border border-sidebar-border/60 bg-sidebar-accent/20 ${
+            compact ? 'px-3 py-2.5' : 'px-3 py-3'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <div className="h-4 w-4 flex-shrink-0 rounded bg-sidebar-accent/55 animate-pulse" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div
+                className={`h-3 rounded bg-sidebar-accent/55 animate-pulse ${
+                  index % 3 === 0 ? 'w-[72%]' : index % 3 === 1 ? 'w-[58%]' : 'w-[66%]'
+                }`}
+              />
+              {!compact && (
+                <div
+                  className={`h-2.5 rounded bg-sidebar-accent/40 animate-pulse ${
+                    index % 2 === 0 ? 'w-[34%]' : 'w-[28%]'
+                  }`}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -157,10 +206,10 @@ function SidebarDocumentSection({
                       className={`w-full flex items-center gap-2.5 px-3 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
                         isActive
                           ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
-                          : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
+                          : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                       }`}
                     >
-                      <DocumentText className="flex-shrink-0 opacity-50" />
+                      <DocumentText size={16} className="flex-shrink-0 ml-[1px] opacity-80" />
                       <span className="text-[13px] truncate">{doc.meta.title || 'Untitled'}</span>
                     </button>
 
@@ -185,10 +234,10 @@ function SidebarDocumentSection({
                 <button
                   type="button"
                   onClick={onShowAll}
-                  className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 >
-                  <MoreHorizontal className="flex-shrink-0 opacity-80" />
-                  <span className="text-[13px] truncate opacity-80">Show All Documents</span>
+                  <MoreHorizontal className="flex-shrink-0 ml-[1px] size-4" />
+                  <span className="text-[13px] truncate">Show All</span>
                 </button>
               </li>
             </ul>
@@ -199,10 +248,74 @@ function SidebarDocumentSection({
   );
 }
 
-export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
+type ProfileMenuPopupProps = {
+  theme: 'dark' | 'light';
+  isAuthenticated: boolean;
+  onOpenSettings: () => void;
+  onOpenTrash: () => void;
+  onLogout: () => void;
+  onOpenAuth: () => void;
+  style: React.CSSProperties;
+  popupRef: React.RefObject<HTMLDivElement | null>;
+};
+
+function ProfileMenuPopup({
+  theme,
+  isAuthenticated,
+  onOpenSettings,
+  onOpenTrash,
+  onLogout,
+  onOpenAuth,
+  style,
+  popupRef,
+}: ProfileMenuPopupProps) {
+  return (
+    <div
+      ref={popupRef}
+      style={style}
+      className={`fixed w-[14.3rem] text-[14px] z-30 rounded-xl border border-sidebar-border p-1.5 shadow-lg ${
+        theme === 'dark' ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
+      }`}
+      role="menu"
+      aria-label="Account options"
+    >
+      <PopupMenuItem
+        theme={theme}
+        icon={<Settings size={15} className="opacity-90" />}
+        onClick={onOpenSettings}
+      >
+        Settings
+      </PopupMenuItem>
+      {isAuthenticated && (
+        <PopupMenuItem
+          theme={theme}
+          icon={<Trash size={15} className="opacity-90" />}
+          onClick={onOpenTrash}
+        >
+          Trash Documents
+        </PopupMenuItem>
+      )}
+      {isAuthenticated ? (
+        <PopupMenuItem
+          theme={theme}
+          icon={<Logout size={15} className="opacity-90" />}
+          onClick={onLogout}
+        >
+          Log out
+        </PopupMenuItem>
+      ) : (
+        <PopupMenuItem theme={theme} icon={<Login className="opacity-90" />} onClick={onOpenAuth}>
+          Log in
+        </PopupMenuItem>
+      )}
+    </div>
+  );
+}
+
+function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   const router = useRouter();
   const params = useParams();
-  const activeDocId = (params?.id as string) || 'default-doc';
+  const routeActiveDocId = (params?.id as string) || 'default-doc';
   const {
     documents,
     sharedDocuments = [],
@@ -226,14 +339,21 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     loadMore,
     loadMoreSharedDocuments = async () => {},
     loadMoreTrashDocuments,
-  } = useLocalDocuments();
+  } = useDocumentList();
   const { resolvedTheme } = useTheme();
-  const { user, isAuthenticated, accessToken, logout } = useAuth();
+  const { user, isAuthenticated, accessToken, logout, isInitializing } = useAuth();
   const userInitial =
     user?.displayName?.trim()?.charAt(0)?.toUpperCase() ||
     user?.email?.charAt(0)?.toUpperCase() ||
     'U';
+  const accountLabel = isInitializing
+    ? 'Loading account...'
+    : isAuthenticated && user
+      ? user.displayName
+      : 'Guest User';
 
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const [isPrivateOpen, setIsPrivateOpen] = useState(true);
   const [isSharedOpen, setIsSharedOpen] = useState(true);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
@@ -247,13 +367,16 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   } | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
+  const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const accountMenuPopupRef = useRef<HTMLDivElement>(null);
   const documentsPanelScrollRef = useRef<HTMLDivElement>(null);
   const documentsPanelSentinelRef = useRef<HTMLLIElement>(null);
 
   const isDocumentsPanelOpen = documentsPanelMode !== null;
   const isTrashPanel = documentsPanelMode === 'trash';
   const isSharedPanel = documentsPanelMode === 'shared';
+  const profileMenuStyle = { left: '0.75rem', bottom: '4.25rem' } as React.CSSProperties;
 
   const panelDocuments = useMemo(
     () => (isTrashPanel ? trashedDocuments : isSharedPanel ? sharedDocuments : documents),
@@ -315,6 +438,15 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
   const handleSelectDocument = useCallback(
     (id: string) => {
+      if (typeof window !== 'undefined' && navigator.onLine === false) {
+        window.dispatchEvent(
+          new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+            detail: { id },
+          })
+        );
+        return;
+      }
+
       if (id === 'default-doc') {
         router.push('/');
       } else {
@@ -324,13 +456,28 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     [router]
   );
 
+  useOfflineDocumentSelect(setOfflineSelectedDocumentId);
+
+  useEffect(() => {
+    if (!offlineSelectedDocumentId) {
+      return;
+    }
+
+    if (routeActiveDocId === offlineSelectedDocumentId) {
+      setOfflineSelectedDocumentId(null);
+    }
+  }, [routeActiveDocId, offlineSelectedDocumentId]);
+
   useEffect(() => {
     if (!isAccountMenuOpen) {
       return;
     }
 
     const handleOutsideClick = (event: MouseEvent) => {
-      if (!accountMenuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const isWithinTrigger = accountMenuTriggerRef.current?.contains(target);
+      const isWithinPopup = accountMenuPopupRef.current?.contains(target);
+      if (!isWithinTrigger && !isWithinPopup) {
         setIsAccountMenuOpen(false);
       }
     };
@@ -654,160 +801,61 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   }
 
   return (
-    <aside className="w-64 border-r flex-shrink-0 flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground border-border select-none">
-      {/* Top actions */}
-      <div className="flex flex-col gap-0.5 px-2 pt-3 pb-1">
-        {/* New Document */}
-        <button
-          onClick={handleCreateFile}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-left
-                     text-sidebar-foreground hover:bg-sidebar-accent
-                     transition-colors duration-100 cursor-pointer"
-        >
-          <NewDocument className="flex-shrink-0 opacity-80" />
-          <span className="text-[14px]">New document</span>
-        </button>
-
-        {/* Search Documents (TODO: currently placeholder) */}
-        <button
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-left
-                     text-sidebar-foreground hover:bg-sidebar-accent
-                     transition-colors duration-100 cursor-pointer"
-        >
-          <Search className="flex-shrink-0 opacity-80" />
-          <span className="text-[14px]">Search documents</span>
-        </button>
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
-        <SidebarDocumentSection
-          title="Private"
-          isOpen={isPrivateOpen}
-          onToggle={() => setIsPrivateOpen((prev) => !prev)}
-          documents={documents}
-          isLoading={isLoading}
-          emptyText="No documents yet"
-          activeDocId={activeDocId}
-          onSelectDocument={(docId) => {
-            setDocActionsAnchor(null);
-            handleSelectDocument(docId);
-          }}
-          isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-          docActionsAnchor={docActionsAnchor}
-          onToggleDocumentActions={handleToggleDocumentActions}
-          resolveActionType={() => 'move-to-trash'}
-          showAllButtonVisible={
-            !isLoading &&
-            documents.length > 0 &&
-            (hasMore || documents.length > SIDEBAR_VISIBLE_COUNT)
-          }
-          onShowAll={openAllDocumentsPanel}
-        />
-
-        {isAuthenticated && (
-          <SidebarDocumentSection
-            title="Shared"
-            className="mt-1"
-            isOpen={isSharedOpen}
-            onToggle={() => setIsSharedOpen((prev) => !prev)}
-            documents={sharedDocuments}
-            isLoading={isSharedLoading}
-            emptyText="No shared documents"
-            activeDocId={activeDocId}
-            onSelectDocument={(docId) => {
-              setDocActionsAnchor(null);
-              handleSelectDocument(docId);
-            }}
-            isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-            docActionsAnchor={docActionsAnchor}
-            onToggleDocumentActions={handleToggleDocumentActions}
-            resolveActionType={resolveSharedActionType}
-            showAllButtonVisible={
-              !isSharedLoading &&
-              sharedDocuments.length > 0 &&
-              (sharedHasMore || sharedDocuments.length > SIDEBAR_VISIBLE_COUNT)
-            }
-            onShowAll={openSharedDocumentsPanel}
-          />
-        )}
-
-        <div
-          className="relative mt-auto sticky bottom-0 border-t border-border bg-sidebar p-2"
-          ref={accountMenuRef}
-        >
-          {isAccountMenuOpen && (
-            <div
-              className={`absolute bottom-[calc(100%+0.35rem)] left-2 right-2 z-20 rounded-xl border border-sidebar-border
-                       p-1.5 shadow-lg ${
-                         resolvedTheme === 'dark'
-                           ? 'bg-[#303030] text-white'
-                           : 'bg-popover text-popover-foreground'
-                       }`}
-              role="menu"
-              aria-label="Account options"
+    <aside
+      className={`${isSidebarCollapsed ? 'w-16' : 'w-64'} border-r flex-shrink-0 flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground border-border select-none transition-all duration-300`}
+    >
+      {isSidebarCollapsed ? (
+        <>
+          <div className="flex items-center justify-center p-2 pt-3">
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed(false)}
+              aria-label="Expand sidebar"
+              aria-expanded={false}
+              title="Expand sidebar"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
             >
-              <PopupMenuItem
-                theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
-                icon={<Settings size={16} className="opacity-90" />}
-                onClick={() => {
-                  setIsAccountMenuOpen(false);
-                  setIsSettingsOpen(true);
-                }}
-              >
-                Settings
-              </PopupMenuItem>
-              {isAuthenticated && (
-                <PopupMenuItem
-                  theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
-                  icon={<Trash size={16} className="opacity-90" />}
-                  onClick={() => {
-                    setIsAccountMenuOpen(false);
-                    openTrashDocumentsPanel();
-                  }}
-                >
-                  Trash Documents
-                </PopupMenuItem>
-              )}
-              {isAuthenticated ? (
-                <PopupMenuItem
-                  theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
-                  icon={<Login size={16} className="opacity-90" />}
-                  onClick={() => {
-                    setIsAccountMenuOpen(false);
-                    logout();
-                  }}
-                >
-                  Log out
-                </PopupMenuItem>
-              ) : (
-                <PopupMenuItem
-                  theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
-                  icon={<Login size={16} className="opacity-90" />}
-                  onClick={() => {
-                    setIsAccountMenuOpen(false);
-                    onOpenAuth();
-                  }}
-                >
-                  Log in
-                </PopupMenuItem>
-              )}
-            </div>
-          )}
+              <Hamburger size={20} strokeWidth={2.25} className="flex-shrink-0" />
+            </button>
+          </div>
 
-          <button
-            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-            aria-haspopup="menu"
-            aria-expanded={isAccountMenuOpen}
-            className="w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent cursor-pointer
-                     flex items-center justify-between gap-2"
-          >
-            <span className="flex min-w-0 items-center gap-2">
+          <div className="flex flex-col items-center gap-2 pt-2 px-2 pb-1">
+            <button
+              onClick={handleCreateFile}
+              title="New Document"
+              aria-label="Create new document"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
+            >
+              <NewDocument className="flex-shrink-0 opacity-80" size={20} />
+            </button>
+
+            <button
+              onClick={openAllDocumentsPanel}
+              title="Search documents"
+              aria-label="Search documents"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
+            >
+              <Search className="flex-shrink-0 opacity-80" size={20} />
+            </button>
+          </div>
+
+          <div className="flex-1" />
+
+          <div className="flex items-center justify-center p-2 pb-3">
+            <button
+              ref={accountMenuTriggerRef}
+              onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={isAccountMenuOpen}
+              title={accountLabel}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors cursor-pointer"
+            >
               <span
                 aria-hidden="true"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground/70 flex-shrink-0"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground/80 flex-shrink-0 hover:bg-sidebar-accent/80 transition-colors"
               >
                 {isAuthenticated && user ? (
-                  <span className="text-[11px] font-semibold leading-none select-none">
+                  <span className="text-[12px] font-semibold leading-none select-none">
                     {userInitial}
                   </span>
                 ) : (
@@ -823,18 +871,179 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                   </svg>
                 )}
               </span>
-              <span className="truncate text-[14px]">
-                {isAuthenticated && user ? user.displayName : 'Guest User'}
-              </span>
-            </span>
-            <ChevronRight
-              className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
-                isAccountMenuOpen ? '-rotate-90' : 'rotate-90'
-              }`}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-between px-2 pt-3 pb-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsAccountMenuOpen(false);
+                setIsSidebarCollapsed(true);
+              }}
+              aria-label="Collapse sidebar"
+              aria-expanded={true}
+              title="Collapse sidebar"
+              className="inline-flex h-9 w-11 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
+            >
+              <Hamburger size={23} strokeWidth={2.25} className="flex-shrink-0" />
+            </button>
+
+            <div className="flex items-center justify-end gap-1.5 py-1 px-4 rounded-lg cursor-pointer hover:bg-sidebar-accent transition-colors duration-100">
+              <NextDocs className="w-[30px] h-[30px]" />
+              <span className="text-[21px] font-[500] leading-none">NextDocs</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col pt-2 px-2 pb-1">
+            <button
+              onClick={handleCreateFile}
+              className="flex items-center gap-3 px-3 py-2 rounded-lg text-left
+                     text-sidebar-foreground hover:bg-sidebar-accent
+                     transition-colors duration-100 cursor-pointer"
+            >
+              <NewDocument className="flex-shrink-0 opacity-80" />
+              <span className="text-[14px]">New Document</span>
+            </button>
+
+            <button
+              // TODO: This should open a search panel instead of the "all documents" panel.
+              // Since the backend currently does not support searching documents, it opens
+              // the "all documents" panel as a temporary solution where we can search by the
+              // title of documents.
+              onClick={openAllDocumentsPanel}
+              className="flex items-center gap-3 px-3 py-2 rounded-lg text-left
+                     text-sidebar-foreground hover:bg-sidebar-accent
+                     transition-colors duration-100 cursor-pointer"
+            >
+              <Search className="flex-shrink-0 opacity-80" />
+              <span className="text-[14px]">Search Documents</span>
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+            <SidebarDocumentSection
+              title="Private"
+              isOpen={isPrivateOpen}
+              onToggle={() => setIsPrivateOpen((prev) => !prev)}
+              documents={documents}
+              isLoading={isLoading}
+              emptyText="No documents yet"
+              activeDocId={activeDocId}
+              onSelectDocument={(docId) => {
+                setDocActionsAnchor(null);
+                handleSelectDocument(docId);
+              }}
+              isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+              docActionsAnchor={docActionsAnchor}
+              onToggleDocumentActions={handleToggleDocumentActions}
+              resolveActionType={() => 'move-to-trash'}
+              showAllButtonVisible={
+                !isLoading &&
+                documents.length > 0 &&
+                (hasMore || documents.length > SIDEBAR_VISIBLE_COUNT)
+              }
+              onShowAll={openAllDocumentsPanel}
             />
-          </button>
-        </div>
-      </div>
+
+            {isAuthenticated && (
+              <SidebarDocumentSection
+                title="Shared"
+                className="mt-1"
+                isOpen={isSharedOpen}
+                onToggle={() => setIsSharedOpen((prev) => !prev)}
+                documents={sharedDocuments}
+                isLoading={isSharedLoading}
+                emptyText="No shared documents"
+                activeDocId={activeDocId}
+                onSelectDocument={(docId) => {
+                  setDocActionsAnchor(null);
+                  handleSelectDocument(docId);
+                }}
+                isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+                docActionsAnchor={docActionsAnchor}
+                onToggleDocumentActions={handleToggleDocumentActions}
+                resolveActionType={resolveSharedActionType}
+                showAllButtonVisible={
+                  !isSharedLoading &&
+                  sharedDocuments.length > 0 &&
+                  (sharedHasMore || sharedDocuments.length > SIDEBAR_VISIBLE_COUNT)
+                }
+                onShowAll={openSharedDocumentsPanel}
+              />
+            )}
+
+            <div className="relative mt-auto sticky bottom-0 border-t border-border bg-sidebar p-2">
+              <button
+                ref={accountMenuTriggerRef}
+                onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+                aria-haspopup="menu"
+                aria-expanded={isAccountMenuOpen}
+                className="w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent cursor-pointer
+                     flex items-center justify-between gap-2"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground/80 flex-shrink-0"
+                  >
+                    {isAuthenticated && user ? (
+                      <span className="text-[11px] font-semibold leading-none select-none">
+                        {userInitial}
+                      </span>
+                    ) : (
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                      >
+                        <circle cx="12" cy="8" r="3.25" />
+                        <path d="M5.5 18.25a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
+                      </svg>
+                    )}
+                  </span>
+                  <span className="truncate text-[14px]">{accountLabel}</span>
+                </span>
+                <ChevronRight
+                  className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
+                    isAccountMenuOpen ? '-rotate-90' : 'rotate-90'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {isAccountMenuOpen && (
+        <ProfileMenuPopup
+          theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+          isAuthenticated={isAuthenticated}
+          onOpenSettings={() => {
+            setIsAccountMenuOpen(false);
+            setIsSettingsOpen(true);
+          }}
+          onOpenTrash={() => {
+            setIsAccountMenuOpen(false);
+            openTrashDocumentsPanel();
+          }}
+          onLogout={() => {
+            setIsAccountMenuOpen(false);
+            logout();
+          }}
+          onOpenAuth={() => {
+            setIsAccountMenuOpen(false);
+            onOpenAuth();
+          }}
+          style={profileMenuStyle}
+          popupRef={accountMenuPopupRef}
+        />
+      )}
+
       {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
 
       {docActionsAnchor && (
@@ -853,9 +1062,9 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
             icon={
               docActionsAnchor.actionType === 'leave-shared' ? (
-                <Login size={16} className="opacity-90" />
+                <Logout className="opacity-90" />
               ) : (
-                <Trash size={16} className="opacity-90" />
+                <Trash size={15} className="opacity-90" />
               )
             }
             onClick={(event) => {
@@ -939,13 +1148,7 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
             <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-3 py-3">
               {panelIsLoadingInitial ? (
-                <ul className="flex flex-col gap-1">
-                  {[1, 2, 3, 4].map((i) => (
-                    <li key={`panel-initial-loading-${i}`}>
-                      <div className="h-12 rounded-xl bg-sidebar-accent/35 animate-pulse" />
-                    </li>
-                  ))}
-                </ul>
+                <DocumentsPanelSkeleton rows={6} />
               ) : filteredDocuments.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
                   <p className="text-[13px] text-muted-foreground">
@@ -966,7 +1169,7 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                       <li key={`all-doc-${doc.id}`} className="relative group/doc">
                         {isTrashPanel ? (
                           <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
-                            <div className="w-full flex items-center gap-2.5 px-3 pr-16 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-default text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground">
+                            <div className="w-full flex items-center gap-2.5 px-3 pr-16 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-default text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground">
                               <DocumentText className="flex-shrink-0 opacity-50" />
                               <span className="text-[13px] truncate">
                                 {doc.meta.title || 'Untitled'}
@@ -991,7 +1194,7 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                                     event.stopPropagation();
                                     void handleRestoreFromTrash(doc.id);
                                   }}
-                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <Restore className="opacity-90" />
                                 </button>
@@ -1008,7 +1211,7 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                                       doc.meta.title || 'Untitled'
                                     );
                                   }}
-                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <Trash className="opacity-90" />
                                 </button>
@@ -1026,10 +1229,10 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                               className={`w-full flex items-center gap-2.5 px-3 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
                                 isActive
                                   ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
-                                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
+                                  : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                               }`}
                             >
-                              <DocumentText className="flex-shrink-0 opacity-50" />
+                              <DocumentText className="flex-shrink-0 ml-[1px] size-4 opacity-80" />
                               <span className="text-[13px] truncate">
                                 {doc.meta.title || 'Untitled'}
                               </span>
@@ -1051,13 +1254,9 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                   })}
 
                   {panelIsLoadingMore && (
-                    <>
-                      {[1, 2, 3].map((i) => (
-                        <li key={`all-doc-loading-${i}`}>
-                          <div className="h-12 rounded-xl bg-sidebar-accent/35 animate-pulse" />
-                        </li>
-                      ))}
-                    </>
+                    <li>
+                      <DocumentsPanelSkeleton rows={3} compact />
+                    </li>
                   )}
 
                   {panelHasMore && <li ref={documentsPanelSentinelRef} className="h-5 w-full" />}
@@ -1092,3 +1291,5 @@ export default function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     </aside>
   );
 }
+
+export default memo(Sidebar);

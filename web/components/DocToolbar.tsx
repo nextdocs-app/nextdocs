@@ -102,14 +102,15 @@ export function DocToolbar({
   const offlineTooltipId = 'doc-offline-tooltip';
   const offlineTooltipText =
     pendingEdits > 0
-      ? `${pendingEdits} edit${pendingEdits === 1 ? '' : 's'} will sync when back online`
-      : 'Will sync when back online';
+      ? `${pendingEdits} edit${pendingEdits === 1 ? '' : 's'} pending sync`
+      : 'No local edits pending sync';
   const isCommentsButtonDisabled = !onCommentsToggle;
   const commentsSummary =
     openCommentsCount > 0
       ? `${openCommentsCount} open thread${openCommentsCount === 1 ? '' : 's'}`
       : 'No open threads';
   const shouldShowGuestNotice = showGuestNotice && !!onGuestNoticeCtaClick;
+  const isOfflineTooltipOpen = isOffline && showOfflineTooltip;
 
   return (
     <>
@@ -120,8 +121,8 @@ export function DocToolbar({
           role="button"
           tabIndex={0}
           aria-label="Offline sync status"
-          aria-expanded={showOfflineTooltip}
-          aria-describedby={showOfflineTooltip ? offlineTooltipId : undefined}
+          aria-expanded={isOfflineTooltipOpen}
+          aria-describedby={isOfflineTooltipOpen ? offlineTooltipId : undefined}
           onMouseEnter={() => setShowOfflineTooltip(true)}
           onMouseLeave={() => setShowOfflineTooltip(false)}
           onFocus={() => setShowOfflineTooltip(true)}
@@ -150,7 +151,7 @@ export function DocToolbar({
             Offline
           </div>
 
-          {showOfflineTooltip && (
+          {isOfflineTooltipOpen && (
             <div
               id={offlineTooltipId}
               role="tooltip"
@@ -158,14 +159,14 @@ export function DocToolbar({
                 absolute top-full mt-1.5 left-0
                 rounded-lg border border-border/60
                 bg-background shadow-lg shadow-black/10
-                px-3 py-2
-                text-[12px] text-muted-foreground
+                px-3 py-2.5
                 whitespace-nowrap
                 pointer-events-none
                 animate-in fade-in duration-100
               "
             >
-              {offlineTooltipText}
+              <div className="text-[11px] font-medium text-foreground">Offline changes</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">{offlineTooltipText}</div>
             </div>
           )}
         </div>

@@ -7,10 +7,78 @@ import type {
 } from './auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
 
+export const AUTH_SESSION_STORAGE_KEY = 'nextdocs.auth.session';
+
+interface PersistedAuthSnapshot {
+  user: AuthState['user'];
+  accessToken: string;
+  expiresAt: number;
+}
+
+function readPersistedAuthSnapshot(): PersistedAuthSnapshot | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PersistedAuthSnapshot>;
+    if (!parsed || !parsed.user || typeof parsed.accessToken !== 'string') {
+      return null;
+    }
+
+    if (typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now()) {
+      window.sessionStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      return null;
+    }
+
+    return {
+      user: parsed.user,
+      accessToken: parsed.accessToken,
+      expiresAt: parsed.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistAuthSnapshot(state: AuthState): void {
+  if (
+    typeof window === 'undefined' ||
+    !state.user ||
+    !state.accessToken ||
+    state.expiresAt === null
+  ) {
+    return;
+  }
+
+  const payload: PersistedAuthSnapshot = {
+    user: state.user,
+    accessToken: state.accessToken,
+    expiresAt: state.expiresAt,
+  };
+
+  window.sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function clearPersistedAuthSnapshot(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.sessionStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+}
+
+const persistedAuth = readPersistedAuthSnapshot();
+
 const initialState: AuthState = {
-  user: null,
-  accessToken: null,
-  expiresAt: null,
+  user: persistedAuth?.user ?? null,
+  accessToken: persistedAuth?.accessToken ?? null,
+  expiresAt: persistedAuth?.expiresAt ?? null,
   lastAuthAction: null,
   isLoading: false,
   isInitializing: true,
@@ -80,6 +148,7 @@ const authSlice = createSlice({
       state.expiresAt = Date.now() + expiresIn * 1000;
       state.lastAuthAction = null;
       state.error = null;
+      persistAuthSnapshot(state);
     },
     clearAuth(state) {
       state.user = null;
@@ -87,6 +156,7 @@ const authSlice = createSlice({
       state.expiresAt = null;
       state.lastAuthAction = null;
       state.error = null;
+      clearPersistedAuthSnapshot();
     },
     clearError(state) {
       state.error = null;
@@ -108,6 +178,7 @@ const authSlice = createSlice({
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = 'login';
         state.error = null;
+        persistAuthSnapshot(state);
       })
       .addCase(loginThunk.rejected, (state, action) => {
         state.isLoading = false;
@@ -126,6 +197,7 @@ const authSlice = createSlice({
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = 'register';
         state.error = null;
+        persistAuthSnapshot(state);
       })
       .addCase(registerThunk.rejected, (state, action) => {
         state.isLoading = false;
@@ -141,6 +213,7 @@ const authSlice = createSlice({
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = null;
+        persistAuthSnapshot(state);
         if (state.isInitializing) {
           state.isInitializing = false;
         }
@@ -151,6 +224,7 @@ const authSlice = createSlice({
           state.accessToken = null;
           state.expiresAt = null;
           state.lastAuthAction = null;
+          clearPersistedAuthSnapshot();
         }
         if (state.isInitializing) {
           state.isInitializing = false;
@@ -163,6 +237,7 @@ const authSlice = createSlice({
       state.expiresAt = null;
       state.lastAuthAction = null;
       state.error = null;
+      clearPersistedAuthSnapshot();
     });
   },
 });

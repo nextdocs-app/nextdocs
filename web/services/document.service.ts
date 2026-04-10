@@ -129,14 +129,20 @@ class DocumentService {
     };
   }
 
-  public async saveDocument(id: string, ydoc: Y.Doc, meta: DocumentMeta): Promise<void> {
+  public async saveDocument(
+    id: string,
+    ydoc: Y.Doc,
+    meta: DocumentMeta,
+    options?: { touchUpdatedAt?: boolean }
+  ): Promise<void> {
     try {
       // We store Yjs state as binary for efficient sync and future backend compatibility
       const yjsState = encodeYjsState(ydoc);
+      const touchUpdatedAt = options?.touchUpdatedAt ?? true;
 
       const updatedMeta: DocumentMeta = {
         ...meta,
-        updatedAt: new Date().toISOString(),
+        updatedAt: touchUpdatedAt ? new Date().toISOString() : meta.updatedAt,
       };
 
       await indexedDBService.saveDocument({

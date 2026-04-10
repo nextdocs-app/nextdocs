@@ -12,7 +12,7 @@ type PopupMenuItemProps = {
 const baseClassName =
   'w-full rounded-lg px-3 py-1.5 text-left text-[13px] transition-colors cursor-pointer flex items-center gap-2';
 
-const iconSlotClassName = 'inline-flex h-4 w-4 flex-shrink-0 items-center justify-center';
+const iconSlotClassName = 'inline-flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center';
 
 export function PopupMenuItem({
   icon,

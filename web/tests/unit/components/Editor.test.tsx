@@ -49,15 +49,19 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import Editor from '../../../components/Editor';
 import { useDocument } from '../../../hooks/useDocument.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
+import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { CommentsExtension } from '@blocknote/core/comments';
+import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
 
 // Mock hooks
 jest.mock('../../../hooks/useDocument.hook');
 jest.mock('../../../hooks/useAuth.hook');
+jest.mock('../../../hooks/useNetworkStatus.hook');
 jest.mock('../../../hooks/useYjsPersistence.hook');
 jest.mock('next/navigation');
 jest.mock('../../../hooks/useTheme.hook', () => ({
@@ -88,6 +92,16 @@ describe('Editor Component', () => {
       isAuthenticated: false,
       accessToken: null,
       user: null,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: true,
+      isOffline: false,
+    });
+    (useYjsPersistence as jest.Mock).mockReturnValue({
+      isSaving: false,
+      lastSaved: null,
+      pendingEdits: 0,
+      hasPendingSync: false,
     });
     (useDocument as jest.Mock).mockReturnValue({
       documentId: 'test-doc-id',
@@ -293,6 +307,49 @@ describe('Editor Component', () => {
     expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-doc-1');
   });
 
+  it('should not replace route while offline even if resolved document id differs', () => {
+    (useParams as jest.Mock).mockReturnValue({});
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'cloud-doc-1',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('should switch effective document from offline sidebar selection event', async () => {
+    render(<Editor />);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+          detail: { id: 'offline-doc-2' },
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(useDocument as jest.Mock).toHaveBeenLastCalledWith('offline-doc-2', {
+        isSharedDocument: false,
+      });
+    });
+  });
+
   it('should toggle comments sidebar button state for authenticated users', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
@@ -356,6 +413,38 @@ describe('Editor Component', () => {
     );
 
     dispatchEventSpy.mockRestore();
+  });
+
+  it('shows offline badge when browser is offline even for local guest editing', () => {
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    render(<Editor />);
+
+    expect(screen.getByLabelText(/offline sync status/i)).toBeInTheDocument();
+  });
+
+  it('shows pending offline edit count in tooltip', () => {
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+    (useYjsPersistence as jest.Mock).mockReturnValue({
+      isSaving: false,
+      lastSaved: null,
+      pendingEdits: 3,
+      hasPendingSync: true,
+    });
+
+    render(<Editor />);
+
+    const offlineBadge = screen.getByLabelText(/offline sync status/i);
+    fireEvent.mouseEnter(offlineBadge);
+
+    expect(screen.getByText(/Offline changes/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 edits pending sync/i)).toBeInTheDocument();
   });
 
   it('should render BlockNote in read-only mode for view access', () => {
