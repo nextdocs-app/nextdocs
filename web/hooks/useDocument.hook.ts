@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
+import { toSortableTimestamp } from '@/lib/timestamp.util';
 import {
   clearCachedDocumentAccessLevel,
   readCachedDocumentAccessLevel,
@@ -152,15 +153,6 @@ function resolveAuthenticatedFallbackAccessLevel(
     options.currentAccessLevel ??
     (options.isSharedDocument ? 'VIEW' : 'EDIT')
   );
-}
-
-function toSortableTimestamp(value: unknown): number {
-  if (typeof value !== 'string' || value.length === 0) {
-    return 0;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function getMostRecentLocalDocument(): Promise<{
