@@ -2,31 +2,7 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { SharePanel } from '@/components/SharePanel';
-
-function ShareIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="12.5" cy="3.5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="3.5" cy="8" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="12.5" cy="12.5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M5 7l6-3M5 9l6 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function CommentsIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H9l-2.5 3L4 11H3.5A1.5 1.5 0 0 1 2 9.5v-7Z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-      <path d="M5 5h6M5 7.5h4" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
-    </svg>
-  );
-}
+import { Comments, Globe } from '@/icons/index';
 
 function formatLastEdited(dateStr: string | undefined | null): string {
   if (!dateStr) return '';
@@ -117,7 +93,7 @@ export function DocToolbar({
       {/* ── Offline badge (top-left, only when offline) ── */}
       {isOffline && (
         <div
-          className="fixed top-3 left-[17rem] z-40"
+          className="absolute top-2 left-4 z-40 pointer-events-auto"
           role="button"
           tabIndex={0}
           aria-label="Offline sync status"
@@ -145,6 +121,8 @@ export function DocToolbar({
               px-2.5 py-1
               text-[11px] text-muted-foreground
               select-none cursor-default
+              transition-colors duration-150
+              hover:bg-[var(--nd-toolbar-hover-bg)]
             "
           >
             <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" aria-hidden="true" />
@@ -173,7 +151,7 @@ export function DocToolbar({
       )}
 
       {/* ── Top-right toolbar ── */}
-      <div className="nd-doc-toolbar fixed top-3 right-4 z-40 flex items-center gap-2">
+      <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5">
         {shouldShowGuestNotice && (
           <div
             className="
@@ -206,53 +184,29 @@ export function DocToolbar({
 
         {/* Last edited */}
         {lastEditedLabel && (
-          <span className="text-[12px] text-muted-foreground/60 select-none hidden sm:block mr-1">
+          <span className="text-[12.5px] text-muted-foreground/80 select-none hidden sm:block">
             {lastEditedLabel}
           </span>
         )}
 
-        {/* Comments toggle button */}
         {showCommentsButton && (
           <button
             id="doc-comments-btn"
             type="button"
-            onClick={onCommentsToggle ? onCommentsToggle : undefined}
+            onClick={onCommentsToggle}
             disabled={isCommentsButtonDisabled}
-            aria-disabled={isCommentsButtonDisabled}
             aria-pressed={isCommentsSidebarOpen}
-            aria-label={
-              isCommentsButtonDisabled
-                ? `Comments unavailable. ${commentsSummary}.`
-                : isCommentsSidebarOpen
-                  ? `Close comments sidebar. ${commentsSummary}.`
-                  : `Open comments sidebar. ${commentsSummary}.`
-            }
-            title={
-              isCommentsButtonDisabled
-                ? `Comments unavailable (${commentsSummary})`
-                : isCommentsSidebarOpen
-                  ? `Close comments (${commentsSummary})`
-                  : `Open comments (${commentsSummary})`
-            }
+            aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
             className={[
-              'inline-flex items-center gap-1.5 rounded-lg',
-              'border px-3 py-1.5',
-              'text-[13px] font-medium',
-              'active:scale-95 transition-all duration-100 shadow-sm',
+              'inline-flex items-center justify-center rounded-sm py-1 px-2 transition-colors duration-150',
               isCommentsButtonDisabled
-                ? 'border-border bg-background text-muted-foreground cursor-not-allowed opacity-60'
+                ? 'text-muted-foreground opacity-60 cursor-not-allowed'
                 : isCommentsSidebarOpen
-                  ? 'border-primary/30 bg-primary/8 text-primary cursor-pointer'
-                  : 'border-border bg-background text-foreground hover:bg-sidebar-accent cursor-pointer',
+                  ? 'text-primary bg-[var(--nd-toolbar-hover-bg)] cursor-pointer'
+                  : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)] cursor-pointer',
             ].join(' ')}
           >
-            <CommentsIcon />
-            <span className="hidden sm:inline">Comments</span>
-            {openCommentsCount > 0 && (
-              <span className="nd-toolbar-comments-count" aria-hidden="true">
-                {openCommentsCount > 99 ? '99+' : openCommentsCount}
-              </span>
-            )}
+            <Comments />
           </button>
         )}
 
@@ -266,17 +220,16 @@ export function DocToolbar({
             aria-haspopup="dialog"
             aria-expanded={isShareOpen}
             className="
-              inline-flex items-center gap-1.5 rounded-lg
+              inline-flex items-center gap-1.5 rounded-sm
               border border-border bg-background
               px-3 py-1.5
-              text-[13px] font-medium text-foreground
-              hover:bg-sidebar-accent
-              active:scale-95
-              transition-all duration-100 cursor-pointer
-              shadow-sm
+              text-[12.5px] font-medium leading-none text-foreground
+              transition-colors duration-150
+              hover:bg-[var(--nd-toolbar-hover-bg)]
+              cursor-pointer
             "
           >
-            <ShareIcon />
+            <Globe />
             Share
           </button>
         )}

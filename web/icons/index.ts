@@ -10,4 +10,6 @@ export { Trash } from './Trash';
 export { Restore } from './Restore';
 export { Hamburger } from './Hamburger';
 export { NextDocs } from './NextDocs';
+export { Comments } from './Comments';
+export { Globe } from './Globe';
 export type { IconProps } from './IconBase';
