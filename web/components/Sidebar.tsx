@@ -20,8 +20,9 @@ import {
   MoreHorizontal,
   Trash,
   Restore,
-  Hamburger,
   NextDocs,
+  CloseSidebar,
+  OpenSidebar,
 } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { PopupMenuItem } from '@/components/PopupMenuItem';
@@ -33,6 +34,7 @@ import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_VISIBLE_COUNT = 7;
+const SIDEBAR_COLLAPSE_HOVER_GUARD_MS = 260;
 type DocumentsPanelMode = 'all' | 'shared' | 'trash' | null;
 type DocActionType = 'move-to-trash' | 'leave-shared';
 type DocActionsAnchor = {
@@ -94,7 +96,7 @@ function DocumentsPanelSkeleton({
         <div
           key={`documents-panel-skeleton-${compact ? 'compact' : 'default'}-${index + 1}`}
           className={`rounded-xl border border-sidebar-border/60 bg-sidebar-accent/20 ${
-            compact ? 'px-3 py-2.5' : 'px-3 py-3'
+            compact ? 'px-2 py-2.5' : 'px-2 py-3'
           }`}
         >
           <div className="flex items-center gap-3">
@@ -166,7 +168,7 @@ function SidebarDocumentSection({
       <button
         onClick={onToggle}
         aria-expanded={isOpen}
-        className="flex items-center gap-1 px-4 py-2 text-left text-[13px] text-muted-foreground cursor-pointer"
+        className="flex items-center gap-1 px-3 py-2 text-left text-[13px] text-muted-foreground cursor-pointer"
       >
         <span className="font-medium">{title}</span>
         <ChevronRight
@@ -175,7 +177,7 @@ function SidebarDocumentSection({
       </button>
 
       {isOpen && (
-        <nav className="px-2 pb-2">
+        <nav className="px-1.5 pb-2">
           {isLoading ? (
             <div className="flex flex-col gap-0.5 px-1">
               {[1, 2, 3].map((i) => (
@@ -186,7 +188,7 @@ function SidebarDocumentSection({
               ))}
             </div>
           ) : documents.length === 0 ? (
-            <div className="px-3 pt-1">
+            <div className="px-2 pt-1">
               <p className="text-[13px] text-muted-foreground/50">{emptyText}</p>
             </div>
           ) : (
@@ -203,13 +205,13 @@ function SidebarDocumentSection({
                   >
                     <button
                       onClick={() => onSelectDocument(doc.id)}
-                      className={`w-full flex items-center gap-2.5 px-3 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
+                      className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
                         isActive
                           ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
                           : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                       }`}
                     >
-                      <DocumentText size={16} className="flex-shrink-0 ml-[1px] opacity-80" />
+                      <DocumentText size={16} className="flex-shrink-0 opacity-80" />
                       <span className="text-[13px] truncate">{doc.meta.title || 'Untitled'}</span>
                     </button>
 
@@ -234,10 +236,11 @@ function SidebarDocumentSection({
                 <button
                   type="button"
                   onClick={onShowAll}
-                  className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  aria-label={`Show all ${title.toLowerCase()} documents`}
+                  className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
                 >
-                  <MoreHorizontal className="flex-shrink-0 ml-[1px] size-4" />
-                  <span className="text-[13px] truncate">Show All</span>
+                  <MoreHorizontal className="flex-shrink-0" />
+                  <span className="text-[13px] truncate">Show More</span>
                 </button>
               </li>
             </ul>
@@ -366,6 +369,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     title: string;
   } | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
+  const [isSidebarCollapseHoverGuard, setIsSidebarCollapseHoverGuard] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
   const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -496,6 +500,20 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       document.removeEventListener('keydown', handleEscape);
     };
   }, [isAccountMenuOpen]);
+
+  useEffect(() => {
+    if (!isSidebarCollapseHoverGuard) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsSidebarCollapseHoverGuard(false);
+    }, SIDEBAR_COLLAPSE_HOVER_GUARD_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isSidebarCollapseHoverGuard]);
 
   useEffect(() => {
     if (!isDocumentsPanelOpen || !panelHasMore || panelIsLoadingInitial || panelIsLoadingMore) {
@@ -797,133 +815,105 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   ]);
 
   if (!isClient) {
-    return <aside className="w-64 border-r flex-shrink-0 bg-sidebar" />;
+    return <aside className="w-64 border-r border-sidebar-border flex-shrink-0 bg-sidebar" />;
   }
 
   return (
     <aside
-      className={`${isSidebarCollapsed ? 'w-16' : 'w-64'} border-r flex-shrink-0 flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground border-border select-none transition-all duration-300`}
+      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'w-64 border-r'} border-sidebar-border flex-shrink-0 flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground select-none transition-all duration-300`}
     >
+      {/* Header */}
       {isSidebarCollapsed ? (
-        <>
-          <div className="flex items-center justify-center p-2 pt-3">
-            <button
-              type="button"
-              onClick={() => setIsSidebarCollapsed(false)}
-              aria-label="Expand sidebar"
-              aria-expanded={false}
-              title="Expand sidebar"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
-            >
-              <Hamburger size={20} strokeWidth={2.25} className="flex-shrink-0" />
-            </button>
-          </div>
-
-          <div className="flex flex-col items-center gap-2 pt-2 px-2 pb-1">
-            <button
-              onClick={handleCreateFile}
-              title="New Document"
-              aria-label="Create new document"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
-            >
-              <NewDocument className="flex-shrink-0 opacity-80" size={20} />
-            </button>
-
-            <button
-              onClick={openAllDocumentsPanel}
-              title="Search documents"
-              aria-label="Search documents"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
-            >
-              <Search className="flex-shrink-0 opacity-80" size={20} />
-            </button>
-          </div>
-
-          <div className="flex-1" />
-
-          <div className="flex items-center justify-center p-2 pb-3">
-            <button
-              ref={accountMenuTriggerRef}
-              onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-              aria-haspopup="menu"
-              aria-expanded={isAccountMenuOpen}
-              title={accountLabel}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors cursor-pointer"
-            >
-              <span
-                aria-hidden="true"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground/80 flex-shrink-0 hover:bg-sidebar-accent/80 transition-colors"
-              >
-                {isAuthenticated && user ? (
-                  <span className="text-[12px] font-semibold leading-none select-none">
-                    {userInitial}
-                  </span>
-                ) : (
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                  >
-                    <circle cx="12" cy="8" r="3.25" />
-                    <path d="M5.5 18.25a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
-                  </svg>
-                )}
-              </span>
-            </button>
-          </div>
-        </>
+        <div className="flex flex-col p-2">
+          <button
+            type="button"
+            onClick={() => {
+              setIsSidebarCollapsed(false);
+              setIsSidebarCollapseHoverGuard(false);
+            }}
+            aria-label="Expand sidebar"
+            aria-expanded={false}
+            title="Expand sidebar"
+            className={`flex items-center gap-3 px-2 py-2 rounded-lg text-sidebar-foreground/80 transition-colors duration-100 cursor-pointer overflow-hidden ${
+              isSidebarCollapseHoverGuard
+                ? ''
+                : 'hover:bg-sidebar-accent hover:text-sidebar-foreground'
+            }`}
+          >
+            <OpenSidebar size={20} className="flex-shrink-0 opacity-80" />
+          </button>
+        </div>
       ) : (
-        <>
-          <div className="flex items-center justify-between px-2 pt-3 pb-2">
-            <button
-              type="button"
-              onClick={() => {
-                setIsAccountMenuOpen(false);
-                setIsSidebarCollapsed(true);
+        <div className="flex items-center justify-between p-2">
+          <div className="flex items-center gap-2 py-1 px-1.5 rounded-lg cursor-pointer overflow-hidden">
+            <NextDocs className="w-[25px] h-[25px] flex-shrink-0" />
+            <span
+              className="text-[21px] mt-[2px] font-[600] leading-none whitespace-nowrap"
+              style={{
+                fontFamily: 'var(--font-serif)',
+                letterSpacing: '0.025em',
               }}
-              aria-label="Collapse sidebar"
-              aria-expanded={true}
-              title="Collapse sidebar"
-              className="inline-flex h-9 w-11 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer"
             >
-              <Hamburger size={23} strokeWidth={2.25} className="flex-shrink-0" />
-            </button>
-
-            <div className="flex items-center justify-end gap-1.5 py-1 px-4 rounded-lg cursor-pointer hover:bg-sidebar-accent transition-colors duration-100">
-              <NextDocs className="w-[30px] h-[30px]" />
-              <span className="text-[21px] font-[500] leading-none">NextDocs</span>
-            </div>
+              NextDocs
+            </span>
           </div>
 
-          <div className="flex flex-col pt-2 px-2 pb-1">
-            <button
-              onClick={handleCreateFile}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg text-left
-                     text-sidebar-foreground hover:bg-sidebar-accent
-                     transition-colors duration-100 cursor-pointer"
-            >
-              <NewDocument className="flex-shrink-0 opacity-80" />
-              <span className="text-[14px]">New Document</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsAccountMenuOpen(false);
+              setIsSidebarCollapsed(true);
+              setIsSidebarCollapseHoverGuard(true);
+            }}
+            aria-label="Collapse sidebar"
+            aria-expanded={true}
+            title="Collapse sidebar"
+            className="inline-flex px-2 py-2 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
+          >
+            <CloseSidebar size={20} className="flex-shrink-0 opacity-80" />
+          </button>
+        </div>
+      )}
 
-            <button
-              // TODO: This should open a search panel instead of the "all documents" panel.
-              // Since the backend currently does not support searching documents, it opens
-              // the "all documents" panel as a temporary solution where we can search by the
-              // title of documents.
-              onClick={openAllDocumentsPanel}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg text-left
-                     text-sidebar-foreground hover:bg-sidebar-accent
-                     transition-colors duration-100 cursor-pointer"
-            >
-              <Search className="flex-shrink-0 opacity-80" />
-              <span className="text-[14px]">Search Documents</span>
-            </button>
-          </div>
+      {/* Action buttons */}
+      <div className="flex flex-col py-2 px-2">
+        <button
+          onClick={handleCreateFile}
+          className="flex items-center gap-3 px-2 py-[7px] rounded-lg text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+        >
+          <NewDocument size={20} className="flex-shrink-0 opacity-80" />
+          <span
+            className="text-[13.5px] whitespace-nowrap"
+            style={{
+              opacity: isSidebarCollapsed ? 0 : 1,
+              width: isSidebarCollapsed ? 0 : 'auto',
+            }}
+          >
+            New Document
+          </span>
+        </button>
 
-          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        <button
+          onClick={openAllDocumentsPanel}
+          className="flex items-center gap-3 px-2 py-[7px] rounded-lg text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+        >
+          <Search size={20} className="flex-shrink-0 opacity-80" />
+          <span
+            className="text-[13.5px] whitespace-nowrap"
+            style={{
+              opacity: isSidebarCollapsed ? 0 : 1,
+              width: isSidebarCollapsed ? 0 : 'auto',
+            }}
+          >
+            Search Documents
+          </span>
+        </button>
+      </div>
+
+      {/* Document sections and account menu */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
+        {!isSidebarCollapsed && (
+          <div className="ml-1">
             <SidebarDocumentSection
               title="Private"
               isOpen={isPrivateOpen}
@@ -974,50 +964,58 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                 onShowAll={openSharedDocumentsPanel}
               />
             )}
-
-            <div className="relative mt-auto sticky bottom-0 border-t border-border bg-sidebar p-2">
-              <button
-                ref={accountMenuTriggerRef}
-                onClick={() => setIsAccountMenuOpen((prev) => !prev)}
-                aria-haspopup="menu"
-                aria-expanded={isAccountMenuOpen}
-                className="w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent cursor-pointer
-                     flex items-center justify-between gap-2"
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground/80 flex-shrink-0"
-                  >
-                    {isAuthenticated && user ? (
-                      <span className="text-[11px] font-semibold leading-none select-none">
-                        {userInitial}
-                      </span>
-                    ) : (
-                      <svg
-                        viewBox="0 0 24 24"
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                      >
-                        <circle cx="12" cy="8" r="3.25" />
-                        <path d="M5.5 18.25a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
-                      </svg>
-                    )}
-                  </span>
-                  <span className="truncate text-[14px]">{accountLabel}</span>
-                </span>
-                <ChevronRight
-                  className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
-                    isAccountMenuOpen ? '-rotate-90' : 'rotate-90'
-                  }`}
-                />
-              </button>
-            </div>
           </div>
-        </>
-      )}
+        )}
+
+        <div
+          className={`relative mt-auto sticky bottom-0 ${isSidebarCollapsed ? '' : 'border-t border-border'} bg-sidebar p-2`}
+        >
+          <button
+            ref={accountMenuTriggerRef}
+            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={isAccountMenuOpen}
+            className="group/account w-full rounded-lg px-1.5 py-2 text-left transition-colors hover:bg-sidebar-accent cursor-pointer flex items-center overflow-hidden"
+          >
+            <span
+              aria-hidden="true"
+              className="inline-flex h-[23px] w-[23px] flex-shrink-0 items-center justify-center rounded-full bg-[#7d7a75]"
+            >
+              {isAuthenticated && user ? (
+                <span className="text-[11px] text-white font-semibold leading-none select-none">
+                  {userInitial}
+                </span>
+              ) : (
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-[15px] w-[15px]"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                >
+                  <circle cx="12" cy="8" r="3.25" />
+                  <path d="M5.5 18.25a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
+                </svg>
+              )}
+            </span>
+            <span
+              className="flex items-center min-w-0 overflow-hidden transition-all duration-300"
+              style={{
+                opacity: isSidebarCollapsed ? 0 : 1,
+                width: isSidebarCollapsed ? 0 : 'calc(100% - 23px)',
+                paddingLeft: isSidebarCollapsed ? 0 : '12px',
+              }}
+            >
+              <span className="truncate text-[14px] whitespace-nowrap flex-1">{accountLabel}</span>
+              <ChevronRight
+                className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
+                  isAccountMenuOpen ? '-rotate-90' : 'rotate-90'
+                }`}
+              />
+            </span>
+          </button>
+        </div>
+      </div>
 
       {isAccountMenuOpen && (
         <ProfileMenuPopup
@@ -1146,7 +1144,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
               </div>
             </div>
 
-            <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-3 py-3">
+            <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-2 py-3">
               {panelIsLoadingInitial ? (
                 <DocumentsPanelSkeleton rows={6} />
               ) : filteredDocuments.length === 0 ? (
@@ -1169,7 +1167,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                       <li key={`all-doc-${doc.id}`} className="relative group/doc">
                         {isTrashPanel ? (
                           <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
-                            <div className="w-full flex items-center gap-2.5 px-3 pr-16 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-default text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground">
+                            <div className="w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-default text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground">
                               <DocumentText className="flex-shrink-0 opacity-50" />
                               <span className="text-[13px] truncate">
                                 {doc.meta.title || 'Untitled'}
@@ -1226,13 +1224,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                                 handleSelectDocument(doc.id);
                                 closeDocumentsPanel();
                               }}
-                              className={`w-full flex items-center gap-2.5 px-3 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
+                              className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
                                 isActive
                                   ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
                                   : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                               }`}
                             >
-                              <DocumentText className="flex-shrink-0 ml-[1px] size-4 opacity-80" />
+                              <DocumentText className="flex-shrink-0 size-4 opacity-80" />
                               <span className="text-[13px] truncate">
                                 {doc.meta.title || 'Untitled'}
                               </span>

@@ -9,7 +9,7 @@ export const NextDocs = (props: SVGProps<SVGSVGElement>) => (
     style={{
       background: '0 0',
     }}
-    viewBox="0 0 2000 2000"
+    viewBox="114.02 100.77 1771.79 1732.41"
     {...props}
   >
     <path
