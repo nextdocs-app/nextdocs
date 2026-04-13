@@ -813,7 +813,7 @@ function EditorContent({
   );
 
   return (
-    <div className="flex flex-col w-full mt-12 md:mt-24">
+    <div className="flex flex-col w-full mt-12 md:mt-24 pb-[40vh] relative bg-background">
       <div className="document-title-container group">
         <textarea
           ref={textareaRef}

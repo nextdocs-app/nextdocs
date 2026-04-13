@@ -369,9 +369,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen">
       <Sidebar onOpenAuth={openAuthModal} />
-      <main className="nd-app-shell-main flex-1 overflow-auto bg-background text-foreground">
-        <div className="max-w-4xl mx-auto py-8 px-4">
-          <Suspense>{children}</Suspense>
+      <main className="nd-app-shell-main flex-1 flex flex-col min-w-0 bg-background text-foreground relative overflow-hidden">
+        {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling 
+        the browser that the scrollable region starts below the toolbar's height.*/}
+        <div className="h-14 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />
+        <div className="flex-1 overflow-y-auto overflow-x-clip w-full">
+          <div className="max-w-4xl mx-auto px-4">
+            <Suspense>{children}</Suspense>
+          </div>
         </div>
       </main>
       {isAuthOpen && <AuthModal onClose={() => setIsAuthOpen(false)} />}
