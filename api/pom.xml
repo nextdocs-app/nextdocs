@@ -28,10 +28,10 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
-		<bucket4j.version>8.17.0</bucket4j.version>
+		<bucket4j.version>8.18.0</bucket4j.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<!-- springdoc 3.x supports Spring Boot 4 -->
-		<springdoc.version>3.0.2</springdoc.version>
+		<springdoc.version>3.0.3</springdoc.version>
 	</properties>
 	<dependencies>
 		<!-- Web MVC -->
