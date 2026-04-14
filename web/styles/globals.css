@@ -37,39 +37,8 @@
   --nd-comments-rail-width: 20rem;
 }
 
-/* System dark — only when no explicit override is set */
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme="light"]):not([data-theme="dark"]) {
-    --background: #1f1f1f;
-    --foreground: oklch(0.985 0 0);
-    --card: #1e1e1e;
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --sidebar: #181818;
-    --sidebar-foreground: oklch(91.279% 0.0001 271.152);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
-  }
-}
-
-/* Explicit dark override */
-html[data-theme="dark"] {
+/* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
+.dark {
   --background: #1f1f1f;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
@@ -90,10 +59,10 @@ html[data-theme="dark"] {
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
   --sidebar: #181818;
-  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(91.279% 0.0001 271.152);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
 }
 
@@ -134,7 +103,8 @@ html[data-theme="dark"] {
 }
 
 @layer base {
-  .bn-shadcn * {
+
+  * {
     @apply border-border outline-ring/50;
   }
   
@@ -151,7 +121,7 @@ html[data-theme="dark"] {
   }
 }
 
-html[data-theme="dark"] * {
+.dark * {
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
@@ -192,11 +162,11 @@ html[data-theme="light"] * {
 }
 
 /* Webkit dark – explicit override */
-html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+.dark ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
 }
 
-html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+.dark ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
@@ -253,11 +223,9 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   }
 
   /* Support explicit .dark class and data-theme="dark" */
-  html[data-theme="dark"] .document-title-input,
   .dark .document-title-input {
     color: #f2f2f2;
   }
-  html[data-theme="dark"] .document-title-input::placeholder,
   .dark .document-title-input::placeholder {
     color: rgba(242, 242, 242, 0.3);
   }
@@ -288,9 +256,7 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* ═══════════════════════════════════════════════════════
-   Comments Sidebar — fixed panel that escapes AppShell
-   ═══════════════════════════════════════════════════════ */
+/* Comments Sidebar — fixed panel that escapes AppShell */
 
 /* Backdrop overlay (mobile + click-away) */
 .nd-comments-backdrop {
@@ -332,11 +298,6 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   border-left: 1px solid var(--nd-comments-panel-border);
   box-shadow: none;
   animation: nd-slide-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-html[data-theme="dark"] .nd-comments-sidebar,
-.dark .nd-comments-sidebar {
-  box-shadow: none;
 }
 
 @keyframes nd-slide-in {
@@ -410,9 +371,10 @@ html[data-theme="dark"] .nd-comments-sidebar,
 }
 
 .nd-comments-sidebar__controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* ─── Filter pill tabs ─── */
@@ -420,8 +382,9 @@ html[data-theme="dark"] .nd-comments-sidebar,
 .nd-comments-filter {
   display: flex;
   align-items: center;
-  gap: 1px;
-  background: var(--muted);
+  gap: 2px;
+  border: 1px solid var(--border);
+  background: var(--nd-comments-surface-muted);
   border-radius: 7px;
   padding: 2px;
 }
@@ -438,8 +401,13 @@ html[data-theme="dark"] .nd-comments-sidebar,
 }
 
 .nd-comments-filter__tab {
-  padding: 3.5px 10px;
-  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 11.5px;
   font-weight: 500;
   color: var(--muted-foreground);
@@ -456,15 +424,6 @@ html[data-theme="dark"] .nd-comments-sidebar,
   background: var(--accent);
 }
 
-.nd-comments-filter__tab.nd-active {
-  background: var(--background);
-  color: var(--foreground);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.1),
-    0 0 0 0.5px rgba(0, 0, 0, 0.05);
-}
-
-html[data-theme="dark"] .nd-comments-filter__tab.nd-active,
 .dark .nd-comments-filter__tab.nd-active {
   box-shadow:
     0 1px 4px rgba(0, 0, 0, 0.3),
@@ -474,12 +433,14 @@ html[data-theme="dark"] .nd-comments-filter__tab.nd-active,
 /* ─── Sort dropdown ─── */
 
 .nd-comments-sort {
+  min-width: 122px;
+  min-height: 28px;
   font-size: 11px;
   font-weight: 500;
-  color: var(--muted-foreground);
-  background: transparent;
+  color: var(--foreground);
+  background-color: var(--nd-comments-surface);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 7px;
   padding: 3px 6px;
   cursor: pointer;
   outline: none;
@@ -516,9 +477,9 @@ html[data-theme="dark"] .nd-comments-filter__tab.nd-active,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
   border: none;
   background: transparent;
   color: var(--muted-foreground);
@@ -536,13 +497,15 @@ html[data-theme="dark"] .nd-comments-filter__tab.nd-active,
 /* ─── Sidebar scrollable body ─── */
 
 .nd-comments-sidebar__body {
+  position: relative;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 4px 0;
+  padding: 8px 0 14px;
+  background: var(--nd-comments-panel-bg);
 }
 
 /* ─── ThreadsSidebar overrides inside our panel ─── */
@@ -572,49 +535,36 @@ html[data-theme="dark"] .nd-comments-filter__tab.nd-active,
 
 /* Thread cards in the sidebar */
 .nd-comments-sidebar__body .bn-thread {
-  margin: 0 10px;
-  border-radius: 10px;
+  margin: 0 10px 10px;
+  border-radius: 12px;
   border: 1px solid var(--border);
-  background: var(--card);
-  transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+  background: var(--nd-comments-surface);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+  transition: transform 0.14s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   overflow: visible !important;
   max-height: none !important;
   width: auto !important;
 }
 
 .nd-comments-sidebar__body .bn-thread:hover {
-  border-color: var(--ring);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+  border-color: var(--nd-comments-focus);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
 }
 
 .nd-comments-sidebar__body .bn-thread.selected {
-  border-color: var(--ring);
+  border-color: var(--nd-comments-focus);
   background: var(--accent);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 }
 
 /* Dark mode sidebar thread overrides */
-html[data-theme="dark"] .nd-comments-sidebar__body .bn-thread,
-.dark .nd-comments-sidebar__body .bn-thread {
-  background: var(--card);
-  border-color: var(--border);
-}
-
-html[data-theme="dark"] .nd-comments-sidebar__body .bn-thread:hover,
 .dark .nd-comments-sidebar__body .bn-thread:hover {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-html[data-theme="dark"] .nd-comments-sidebar__body .bn-thread.selected,
-.dark .nd-comments-sidebar__body .bn-thread.selected {
-  background: var(--accent);
-  border-color: var(--ring);
-}
 
-
-/* ═══════════════════════════════════════════════════════
-   Inline Comments — production styling for editor threads
-   ═══════════════════════════════════════════════════════ */
+/* Inline Comments — production styling for editor threads */
 
 /*
   Floating thread (appears when clicking a comment highlight in the editor).
@@ -622,21 +572,19 @@ html[data-theme="dark"] .nd-comments-sidebar__body .bn-thread.selected,
   We increase width and polish the card.
 */
 .bn-thread {
-  width: 340px !important;
+  width: min(360px, calc(100vw - 28px)) !important;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: var(--background);
-  box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.08),
-    0 2px 8px rgba(0, 0, 0, 0.04);
+  background: var(--popover);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.1);
   overflow: hidden;
+  gap: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
 }
 
-html[data-theme="dark"] .bn-thread,
 .dark .bn-thread {
-  box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38), 0 3px 10px rgba(0, 0, 0, 0.22);
   border-color: var(--border);
   background: var(--card);
 }
@@ -646,17 +594,17 @@ html[data-theme="dark"] .bn-thread,
 .bn-thread .bn-resolved-text {
   font-size: 12.5px;
   color: var(--muted-foreground);
-  border-left: 2px solid var(--ring);
-  padding-left: 8px;
-  margin-bottom: 2px;
+  border-left: 2px solid var(--nd-comments-focus);
+  padding-left: 7px;
+  margin: 12px 14px 4px;
 }
 
 /* Comments section inside threads */
 .bn-thread .bn-thread-comments {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -693,13 +641,6 @@ html[data-theme="dark"] .bn-thread,
 }
 
 /* Composer (reply) section at bottom of thread */
-.bn-thread .bn-thread-composer {
-  padding: 10px 16px 12px;
-  background: var(--muted);
-  border-top: none;
-}
-
-html[data-theme="dark"] .bn-thread .bn-thread-composer,
 .dark .bn-thread .bn-thread-composer {
   background: rgba(255, 255, 255, 0.03);
 }
@@ -714,7 +655,6 @@ html[data-theme="dark"] .bn-thread .bn-thread-composer,
   gap: 2px;
 }
 
-html[data-theme="dark"] .bn-thread .bn-action-toolbar,
 .dark .bn-thread .bn-action-toolbar {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
@@ -737,7 +677,6 @@ html[data-theme="dark"] .bn-thread .bn-action-toolbar,
   overflow: hidden;
 }
 
-html[data-theme="dark"] .bn-floating-composer,
 .dark .bn-floating-composer {
   box-shadow:
     0 8px 30px rgba(0, 0, 0, 0.4),
@@ -763,24 +702,14 @@ html[data-theme="dark"] .bn-floating-composer,
   border-color: var(--ring) !important;
 }
 
-html[data-theme="dark"] .bn-threads-sidebar .bn-thread.selected,
-.dark .bn-threads-sidebar .bn-thread.selected {
-  background-color: var(--accent) !important;
-  border-color: var(--ring) !important;
-}
-
-/* ═══════════════════════════════════════════════════════
-   DocToolbar – comments button active state
-   ═══════════════════════════════════════════════════════ */
+/* DocToolbar – comments button active state */
 
 #doc-comments-btn[aria-pressed="true"] {
   border-color: var(--ring);
 }
 
 
-/* =======================================================
-   Comments Theme Alignment
-   ======================================================= */
+/* Comments Theme Alignment */
 
 :root {
   --nd-comments-panel-bg: var(--sidebar);
@@ -792,13 +721,14 @@ html[data-theme="dark"] .bn-threads-sidebar .bn-thread.selected,
   --nd-comments-highlight-bg: rgba(234, 179, 8, 0.24);
   --nd-comments-highlight-bg-hover: rgba(234, 179, 8, 0.34);
   --nd-comments-highlight-border: rgba(180, 120, 12, 0.72);
+  --nd-toolbar-hover-bg: oklch(0.93 0 0);
 }
 
-html[data-theme="dark"],
 .dark {
   --nd-comments-highlight-bg: rgba(245, 198, 76, 0.2);
   --nd-comments-highlight-bg-hover: rgba(245, 198, 76, 0.32);
   --nd-comments-highlight-border: rgba(245, 198, 76, 0.8);
+  --nd-toolbar-hover-bg: oklch(0.32 0 0);
 }
 
 .nd-toolbar-comments-count {
@@ -816,31 +746,6 @@ html[data-theme="dark"],
   color: var(--primary-foreground);
   background: var(--primary);
   border: 1px solid var(--border);
-}
-
-.nd-comments-sidebar__controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.nd-comments-filter {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border: 1px solid var(--border);
-  background: var(--nd-comments-surface-muted);
-}
-
-.nd-comments-filter__tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 27px;
-  padding: 4px 10px;
-  border-radius: 6px;
 }
 
 .nd-comments-filter__tab.nd-active {
@@ -871,27 +776,6 @@ html[data-theme="dark"],
   border-color: transparent;
 }
 
-.nd-comments-sort {
-  min-width: 122px;
-  min-height: 28px;
-  border-radius: 7px;
-  border-color: var(--border);
-  background-color: var(--nd-comments-surface);
-  color: var(--foreground);
-}
-
-.nd-comments-sidebar__close {
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-}
-
-.nd-comments-sidebar__body {
-  position: relative;
-  padding: 8px 0 14px;
-  background: var(--nd-comments-panel-bg);
-}
-
 .nd-comments-empty {
   margin: 16px 14px;
   border: 1px dashed var(--border);
@@ -915,57 +799,8 @@ html[data-theme="dark"],
   color: var(--nd-comments-text-muted);
 }
 
-.nd-comments-sidebar__body .bn-thread {
-  margin: 0 10px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--nd-comments-surface);
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
-  transition: transform 0.14s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-}
-
-.nd-comments-sidebar__body .bn-thread:hover {
-  transform: translateY(-1px);
-  border-color: var(--nd-comments-focus);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
-}
-
-.nd-comments-sidebar__body .bn-thread.selected {
-  border-color: var(--nd-comments-focus);
-  background: var(--accent);
-}
-
-html[data-theme="dark"] .nd-comments-sidebar__body .bn-thread,
 .dark .nd-comments-sidebar__body .bn-thread {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-}
-
-.bn-thread {
-  width: min(360px, calc(100vw - 28px)) !important;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.1);
-  gap: 0 !important;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
-}
-
-html[data-theme="dark"] .bn-thread,
-.dark .bn-thread {
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38), 0 3px 10px rgba(0, 0, 0, 0.22);
-}
-
-.bn-thread .bn-header-text,
-.bn-thread .bn-resolved-text {
-  border-left-color: var(--nd-comments-focus);
-  padding-left: 7px;
-  margin: 12px 14px 4px;
-}
-
-.bn-thread .bn-thread-comments {
-  gap: 12px;
-  padding: 12px 14px;
 }
 
 .nd-floating-thread .bn-thread .bn-thread-comments .bn-comment-editor .bn-editor {
@@ -997,7 +832,6 @@ html[data-theme="dark"] .bn-thread,
   border-top: 1px solid var(--border);
   background: var(--nd-comments-surface-muted);
 }
-
 
 .bn-thread .bn-thread-composer .bn-comment-editor,
 .nd-floating-composer .bn-comment-editor {
@@ -1134,7 +968,6 @@ html[data-theme="dark"] .bn-thread,
   appearance: none;
 }
 
-
 /* Do not render fallback pseudo-buttons; only real action buttons should appear. */
 .bn-thread .bn-thread-composer::after,
 .nd-floating-composer .bn-thread::after {
@@ -1187,17 +1020,13 @@ html[data-theme="dark"] .bn-thread,
     rgba(234, 179, 8, 0.08);
 }
 
-/* =======================================================
-   Comments Sidebar Layout Behavior
-   ======================================================= */
+/* Comments Sidebar Layout Behavior */
 
 :root {
   --nd-workspace-left-sidebar-width: 16rem;
 }
 
-.nd-comments-sidebar,
-html[data-theme='dark'] .nd-comments-sidebar,
-.dark .nd-comments-sidebar {
+.nd-comments-sidebar {
   width: var(--nd-comments-rail-width) !important;
   max-width: var(--nd-comments-rail-width) !important;
   box-shadow: none !important;
@@ -1205,13 +1034,7 @@ html[data-theme='dark'] .nd-comments-sidebar,
 
 .nd-comments-sidebar .bn-thread,
 .nd-comments-sidebar .bn-thread:hover,
-.nd-comments-sidebar .bn-thread.selected,
-html[data-theme='dark'] .nd-comments-sidebar .bn-thread,
-html[data-theme='dark'] .nd-comments-sidebar .bn-thread:hover,
-html[data-theme='dark'] .nd-comments-sidebar .bn-thread.selected,
-.dark .nd-comments-sidebar .bn-thread,
-.dark .nd-comments-sidebar .bn-thread:hover,
-.dark .nd-comments-sidebar .bn-thread.selected {
+.nd-comments-sidebar .bn-thread.selected {
   box-shadow: none !important;
 }
 
