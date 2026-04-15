@@ -834,7 +834,6 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
     },
     [
       meta,
-      ydoc,
       dispatch,
       isAuthenticated,
       accessToken,
