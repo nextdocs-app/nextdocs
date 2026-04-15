@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/santhoshh-kumar/nextdocs">
-      <img alt="NextDocs" src="https://github.com/user-attachments/assets/a9db63a7-fe89-418c-aefc-c183e6e427a4" />
+      <img alt="NextDocs" src="https://github.com/user-attachments/assets/8e18c94e-9f4a-4bc1-a33c-a54a9cefdbcb" />
   </a>
 </p>
 
@@ -31,6 +31,11 @@ This is where **NextDocs** becomes relevant.
 For privacy-conscious individuals and organizations handling sensitive information, it's fully self-hostable, runs entirely on open technologies, and requires zero dependency on proprietary services. You deploy it. You control it. You own your data — end to end.
 
 > Own your documents. Not just access them.
+
+<h2>
+  <img width="100%" alt="pre-alpha-overview" src="https://github.com/user-attachments/assets/2b801800-8722-4b06-954a-99185dd1d968">
+  <p></p>
+</h2>
 
 ### Block-Based Editing
 
