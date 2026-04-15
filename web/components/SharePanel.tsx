@@ -29,6 +29,13 @@ const ACCESS_LABELS: Record<string, string> = {
   OWNER: 'Owner',
 };
 
+const ACCESS_ACTION_LABELS: Record<string, string> = {
+  VIEW: 'view',
+  COMMENT: 'comment',
+  EDIT: 'edit',
+  OWNER: 'own',
+};
+
 const ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT'];
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
@@ -257,6 +264,8 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+
   const owner = useMemo(
     () => collaborators.find((c) => c.accessLevel === 'OWNER') ?? null,
     [collaborators]
@@ -265,6 +274,45 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
     () => collaborators.filter((c) => c.accessLevel !== 'OWNER'),
     [collaborators]
   );
+
+  useEffect(() => {
+    if (!isOpen) {
+      setCoords(null);
+      return;
+    }
+    if (!anchorRef.current) return;
+
+    const updatePosition = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (rect) {
+        let right = window.innerWidth - rect.right;
+
+        // Ensure it doesn't go off screen
+        const panelWidth = 448; // 28rem
+        const minMargin = 16;
+
+        // maxRightValue ensures panel's left edge doesn't go off screen left
+        const maxRightValue = Math.max(minMargin, window.innerWidth - panelWidth - minMargin);
+
+        // Keep right within [minMargin, maxRightValue]
+        right = Math.max(minMargin, Math.min(right, maxRightValue));
+
+        setCoords({
+          top: rect.bottom + 8,
+          right: right,
+        });
+      }
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isOpen, anchorRef]);
 
   // ── Load ────────────────────────────────────────────────────────────────
 
@@ -439,8 +487,16 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
       role="dialog"
       aria-modal="true"
       aria-label="Share document"
+      style={
+        coords
+          ? {
+              top: coords.top,
+              right: coords.right,
+            }
+          : { opacity: 0 }
+      }
       className="
-        fixed top-14 right-4 z-50
+        fixed z-50
         w-[28rem]
         rounded-2xl
         bg-background
@@ -635,7 +691,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
                     />
                     <p className="text-[12px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
                       {isAnyoneWithLink
-                        ? `Anyone on the internet with the link can ${ACCESS_LABELS[settings?.linkAccessLevel ?? 'VIEW'].toLowerCase()}`
+                        ? `Anyone on the internet with the link can ${ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view'}`
                         : 'Only people with access can open with the link'}
                     </p>
                   </div>

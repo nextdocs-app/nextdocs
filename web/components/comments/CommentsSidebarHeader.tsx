@@ -41,9 +41,7 @@ export function CommentsSidebarHeader({
   const subtitle =
     stats.open > 0
       ? `${stats.open} open thread${stats.open === 1 ? '' : 's'} needing attention`
-      : canComment
-        ? 'Select text in the editor to start a thread'
-        : 'View and follow discussion activity';
+      : canComment && 'Select text in Editor to start a thread';
 
   return (
     <div className="nd-comments-sidebar__header">

@@ -8,7 +8,7 @@ export type IconProps = {
 
 export const IconBase = ({
   size = 18,
-  strokeWidth = 1.75,
+  strokeWidth = 1,
   className,
   children,
 }: React.PropsWithChildren<IconProps>) => (

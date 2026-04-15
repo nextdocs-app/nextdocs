@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/santhoshh-kumar/nextdocs">
-      <img alt="NextDocs" src="https://github.com/user-attachments/assets/8e18c94e-9f4a-4bc1-a33c-a54a9cefdbcb" />
+      <img width="100%" alt="NEXTDOCS9" src="https://github.com/user-attachments/assets/3dcdd4e8-9e87-4a27-b729-70f50fd819db" />
   </a>
 </p>
 
@@ -118,7 +118,7 @@ Use the `./nd` CLI for all development tasks:
 
 ### Manual Setup
 
-If you prefer to run services manually with no development CLI:
+If you prefer to run services manually without the `./nd` CLI:
 
 ```bash
 # 1. Start PostgreSQL
@@ -130,11 +130,15 @@ cp .env.example .env
 # 3. Start the API (from api/ directory)
 ./mvnw spring-boot:run
 
-# 4. Start the web frontend (from web/ directory)
+# 4. Start the web + realtime servers (uses Turborepo)
 npm run dev
+```
 
-# 5. Start the realtime server (from realtime/ directory)
-npm run dev
+The `npm run dev` command at the root uses [Turborepo](https://turbo.build/) to run both the web frontend and realtime WebSocket server in parallel with a single command. To start them individually:
+
+```bash
+npm run dev -- --filter=web       # Web frontend only
+npm run dev -- --filter=realtime  # Realtime server only
 ```
 
 ## Architecture

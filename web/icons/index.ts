@@ -10,4 +10,8 @@ export { Trash } from './Trash';
 export { Restore } from './Restore';
 export { Hamburger } from './Hamburger';
 export { NextDocs } from './NextDocs';
+export { CloseSidebar } from './CloseSidebar';
+export { OpenSidebar } from './OpenSidebar';
+export { Comments } from './Comments';
+export { Globe } from './Globe';
 export type { IconProps } from './IconBase';
