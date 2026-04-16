@@ -1,23 +1,22 @@
-FROM node:25-alpine AS base
+FROM node:24.14.1-alpine AS base
 
 FROM base AS deps
 WORKDIR /app
-COPY web/package.json web/package-lock.json ./
-RUN npm install
+ENV HUSKY=0
+COPY package.json package-lock.json ./
+COPY web/package.json ./web/package.json
+COPY realtime/package.json ./realtime/package.json
+RUN npm ci --workspace web --include-workspace-root=false --ignore-scripts
 
 FROM base AS builder
 WORKDIR /app
-# We copy the base config to both root and web directories to support 
-# volume mounting and the build process.
+# We copy the base config to the root directory to support the build process.
+COPY --from=deps /app/ ./
 COPY tsconfig.base.json /app/tsconfig.base.json
-COPY tsconfig.base.json /app/web/tsconfig.base.json
+COPY web/ /app/web/
+COPY realtime/src/types/ /app/realtime/src/types/
 
 WORKDIR /app/web
-COPY --from=deps /app/node_modules ./node_modules
-COPY web/ .
-
-# We patch tsconfig.json to reference the local base config for the build.  
-RUN sed -i 's|../tsconfig.base.json|./tsconfig.base.json|' tsconfig.json && grep -q '"extends": "./tsconfig.base.json"' tsconfig.json
 
 RUN npm run build
 

@@ -66,12 +66,18 @@ Every document is persisted locally in [IndexedDB](https://developer.mozilla.org
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18
+- [Node.js](https://nodejs.org/) 24.14.1 (LTS)
 - [Java](https://openjdk.org/) 21
 - [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/) (for PostgreSQL)
 - [npm](https://www.npmjs.com/) (comes with Node.js)
 
 ### Quick Start
+
+Use Node.js version 24.14.1 (LTS):
+
+```bash
+nvm use
+```
 
 The fastest way to get NextDocs running locally:
 
@@ -127,10 +133,13 @@ docker compose up -d postgres
 # 2. Copy and configure environment variables
 cp .env.example .env
 
-# 3. Start the API (from api/ directory)
+# 3. Install JS workspace dependencies (from repository root)
+npm ci
+
+# 4. Start the API (from api/ directory)
 ./mvnw spring-boot:run
 
-# 4. Start the web + realtime servers (uses Turborepo)
+# 5. Start the web + realtime servers (uses Turborepo)
 npm run dev
 ```
 

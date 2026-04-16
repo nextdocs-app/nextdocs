@@ -2,11 +2,16 @@
   "name": "nextdocs-root",
   "private": true,
   "packageManager": "npm@11.6.2",
+  "engines": {
+    "node": ">=24.14.1",
+    "npm": ">=11.6.2"
+  },
   "workspaces": [
     "web",
     "realtime"
   ],
   "scripts": {
+    "check:lockfiles": "node scripts/check-workspace-lockfiles.js",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",

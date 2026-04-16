@@ -4,17 +4,19 @@ WebSocket server powered by [Yjs](https://github.com/yjs/yjs) for real-time coll
 
 ## Setup
 
+Run commands from the repository root so npm workspaces use the single root lockfile.
+
 ```bash
-npm install
-cp .env.example .env
-npm run build  # Compile TypeScript
-npm start
+npm ci
+npm run build -- --filter=realtime
+npm run dev -- --filter=realtime
 ```
 
-For development with auto-reload:
+For a production-like run after build:
 
 ```bash
-npm run dev
+npm run build -- --filter=realtime
+node realtime/dist/server.js
 ```
 
 Server runs on `http://localhost:1234`.
