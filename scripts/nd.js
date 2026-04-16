@@ -2,6 +2,7 @@
 
 const { spawnSync, spawn } = require('child_process');
 const { randomBytes } = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
@@ -13,9 +14,22 @@ const command = args[0];
 const service = args[1];
 
 const ROOT = path.resolve(__dirname, '..');
-const ALL_SERVICES = ['api', 'web', 'realtime'];
-
 const isWin = process.platform === 'win32';
+const ALL_SERVICES = ['api', 'web', 'realtime'];
+const WORKSPACE_LOCKFILES = [
+  path.join(ROOT, 'web', 'package-lock.json'),
+  path.join(ROOT, 'realtime', 'package-lock.json'),
+];
+
+const REQUIRED_JS_BINARIES = [
+  path.join(ROOT, 'node_modules', '.bin', isWin ? 'turbo.cmd' : 'turbo'),
+];
+
+const REQUIRED_WORKSPACE_PACKAGES = {
+  web: ['next', 'react', 'react-dom'],
+  realtime: ['tsx', 'y-websocket'],
+};
+
 const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
 
 const POSTGRES_CONTAINER = 'nextdocs-postgres';
@@ -88,6 +102,60 @@ function run(cmd, opts = {}) {
 
 function runSilent(cmd) {
   return spawnSync(cmd, { shell: true, cwd: ROOT, stdio: 'pipe' });
+}
+
+function verifyWorkspaceLockfilePolicy() {
+  const found = WORKSPACE_LOCKFILES.filter((filePath) => fs.existsSync(filePath));
+  if (found.length === 0) return;
+
+  console.error('\x1b[31m✗ Workspace lockfile policy violation detected\x1b[0m');
+  console.error('Only the root package-lock.json is allowed. Remove these files:');
+  for (const filePath of found) {
+    console.error(`  - ${path.relative(ROOT, filePath)}`);
+  }
+  console.error('Then run: npm run check:lockfiles && npm ci');
+  process.exit(1);
+}
+
+function verifyJsWorkspaceInstall(target = 'all') {
+  const missing = [];
+
+  for (const binaryPath of REQUIRED_JS_BINARIES) {
+    if (!fs.existsSync(binaryPath)) {
+      missing.push(path.relative(ROOT, binaryPath));
+    }
+  }
+
+  const targets = target === 'all' ? ['web', 'realtime'] : [target];
+  for (const svc of targets) {
+    const requiredPackages = REQUIRED_WORKSPACE_PACKAGES[svc] || [];
+    for (const packageName of requiredPackages) {
+      const packageCandidates = [
+        path.join(ROOT, 'node_modules', packageName, 'package.json'),
+        path.join(ROOT, svc, 'node_modules', packageName, 'package.json'),
+      ];
+      const found = packageCandidates.some((candidatePath) => fs.existsSync(candidatePath));
+      if (!found) {
+        missing.push(`${svc}:${packageName}`);
+      }
+    }
+  }
+
+  if (missing.length === 0) return;
+
+  console.error('\x1b[31m✗ Missing workspace dependencies\x1b[0m');
+  console.error('The JS workspaces are not installed or are partially installed.');
+  console.error('Run from repository root: npm ci');
+  console.error('Missing artifacts:');
+  for (const item of missing) {
+    console.error(`  - ${item}`);
+  }
+  process.exit(1);
+}
+
+function ensureJsWorkspaceReady(target = 'all') {
+  verifyWorkspaceLockfilePolicy();
+  verifyJsWorkspaceInstall(target);
 }
 
 function turbo(task, filter, extraArgs = '') {
@@ -171,6 +239,8 @@ function runForService(task, svc) {
     }
     return run(API_COMMANDS[task], opts);
   }
+
+  ensureJsWorkspaceReady(svc);
   return turbo(task, svc);
 }
 
@@ -182,6 +252,7 @@ function runForAll(task) {
   });
 
   console.log(`\n--- WEB + REALTIME ---`);
+  ensureJsWorkspaceReady('all');
   let turboTask = task;
   if (task === 'format' && isFix) turboTask = 'format:fix';
   const turboStatus = turbo(turboTask, null, (task === 'lint' && isFix) ? ' -- --fix' : '');
@@ -198,6 +269,7 @@ switch (command) {
     if (service) {
       runForService('dev', service);
     } else {
+      ensureJsWorkspaceReady('all');
       console.log('\x1b[34m> Starting all dev servers...\x1b[0m');
       const api = spawn(mvnw, ['spring-boot:run', '--no-transfer-progress'], {
         stdio: ['inherit', 'pipe', 'pipe'],
