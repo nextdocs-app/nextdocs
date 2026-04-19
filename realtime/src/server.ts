@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
@@ -92,6 +93,14 @@ export const wss = new WebSocketServer({
 
 const ipConnections = new Map<string, number>();
 const ipConnectionTimestamps = new Map<string, number[]>();
+const unauthorizedAccessCooldown = new Map<string, UnauthorizedCooldownState>();
+const ROOM_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface UnauthorizedCooldownState {
+  denyUntil: number;
+  lastWarnAt: number;
+  suppressedAttempts: number;
+}
 
 interface AccessCheckData {
   allowed: boolean;
@@ -134,6 +143,92 @@ function extractToken(req: http.IncomingMessage, url: URL): string | null {
   return null;
 }
 
+function isValidRoomId(roomId: string): boolean {
+  return ROOM_ID_PATTERN.test(roomId);
+}
+
+function getTokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 12);
+}
+
+function buildUnauthorizedCooldownKey(roomId: string, clientIp: string, token: string): string {
+  return `${roomId}:${clientIp}:${getTokenFingerprint(token)}`;
+}
+
+function getUnauthorizedCooldownState(key: string, now: number): UnauthorizedCooldownState | null {
+  const existingState = unauthorizedAccessCooldown.get(key);
+  if (!existingState) {
+    return null;
+  }
+
+  if (existingState.denyUntil <= now) {
+    unauthorizedAccessCooldown.delete(key);
+    return null;
+  }
+
+  return existingState;
+}
+
+function trackUnauthorizedAccess(key: string, now: number): UnauthorizedCooldownState {
+  const existingState = getUnauthorizedCooldownState(key, now);
+  if (existingState) {
+    existingState.denyUntil = now + config.unauthorizedAccessCooldownMs;
+    return existingState;
+  }
+
+  const nextState: UnauthorizedCooldownState = {
+    denyUntil: now + config.unauthorizedAccessCooldownMs,
+    lastWarnAt: 0,
+    suppressedAttempts: 0,
+  };
+
+  unauthorizedAccessCooldown.set(key, nextState);
+  return nextState;
+}
+
+function logUnauthorizedRejection(
+  state: UnauthorizedCooldownState,
+  context: {
+    roomId: string;
+    clientIp: string;
+    now: number;
+    source: 'cooldown' | 'access-check';
+  }
+): void {
+  const cooldownMsRemaining = Math.max(0, state.denyUntil - context.now);
+  const shouldWarn = context.now - state.lastWarnAt >= config.unauthorizedAccessWarnIntervalMs;
+
+  if (!shouldWarn) {
+    state.suppressedAttempts += 1;
+    logger.debug('Connection rejected: unauthorized document access (suppressed)', {
+      roomId: context.roomId,
+      ip: context.clientIp,
+      source: context.source,
+      cooldownMsRemaining,
+    });
+    return;
+  }
+
+  logger.warn('Connection rejected: unauthorized document access', {
+    roomId: context.roomId,
+    ip: context.clientIp,
+    source: context.source,
+    cooldownMsRemaining,
+    suppressedAttempts: state.suppressedAttempts,
+  });
+
+  state.lastWarnAt = context.now;
+  state.suppressedAttempts = 0;
+}
+
+function cleanupExpiredUnauthorizedCooldown(now = Date.now()): void {
+  for (const [key, state] of unauthorizedAccessCooldown.entries()) {
+    if (state.denyUntil <= now) {
+      unauthorizedAccessCooldown.delete(key);
+    }
+  }
+}
+
 async function fetchAccess(token: string, roomId: string): Promise<AccessCheckData | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -164,14 +259,14 @@ async function fetchAccess(token: string, roomId: string): Promise<AccessCheckDa
     return body.data;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      logger.error('Document access check timed out', {
+      logger.debug('Document access check timed out', {
         roomId,
         error: error.message,
       });
       return null;
     }
 
-    logger.error('Document access check failed', {
+    logger.debug('Document access check failed', {
       roomId,
       error: error instanceof Error ? error.message : String(error),
     });
@@ -285,6 +380,15 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
       return;
     }
 
+    if (!isValidRoomId(roomId)) {
+      logger.info('Connection rejected: invalid room ID format', {
+        roomId,
+        ip: clientIp,
+      });
+      conn.close(1008, 'Invalid room ID');
+      return;
+    }
+
     const token = extractToken(req, parsedUrl);
     if (!token) {
       logger.warn('Connection rejected: missing access token', { roomId, ip: clientIp });
@@ -292,12 +396,38 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
       return;
     }
 
-    const access = await fetchAccess(token, roomId);
-    if (!access?.allowed || !access.accessLevel) {
-      logger.warn('Connection rejected: unauthorized document access', { roomId, ip: clientIp });
+    const authCheckNow = Date.now();
+    const unauthorizedCooldownKey = buildUnauthorizedCooldownKey(roomId, clientIp, token);
+    const activeUnauthorizedCooldownState = getUnauthorizedCooldownState(
+      unauthorizedCooldownKey,
+      authCheckNow
+    );
+
+    if (activeUnauthorizedCooldownState) {
+      logUnauthorizedRejection(activeUnauthorizedCooldownState, {
+        roomId,
+        clientIp,
+        now: authCheckNow,
+        source: 'cooldown',
+      });
       conn.close(1008, 'Access denied');
       return;
     }
+
+    const access = await fetchAccess(token, roomId);
+    if (!access?.allowed || !access.accessLevel) {
+      const unauthorizedState = trackUnauthorizedAccess(unauthorizedCooldownKey, authCheckNow);
+      logUnauthorizedRejection(unauthorizedState, {
+        roomId,
+        clientIp,
+        now: authCheckNow,
+        source: 'access-check',
+      });
+      conn.close(1008, 'Access denied');
+      return;
+    }
+
+    unauthorizedAccessCooldown.delete(unauthorizedCooldownKey);
 
     ipConnections.set(clientIp, currentIpConns + 1);
 
@@ -457,6 +587,8 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
 export function cleanupInactiveRooms(): void {
   const now = Date.now();
   let cleaned = 0;
+
+  cleanupExpiredUnauthorizedCooldown(now);
 
   for (const [roomId, room] of rooms.entries()) {
     const inactive = now - room.lastActivity > config.roomInactiveTimeout;
