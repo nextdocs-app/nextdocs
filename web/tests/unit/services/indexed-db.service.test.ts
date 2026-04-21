@@ -173,6 +173,60 @@ describe('indexed-db.service', () => {
     });
   });
 
+  describe('wipeDatabase', () => {
+    it('should delete the current database and clear all documents', async () => {
+      indexedDBService.setUserId('user-1');
+      expect(indexedDBService.dbName).toBe('nextdocs-db_user-1');
+
+      const doc: StoredDocument = {
+        id: 'test-doc',
+        meta: {
+          title: 'Test',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        yjsState: new Uint8Array([1]),
+        version: 1,
+      };
+
+      await indexedDBService.saveDocument(doc);
+      await indexedDBService.wipeDatabase();
+
+      const retrieved = await indexedDBService.getDocument('test-doc');
+      expect(retrieved).toBeUndefined();
+
+      const ids = await indexedDBService.getAllDocumentIds();
+      expect(ids).toEqual([]);
+    });
+
+    it('should switch databases when userId changes', async () => {
+      indexedDBService.setUserId('user-A');
+      const docA: StoredDocument = {
+        id: 'doc-A',
+        meta: { title: 'A', createdAt: '', updatedAt: '' },
+        yjsState: new Uint8Array([65]),
+        version: 1,
+      };
+      await indexedDBService.saveDocument(docA);
+
+      indexedDBService.setUserId('user-B');
+      const docB: StoredDocument = {
+        id: 'doc-B',
+        meta: { title: 'B', createdAt: '', updatedAt: '' },
+        yjsState: new Uint8Array([66]),
+        version: 1,
+      };
+      await indexedDBService.saveDocument(docB);
+
+      expect(await indexedDBService.getDocument('doc-B')).toBeDefined();
+      expect(await indexedDBService.getDocument('doc-A')).toBeUndefined();
+
+      indexedDBService.setUserId('user-A');
+      expect(await indexedDBService.getDocument('doc-A')).toBeDefined();
+      expect(await indexedDBService.getDocument('doc-B')).toBeUndefined();
+    });
+  });
+
   describe('isAvailable', () => {
     it('should return true when IndexedDB is supported', () => {
       expect(indexedDBService.isAvailable()).toBe(true);

@@ -1,14 +1,15 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { StoredDocument } from '@/types/document.types';
 
-const DB_NAME = 'nextdocs-db';
 const DB_VERSION = 1;
 const DOCUMENTS_STORE = 'documents';
 
 class IndexedDBService {
   private static instance: IndexedDBService;
   private dbPromise: Promise<IDBPDatabase> | null = null;
+  private dbClosingPromise: Promise<void> | null = null;
   private isSupported: boolean = true;
+  private currentUserId: string | null = null;
 
   private constructor() {
     if (typeof window === 'undefined' || !window.indexedDB) {
@@ -23,9 +24,43 @@ class IndexedDBService {
     return IndexedDBService.instance;
   }
 
+  public get dbName(): string {
+    return this.currentUserId ? `nextdocs-db_${this.currentUserId}` : 'nextdocs-db';
+  }
+
+  public setUserId(userId: string | null): void {
+    if (this.currentUserId === userId) {
+      return;
+    }
+
+    this.currentUserId = userId;
+
+    if (this.dbPromise && !this.dbClosingPromise) {
+      const dbPromiseToClose = this.dbPromise;
+
+      this.dbClosingPromise = dbPromiseToClose
+        .then((db) => {
+          db.close();
+        })
+        .catch((error) => {
+          console.warn('Failed to close IndexedDB connection during user switch:', error);
+        })
+        .finally(() => {
+          if (this.dbPromise === dbPromiseToClose) {
+            this.dbPromise = null;
+          }
+          this.dbClosingPromise = null;
+        });
+    }
+  }
+
   private async getDB(): Promise<IDBPDatabase> {
     if (!this.isSupported) {
       throw new Error('IndexedDB not supported');
+    }
+
+    if (this.dbClosingPromise) {
+      await this.dbClosingPromise;
     }
 
     if (!this.dbPromise) {
@@ -37,17 +72,9 @@ class IndexedDBService {
 
   private async initDB(): Promise<IDBPDatabase> {
     try {
-      const db = await openDB(DB_NAME, DB_VERSION, {
-        upgrade(db) {
-          // We check if store exists to support future schema migrations
-          if (!db.objectStoreNames.contains(DOCUMENTS_STORE)) {
-            const store = db.createObjectStore(DOCUMENTS_STORE, {
-              keyPath: 'id',
-            });
-
-            store.createIndex('updatedAt', 'meta.updatedAt');
-            store.createIndex('createdAt', 'meta.createdAt');
-          }
+      const db = await openDB(this.dbName, DB_VERSION, {
+        upgrade: (db) => {
+          this.ensureDocumentsStore(db);
         },
       });
 
@@ -56,6 +83,18 @@ class IndexedDBService {
       console.error('Failed to initialize IndexedDB:', error);
       this.isSupported = false;
       throw error;
+    }
+  }
+
+  private ensureDocumentsStore(db: IDBPDatabase): void {
+    // Keep guest and user DB schema bootstrap logic in one place.
+    if (!db.objectStoreNames.contains(DOCUMENTS_STORE)) {
+      const store = db.createObjectStore(DOCUMENTS_STORE, {
+        keyPath: 'id',
+      });
+
+      store.createIndex('updatedAt', 'meta.updatedAt');
+      store.createIndex('createdAt', 'meta.createdAt');
     }
   }
 
