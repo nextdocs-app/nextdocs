@@ -1,4 +1,4 @@
-import { openDB, type IDBPDatabase } from 'idb';
+import { openDB, deleteDB, type IDBPDatabase } from 'idb';
 import type { StoredDocument } from '@/types/document.types';
 
 const DB_VERSION = 1;
@@ -155,6 +155,67 @@ class IndexedDBService {
       await db.clear(DOCUMENTS_STORE);
     } catch (error) {
       console.error('Failed to clear documents:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Specifically targets the legacy/guest database ('nextdocs-db') to find
+   * documents created before the user logged in.
+   */
+  public async getAllGuestDocuments(): Promise<StoredDocument[]> {
+    if (!this.isSupported) {
+      return [];
+    }
+
+    try {
+      const guestDb = await openDB('nextdocs-db', DB_VERSION, {
+        upgrade: (db) => {
+          this.ensureDocumentsStore(db);
+        },
+      });
+
+      const docs = await guestDb.getAll(DOCUMENTS_STORE);
+      guestDb.close();
+      return docs;
+    } catch (error) {
+      console.error('Failed to get guest documents:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Deletes documents from the guest database by ID.
+   */
+  public async deleteGuestDocuments(ids: string[]): Promise<void> {
+    if (!this.isSupported || ids.length === 0) {
+      return;
+    }
+
+    try {
+      const guestDb = await openDB('nextdocs-db', DB_VERSION, {
+        upgrade: (db) => {
+          this.ensureDocumentsStore(db);
+        },
+      });
+      const tx = guestDb.transaction(DOCUMENTS_STORE, 'readwrite');
+      await Promise.all([...ids.map((id) => tx.store.delete(id)), tx.done]);
+      guestDb.close();
+    } catch (error) {
+      console.error('Failed to delete guest documents:', error);
+    }
+  }
+
+  public async wipeDatabase(): Promise<void> {
+    try {
+      if (this.dbPromise) {
+        const db = await this.dbPromise;
+        db.close();
+        this.dbPromise = null;
+      }
+      await deleteDB(this.dbName);
+    } catch (error) {
+      console.error('Failed to wipe database:', error);
       throw error;
     }
   }

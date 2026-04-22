@@ -557,6 +557,10 @@ class DocumentService {
     return indexedDBService.getAllDocuments();
   }
 
+  public async getAllGuestDocuments(): Promise<StoredDocument[]> {
+    return indexedDBService.getAllGuestDocuments();
+  }
+
   public async bulkImportLocalDocuments(
     accessToken: string,
     docs: StoredDocument[]
@@ -585,6 +589,11 @@ class DocumentService {
 
   public async deleteLocalDocumentsByIds(ids: string[]): Promise<void> {
     await Promise.all(ids.map((id) => indexedDBService.deleteDocument(id)));
+    this.emitLocalDocumentsChanged();
+  }
+
+  public async deleteGuestDocumentsByIds(ids: string[]): Promise<void> {
+    await indexedDBService.deleteGuestDocuments(ids);
     this.emitLocalDocumentsChanged();
   }
 

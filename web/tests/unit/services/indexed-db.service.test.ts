@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { openDB } from 'idb';
 import { indexedDBService } from '@/services/indexed-db.service';
 import type { StoredDocument } from '@/types/document.types';
 
@@ -230,6 +231,44 @@ describe('indexed-db.service', () => {
   describe('isAvailable', () => {
     it('should return true when IndexedDB is supported', () => {
       expect(indexedDBService.isAvailable()).toBe(true);
+    });
+  });
+
+  describe('Guest Database Methods', () => {
+    it('should operate on the guest database specifically', async () => {
+      // Set a user context
+      indexedDBService.setUserId('some-user');
+      expect(indexedDBService.dbName).toBe('nextdocs-db_some-user');
+
+      // Manually seed the legacy/guest database
+      const guestDb = await openDB('nextdocs-db', 1, {
+        upgrade(db) {
+          if (!db.objectStoreNames.contains('documents')) {
+            db.createObjectStore('documents', { keyPath: 'id' });
+          }
+        },
+      });
+      await guestDb.put('documents', {
+        id: 'guest-doc-1',
+        meta: { title: 'Guest Doc', createdAt: '', updatedAt: '' },
+        yjsState: new Uint8Array([1]),
+        version: 1,
+      });
+      guestDb.close();
+
+      // Verify getAllGuestDocuments finds it even with user context
+      const guestDocs = await indexedDBService.getAllGuestDocuments();
+      expect(guestDocs).toHaveLength(1);
+      expect(guestDocs[0].id).toBe('guest-doc-1');
+
+      // Verify it doesn't show up in the current user's documents
+      const userDocs = await indexedDBService.getAllDocuments();
+      expect(userDocs).toHaveLength(0);
+
+      // Verify deletion from guest DB
+      await indexedDBService.deleteGuestDocuments(['guest-doc-1']);
+      const guestDocsAfterDelete = await indexedDBService.getAllGuestDocuments();
+      expect(guestDocsAfterDelete).toHaveLength(0);
     });
   });
 });
