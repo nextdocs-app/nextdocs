@@ -6,6 +6,8 @@ import type {
   AuthApiResponse,
 } from './auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
+import { clearLocalUserData } from '@/lib/idb-isolation.util';
+import { indexedDBService } from '@/services/indexed-db.service';
 
 export const AUTH_SESSION_STORAGE_KEY = 'nextdocs.auth.session';
 
@@ -74,6 +76,7 @@ function clearPersistedAuthSnapshot(): void {
 }
 
 const persistedAuth = readPersistedAuthSnapshot();
+indexedDBService.setUserId(persistedAuth?.user?.id ?? null);
 
 const initialState: AuthState = {
   user: persistedAuth?.user ?? null,
@@ -89,7 +92,9 @@ export const loginThunk = createAsyncThunk<AuthApiResponse, LoginCredentials>(
   'auth/login',
   async (credentials, { rejectWithValue }) => {
     try {
-      return await authApiService.login(credentials);
+      const response = await authApiService.login(credentials);
+      indexedDBService.setUserId(response.user.id);
+      return response;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Login failed.';
       return rejectWithValue(message);
@@ -101,7 +106,9 @@ export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentia
   'auth/register',
   async (credentials, { rejectWithValue }) => {
     try {
-      return await authApiService.register(credentials);
+      const response = await authApiService.register(credentials);
+      indexedDBService.setUserId(response.user.id);
+      return response;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Registration failed.';
       return rejectWithValue(message);
@@ -113,9 +120,13 @@ export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
   'auth/refresh',
   async (_, { rejectWithValue }) => {
     try {
-      return await authApiService.refresh();
+      const response = await authApiService.refresh();
+      indexedDBService.setUserId(response.user.id);
+      return response;
     } catch (err: unknown) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        await clearLocalUserData();
+        indexedDBService.setUserId(null);
         return rejectWithValue('unauthorized');
       }
       return rejectWithValue('failed');
@@ -134,6 +145,8 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
     } catch {
       // ignore
     }
+    await clearLocalUserData();
+    indexedDBService.setUserId(null);
   }
 );
 
