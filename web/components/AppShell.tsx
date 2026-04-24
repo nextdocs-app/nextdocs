@@ -10,7 +10,7 @@ import { useAppDispatch } from '@/stores/hooks';
 import { refreshSessionThunk } from '@/stores/auth/auth.slice';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { documentService } from '@/services/document.service';
-import { decodeYjsState } from '@/lib/yjs.util';
+import { isUntitledTitle, isEmptyLocalDocument } from '@/lib/document-content.util';
 import type { StoredDocument } from '@/types/document.types';
 
 const LOCAL_IMPORT_LOCK_KEY = 'nextdocs-local-import-lock';
@@ -49,24 +49,6 @@ function tryAcquireImportLock(): boolean {
 
 function releaseImportLock() {
   localStorage.removeItem(LOCAL_IMPORT_LOCK_KEY);
-}
-
-function isUntitledTitle(title: string | undefined): boolean {
-  const normalized = (title ?? '').trim().toLowerCase();
-  return normalized === '' || normalized === 'untitled';
-}
-
-function isEmptyLocalDocument(doc: StoredDocument): boolean {
-  try {
-    const ydoc = decodeYjsState(doc.yjsState);
-    const fragment = ydoc.getXmlFragment('blocknote');
-    const isEmpty = fragment.length === 0;
-    ydoc.destroy();
-    return isEmpty;
-  } catch {
-    // Keep unknown/unreadable docs eligible to avoid accidental data loss.
-    return false;
-  }
 }
 
 export function getDocsEligibleForAccountMove(docs: StoredDocument[]): StoredDocument[] {
@@ -129,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
 
         // Delete local docs only after backend confirms all were imported.
-        await documentService.deleteLocalDocumentsByIds(docs.map((doc) => doc.id));
+        await documentService.deleteGuestDocumentsByIds(docs.map((doc) => doc.id));
 
         if (actionKey) {
           bulkImportCompletedKeyRef.current = actionKey;
@@ -247,8 +229,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     const run = async () => {
       try {
-        const localDocs = await documentService.getAllLocalDocuments();
+        const localDocs = await documentService.getAllGuestDocuments();
         const promotableLocalDocs = getDocsEligibleForAccountMove(localDocs);
+        const junkDocs = localDocs.filter(
+          (doc) => !promotableLocalDocs.some((p) => p.id === doc.id)
+        );
+
+        // Immediately clean up junk guest documents (empty untitled docs) to prevent
+        // them from haunting the user after they log out later.
+        if (junkDocs.length > 0) {
+          try {
+            await documentService.deleteGuestDocumentsByIds(junkDocs.map((d) => d.id));
+          } catch (error) {
+            console.warn('[AppShell] Failed to clean up junk guest documents:', error);
+          }
+        }
 
         if (cancelled || promotableLocalDocs.length === 0) {
           didPromptImportRef.current = true;
@@ -356,7 +351,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setIsImportingLocalDocs(true);
       setLocalDocsError(null);
 
-      await documentService.deleteLocalDocumentsByIds(localDocsToPromote.map((doc) => doc.id));
+      await documentService.deleteGuestDocumentsByIds(localDocsToPromote.map((doc) => doc.id));
 
       closePromotionFlow();
     } catch (error) {

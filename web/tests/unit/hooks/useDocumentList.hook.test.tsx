@@ -1,18 +1,20 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import * as Y from 'yjs';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
-import { documentService } from '@/services/document.service';
+import { documentService, DocumentServiceApiError } from '@/services/document.service';
 import { useCloudBackoff } from '../../../hooks/useCloudBackoff.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
 
 const mockIsCloudInBackoff = jest.fn(() => false);
 const mockTriggerCloudBackoff = jest.fn();
 const mockClearCloudBackoff = jest.fn();
+const mockRefreshSession = jest.fn();
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
     isAuthenticated: false,
     accessToken: null,
+    refresh: mockRefreshSession,
   })),
 }));
 
@@ -81,6 +83,7 @@ describe('useDocumentList', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
+      refresh: mockRefreshSession,
     });
   });
 
@@ -208,6 +211,37 @@ describe('useDocumentList', () => {
 
     expect(result.current.documents.map((doc) => doc.id)).toEqual(['local-1', 'local-2']);
     expect(result.current.sharedDocuments).toHaveLength(0);
+  });
+
+  it('refreshes the session and falls back to local documents when cloud list returns 401', async () => {
+    const refresh = jest.fn();
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'stale-token',
+      isInitializing: false,
+      refresh,
+    });
+
+    listCloudDocumentsSpy.mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
+    getAllDocumentsMetaSpy.mockResolvedValue([
+      {
+        id: 'cached-doc',
+        meta: {
+          title: 'Cached Doc',
+          updatedAt: '2024-01-03T10:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ]);
+
+    const { result } = renderHook(() => useDocumentList());
+
+    await waitForInitialLoad(result, { includeShared: true });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(mockTriggerCloudBackoff).not.toHaveBeenCalled();
+    expect(result.current.documents.map((doc) => doc.id)).toEqual(['cached-doc']);
   });
 
   it('loads next cloud page when in show-all mode', async () => {
@@ -499,6 +533,36 @@ describe('useDocumentList', () => {
     expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
     expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 20);
     expect(result.current.sharedDocuments.length).toBe(30);
+    expect(result.current.sharedHasMore).toBe(false);
+  });
+
+  it('refreshes the session and clears shared-with-me state when shared list returns 401', async () => {
+    const refresh = jest.fn();
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'stale-token',
+      isInitializing: false,
+      refresh,
+    });
+
+    listCloudDocumentsSpy.mockResolvedValue({
+      items: [],
+      page: 0,
+      size: 7,
+      totalElements: 0,
+      totalPages: 0,
+      hasMore: false,
+    });
+    listSharedDocumentsSpy.mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
+
+    const { result } = renderHook(() => useDocumentList());
+
+    await waitForInitialLoad(result, { includeShared: true });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(mockTriggerCloudBackoff).not.toHaveBeenCalled();
+    expect(result.current.sharedDocuments).toEqual([]);
     expect(result.current.sharedHasMore).toBe(false);
   });
 

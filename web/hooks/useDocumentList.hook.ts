@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { documentService } from '@/services/document.service';
+import { documentService, DocumentServiceApiError } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
@@ -111,7 +111,14 @@ export function useDocumentList() {
   const [isShowingAllShared, setIsShowingAllShared] = useState(false);
   const [isTrashLoadingMore, setIsTrashLoadingMore] = useState(false);
   const [trashHasMore, setTrashHasMore] = useState(false);
-  const { isAuthenticated, accessToken, isInitializing } = useAuth();
+  const { isAuthenticated, accessToken, isInitializing, refresh: refreshSession } = useAuth();
+  // Track previous auth state to detect boundary transitions (guest ↔ authenticated).
+  const prevIsAuthenticatedRef = useRef<boolean | null>(null);
+  // Stable ref so refreshSession can be called from inside callbacks without being a dep.
+  const refreshRef = useRef(refreshSession);
+  useEffect(() => {
+    refreshRef.current = refreshSession;
+  }, [refreshSession]);
 
   const nextCloudPageRef = useRef(0);
   const nextSharedPageRef = useRef(0);
@@ -298,11 +305,17 @@ export function useDocumentList() {
             void ensureCloudDocsCachedLocally([...privateDocs, ...sharedByOwnerDocs]);
             return;
           } catch (cloudError) {
-            if (!isConnectivityError(cloudError)) {
+            if (cloudError instanceof DocumentServiceApiError && cloudError.status === 401) {
+              // Stale token: attempt silent re-auth and degrade to local cache.
+              // When refreshSessionThunk resolves the new accessToken, the dep change
+              // will recreate loadInitial and re-trigger this effect automatically.
+              void refreshRef.current();
+              // fall through to local IDB below — no backoff so retry is immediate
+            } else if (!isConnectivityError(cloudError)) {
               throw cloudError;
+            } else {
+              triggerCloudBackoff();
             }
-
-            triggerCloudBackoff();
 
             // If cloud is unreachable, degrade gracefully to local IndexedDB documents.
             const allLocalDocs = sortByUpdatedAtDesc(await documentService.getAllDocumentsMeta());
@@ -811,8 +824,22 @@ export function useDocumentList() {
       return;
     }
 
+    // Security: when the auth boundary changes (guest → authenticated or vice-versa),
+    // reset all in-memory local document refs so the previous session's cached
+    // list is never momentarily shown to the new session before the API responds.
+    const isAuthTransition =
+      prevIsAuthenticatedRef.current !== null && prevIsAuthenticatedRef.current !== isAuthenticated;
+
+    if (isAuthTransition) {
+      localAllDocsRef.current = [];
+      localLoadedCountRef.current = 0;
+      nextCloudPageRef.current = 0;
+    }
+
+    prevIsAuthenticatedRef.current = isAuthenticated;
+
     void loadInitial(true, false);
-  }, [isInitializing, loadInitial]);
+  }, [isInitializing, isAuthenticated, loadInitial]);
 
   useEffect(() => {
     if (isInitializing) {
@@ -856,6 +883,17 @@ export function useDocumentList() {
           void ensureCloudDocsCachedLocally(page.items);
         }
       } catch (error) {
+        if (error instanceof DocumentServiceApiError && error.status === 401) {
+          // Stale token: trigger silent re-auth; shared list will reload automatically
+          // once the new accessToken dep change re-runs this effect.
+          void refreshRef.current();
+          if (!cancelled) {
+            setSharedWithMeDocuments([]);
+            setSharedWithMeHasMore(false);
+            nextSharedPageRef.current = 0;
+          }
+          return;
+        }
         if (isConnectivityError(error)) {
           triggerCloudBackoff();
         }
