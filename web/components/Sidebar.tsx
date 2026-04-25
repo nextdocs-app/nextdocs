@@ -31,6 +31,7 @@ import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
+import { resolveRootDocumentId } from '@/lib/root-document.util';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_VISIBLE_COUNT = 7;
@@ -318,7 +319,7 @@ function ProfileMenuPopup({
 function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   const router = useRouter();
   const params = useParams();
-  const routeActiveDocId = (params?.id as string) || 'default-doc';
+  const routeActiveDocId = (params?.id as string) || '';
   const {
     documents,
     sharedDocuments = [],
@@ -451,13 +452,31 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         return;
       }
 
-      if (id === 'default-doc') {
-        router.push('/');
-      } else {
-        router.push(`/doc/${id}`);
-      }
+      router.push(`/doc/${id}`);
     },
     [router]
+  );
+
+  const navigateToResolvedRootDocument = useCallback(
+    async (options?: {
+      excludedDocumentIds?: string[];
+      isAuthenticated?: boolean;
+      accessToken?: string | null;
+    }) => {
+      const nextAccessToken =
+        options && Object.prototype.hasOwnProperty.call(options, 'accessToken')
+          ? (options.accessToken ?? null)
+          : accessToken;
+
+      const nextDocumentId = await resolveRootDocumentId({
+        isAuthenticated: options?.isAuthenticated ?? isAuthenticated,
+        accessToken: nextAccessToken,
+        excludedDocumentIds: options?.excludedDocumentIds,
+      });
+
+      router.replace(`/doc/${nextDocumentId}`);
+    },
+    [router, isAuthenticated, accessToken]
   );
 
   useOfflineDocumentSelect(setOfflineSelectedDocumentId);
@@ -718,7 +737,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         setDocActionsAnchor(null);
 
         if (activeDocId === docId) {
-          router.push('/');
+          await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
         }
 
         await refresh(false);
@@ -728,7 +747,14 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         alert('Failed to move document to trash. Please try again.');
       }
     },
-    [isAuthenticated, accessToken, activeDocId, router, refresh, refreshTrash]
+    [
+      isAuthenticated,
+      accessToken,
+      activeDocId,
+      navigateToResolvedRootDocument,
+      refresh,
+      refreshTrash,
+    ]
   );
 
   const handleRestoreFromTrash = useCallback(
@@ -764,7 +790,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         setDocActionsAnchor(null);
 
         if (activeDocId === docId) {
-          router.push('/');
+          await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
         }
 
         await refresh(false);
@@ -773,7 +799,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         alert('Failed to leave shared document. Please try again.');
       }
     },
-    [isAuthenticated, accessToken, activeDocId, router, refresh]
+    [isAuthenticated, accessToken, activeDocId, navigateToResolvedRootDocument, refresh]
   );
 
   const handleRequestPermanentDelete = useCallback((docId: string, title: string) => {
@@ -793,7 +819,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       setPermanentDeleteTarget(null);
 
       if (activeDocId === id) {
-        router.push('/');
+        await navigateToResolvedRootDocument({ excludedDocumentIds: [id] });
       }
 
       await refresh(false);
@@ -809,7 +835,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     accessToken,
     permanentDeleteTarget,
     activeDocId,
-    router,
+    navigateToResolvedRootDocument,
     refresh,
     refreshTrash,
   ]);
@@ -1029,9 +1055,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             setIsAccountMenuOpen(false);
             openTrashDocumentsPanel();
           }}
-          onLogout={() => {
+          onLogout={async () => {
             setIsAccountMenuOpen(false);
-            logout();
+            await logout();
+            await navigateToResolvedRootDocument({
+              isAuthenticated: false,
+              accessToken: null,
+            });
           }}
           onOpenAuth={() => {
             setIsAccountMenuOpen(false);
