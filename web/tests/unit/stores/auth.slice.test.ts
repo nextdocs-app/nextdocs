@@ -23,6 +23,19 @@ jest.mock('../../../services/auth.service', () => ({
   },
 }));
 
+jest.mock('../../../lib/idb-isolation.util', () => ({
+  clearLocalUserData: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../../services/indexed-db.service', () => ({
+  indexedDBService: {
+    setUserId: jest.fn(),
+  },
+}));
+
+import { clearLocalUserData } from '../../../lib/idb-isolation.util';
+import { indexedDBService } from '../../../services/indexed-db.service';
+
 const mockUser = {
   id: 'user-1',
   email: 'test@example.com',
@@ -111,6 +124,7 @@ describe('auth slice', () => {
     expect(auth.user).toEqual(mockUser);
     expect(auth.accessToken).toBe('access-token-123');
     expect(auth.error).toBeNull();
+    expect(indexedDBService.setUserId).toHaveBeenCalledWith('user-1');
   });
 
   it('loginThunk/rejected records the error message', async () => {
@@ -130,6 +144,7 @@ describe('auth slice', () => {
     const { auth } = store.getState();
     expect(auth.user).toEqual(mockUser);
     expect(auth.error).toBeNull();
+    expect(indexedDBService.setUserId).toHaveBeenCalledWith('user-1');
   });
 
   it('registerThunk/rejected records the error message', async () => {
@@ -154,6 +169,7 @@ describe('auth slice', () => {
     expect(auth.isInitializing).toBe(false);
     expect(auth.user).toEqual(mockUser);
     expect(auth.accessToken).toBe('access-token-123');
+    expect(indexedDBService.setUserId).toHaveBeenCalledWith('user-1');
   });
 
   it('refreshSessionThunk/rejected clears state if unauthorized', async () => {
@@ -164,6 +180,7 @@ describe('auth slice', () => {
     expect(auth.isInitializing).toBe(false);
     expect(auth.user).toBeNull();
     expect(auth.accessToken).toBeNull();
+    expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
   });
 
   it('refreshSessionThunk/rejected retains state on network error and only changes isInitializing if true', async () => {
@@ -190,6 +207,9 @@ describe('auth slice', () => {
     expect(auth.user).toBeNull();
     expect(auth.accessToken).toBeNull();
     expect(auth.expiresAt).toBeNull();
+    // Security: local user data must be wiped even when the API call fails.
+    expect(clearLocalUserData).toHaveBeenCalledTimes(1);
+    expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
   });
 
   it('logoutThunk sends current access token to backend logout endpoint', async () => {
@@ -199,6 +219,8 @@ describe('auth slice', () => {
     await store.dispatch(logoutThunk());
 
     expect(authApiService.logout).toHaveBeenCalledWith('tok-logout');
+    // Security: local user data must always be wiped on logout.
+    expect(clearLocalUserData).toHaveBeenCalledTimes(1);
   });
 
   describe('persistence', () => {

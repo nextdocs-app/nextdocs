@@ -7,6 +7,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
+import { resolveRootDocumentId } from '../../../lib/root-document.util';
 import * as Y from 'yjs';
 
 jest.mock('../../../hooks/useDocumentList.hook');
@@ -14,6 +15,9 @@ jest.mock('next/navigation');
 jest.mock('../../../services/document.service');
 jest.mock('../../../hooks/useAuth.hook');
 jest.mock('../../../hooks/useTheme.hook');
+jest.mock('../../../lib/root-document.util', () => ({
+  resolveRootDocumentId: jest.fn(),
+}));
 jest.mock('../../../components/SettingsModal', () => ({
   SettingsModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="settings-modal">
@@ -23,6 +27,7 @@ jest.mock('../../../components/SettingsModal', () => ({
 }));
 
 const mockPush = jest.fn();
+const mockReplace = jest.fn();
 const mockRefresh = jest.fn();
 const mockShowAllDocuments = jest.fn();
 const mockShowAllSharedDocuments = jest.fn();
@@ -50,7 +55,7 @@ const mockDocs = [
 ];
 
 function setupDefault() {
-  (useRouter as jest.Mock).mockReturnValue({ push: mockPush });
+  (useRouter as jest.Mock).mockReturnValue({ push: mockPush, replace: mockReplace });
   (useParams as jest.Mock).mockReturnValue({ id: 'id-1' });
   (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
@@ -84,6 +89,7 @@ function setupDefault() {
     accessToken: null,
     logout: mockLogout,
   });
+  (resolveRootDocumentId as jest.Mock).mockResolvedValue('resolved-root-id');
 }
 
 beforeEach(() => {
@@ -212,6 +218,14 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
   await user.click(screen.getByRole('button', { name: /Alice/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log out/i }));
   expect(mockLogout).toHaveBeenCalledTimes(1);
+  await waitFor(() => {
+    expect(resolveRootDocumentId).toHaveBeenCalledWith({
+      isAuthenticated: false,
+      accessToken: null,
+      excludedDocumentIds: undefined,
+    });
+  });
+  expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
@@ -532,6 +546,12 @@ it('moves a document to trash from row actions menu', async () => {
   await waitFor(() => {
     expect(documentService.moveCloudDocumentToTrash).toHaveBeenCalledWith('id-1', 'token-1');
   });
+  expect(resolveRootDocumentId).toHaveBeenCalledWith({
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    excludedDocumentIds: ['id-1'],
+  });
+  expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   expect(mockRefresh).toHaveBeenCalled();
   expect(mockRefreshTrash).toHaveBeenCalled();
 });
@@ -687,6 +707,12 @@ it('permanently deletes a document from trash panel after confirmation', async (
   await waitFor(() => {
     expect(documentService.deleteCloudDocumentPermanently).toHaveBeenCalledWith('id-1', 'token-1');
   });
+  expect(resolveRootDocumentId).toHaveBeenCalledWith({
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    excludedDocumentIds: ['id-1'],
+  });
+  expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   expect(mockRefresh).toHaveBeenCalled();
   expect(mockRefreshTrash).toHaveBeenCalled();
 });
@@ -809,4 +835,70 @@ it('lets collaborator leave shared document from shared section row actions menu
     expect(documentService.leaveSharedDocument).toHaveBeenCalledWith('shared-collab-1', 'token-1');
   });
   expect(mockRefresh).toHaveBeenCalled();
+});
+
+it('resolves a replacement document when leaving the active shared document', async () => {
+  (useParams as jest.Mock).mockReturnValue({ id: 'shared-collab-1' });
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-collab-1',
+        relationship: 'collaborator',
+        meta: {
+          title: 'Collaborator Shared Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.leaveSharedDocument as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+
+  await user.click(
+    screen.getByRole('button', { name: /Document actions for Collaborator Shared Doc/i })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Leave shared document/i }));
+
+  expect(documentService.leaveSharedDocument).toHaveBeenCalledWith('shared-collab-1', 'token-1');
+
+  await waitFor(() => {
+    expect(resolveRootDocumentId).toHaveBeenCalledWith({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      excludedDocumentIds: ['shared-collab-1'],
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
+  });
 });

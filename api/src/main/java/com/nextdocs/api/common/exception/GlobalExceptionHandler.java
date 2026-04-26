@@ -9,6 +9,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -33,6 +34,23 @@ public class GlobalExceptionHandler {
                 .sorted()
                 .collect(Collectors.joining("; "));
         log.debug("Validation failed: {}", detail);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(ErrorCode.VALIDATION_FAILED.defaultMessage(), detail));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String parameterName = ex.getName();
+        String requiredTypeName =
+                ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "value";
+        String detail = String.format("%s must be a valid %s.", parameterName, requiredTypeName);
+
+        log.debug(
+                "Type mismatch for parameter '{}': value='{}', requiredType={}",
+                parameterName,
+                ex.getValue(),
+                requiredTypeName);
+
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(ErrorCode.VALIDATION_FAILED.defaultMessage(), detail));
     }

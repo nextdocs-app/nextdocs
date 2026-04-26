@@ -30,6 +30,8 @@ interface Config {
   roomInactiveTimeout: number;
   accessRevalidationIntervalMs: number;
   fetchTimeoutMs: number;
+  unauthorizedAccessCooldownMs: number;
+  unauthorizedAccessWarnIntervalMs: number;
   enforceMemoryThreshold: boolean;
   limits: Limits;
 }
@@ -69,6 +71,14 @@ const config: Config = {
   roomInactiveTimeout: parseInt(process.env.ROOM_INACTIVE_TIMEOUT || '3600000', 10),
   accessRevalidationIntervalMs: parseInt(process.env.ACCESS_REVALIDATION_INTERVAL_MS || '5000', 10),
   fetchTimeoutMs: parseInt(process.env.FETCH_TIMEOUT_MS || '5000', 10),
+  unauthorizedAccessCooldownMs: parseInt(
+    process.env.UNAUTHORIZED_ACCESS_COOLDOWN_MS || '15000',
+    10
+  ),
+  unauthorizedAccessWarnIntervalMs: parseInt(
+    process.env.UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS || '10000',
+    10
+  ),
   enforceMemoryThreshold: parseBoolean(process.env.ENFORCE_MEMORY_THRESHOLD, isProd),
 
   limits: {
@@ -106,6 +116,21 @@ if (Number.isNaN(config.accessRevalidationIntervalMs) || config.accessRevalidati
 if (Number.isNaN(config.fetchTimeoutMs) || config.fetchTimeoutMs <= 0) {
   throw new Error(
     `Invalid FETCH_TIMEOUT_MS: ${process.env.FETCH_TIMEOUT_MS}. Must be a positive number (milliseconds).`
+  );
+}
+
+if (Number.isNaN(config.unauthorizedAccessCooldownMs) || config.unauthorizedAccessCooldownMs <= 0) {
+  throw new Error(
+    `Invalid UNAUTHORIZED_ACCESS_COOLDOWN_MS: ${process.env.UNAUTHORIZED_ACCESS_COOLDOWN_MS}. Must be a positive number (milliseconds).`
+  );
+}
+
+if (
+  Number.isNaN(config.unauthorizedAccessWarnIntervalMs) ||
+  config.unauthorizedAccessWarnIntervalMs <= 0
+) {
+  throw new Error(
+    `Invalid UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS: ${process.env.UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS}. Must be a positive number (milliseconds).`
   );
 }
 

@@ -286,8 +286,8 @@ describe('Editor Component', () => {
     expect(screen.getByTestId('blocknote-view')).toBeInTheDocument();
   });
 
-  it('should replace default-doc route with resolved document id', () => {
-    (useParams as jest.Mock).mockReturnValue({});
+  it('should replace route when resolved document id differs from route id', () => {
+    (useParams as jest.Mock).mockReturnValue({ id: 'route-doc-id' });
     (useDocument as jest.Mock).mockReturnValue({
       documentId: 'cloud-doc-1',
       ydoc: mockYdoc,
@@ -308,7 +308,7 @@ describe('Editor Component', () => {
   });
 
   it('should not replace route while offline even if resolved document id differs', () => {
-    (useParams as jest.Mock).mockReturnValue({});
+    (useParams as jest.Mock).mockReturnValue({ id: 'route-doc-id' });
     (useNetworkStatus as jest.Mock).mockReturnValue({
       isOnline: false,
       isOffline: true,
@@ -424,6 +424,41 @@ describe('Editor Component', () => {
     render(<Editor />);
 
     expect(screen.getByLabelText(/offline sync status/i)).toBeInTheDocument();
+  });
+
+  it('does not show offline badge when browser is online but realtime is disconnected', () => {
+    jest.useFakeTimers();
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token',
+      user: {
+        id: 'user-1',
+        displayName: 'Jane Doe',
+        email: 'jane@example.com',
+        avatarUrl: null,
+      },
+    });
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(screen.queryByLabelText(/offline sync status/i)).not.toBeInTheDocument();
   });
 
   it('shows pending offline edit count in tooltip', () => {

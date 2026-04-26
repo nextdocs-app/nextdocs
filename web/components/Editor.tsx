@@ -123,11 +123,13 @@ export default function Editor() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const routeDocumentId = (params?.id as string) || 'default-doc';
+  const idParam = params?.id;
+  const routeDocumentId = Array.isArray(idParam) ? idParam[0] : idParam;
+
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const effectiveOfflineSelectedDocumentId =
     offlineSelectedDocumentId === routeDocumentId ? null : offlineSelectedDocumentId;
-  const effectiveDocumentId = effectiveOfflineSelectedDocumentId ?? routeDocumentId;
+  const effectiveDocumentId = effectiveOfflineSelectedDocumentId ?? routeDocumentId ?? '';
   const searchParamsString = searchParams.toString();
   const isSharedDocument = searchParams.get('share') === '1';
   const { isAuthenticated, accessToken, user } = useAuth();
@@ -138,7 +140,6 @@ export default function Editor() {
     meta,
     accessLevel,
     isReadOnly,
-    isRealtimeConnected,
     realtimeProvider,
     errorState,
     isLoading,
@@ -147,15 +148,13 @@ export default function Editor() {
   } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
   const [showCommentsSidebar, setShowCommentsSidebar] = useState(false);
-  const [showRealtimeOfflineBadge, setShowRealtimeOfflineBadge] = useState(false);
   const [commentsFilter, setCommentsFilter] = useState<CommentsFilter>('open');
   const [commentsSort, setCommentsSort] = useState<CommentsSort>('position');
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
     Record<string, CommentThreadStats>
   >({});
-  const isGuestSharedView =
-    !isAuthenticated && effectiveDocumentId !== 'default-doc' && accessLevel === 'VIEW';
-  const isOffline = !isOnline || showRealtimeOfflineBadge;
+  const isGuestSharedView = !isAuthenticated && isSharedDocument && accessLevel === 'VIEW';
+  const isOffline = !isOnline;
   const { pendingEdits } = useYjsPersistence(
     documentId,
     ydoc,
@@ -172,7 +171,7 @@ export default function Editor() {
   useOfflineDocumentSelect(setOfflineSelectedDocumentId);
 
   useEffect(() => {
-    if (!isOnline) {
+    if (!isOnline || !routeDocumentId) {
       return;
     }
 
@@ -199,21 +198,6 @@ export default function Editor() {
     }
     return () => clearTimeout(timer);
   }, [effectiveDocumentId, isLoading]);
-
-  useEffect(() => {
-    const timer = setTimeout(
-      () => {
-        if (!isAuthenticated || !isOnline || isRealtimeConnected) {
-          setShowRealtimeOfflineBadge(false);
-        } else {
-          setShowRealtimeOfflineBadge(true);
-        }
-      },
-      isAuthenticated && isOnline && !isRealtimeConnected ? 1500 : 0
-    );
-
-    return () => clearTimeout(timer);
-  }, [documentId, isAuthenticated, isOnline, isRealtimeConnected]);
 
   const commentsFeatureEnabled = accessLevel !== null;
   const showCommentsButton = !!user?.id && accessLevel !== 'VIEW';

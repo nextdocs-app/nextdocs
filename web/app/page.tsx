@@ -1,9 +1,7 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-
-const Editor = dynamic(() => import('@/components/Editor'), { ssr: false });
+import RootDocumentResolver from '@/components/RootDocumentResolver';
 
 export default function Home() {
-  return <Editor />;
+  return <RootDocumentResolver />;
 }

@@ -14,7 +14,6 @@ import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
-import { toSortableTimestamp } from '@/lib/timestamp.util';
 import {
   clearCachedDocumentAccessLevel,
   readCachedDocumentAccessLevel,
@@ -22,11 +21,11 @@ import {
 } from '@/lib/document-access.util';
 import { getPresenceColor, isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
+import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 
-const DEFAULT_DOC_ID = 'default-doc';
 const REALTIME_URL = process.env.NEXT_PUBLIC_REALTIME_URL ?? 'ws://localhost:1234';
 const MESSAGE_ACCESS_LEVEL = 2;
 const VALID_DOCUMENT_ACCESS_LEVELS: readonly DocumentAccessLevel[] = [
@@ -155,56 +154,10 @@ function resolveAuthenticatedFallbackAccessLevel(
   );
 }
 
-async function getMostRecentLocalDocument(): Promise<{
-  id: string;
-  result: DocumentLoadResult;
-} | null> {
-  const localDocs = await documentService.getAllLocalDocuments();
-  if (localDocs.length === 0) {
-    return null;
-  }
-
-  const mostRecentLocalDoc = [...localDocs].sort((a, b) => {
-    const updatedAtDiff =
-      toSortableTimestamp(b.meta.updatedAt) - toSortableTimestamp(a.meta.updatedAt);
-    if (updatedAtDiff !== 0) return updatedAtDiff;
-    const createdAtDiff =
-      toSortableTimestamp(b.meta.createdAt) - toSortableTimestamp(a.meta.createdAt);
-    if (createdAtDiff !== 0) return createdAtDiff;
-    return a.id.localeCompare(b.id);
-  })[0];
-
-  const localLoaded = await documentService.loadDocument(mostRecentLocalDoc.id);
-  if (!localLoaded) {
-    return null;
-  }
-
-  return {
-    id: mostRecentLocalDoc.id,
-    result: localLoaded,
-  };
-}
-
 async function resolveLocalFallbackDocument(
   id: string,
   options: { createIfMissing: boolean }
 ): Promise<{ id: string; result: DocumentLoadResult }> {
-  if (id === DEFAULT_DOC_ID) {
-    const mostRecent = await getMostRecentLocalDocument();
-    if (mostRecent) {
-      return mostRecent;
-    }
-
-    if (!options.createIfMissing) {
-      throw new OfflineDocumentUnavailableError('No local documents are available yet.');
-    }
-
-    return {
-      id,
-      result: await documentService.getOrCreateDocument(id),
-    };
-  }
-
   const localById = await documentService.loadDocument(id);
   if (localById) {
     return { id, result: localById };
@@ -220,12 +173,12 @@ async function resolveLocalFallbackDocument(
   };
 }
 
-export function useDocument(documentId?: string, options?: UseDocumentOptions) {
-  const id = documentId || DEFAULT_DOC_ID;
+export function useDocument(documentId: string, options?: UseDocumentOptions) {
+  const id = documentId;
   const isSharedDocument = options?.isSharedDocument === true;
   const dispatch = useAppDispatch();
   const { meta, isLoading, error } = useAppSelector((state) => state.document);
-  const { isAuthenticated, accessToken, user, isInitializing } = useAuth();
+  const { isAuthenticated, accessToken, user, isInitializing, refresh } = useAuth();
   const { isOnline } = useNetworkStatus();
   const accessTokenRef = useRef<string | null>(accessToken);
   const accessLevelRef = useRef<DocumentAccessLevel | null>('EDIT');
@@ -303,92 +256,40 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
         let guestAccessLevel: DocumentAccessLevel = 'EDIT';
         let loadedFromCloud = false;
         const canAttemptCloudRead = !isCloudReadInBackoff() && !hasPendingSyncForRequestedDoc;
-        const canCreateFallbackDocument = id === DEFAULT_DOC_ID;
 
         if (isAuthenticated && token) {
           if (!canAttemptCloudRead) {
             const fallback = await resolveLocalFallbackDocument(id, {
-              createIfMissing: canCreateFallbackDocument,
+              createIfMissing: false,
             });
             effectiveId = fallback.id;
             result = fallback.result;
           } else {
             try {
-              if (id === DEFAULT_DOC_ID) {
-                const docsPage = await documentService.listCloudDocuments(token, 0, 1);
-                const docs = docsPage.items;
-
-                if (docs.length > 0) {
-                  effectiveId = docs[0].id;
-                  result = await documentService.getCloudDocument(effectiveId, token);
-                  loadedFromCloud = true;
-                } else {
-                  const mostRecentLocal = await getMostRecentLocalDocument();
-
-                  if (mostRecentLocal) {
-                    const created = await documentService.createCloudDocument(
-                      token,
-                      mostRecentLocal.result.meta.title || 'Untitled',
-                      mostRecentLocal.id
-                    );
-
-                    try {
-                      await documentService.saveCloudDocument(
-                        created.id,
-                        mostRecentLocal.result.ydoc,
-                        {
-                          ...mostRecentLocal.result.meta,
-                          title: mostRecentLocal.result.meta.title || 'Untitled',
-                        },
-                        token
-                      );
-                    } catch (saveErr) {
-                      try {
-                        await documentService.deleteCloudDocumentPermanently(created.id, token);
-                      } catch (cleanupErr) {
-                        console.error(
-                          'Failed to rollback partially-created cloud document after migration save failure:',
-                          cleanupErr
-                        );
-                      }
-
-                      throw saveErr;
-                    }
-
-                    effectiveId = created.id;
-                    result = await documentService.getCloudDocument(effectiveId, token);
-                    loadedFromCloud = true;
-                  } else {
-                    const created = await documentService.createCloudDocument(token);
-                    effectiveId = created.id;
-                    result = { ydoc: created.ydoc, meta: created.meta };
-                    loadedFromCloud = true;
-                  }
-                }
-              } else {
-                result = await documentService.getCloudDocument(id, token);
-                loadedFromCloud = true;
-              }
+              result = await documentService.getCloudDocument(id, token);
+              loadedFromCloud = true;
 
               clearCloudReadBackoff();
             } catch (cloudErr) {
-              if (!isConnectivityError(cloudErr)) {
+              if (cloudErr instanceof DocumentServiceApiError && cloudErr.status === 401) {
+                // Stale token: trigger silent re-auth and fall back to local IDB.
+                // The new accessToken from refreshSessionThunk will re-trigger loadDoc.
+                void refresh();
+              } else if (!isConnectivityError(cloudErr)) {
                 throw cloudErr;
+              } else {
+                triggerCloudReadBackoff();
               }
 
-              triggerCloudReadBackoff();
-
               const fallback = await resolveLocalFallbackDocument(id, {
-                createIfMissing: canCreateFallbackDocument,
+                createIfMissing: false,
               });
               effectiveId = fallback.id;
               result = fallback.result;
             }
           }
         } else {
-          if (id === DEFAULT_DOC_ID) {
-            result = await documentService.getOrCreateDocument(id);
-          } else if (isSharedDocument) {
+          if (isSharedDocument) {
             try {
               result = await documentService.getPublicDocument(id);
               guestAccessLevel = 'VIEW';
@@ -554,6 +455,7 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
     isCloudReadInBackoff,
     clearCloudReadBackoff,
     triggerCloudReadBackoff,
+    refresh,
   ]);
 
   useEffect(() => {
@@ -561,7 +463,10 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
       !REALTIME_URL ||
       !ydoc ||
       !resolvedDocumentId ||
+      !isRealtimeEligibleDocumentId(resolvedDocumentId) ||
       !isOnline ||
+      isLoading ||
+      errorState !== null ||
       isCloudReadInBackoff() ||
       !isAuthenticated ||
       !accessTokenRef.current
@@ -584,8 +489,18 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
     const statusHandler = (event: { status: 'connected' | 'disconnected' | 'connecting' }) => {
       setIsRealtimeConnected(event.status === 'connected');
     };
+    const connectionCloseHandler = (event: CloseEvent | null) => {
+      if (!event || event.code !== 1008) {
+        return;
+      }
+
+      provider.shouldConnect = false;
+      setIsRealtimeConnected(false);
+      setRealtimeProvider((current) => (current === provider ? null : current));
+    };
 
     provider.on('status', statusHandler);
+    provider.on('connection-close', connectionCloseHandler);
     setRealtimeProvider(provider);
 
     const userName = user?.displayName || user?.email || meta?.createdBy || 'NextDocs User';
@@ -597,6 +512,8 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
 
     return () => {
       provider.off('status', statusHandler);
+      provider.off('connection-close', connectionCloseHandler);
+      provider.shouldConnect = false;
       provider.destroy();
       setIsRealtimeConnected(false);
       setRealtimeProvider(null);
@@ -605,6 +522,8 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
     ydoc,
     resolvedDocumentId,
     isOnline,
+    isLoading,
+    errorState,
     isAuthenticated,
     meta?.createdBy,
     user?.id,
@@ -695,8 +614,7 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
       !accessToken ||
       !isOnline ||
       isCloudReadInBackoff() ||
-      !resolvedDocumentId ||
-      resolvedDocumentId === DEFAULT_DOC_ID
+      !resolvedDocumentId
     ) {
       return;
     }
@@ -720,6 +638,14 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
         writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
         setAccessLevel(myAccess.accessLevel);
       } catch (err) {
+        if (err instanceof DocumentServiceApiError && err.status === 401) {
+          // Stale token: silently attempt re-auth. When refreshSessionThunk resolves
+          // with a new accessToken, the dep change tears down and recreates this
+          // effect (and its interval) automatically — no manual retry needed.
+          void refresh();
+          return;
+        }
+
         if (err instanceof DocumentServiceApiError && (err.status === 403 || err.status === 404)) {
           clearCachedDocumentAccessLevel(resolvedDocumentId);
           const restrictedError = buildDocumentErrorState(err);
@@ -744,7 +670,15 @@ export function useDocument(documentId?: string, options?: UseDocumentOptions) {
     return () => {
       clearInterval(interval);
     };
-  }, [isAuthenticated, accessToken, isOnline, resolvedDocumentId, dispatch, isCloudReadInBackoff]);
+  }, [
+    isAuthenticated,
+    accessToken,
+    isOnline,
+    resolvedDocumentId,
+    dispatch,
+    isCloudReadInBackoff,
+    refresh,
+  ]);
 
   const updateMeta = useCallback(
     (updates: Partial<DocumentMeta>) => {

@@ -35,7 +35,7 @@ interface DocToolbarProps {
   isShareEnabled: boolean;
   /** ISO string of when the document was last edited */
   updatedAt?: string | null;
-  /** Whether the real-time socket is currently offline */
+  /** Whether the browser is offline and edits may need local sync fallback */
   isOffline: boolean;
   /** Number of local edits pending sync (shown in offline tooltip) */
   pendingEdits?: number;

@@ -8,6 +8,7 @@ import com.nextdocs.api.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -88,6 +89,15 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    void typeMismatchException_returns400WithValidationError() throws Exception {
+        mockMvc.perform(get("/test/type-mismatch/default-doc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.VALIDATION_FAILED.defaultMessage()))
+                .andExpect(jsonPath("$.message").value("id must be a valid UUID."));
+    }
+
     @RestController
     @RequestMapping("/test")
     static class TestController {
@@ -115,6 +125,11 @@ class GlobalExceptionHandlerTest {
         @PostMapping("/validate")
         ResponseEntity<ApiResponse<String>> validate(@Valid @RequestBody ValidatedBody body) {
             return ResponseEntity.ok(ApiResponse.ok("ok"));
+        }
+
+        @GetMapping("/type-mismatch/{id}")
+        ResponseEntity<ApiResponse<String>> typeMismatch(@PathVariable UUID id) {
+            return ResponseEntity.ok(ApiResponse.ok(id.toString()));
         }
 
         record ValidatedBody(

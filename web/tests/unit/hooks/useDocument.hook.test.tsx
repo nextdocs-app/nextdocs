@@ -10,10 +10,13 @@ import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
+const mockRefreshSession = jest.fn();
+
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
     isAuthenticated: false,
     accessToken: null,
+    refresh: mockRefreshSession,
   })),
 }));
 
@@ -73,6 +76,7 @@ describe('useDocument', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
+      refresh: mockRefreshSession,
     });
     (useNetworkStatus as jest.Mock).mockReturnValue({
       isOnline: true,
@@ -137,28 +141,6 @@ describe('useDocument', () => {
     expect(result.current.meta).toEqual(meta);
     expect(result.current.error).toBeNull();
     expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('test-id');
-  });
-
-  it('should use default document ID when none provided', async () => {
-    const ydoc = new Y.Doc();
-    const meta = {
-      title: 'Default Document',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-    };
-
-    getOrCreateDocumentSpy.mockResolvedValue({
-      ydoc,
-      meta,
-    });
-
-    const { result } = renderHook(() => useDocument(), { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('default-doc');
   });
 
   it('should load shared public document in guest mode as read-only', async () => {
@@ -343,6 +325,38 @@ describe('useDocument', () => {
     expect(result.current.meta?.title).toBe('Local Offline Copy');
 
     consoleWarnSpy.mockRestore();
+  });
+
+  it('should refresh session and fallback to cached local document when cloud fetch returns 401', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cached stale-token copy',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+    const refresh = jest.fn();
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'stale-token',
+      isInitializing: false,
+      refresh,
+    });
+
+    getCloudDocumentSpy.mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(loadDocumentSpy).toHaveBeenCalledWith('cloud-id');
+    expect(result.current.documentId).toBe('cloud-id');
+    expect(result.current.meta?.title).toBe('Cached stale-token copy');
+    expect(result.current.errorState).toBeNull();
   });
 
   it('should keep local document state on reconnect when pending sync edits exist', async () => {
@@ -670,76 +684,69 @@ describe('useDocument', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('should promote most recent local doc when default route has no cloud docs', async () => {
-    const localYdoc = new Y.Doc();
-    const localMeta = {
-      title: 'Recent Local',
-      createdAt: '2024-01-03T00:00:00.000Z',
-      updatedAt: '2024-01-04T00:00:00.000Z',
+  it('should refresh session instead of hiding the document when access revalidation returns 401', async () => {
+    jest.useFakeTimers();
+
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
     };
+    const refresh = jest.fn();
 
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
-      accessToken: 'token-default',
+      accessToken: 'stale-token',
+      isInitializing: false,
+      refresh,
     });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    getMyAccessSpy
+      .mockResolvedValueOnce({
+        documentId: 'cloud-id',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      })
+      .mockResolvedValueOnce({
+        documentId: 'cloud-id',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      })
+      .mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
 
-    const getAllLocalDocumentsSpy = jest
-      .spyOn(documentService, 'getAllLocalDocuments')
-      .mockResolvedValue([
-        {
-          id: 'local-a',
-          meta: {
-            title: 'Old Local',
-            createdAt: '2024-01-01T00:00:00.000Z',
-            updatedAt: '2024-01-01T00:00:00.000Z',
-          },
-          yjsState: new Uint8Array([1]),
-          version: 1,
-        },
-        {
-          id: 'local-b',
-          meta: {
-            title: 'Recent Local',
-            createdAt: '2024-01-03T00:00:00.000Z',
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          yjsState: new Uint8Array([2]),
-          version: 1,
-        },
-      ]);
+    try {
+      const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
 
-    const listCloudDocumentsSpy = jest
-      .spyOn(documentService, 'listCloudDocuments')
-      .mockResolvedValue({
-        items: [],
-        page: 0,
-        size: 1,
-        totalElements: 0,
-        totalPages: 0,
-        hasMore: false,
+      await act(async () => {
+        // With fake timers enabled, explicitly flush the mount-time async load chain
+        // so state updates happen under React's act boundary.
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
       });
 
-    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
-    createCloudDocumentSpy.mockResolvedValue({
-      id: 'cloud-from-local',
-      ydoc: new Y.Doc(),
-      meta: localMeta,
-    });
-    saveCloudDocumentSpy.mockResolvedValue(undefined);
-    getCloudDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
 
-    const { result } = renderHook(() => useDocument(), { wrapper: createWrapper() });
+      await act(async () => {
+        jest.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
 
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
+      await waitFor(() => {
+        expect(refresh).toHaveBeenCalledTimes(1);
+      });
 
-    expect(getAllLocalDocumentsSpy).toHaveBeenCalled();
-    expect(createCloudDocumentSpy).toHaveBeenCalledWith('token-default', 'Recent Local', 'local-b');
-    expect(result.current.documentId).toBe('cloud-from-local');
-
-    getAllLocalDocumentsSpy.mockRestore();
-    listCloudDocumentsSpy.mockRestore();
+      expect(result.current.ydoc).toBe(ydoc);
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('should not update metadata if meta is null', async () => {
@@ -839,16 +846,21 @@ describe('useDocument', () => {
       initialProps: { docId: 'doc-1' },
     });
 
-    // Change id before first load resolves
-    rerender({ docId: 'doc-2' });
+    // Change id before first load resolves.
+    await act(async () => {
+      rerender({ docId: 'doc-2' });
+      await Promise.resolve();
+    });
 
     await waitFor(() => {
       expect(store.getState().document.meta?.title).toBe('Doc 2');
     });
 
-    // Now resolve the first (stale) request
-    resolveFirst?.({ ydoc: ydoc1, meta: meta1 });
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    // Now resolve the first (stale) request.
+    await act(async () => {
+      resolveFirst?.({ ydoc: ydoc1, meta: meta1 });
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    });
 
     // State should still show Doc 2, not Doc 1
     expect(store.getState().document.meta?.title).toBe('Doc 2');

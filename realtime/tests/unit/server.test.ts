@@ -43,6 +43,10 @@ jest.mock('../../src/config', () => ({
     roomCleanupInterval: 300000,
     roomInactiveTimeout: 3600000,
     accessRevalidationIntervalMs: 5000,
+    fetchTimeoutMs: 5000,
+    unauthorizedAccessCooldownMs: 15000,
+    unauthorizedAccessWarnIntervalMs: 10000,
+    enforceMemoryThreshold: false,
     limits: {
       maxPayload: 5 * 1024 * 1024,
       maxConnsPerIp: 200,
@@ -55,6 +59,8 @@ jest.mock('../../src/config', () => ({
 }));
 
 import { WebSocket } from 'ws';
+
+const VALID_ROOM_ID = '11111111-1111-1111-1111-111111111111';
 
 const waitForConnectionProcessing = async () => {
   await Promise.resolve();
@@ -136,7 +142,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1?token=test-token',
+        url: `/${VALID_ROOM_ID}?token=test-token`,
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
@@ -149,7 +155,7 @@ describe('Server', () => {
     it('should accept connection with valid room ID', async () => {
       wss.emit('connection', mockConn, mockReq);
       await waitForConnectionProcessing();
-      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1', 'EDIT');
+      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, VALID_ROOM_ID, 'EDIT');
       expect(mockConn.close).not.toHaveBeenCalled();
     });
 
@@ -184,6 +190,79 @@ describe('Server', () => {
       );
     });
 
+    it('should reject connection with invalid room ID format before access-check', async () => {
+      mockReq.url = '/default-doc?token=test-token';
+
+      wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
+
+      expect(mockConn.close).toHaveBeenCalledWith(1008, 'Invalid room ID');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(setupWSConnectionMock).not.toHaveBeenCalled();
+    });
+
+    it('should suppress repeated unauthorized access checks during cooldown', async () => {
+      jest.useFakeTimers();
+
+      try {
+        fetchMock
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                allowed: false,
+                accessLevel: null,
+                owner: false,
+              },
+              error: null,
+            }),
+          } as Response)
+          .mockResolvedValue({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                allowed: true,
+                accessLevel: 'EDIT',
+                owner: false,
+              },
+              error: null,
+            }),
+          } as Response);
+
+        const firstConn: any = new EventEmitter();
+        firstConn.close = jest.fn();
+        firstConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', firstConn, mockReq);
+        await waitForConnectionProcessing();
+
+        expect(firstConn.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const secondConn: any = new EventEmitter();
+        secondConn.close = jest.fn();
+        secondConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', secondConn, mockReq);
+        await waitForConnectionProcessing();
+
+        expect(secondConn.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(15001);
+
+        const thirdConn: any = new EventEmitter();
+        thirdConn.close = jest.fn();
+        thirdConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', thirdConn, mockReq);
+        await waitForConnectionProcessing();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('should handle synchronous error in setupWSConnection', async () => {
       // Mock setupWSConnection to throw synchronously
       setupWSConnectionMock.mockImplementationOnce(() => {
@@ -193,13 +272,13 @@ describe('Server', () => {
       wss.emit('connection', mockConn, mockReq);
       await waitForConnectionProcessing();
 
-      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, 'room1', 'EDIT');
+      expect(setupWSConnectionMock).toHaveBeenCalledWith(mockConn, VALID_ROOM_ID, 'EDIT');
       // valid connection rejected due to internal error
       expect(mockConn.close).toHaveBeenCalledWith(1011, 'Internal server error');
 
       const response = await request(server).get('/metrics');
       const metrics = JSON.parse(response.text);
-      const room = metrics.rooms.find((r: any) => r.id === 'room1');
+      const room = metrics.rooms.find((r: any) => r.id === VALID_ROOM_ID);
 
       // Should be 0 connections
       if (room) {
@@ -217,7 +296,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1?token=test-token',
+        url: `/${VALID_ROOM_ID}?token=test-token`,
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
@@ -335,7 +414,7 @@ describe('Server', () => {
 
     beforeEach(() => {
       mockReq = {
-        url: '/room1?token=test-token',
+        url: `/${VALID_ROOM_ID}?token=test-token`,
         headers: { host: 'localhost:1234' },
         socket: { remoteAddress: '127.0.0.1' },
       };
