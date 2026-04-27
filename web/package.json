@@ -12,14 +12,14 @@
     "format:fix": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@blocknote/core": "^0.47.3",
-    "@blocknote/react": "^0.47.3",
-    "@blocknote/shadcn": "^0.47.3",
+    "@blocknote/core": "^0.49.0",
+    "@blocknote/react": "^0.49.0",
+    "@blocknote/shadcn": "^0.49.0",
     "@monaco-editor/react": "^4.7.0",
     "@reduxjs/toolkit": "^2.11.2",
     "idb": "^8.0.3",
     "monaco-editor": "^0.55.1",
-    "next": "16.2.3",
+    "next": "16.2.4",
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "react-redux": "^9.2.0",
@@ -29,7 +29,7 @@
     "yjs": "^13.6.30"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.2.2",
+    "@tailwindcss/postcss": "^4.2.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -38,13 +38,13 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^10.2.0",
-    "eslint-config-next": "16.2.3",
+    "eslint": "^10.2.1",
+    "eslint-config-next": "16.2.4",
     "eslint-config-prettier": "^10.1.8",
     "fake-indexeddb": "^6.2.5",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
-    "prettier": "^3.8.2",
+    "prettier": "^3.8.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
