@@ -7,7 +7,7 @@ const DOCUMENTS_STORE = 'documents';
 class IndexedDBService {
   private static instance: IndexedDBService;
   private dbPromise: Promise<IDBPDatabase> | null = null;
-  private dbClosingPromise: Promise<void> | null = null;
+  private dbSwitchPromise: Promise<void> = Promise.resolve();
   private isSupported: boolean = true;
   private currentUserId: string | null = null;
 
@@ -35,22 +35,42 @@ class IndexedDBService {
 
     this.currentUserId = userId;
 
-    if (this.dbPromise && !this.dbClosingPromise) {
-      const dbPromiseToClose = this.dbPromise;
+    this.dbSwitchPromise = this.dbSwitchPromise
+      .then(async () => {
+        await this.closeCurrentConnection();
+      })
+      .catch((error) => {
+        console.warn('Failed to process IndexedDB user switch:', error);
+      });
+  }
 
-      this.dbClosingPromise = dbPromiseToClose
-        .then((db) => {
-          db.close();
-        })
-        .catch((error) => {
-          console.warn('Failed to close IndexedDB connection during user switch:', error);
-        })
-        .finally(() => {
-          if (this.dbPromise === dbPromiseToClose) {
-            this.dbPromise = null;
-          }
-          this.dbClosingPromise = null;
-        });
+  private async awaitStableUserSwitch(): Promise<void> {
+    while (true) {
+      const inFlightSwitch = this.dbSwitchPromise;
+      await inFlightSwitch;
+
+      // A newer switch may have been queued while awaiting this one.
+      if (inFlightSwitch === this.dbSwitchPromise) {
+        return;
+      }
+    }
+  }
+
+  private async closeCurrentConnection(): Promise<void> {
+    const dbPromiseToClose = this.dbPromise;
+    if (!dbPromiseToClose) {
+      return;
+    }
+
+    try {
+      const db = await dbPromiseToClose;
+      db.close();
+    } catch (error) {
+      console.warn('Failed to close IndexedDB connection during user switch:', error);
+    } finally {
+      if (this.dbPromise === dbPromiseToClose) {
+        this.dbPromise = null;
+      }
     }
   }
 
@@ -59,9 +79,7 @@ class IndexedDBService {
       throw new Error('IndexedDB not supported');
     }
 
-    if (this.dbClosingPromise) {
-      await this.dbClosingPromise;
-    }
+    await this.awaitStableUserSwitch();
 
     if (!this.dbPromise) {
       this.dbPromise = this.initDB();
@@ -208,11 +226,8 @@ class IndexedDBService {
 
   public async wipeDatabase(): Promise<void> {
     try {
-      if (this.dbPromise) {
-        const db = await this.dbPromise;
-        db.close();
-        this.dbPromise = null;
-      }
+      await this.awaitStableUserSwitch();
+      await this.closeCurrentConnection();
       await deleteDB(this.dbName);
     } catch (error) {
       console.error('Failed to wipe database:', error);
