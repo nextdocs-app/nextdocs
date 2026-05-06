@@ -70,6 +70,7 @@ const waitForConnectionProcessing = async () => {
 describe('Server', () => {
   let server: any;
   let wss: any;
+  let cleanupInactiveRooms: any;
   let setupWSConnectionMock: any;
   let memoryUsageSpy: any;
   let fetchMock: jest.MockedFunction<typeof fetch>;
@@ -103,6 +104,7 @@ describe('Server', () => {
     const serverModule = await import('../../src/server');
     server = serverModule.server;
     wss = serverModule.wss;
+    cleanupInactiveRooms = serverModule.cleanupInactiveRooms;
 
     const yjsUtilsModule = await import('../../src/yjs-utils');
     setupWSConnectionMock = yjsUtilsModule.setupWSConnection;
@@ -257,6 +259,59 @@ describe('Server', () => {
         wss.emit('connection', thirdConn, mockReq);
         await waitForConnectionProcessing();
 
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should not clear renewed cooldown state when stale expirations are cleaned', async () => {
+      jest.useFakeTimers();
+
+      try {
+        fetchMock.mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              allowed: false,
+              accessLevel: null,
+              owner: false,
+            },
+            error: null,
+          }),
+        } as Response);
+
+        const firstConn: any = new EventEmitter();
+        firstConn.close = jest.fn();
+        firstConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', firstConn, mockReq);
+        await waitForConnectionProcessing();
+
+        expect(firstConn.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(15001);
+
+        const secondConn: any = new EventEmitter();
+        secondConn.close = jest.fn();
+        secondConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', secondConn, mockReq);
+        await waitForConnectionProcessing();
+
+        expect(secondConn.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        cleanupInactiveRooms();
+
+        const thirdConn: any = new EventEmitter();
+        thirdConn.close = jest.fn();
+        thirdConn.readyState = WebSocket.OPEN;
+        wss.emit('connection', thirdConn, mockReq);
+        await waitForConnectionProcessing();
+
+        // Third attempt is still blocked by the renewed cooldown, so no new access check runs.
+        expect(thirdConn.close).toHaveBeenCalledWith(1008, 'Access denied');
         expect(fetchMock).toHaveBeenCalledTimes(2);
       } finally {
         jest.useRealTimers();

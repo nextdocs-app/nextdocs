@@ -226,6 +226,34 @@ describe('indexed-db.service', () => {
       expect(await indexedDBService.getDocument('doc-A')).toBeDefined();
       expect(await indexedDBService.getDocument('doc-B')).toBeUndefined();
     });
+
+    it('should honor the latest user context after rapid user switches', async () => {
+      indexedDBService.setUserId('rapid-user-A');
+      await indexedDBService.saveDocument({
+        id: 'doc-rapid-A',
+        meta: { title: 'A', createdAt: '', updatedAt: '' },
+        yjsState: new Uint8Array([1]),
+        version: 1,
+      });
+
+      indexedDBService.setUserId('rapid-user-B');
+      indexedDBService.setUserId('rapid-user-C');
+      indexedDBService.setUserId('rapid-user-B');
+
+      await indexedDBService.saveDocument({
+        id: 'doc-rapid-B',
+        meta: { title: 'B', createdAt: '', updatedAt: '' },
+        yjsState: new Uint8Array([2]),
+        version: 1,
+      });
+
+      expect(indexedDBService.dbName).toBe('nextdocs-db_rapid-user-B');
+      expect(await indexedDBService.getDocument('doc-rapid-B')).toBeDefined();
+
+      indexedDBService.setUserId('rapid-user-A');
+      expect(await indexedDBService.getDocument('doc-rapid-B')).toBeUndefined();
+      expect(await indexedDBService.getDocument('doc-rapid-A')).toBeDefined();
+    });
   });
 
   describe('isAvailable', () => {

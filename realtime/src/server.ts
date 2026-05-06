@@ -94,12 +94,21 @@ export const wss = new WebSocketServer({
 const ipConnections = new Map<string, number>();
 const ipConnectionTimestamps = new Map<string, number[]>();
 const unauthorizedAccessCooldown = new Map<string, UnauthorizedCooldownState>();
+const unauthorizedCooldownExpirations: UnauthorizedCooldownExpiryEntry[] = [];
+const MAX_UNAUTHORIZED_COOLDOWN_EXPIRATIONS_PER_CLEANUP = 512;
+const UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_MIN_SIZE = 1024;
+const UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_RATIO = 4;
 const ROOM_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface UnauthorizedCooldownState {
   denyUntil: number;
   lastWarnAt: number;
   suppressedAttempts: number;
+}
+
+interface UnauthorizedCooldownExpiryEntry {
+  key: string;
+  denyUntil: number;
 }
 
 interface AccessCheckData {
@@ -155,6 +164,122 @@ function buildUnauthorizedCooldownKey(roomId: string, clientIp: string, token: s
   return `${roomId}:${clientIp}:${getTokenFingerprint(token)}`;
 }
 
+function swapUnauthorizedCooldownHeapEntries(a: number, b: number): void {
+  const tmp = unauthorizedCooldownExpirations[a];
+  unauthorizedCooldownExpirations[a] = unauthorizedCooldownExpirations[b];
+  unauthorizedCooldownExpirations[b] = tmp;
+}
+
+function siftUnauthorizedCooldownExpirationUp(index: number): void {
+  let current = index;
+
+  while (current > 0) {
+    const parent = Math.floor((current - 1) / 2);
+    if (
+      unauthorizedCooldownExpirations[parent].denyUntil <=
+      unauthorizedCooldownExpirations[current].denyUntil
+    ) {
+      break;
+    }
+
+    swapUnauthorizedCooldownHeapEntries(parent, current);
+    current = parent;
+  }
+}
+
+function siftUnauthorizedCooldownExpirationDown(index: number): void {
+  let current = index;
+  const size = unauthorizedCooldownExpirations.length;
+
+  while (true) {
+    const left = current * 2 + 1;
+    const right = left + 1;
+    let smallest = current;
+
+    if (
+      left < size &&
+      unauthorizedCooldownExpirations[left].denyUntil <
+        unauthorizedCooldownExpirations[smallest].denyUntil
+    ) {
+      smallest = left;
+    }
+
+    if (
+      right < size &&
+      unauthorizedCooldownExpirations[right].denyUntil <
+        unauthorizedCooldownExpirations[smallest].denyUntil
+    ) {
+      smallest = right;
+    }
+
+    if (smallest === current) {
+      break;
+    }
+
+    swapUnauthorizedCooldownHeapEntries(current, smallest);
+    current = smallest;
+  }
+}
+
+function pushUnauthorizedCooldownExpiration(entry: UnauthorizedCooldownExpiryEntry): void {
+  unauthorizedCooldownExpirations.push(entry);
+  siftUnauthorizedCooldownExpirationUp(unauthorizedCooldownExpirations.length - 1);
+}
+
+function peekUnauthorizedCooldownExpiration(): UnauthorizedCooldownExpiryEntry | null {
+  return unauthorizedCooldownExpirations[0] ?? null;
+}
+
+function popUnauthorizedCooldownExpiration(): UnauthorizedCooldownExpiryEntry | null {
+  if (unauthorizedCooldownExpirations.length === 0) {
+    return null;
+  }
+
+  const root = unauthorizedCooldownExpirations[0];
+  const last = unauthorizedCooldownExpirations.pop();
+  if (unauthorizedCooldownExpirations.length > 0 && last) {
+    unauthorizedCooldownExpirations[0] = last;
+    siftUnauthorizedCooldownExpirationDown(0);
+  }
+
+  return root;
+}
+
+function rebuildUnauthorizedCooldownExpirationHeap(): void {
+  unauthorizedCooldownExpirations.length = 0;
+
+  for (const [key, state] of unauthorizedAccessCooldown.entries()) {
+    unauthorizedCooldownExpirations.push({
+      key,
+      denyUntil: state.denyUntil,
+    });
+  }
+
+  for (let i = Math.floor(unauthorizedCooldownExpirations.length / 2) - 1; i >= 0; i -= 1) {
+    siftUnauthorizedCooldownExpirationDown(i);
+  }
+}
+
+function maybeRebuildUnauthorizedCooldownExpirationHeap(): void {
+  if (unauthorizedCooldownExpirations.length < UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_MIN_SIZE) {
+    return;
+  }
+
+  if (unauthorizedAccessCooldown.size === 0) {
+    unauthorizedCooldownExpirations.length = 0;
+    return;
+  }
+
+  if (
+    unauthorizedCooldownExpirations.length <=
+    unauthorizedAccessCooldown.size * UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_RATIO
+  ) {
+    return;
+  }
+
+  rebuildUnauthorizedCooldownExpirationHeap();
+}
+
 function getUnauthorizedCooldownState(key: string, now: number): UnauthorizedCooldownState | null {
   const existingState = unauthorizedAccessCooldown.get(key);
   if (!existingState) {
@@ -173,6 +298,7 @@ function trackUnauthorizedAccess(key: string, now: number): UnauthorizedCooldown
   const existingState = getUnauthorizedCooldownState(key, now);
   if (existingState) {
     existingState.denyUntil = now + config.unauthorizedAccessCooldownMs;
+    pushUnauthorizedCooldownExpiration({ key, denyUntil: existingState.denyUntil });
     return existingState;
   }
 
@@ -183,6 +309,7 @@ function trackUnauthorizedAccess(key: string, now: number): UnauthorizedCooldown
   };
 
   unauthorizedAccessCooldown.set(key, nextState);
+  pushUnauthorizedCooldownExpiration({ key, denyUntil: nextState.denyUntil });
   return nextState;
 }
 
@@ -222,11 +349,40 @@ function logUnauthorizedRejection(
 }
 
 function cleanupExpiredUnauthorizedCooldown(now = Date.now()): void {
-  for (const [key, state] of unauthorizedAccessCooldown.entries()) {
-    if (state.denyUntil <= now) {
-      unauthorizedAccessCooldown.delete(key);
+  let processedEntries = 0;
+
+  while (processedEntries < MAX_UNAUTHORIZED_COOLDOWN_EXPIRATIONS_PER_CLEANUP) {
+    const nextExpiration = peekUnauthorizedCooldownExpiration();
+    if (!nextExpiration || nextExpiration.denyUntil > now) {
+      break;
     }
+
+    const expiredEntry = popUnauthorizedCooldownExpiration();
+    if (!expiredEntry) {
+      break;
+    }
+
+    processedEntries += 1;
+
+    const existingState = unauthorizedAccessCooldown.get(expiredEntry.key);
+    if (!existingState) {
+      continue;
+    }
+
+    // The key may have been renewed after this heap entry was pushed.
+    if (existingState.denyUntil !== expiredEntry.denyUntil) {
+      continue;
+    }
+
+    unauthorizedAccessCooldown.delete(expiredEntry.key);
   }
+
+  if (unauthorizedAccessCooldown.size === 0) {
+    unauthorizedCooldownExpirations.length = 0;
+    return;
+  }
+
+  maybeRebuildUnauthorizedCooldownExpirationHeap();
 }
 
 async function fetchAccess(token: string, roomId: string): Promise<AccessCheckData | null> {
