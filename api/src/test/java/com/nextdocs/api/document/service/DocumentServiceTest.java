@@ -2,6 +2,7 @@ package com.nextdocs.api.document.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,7 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
+import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -66,6 +68,86 @@ class DocumentServiceTest {
         ArgumentCaptor<OffsetDateTime> cutoff = ArgumentCaptor.forClass(OffsetDateTime.class);
         verify(documentRepository).deleteExpiredTrash(cutoff.capture());
         assertEquals(OffsetDateTime.of(2025, 5, 16, 12, 0, 0, 0, ZoneOffset.UTC), cutoff.getValue());
+    }
+
+    @Test
+    void create_persistsClientProvidedId() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder()
+                .id(userId)
+                .email("alice@example.com")
+                .displayName("Alice")
+                .build();
+        DocumentCreateRequest request = new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice");
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.empty());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DocumentService.CreateDocumentResult result = documentService.create(userId, request);
+
+        assertTrue(result.created());
+        assertEquals(documentId, result.document().id());
+        verify(documentRepository).findByIdAndUser_Id(documentId, userId);
+        verify(documentRepository).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void create_returnsExistingDocumentForMatchingClientProvidedId() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder()
+                .id(userId)
+                .email("alice@example.com")
+                .displayName("Alice")
+                .build();
+        Document existing = Document.builder()
+                .id(documentId)
+                .user(user)
+                .title("Existing")
+                .yjsState(new byte[] {1, 2, 3})
+                .createdBy("Alice")
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        DocumentCreateRequest request = new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice");
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.of(existing));
+
+        DocumentService.CreateDocumentResult result = documentService.create(userId, request);
+
+        assertEquals(false, result.created());
+        assertEquals(documentId, result.document().id());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void create_rejectsTrashedDocumentIdReuse() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder()
+                .id(userId)
+                .email("alice@example.com")
+                .displayName("Alice")
+                .build();
+        Document existing = Document.builder()
+                .id(documentId)
+                .user(user)
+                .title("Existing")
+                .yjsState(new byte[] {1, 2, 3})
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        DocumentCreateRequest request = new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice");
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.of(existing));
+
+        ApiException exception = assertThrows(ApiException.class, () -> documentService.create(userId, request));
+
+        assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
     }
 
     @Test

@@ -5,8 +5,9 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
-import com.nextdocs.api.document.dto.request.*;
-import com.nextdocs.api.document.dto.response.*;
+import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
+import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
+import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -16,9 +17,6 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,12 +27,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class DocumentService {
+
+    public record CreateDocumentResult(DocumentResponse document, boolean created) {}
 
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
@@ -46,48 +45,51 @@ public class DocumentService {
     private DocumentService selfProxy;
 
     @Transactional
-    public DocumentResponse create(UUID userId, DocumentCreateRequest request) {
+    public CreateDocumentResult create(UUID userId, DocumentCreateRequest request) {
         User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-        String sourceLocalId = normalizeSourceLocalId(request.sourceLocalId());
         String yjsState = request.yjsState();
 
-        if (yjsState == null) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "yjsState is required.");
-        }
+        UUID documentId = request.id() != null ? request.id() : UUID.randomUUID();
 
-        if (sourceLocalId != null) {
-            Document existing = documentRepository
-                    .findByUser_IdAndSourceLocalIdAndDeletedAtIsNull(userId, sourceLocalId)
-                    .orElse(null);
-
+        if (request.id() != null) {
+            Document existing =
+                    documentRepository.findByIdAndUser_Id(documentId, userId).orElse(null);
             if (existing != null) {
-                applyFields(existing, user, request.title(), yjsState, request.createdBy(), sourceLocalId);
-                return toResponse(documentRepository.save(existing), true);
+                if (existing.getDeletedAt() != null) {
+                    throw new ApiException(
+                            ErrorCode.CONFLICT,
+                            "A trashed document already exists with this ID. Restore or permanently delete it first.");
+                }
+                return new CreateDocumentResult(toResponse(existing, true), false);
             }
         }
 
         Document document = Document.builder()
+                .id(documentId)
                 .user(user)
                 .title(normalizeTitle(request.title()))
                 .yjsState(decodeBase64State(yjsState))
                 .createdBy(request.createdBy())
-                .sourceLocalId(sourceLocalId)
                 .build();
 
-        if (sourceLocalId != null) {
-            try {
-                return toResponse(documentRepository.saveAndFlush(document), true);
-            } catch (DataIntegrityViolationException ex) {
-                Document existing = documentRepository
-                        .findByUser_IdAndSourceLocalIdAndDeletedAtIsNull(userId, sourceLocalId)
-                        .orElseThrow(() -> ex);
-
-                applyFields(existing, user, request.title(), yjsState, request.createdBy(), sourceLocalId);
-                return toResponse(documentRepository.save(existing), true);
+        try {
+            return new CreateDocumentResult(toResponse(documentRepository.saveAndFlush(document), true), true);
+        } catch (DataIntegrityViolationException ex) {
+            if (request.id() == null) {
+                throw ex;
             }
-        }
 
-        return toResponse(documentRepository.save(document), true);
+            Document existing = documentRepository.findById(documentId).orElseThrow(() -> ex);
+            if (!existing.getUser().getId().equals(userId)) {
+                throw new ApiException(ErrorCode.CONFLICT, "A document already exists with this ID.");
+            }
+            if (existing.getDeletedAt() != null) {
+                throw new ApiException(
+                        ErrorCode.CONFLICT,
+                        "A trashed document already exists with this ID. Restore or permanently delete it first.");
+            }
+            return new CreateDocumentResult(toResponse(existing, true), false);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -221,91 +223,12 @@ public class DocumentService {
         return purgeExpiredTrash(nowUtc);
     }
 
-    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
-    public BulkImportResponse bulkImport(UUID userId, BulkImportRequest request) {
-        User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-
-        List<String> sourceLocalIds = request.docs().stream()
-                .map(BulkImportItemRequest::localId)
-                .map(DocumentService::normalizeSourceLocalId)
-                .filter(id -> id != null)
-                .toList();
-
-        Map<String, Document> existingByLocalId = new HashMap<>();
-        if (!sourceLocalIds.isEmpty()) {
-            existingByLocalId =
-                    documentRepository
-                            .findAllByUser_IdAndSourceLocalIdInAndDeletedAtIsNull(userId, sourceLocalIds)
-                            .stream()
-                            .collect(java.util.stream.Collectors.toMap(Document::getSourceLocalId, doc -> doc));
-        }
-
-        List<BulkImportItemResponse> imported = new java.util.ArrayList<>();
-        for (BulkImportItemRequest item : request.docs()) {
-            String localId = normalizeSourceLocalId(item.localId());
-            Document existing = localId == null ? null : existingByLocalId.get(localId);
-            Document target = existing == null ? new Document() : existing;
-
-            applyFields(target, user, item.title(), item.yjsState(), item.createdBy(), localId);
-
-            target = saveWithSourceLocalIdRetry(userId, localId, target, user, item);
-
-            if (localId != null) {
-                existingByLocalId.put(localId, target);
-            }
-
-            imported.add(new BulkImportItemResponse(item.localId(), target.getId(), target.getTitle()));
-        }
-
-        return new BulkImportResponse(imported);
-    }
-
-    private Document saveWithSourceLocalIdRetry(
-            UUID userId, String localId, Document target, User user, BulkImportItemRequest item) {
-        if (target.getId() != null) {
-            return documentRepository.save(target);
-        }
-
-        try {
-            return documentRepository.saveAndFlush(target);
-        } catch (DataIntegrityViolationException ex) {
-            if (localId == null) {
-                throw ex;
-            }
-
-            Document latest = documentRepository
-                    .findByUser_IdAndSourceLocalIdAndDeletedAtIsNull(userId, localId)
-                    .orElseThrow(() -> ex);
-
-            applyFields(latest, user, item.title(), item.yjsState(), item.createdBy(), localId);
-            return documentRepository.save(latest);
-        }
-    }
-
     private static String normalizeTitle(String title) {
         String value = title == null ? "" : title.strip();
         if (value.isBlank()) {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "Title must not be blank.");
         }
         return value;
-    }
-
-    private static String normalizeSourceLocalId(String sourceLocalId) {
-        if (sourceLocalId == null) {
-            return null;
-        }
-
-        String value = sourceLocalId.strip();
-        return value.isBlank() ? null : value;
-    }
-
-    private static void applyFields(
-            Document target, User user, String title, String yjsState, String createdBy, String sourceLocalId) {
-        target.setUser(user);
-        target.setTitle(normalizeTitle(title));
-        target.setYjsState(decodeBase64State(yjsState));
-        target.setCreatedBy(createdBy);
-        target.setSourceLocalId(sourceLocalId);
     }
 
     private static byte[] decodeBase64State(String yjsState) {
