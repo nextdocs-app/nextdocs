@@ -25,7 +25,9 @@ function clearNextdocsLocalStorageKeys(): void {
 // user because of the unique database name per user. This is just an extra cleanup
 // step to free up space and avoid confusion.
 export async function clearLocalUserData(): Promise<void> {
-  if (indexedDBService.isAvailable()) {
+  // Guest documents live in the shared guest database and should survive
+  // unauthenticated session refresh failures or app reloads.
+  if (indexedDBService.isAvailable() && indexedDBService.getUserId() !== null) {
     try {
       await indexedDBService.clearAllDocuments();
     } catch {

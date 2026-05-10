@@ -28,6 +28,10 @@ class IndexedDBService {
     return this.currentUserId ? `nextdocs-db_${this.currentUserId}` : 'nextdocs-db';
   }
 
+  public getUserId(): string | null {
+    return this.currentUserId;
+  }
+
   public setUserId(userId: string | null): void {
     if (this.currentUserId === userId) {
       return;
