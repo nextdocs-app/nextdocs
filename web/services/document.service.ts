@@ -28,14 +28,6 @@ interface ApiPage<T> {
   last: boolean;
 }
 
-interface BulkImportResponse {
-  imported: {
-    localId: string;
-    documentId: string;
-    title: string;
-  }[];
-}
-
 interface ApiDocument {
   id: string;
   title: string;
@@ -114,6 +106,11 @@ export class DocumentServiceApiError extends Error {
 }
 
 class DocumentService {
+  private normalizeCloudDocumentTitle(title: string | null | undefined): string {
+    const value = title?.trim();
+    return value ? value : 'Untitled';
+  }
+
   public async loadDocument(id: string): Promise<DocumentLoadResult | null> {
     const storedDoc = await indexedDBService.getDocument(id);
 
@@ -461,17 +458,17 @@ class DocumentService {
 
   public async createCloudDocument(
     accessToken: string,
+    id: string,
     title = 'Untitled',
-    sourceLocalId?: string
+    ydoc?: Y.Doc,
+    createdBy?: string | null
   ): Promise<{ id: string; ydoc: Y.Doc; meta: DocumentMeta }> {
-    const ydoc = createYjsDoc();
+    const documentYDoc = ydoc ?? createYjsDoc();
     const payload = {
+      id,
       title,
-      yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
-      icon: null,
-      coverImage: null,
-      createdBy: 'NextDocs User',
-      sourceLocalId,
+      yjsState: this.uint8ArrayToBase64(encodeYjsState(documentYDoc)),
+      createdBy: createdBy ?? 'NextDocs User',
     };
 
     const body = await this.fetchApi<ApiDocument>('/api/v1/documents', {
@@ -480,9 +477,15 @@ class DocumentService {
       body: JSON.stringify(payload),
     });
 
+    if (body.id !== id) {
+      throw new Error(
+        `createCloudDocument: server returned ID "${body.id}" for requested ID "${id}".`
+      );
+    }
+
     return {
       id: body.id,
-      ydoc,
+      ydoc: documentYDoc,
       meta: this.toDocumentMeta(body),
     };
   }
@@ -561,30 +564,31 @@ class DocumentService {
     return indexedDBService.getAllGuestDocuments();
   }
 
-  public async bulkImportLocalDocuments(
+  public async promoteGuestDocumentsToAccount(
     accessToken: string,
     docs: StoredDocument[]
-  ): Promise<BulkImportResponse> {
-    const payload = {
-      docs: docs.map((doc) => ({
-        localId: doc.id,
-        title: doc.meta.title,
-        icon: doc.meta.icon,
-        coverImage: doc.meta.coverImage,
-        yjsState: this.uint8ArrayToBase64(doc.yjsState),
-        createdBy: doc.meta.createdBy,
-      })),
-    };
+  ): Promise<string[]> {
+    const promotedIds = await Promise.all(
+      docs.map(async (doc) => {
+        const created = await this.createCloudDocument(
+          accessToken,
+          doc.id,
+          this.normalizeCloudDocumentTitle(doc.meta.title),
+          decodeYjsState(doc.yjsState),
+          doc.meta.createdBy ?? null
+        );
 
-    const body = await this.fetchApi<BulkImportResponse>('/api/v1/documents/bulk-import', {
-      method: 'POST',
-      accessToken,
-      body: JSON.stringify(payload),
-    });
+        await this.saveDocument(doc.id, created.ydoc, created.meta, {
+          touchUpdatedAt: false,
+        });
+
+        return doc.id;
+      })
+    );
 
     this.emitCloudDocumentsChanged();
-
-    return body;
+    this.emitLocalDocumentsChanged();
+    return promotedIds;
   }
 
   public async deleteLocalDocumentsByIds(ids: string[]): Promise<void> {

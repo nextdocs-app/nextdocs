@@ -261,7 +261,7 @@ describe('document.service', () => {
     });
   });
 
-  describe('bulkImportLocalDocuments', () => {
+  describe('createCloudDocument', () => {
     let originalFetch: typeof globalThis.fetch;
 
     beforeEach(() => {
@@ -272,48 +272,104 @@ describe('document.service', () => {
       (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
     });
 
-    it('should call backend and return imported mappings', async () => {
+    it('should send the requested client-generated id to the backend', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
           data: {
-            imported: [{ localId: 'id-1', documentId: 'server-1', title: 'Doc 1' }],
+            id: 'id-1',
+            title: 'Doc 1',
+            yjsState: 'AQID',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
           },
           error: null,
         }),
       } as Response);
       (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
 
-      const { ydoc, meta } = await documentService.createDocument('Doc 1');
-      await documentService.saveDocument('id-1', ydoc, meta);
-      const docs = await documentService.getAllLocalDocuments();
+      const result = await documentService.createCloudDocument('access-token', 'id-1', 'Doc 1');
 
-      const result = await documentService.bulkImportLocalDocuments('access-token', docs);
-
-      expect(result.imported).toHaveLength(1);
-      expect(result.imported[0].localId).toBe('id-1');
+      expect(result.id).toBe('id-1');
       expect(fetchMock).toHaveBeenCalled();
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"id":"id-1"');
     });
 
-    it('should throw when backend import fails', async () => {
+    it('should throw when backend returns a different id', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
-        ok: false,
+        ok: true,
         json: async () => ({
-          success: false,
-          data: null,
-          error: 'Import failed',
+          success: true,
+          data: {
+            id: 'server-id',
+            title: 'Doc 1',
+            yjsState: 'AQID',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
         }),
       } as Response);
       (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
 
+      await expect(
+        documentService.createCloudDocument('access-token', 'id-1', 'Doc 1')
+      ).rejects.toThrow('server returned ID "server-id"');
+    });
+  });
+
+  describe('promoteGuestDocumentsToAccount', () => {
+    it('should cache promoted guest documents in the active user database', async () => {
+      const cloudYDoc = new Y.Doc();
+      const cloudMeta = {
+        title: 'Doc 1',
+        createdAt: '2024-01-02T00:00:00.000Z',
+        updatedAt: '2024-01-02T00:00:00.000Z',
+      };
+      const createCloudDocumentSpy = jest
+        .spyOn(documentService, 'createCloudDocument')
+        .mockResolvedValue({
+          id: 'id-1',
+          ydoc: cloudYDoc,
+          meta: cloudMeta,
+        });
+
+      const { ydoc, meta } = await documentService.createDocument('Doc 1');
+      await documentService.saveDocument('id-1', ydoc, meta);
+      const docs = await documentService.getAllLocalDocuments();
+      await indexedDBService.clearAllDocuments();
+
+      const result = await documentService.promoteGuestDocumentsToAccount('access-token', docs);
+
+      expect(result).toEqual(['id-1']);
+      expect(createCloudDocumentSpy).toHaveBeenCalledWith(
+        'access-token',
+        'id-1',
+        'Doc 1',
+        expect.any(Y.Doc),
+        null
+      );
+      const stored = await indexedDBService.getDocument('id-1');
+      expect(stored?.meta).toEqual(cloudMeta);
+
+      createCloudDocumentSpy.mockRestore();
+    });
+
+    it('should propagate create failures during promotion', async () => {
+      const createCloudDocumentSpy = jest
+        .spyOn(documentService, 'createCloudDocument')
+        .mockRejectedValue(new Error('Create failed'));
+
       const { ydoc, meta } = await documentService.createDocument('Doc 1');
       await documentService.saveDocument('id-1', ydoc, meta);
       const docs = await documentService.getAllLocalDocuments();
 
-      await expect(documentService.bulkImportLocalDocuments('access-token', docs)).rejects.toThrow(
-        'Import failed'
-      );
+      await expect(
+        documentService.promoteGuestDocumentsToAccount('access-token', docs)
+      ).rejects.toThrow('Create failed');
+
+      createCloudDocumentSpy.mockRestore();
     });
   });
 
