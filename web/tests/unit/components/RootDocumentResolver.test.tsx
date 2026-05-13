@@ -66,7 +66,7 @@ describe('RootDocumentResolver', () => {
       hasMore: false,
     });
     (documentService.createCloudDocument as jest.Mock).mockResolvedValue({
-      id: 'cloud-created-id',
+      id: 'generated-local-id',
       ydoc: new Y.Doc(),
       meta: defaultMeta,
     });
@@ -202,7 +202,7 @@ describe('RootDocumentResolver', () => {
       meta: localMeta,
     });
     (documentService.createCloudDocument as jest.Mock).mockResolvedValue({
-      id: 'cloud-from-local',
+      id: 'local-recent',
       ydoc: new Y.Doc(),
       meta: localMeta,
     });
@@ -210,20 +210,22 @@ describe('RootDocumentResolver', () => {
     render(<RootDocumentResolver />);
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-from-local');
+      expect(mockReplace).toHaveBeenCalledWith('/doc/local-recent');
     });
 
     expect(documentService.createCloudDocument).toHaveBeenCalledWith(
       'token-2',
+      'local-recent',
       'Recent local',
-      'local-recent'
+      localYDoc,
+      null
     );
-    expect(documentService.saveCloudDocument).toHaveBeenCalledWith(
-      'cloud-from-local',
+    expect(documentService.saveDocument).toHaveBeenCalledWith(
+      'local-recent',
       localYDoc,
       expect.objectContaining({ title: 'Recent local' }),
-      'token-2'
+      { touchUpdatedAt: false }
     );
-    expect(documentService.deleteDocument).toHaveBeenCalledWith('local-recent');
+    expect(documentService.deleteDocument).not.toHaveBeenCalled();
   });
 });
