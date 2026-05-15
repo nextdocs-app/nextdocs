@@ -13,7 +13,7 @@ import { documentService } from '@/services/document.service';
 import { isUntitledTitle, isEmptyLocalDocument } from '@/lib/document-content.util';
 import type { StoredDocument } from '@/types/document.types';
 
-const LOCAL_IMPORT_LOCK_KEY = 'nextdocs-local-import-lock';
+const LOCAL_PROMOTION_LOCK_KEY = 'nextdocs-local-promotion-lock';
 const REGISTRATION_SYNC_MIN_OVERLAY_MS = 800;
 
 function wait(ms: number): Promise<void> {
@@ -31,9 +31,9 @@ function waitForNextPaint(): Promise<void> {
   });
 }
 
-function tryAcquireImportLock(): boolean {
+function tryAcquirePromotionLock(): boolean {
   const now = Date.now();
-  const raw = localStorage.getItem(LOCAL_IMPORT_LOCK_KEY);
+  const raw = localStorage.getItem(LOCAL_PROMOTION_LOCK_KEY);
   const lockAgeMs = 30_000;
 
   if (raw) {
@@ -43,12 +43,12 @@ function tryAcquireImportLock(): boolean {
     }
   }
 
-  localStorage.setItem(LOCAL_IMPORT_LOCK_KEY, String(now));
+  localStorage.setItem(LOCAL_PROMOTION_LOCK_KEY, String(now));
   return true;
 }
 
-function releaseImportLock() {
-  localStorage.removeItem(LOCAL_IMPORT_LOCK_KEY);
+function releasePromotionLock() {
+  localStorage.removeItem(LOCAL_PROMOTION_LOCK_KEY);
 }
 
 export function getDocsEligibleForAccountMove(docs: StoredDocument[]): StoredDocument[] {
@@ -68,11 +68,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
   const { user, isTokenExpiringSoon, isAuthenticated, accessToken, lastAuthAction } = useAuth();
   const didPromptImportRef = useRef(false);
-  const ownsLocalImportLockRef = useRef(false);
-  const bulkImportInFlightRef = useRef<Promise<void> | null>(null);
-  const bulkImportCompletedKeyRef = useRef<string | null>(null);
+  const ownsLocalPromotionLockRef = useRef(false);
+  const promotionInFlightRef = useRef<Promise<void> | null>(null);
+  const promotionCompletedKeyRef = useRef<string | null>(null);
 
-  const getBulkImportActionKey = useCallback(() => {
+  const getPromotionActionKey = useCallback(() => {
     if (!user?.id || !lastAuthAction) {
       return null;
     }
@@ -82,14 +82,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const moveLocalDocsToAccount = useCallback(
     async (docs: StoredDocument[]) => {
-      const actionKey = getBulkImportActionKey();
+      const actionKey = getPromotionActionKey();
 
-      if (actionKey && bulkImportCompletedKeyRef.current === actionKey) {
+      if (actionKey && promotionCompletedKeyRef.current === actionKey) {
         return;
       }
 
-      if (bulkImportInFlightRef.current) {
-        await bulkImportInFlightRef.current;
+      if (promotionInFlightRef.current) {
+        await promotionInFlightRef.current;
         return;
       }
 
@@ -98,14 +98,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           throw new Error('Missing access token');
         }
 
-        const imported = await documentService.bulkImportLocalDocuments(accessToken, docs);
-        const importedIds = new Set(
-          imported.imported
-            .map((item) => item.localId)
-            .filter((id): id is string => typeof id === 'string' && id.length > 0)
-        );
-
-        const allDocsConfirmed = docs.every((doc) => importedIds.has(doc.id));
+        const promotedIds = await documentService.promoteGuestDocumentsToAccount(accessToken, docs);
+        const allDocsConfirmed = docs.every((doc) => promotedIds.includes(doc.id));
         if (!allDocsConfirmed) {
           throw new Error('Backend did not confirm all local documents were persisted.');
         }
@@ -114,23 +108,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         await documentService.deleteGuestDocumentsByIds(docs.map((doc) => doc.id));
 
         if (actionKey) {
-          bulkImportCompletedKeyRef.current = actionKey;
+          promotionCompletedKeyRef.current = actionKey;
         }
       })();
 
-      bulkImportInFlightRef.current = run;
+      promotionInFlightRef.current = run;
 
       try {
         await run;
       } finally {
-        bulkImportInFlightRef.current = null;
+        promotionInFlightRef.current = null;
       }
     },
-    [accessToken, getBulkImportActionKey]
+    [accessToken, getPromotionActionKey]
   );
 
-  const waitForBulkImportInFlight = useCallback(async () => {
-    const inFlight = bulkImportInFlightRef.current;
+  const waitForPromotionInFlight = useCallback(async () => {
+    const inFlight = promotionInFlightRef.current;
     if (!inFlight) {
       return;
     }
@@ -142,10 +136,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const releaseImportLockIfOwned = useCallback(() => {
-    if (ownsLocalImportLockRef.current) {
-      releaseImportLock();
-      ownsLocalImportLockRef.current = false;
+  const releasePromotionLockIfOwned = useCallback(() => {
+    if (ownsLocalPromotionLockRef.current) {
+      releasePromotionLock();
+      ownsLocalPromotionLockRef.current = false;
     }
   }, []);
 
@@ -156,8 +150,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setIsImportingLocalDocs(false);
     setLocalDocsError(null);
     setIsRegistrationSyncOverlayOpen(false);
-    releaseImportLockIfOwned();
-  }, [releaseImportLockIfOwned]);
+    releasePromotionLockIfOwned();
+  }, [releasePromotionLockIfOwned]);
 
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {
@@ -185,16 +179,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     let isDisposed = false;
 
     const resetAfterInFlightImport = async () => {
-      await waitForBulkImportInFlight();
+      await waitForPromotionInFlight();
 
       if (isDisposed) {
         return;
       }
 
       didPromptImportRef.current = false;
-      bulkImportCompletedKeyRef.current = null;
-      bulkImportInFlightRef.current = null;
-      releaseImportLockIfOwned();
+      promotionCompletedKeyRef.current = null;
+      promotionInFlightRef.current = null;
+      releasePromotionLockIfOwned();
     };
 
     void resetAfterInFlightImport();
@@ -202,7 +196,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       isDisposed = true;
     };
-  }, [isAuthenticated, user?.id, waitForBulkImportInFlight, releaseImportLockIfOwned]);
+  }, [isAuthenticated, user?.id, waitForPromotionInFlight, releasePromotionLockIfOwned]);
 
   // Prompt once per app load after login to promote local docs into account.
   useEffect(() => {
@@ -219,11 +213,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!tryAcquireImportLock()) {
+    if (!tryAcquirePromotionLock()) {
       return;
     }
 
-    ownsLocalImportLockRef.current = true;
+    ownsLocalPromotionLockRef.current = true;
 
     let cancelled = false;
 
@@ -248,7 +242,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (cancelled || promotableLocalDocs.length === 0) {
           didPromptImportRef.current = true;
           setIsRegistrationSyncOverlayOpen(false);
-          releaseImportLockIfOwned();
+          releasePromotionLockIfOwned();
           return;
         }
 
@@ -275,15 +269,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setLocalDocsToPromote(promotableLocalDocs);
         setIsLocalDocsModalOpen(true);
       } catch (error) {
-        console.error('Failed to import local documents:', error);
+        console.error('Failed to promote local documents:', error);
         setIsImportingLocalDocs(false);
         setIsRegistrationSyncOverlayOpen(lastAuthAction === 'register');
         setLocalDocsError(
-          error instanceof Error ? error.message : 'Failed to import local documents.'
+          error instanceof Error ? error.message : 'Failed to promote local documents.'
         );
 
         if (!isRegistrationFlow) {
-          releaseImportLockIfOwned();
+          releasePromotionLockIfOwned();
         }
       }
     };
@@ -294,8 +288,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       cancelled = true;
 
       const releaseLockAfterInFlightImport = async () => {
-        await waitForBulkImportInFlight();
-        releaseImportLockIfOwned();
+        await waitForPromotionInFlight();
+        releasePromotionLockIfOwned();
       };
 
       void releaseLockAfterInFlightImport();
@@ -307,8 +301,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     lastAuthAction,
     closePromotionFlow,
     moveLocalDocsToAccount,
-    releaseImportLockIfOwned,
-    waitForBulkImportInFlight,
+    releasePromotionLockIfOwned,
+    waitForPromotionInFlight,
   ]);
 
   const runMoveToAccount = useCallback(async () => {
@@ -336,7 +330,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } catch (error) {
       setIsImportingLocalDocs(false);
       setLocalDocsError(
-        error instanceof Error ? error.message : 'Failed to import local documents.'
+        error instanceof Error ? error.message : 'Failed to promote local documents.'
       );
     }
   }, [accessToken, user?.id, localDocsToPromote, moveLocalDocsToAccount, closePromotionFlow]);

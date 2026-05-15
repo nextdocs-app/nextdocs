@@ -104,7 +104,7 @@ describe('AppShell local guest document promotion', () => {
     deleteGuestDocumentsByIdsSpy = jest
       .spyOn(documentService, 'deleteGuestDocumentsByIds')
       .mockResolvedValue(undefined);
-    jest.spyOn(documentService, 'bulkImportLocalDocuments').mockResolvedValue({ imported: [] });
+    jest.spyOn(documentService, 'promoteGuestDocumentsToAccount').mockResolvedValue([]);
   });
 
   afterEach(() => {
