@@ -6,6 +6,7 @@ jest.mock('../../../services/indexed-db.service', () => ({
     clearAllDocuments: jest.fn(),
     wipeDatabase: jest.fn(),
     isAvailable: jest.fn().mockReturnValue(true),
+    getUserId: jest.fn().mockReturnValue('user-1'),
     setUserId: jest.fn(),
   },
 }));
@@ -19,11 +20,15 @@ const mockWipeDatabase = indexedDBService.wipeDatabase as jest.MockedFunction<
 const mockIsAvailable = indexedDBService.isAvailable as jest.MockedFunction<
   typeof indexedDBService.isAvailable
 >;
+const mockGetUserId = indexedDBService.getUserId as jest.MockedFunction<
+  typeof indexedDBService.getUserId
+>;
 
 describe('clearLocalUserData', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockIsAvailable.mockReturnValue(true);
+    mockGetUserId.mockReturnValue('user-1');
     mockClearAllDocuments.mockReset(); // Use Reset to clear return values too
     mockWipeDatabase.mockReset();
     mockClearAllDocuments.mockResolvedValue(undefined);
@@ -67,6 +72,15 @@ describe('clearLocalUserData', () => {
   it('skips IDB clearing if IndexedDB is not available', async () => {
     mockIsAvailable.mockReturnValue(false);
     await clearLocalUserData();
+    expect(mockClearAllDocuments).not.toHaveBeenCalled();
+    expect(mockWipeDatabase).not.toHaveBeenCalled();
+  });
+
+  it('does not clear guest documents when there is no authenticated user context', async () => {
+    mockGetUserId.mockReturnValue(null);
+
+    await clearLocalUserData();
+
     expect(mockClearAllDocuments).not.toHaveBeenCalled();
     expect(mockWipeDatabase).not.toHaveBeenCalled();
   });

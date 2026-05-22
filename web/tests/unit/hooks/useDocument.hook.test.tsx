@@ -440,6 +440,48 @@ describe('useDocument', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('should retry loading after document change events when migration finishes', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const recoveredYdoc = new Y.Doc();
+    const recoveredMeta = {
+      title: 'Recovered Cloud Copy',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-retry',
+      isInitializing: false,
+    });
+
+    getCloudDocumentSpy
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ ydoc: recoveredYdoc, meta: recoveredMeta });
+    loadDocumentSpy.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useDocument('cloud-retry-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.errorState?.title).toBe('Document unavailable offline');
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('cloud-documents-changed'));
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Recovered Cloud Copy');
+    });
+
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
+    expect(result.current.errorState).toBeNull();
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it('should persist metadata locally while offline for authenticated users', async () => {
     const ydoc = new Y.Doc();
     const meta = {

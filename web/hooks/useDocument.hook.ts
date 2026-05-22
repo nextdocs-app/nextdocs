@@ -187,6 +187,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
+  const [retryTrigger, setRetryTrigger] = useState(0);
   const lastLoadContextKeyRef = useRef<string | null>(null);
   const {
     isInBackoff: isCloudReadInBackoff,
@@ -211,6 +212,25 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   useEffect(() => {
     accessLevelRef.current = accessLevel;
   }, [accessLevel]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isInitializing || errorState === null || ydoc !== null || isLoading) {
+      return;
+    }
+
+    const retryLoad = () => {
+      clearCloudReadBackoff();
+      setRetryTrigger((prev) => prev + 1);
+    };
+
+    window.addEventListener('cloud-documents-changed', retryLoad);
+    window.addEventListener('local-documents-changed', retryLoad);
+
+    return () => {
+      window.removeEventListener('cloud-documents-changed', retryLoad);
+      window.removeEventListener('local-documents-changed', retryLoad);
+    };
+  }, [isAuthenticated, isInitializing, errorState, ydoc, isLoading, clearCloudReadBackoff]);
 
   useEffect(() => {
     if (isInitializing) {
@@ -447,6 +467,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     id,
     dispatch,
     isAuthenticated,
+    accessToken,
     isInitializing,
     ydoc,
     isOnline,
@@ -456,6 +477,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     clearCloudReadBackoff,
     triggerCloudReadBackoff,
     refresh,
+    retryTrigger,
   ]);
 
   useEffect(() => {

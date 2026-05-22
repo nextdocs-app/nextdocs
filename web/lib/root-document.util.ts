@@ -11,6 +11,12 @@ interface LocalLoadedDocument {
   result: DocumentLoadResult;
 }
 
+interface LocalDocumentSnapshot {
+  id: string;
+  ydoc: DocumentLoadResult['ydoc'];
+  meta: DocumentMeta;
+}
+
 export interface ResolveRootDocumentOptions {
   isAuthenticated: boolean;
   accessToken: string | null;
@@ -71,14 +77,26 @@ async function getMostRecentLocalDocument(
   };
 }
 
-async function createLocalDocument(): Promise<string> {
-  const newDocumentId = generateDocumentId();
-  const created = await documentService.createDocument();
-  await documentService.saveDocument(newDocumentId, created.ydoc, created.meta, {
+async function createLocalDocumentSnapshot(title?: string): Promise<LocalDocumentSnapshot> {
+  const id = generateDocumentId();
+  const created = await documentService.createDocument(title);
+  return {
+    id,
+    ydoc: created.ydoc,
+    meta: created.meta,
+  };
+}
+
+async function persistLocalDocument(snapshot: LocalDocumentSnapshot): Promise<string> {
+  await documentService.saveDocument(snapshot.id, snapshot.ydoc, snapshot.meta, {
     touchUpdatedAt: false,
   });
   documentService.emitLocalDocumentsChanged();
-  return newDocumentId;
+  return snapshot.id;
+}
+
+async function createLocalDocument(title?: string): Promise<string> {
+  return persistLocalDocument(await createLocalDocumentSnapshot(title));
 }
 
 async function migrateLocalDocumentToCloud(
@@ -88,53 +106,18 @@ async function migrateLocalDocumentToCloud(
   const normalizedTitle = normalizeDocumentTitle(localDoc.result.meta.title);
   const created = await documentService.createCloudDocument(
     accessToken,
+    localDoc.id,
     normalizedTitle,
-    localDoc.id
+    localDoc.result.ydoc,
+    localDoc.result.meta.createdBy ?? null
   );
 
   try {
-    await documentService.saveCloudDocument(
-      created.id,
-      localDoc.result.ydoc,
-      {
-        ...localDoc.result.meta,
-        title: normalizedTitle,
-      },
-      accessToken
-    );
-  } catch (saveError) {
-    try {
-      await documentService.deleteCloudDocumentPermanently(created.id, accessToken);
-    } catch (rollbackError) {
-      console.error(
-        'Failed to rollback partially-created cloud document during root local migration:',
-        rollbackError
-      );
-    }
-
-    throw saveError;
-  }
-
-  try {
-    await documentService.saveDocument(
-      created.id,
-      localDoc.result.ydoc,
-      {
-        ...localDoc.result.meta,
-        title: normalizedTitle,
-      },
-      { touchUpdatedAt: false }
-    );
+    await documentService.saveDocument(localDoc.id, localDoc.result.ydoc, created.meta, {
+      touchUpdatedAt: false,
+    });
   } catch (cacheError) {
     console.warn('Failed to cache migrated cloud document locally:', cacheError);
-  }
-
-  if (created.id !== localDoc.id) {
-    try {
-      await documentService.deleteDocument(localDoc.id);
-    } catch (deleteError) {
-      console.warn('Failed to remove old local document after cloud migration:', deleteError);
-    }
   }
 
   documentService.emitCloudDocumentsChanged();
@@ -171,20 +154,20 @@ export async function resolveRootDocumentId(options: ResolveRootDocumentOptions)
       }
 
       const normalizedTitle = normalizeDocumentTitle(options.title);
+      const localSnapshot = await createLocalDocumentSnapshot(normalizedTitle);
       const createdCloudDocument = await documentService.createCloudDocument(
         options.accessToken,
-        normalizedTitle
+        localSnapshot.id,
+        normalizedTitle,
+        localSnapshot.ydoc,
+        localSnapshot.meta.createdBy ?? null
       );
-      const createdCloudDocumentMeta = {
-        ...createdCloudDocument.meta,
-        title: normalizedTitle,
-      };
 
       try {
         await documentService.saveDocument(
-          createdCloudDocument.id,
-          createdCloudDocument.ydoc,
-          createdCloudDocumentMeta,
+          localSnapshot.id,
+          localSnapshot.ydoc,
+          createdCloudDocument.meta,
           { touchUpdatedAt: false }
         );
       } catch (cacheError) {
@@ -203,7 +186,7 @@ export async function resolveRootDocumentId(options: ResolveRootDocumentOptions)
         return mostRecentLocalDocument.id;
       }
 
-      return createLocalDocument();
+      return persistLocalDocument(await createLocalDocumentSnapshot(options.title));
     }
   }
 

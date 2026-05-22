@@ -2,7 +2,6 @@ package com.nextdocs.api.document.repository;
 
 import com.nextdocs.api.document.entity.Document;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -19,10 +18,6 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     Page<Document> findAllByUser_IdAndDeletedAtIsNull(UUID userId, Pageable pageable);
 
     Page<Document> findAllByUser_IdAndDeletedAtIsNotNull(UUID userId, Pageable pageable);
-
-    List<Document> findAllByUser_IdAndSourceLocalIdInAndDeletedAtIsNull(UUID userId, List<String> sourceLocalIds);
-
-    Optional<Document> findByUser_IdAndSourceLocalIdAndDeletedAtIsNull(UUID userId, String sourceLocalId);
 
     Optional<Document> findByIdAndUser_IdAndDeletedAtIsNull(UUID id, UUID userId);
 

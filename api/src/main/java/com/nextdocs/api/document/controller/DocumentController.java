@@ -3,10 +3,8 @@ package com.nextdocs.api.document.controller;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.common.response.PagedResponse;
-import com.nextdocs.api.document.dto.request.BulkImportRequest;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
-import com.nextdocs.api.document.dto.response.BulkImportResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.service.DocumentService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -38,6 +36,9 @@ public class DocumentController {
             description = "Creates a new document owned by the authenticated user.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Document already existed for the authenticated user"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "201",
                         description = "Document created"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -50,8 +51,10 @@ public class DocumentController {
     @PostMapping
     public ResponseEntity<ApiResponse<DocumentResponse>> create(
             @AuthenticationPrincipal UserPrincipal principal, @Valid @RequestBody DocumentCreateRequest request) {
-        DocumentResponse response = documentService.create(principal.getId(), request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Document created."));
+        DocumentService.CreateDocumentResult result = documentService.create(principal.getId(), request);
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        String message = result.created() ? "Document created." : "Document already exists.";
+        return ResponseEntity.status(status).body(ApiResponse.ok(result.document(), message));
     }
 
     @Operation(
@@ -194,27 +197,5 @@ public class DocumentController {
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
         DocumentResponse response = documentService.restore(principal.getId(), id);
         return ResponseEntity.ok(ApiResponse.ok(response, "Document restored."));
-    }
-
-    @Operation(
-            summary = "Bulk import local documents",
-            description = "Imports local documents into the authenticated user's account. "
-                    + "Operation is transactional: if one document fails validation, none are imported.",
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "201",
-                        description = "Documents imported"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "400",
-                        description = "Invalid request payload"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
-            })
-    @PostMapping("/bulk-import")
-    public ResponseEntity<ApiResponse<BulkImportResponse>> bulkImport(
-            @AuthenticationPrincipal UserPrincipal principal, @Valid @RequestBody BulkImportRequest request) {
-        BulkImportResponse response = documentService.bulkImport(principal.getId(), request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Documents imported."));
     }
 }

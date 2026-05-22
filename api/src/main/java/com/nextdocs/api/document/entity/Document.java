@@ -15,8 +15,7 @@ import org.hibernate.type.SqlTypes;
         name = "documents",
         indexes = {
             @Index(name = "idx_documents_user_created", columnList = "user_id,created_at"),
-            @Index(name = "idx_documents_user_updated", columnList = "user_id,updated_at"),
-            @Index(name = "idx_documents_user_source_local", columnList = "user_id,source_local_id")
+            @Index(name = "idx_documents_user_updated", columnList = "user_id,updated_at")
         })
 @Getter
 @Setter
@@ -26,7 +25,6 @@ import org.hibernate.type.SqlTypes;
 public class Document {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -42,9 +40,6 @@ public class Document {
 
     @Column(name = "created_by", length = 255)
     private String createdBy;
-
-    @Column(name = "source_local_id", length = 128)
-    private String sourceLocalId;
 
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;

@@ -2,6 +2,10 @@ import * as Y from 'yjs';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 import { documentService } from '@/services/document.service';
 
+jest.mock('../../../lib/document-id.util', () => ({
+  generateDocumentId: jest.fn(() => 'generated-local-id'),
+}));
+
 jest.mock('../../../services/document.service', () => ({
   documentService: {
     getAllDocumentsMeta: jest.fn(),
@@ -21,7 +25,7 @@ jest.mock('../../../services/document.service', () => ({
 describe('resolveRootDocumentId', () => {
   const createdYDoc = new Y.Doc();
   const createdMeta = {
-    title: '',
+    title: 'Untitled',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
   };
@@ -39,7 +43,11 @@ describe('resolveRootDocumentId', () => {
       hasMore: false,
     });
     (documentService.createCloudDocument as jest.Mock).mockResolvedValue({
-      id: 'cloud-created-id',
+      id: 'generated-local-id',
+      ydoc: createdYDoc,
+      meta: createdMeta,
+    });
+    (documentService.createDocument as jest.Mock).mockResolvedValue({
       ydoc: createdYDoc,
       meta: createdMeta,
     });
@@ -54,11 +62,17 @@ describe('resolveRootDocumentId', () => {
         isAuthenticated: true,
         accessToken: 'token-1',
       })
-    ).resolves.toBe('cloud-created-id');
+    ).resolves.toBe('generated-local-id');
 
-    expect(documentService.createCloudDocument).toHaveBeenCalledWith('token-1', 'Untitled');
+    expect(documentService.createCloudDocument).toHaveBeenCalledWith(
+      'token-1',
+      'generated-local-id',
+      'Untitled',
+      expect.any(Y.Doc),
+      null
+    );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
-      'cloud-created-id',
+      'generated-local-id',
       createdYDoc,
       expect.objectContaining({ title: 'Untitled' }),
       { touchUpdatedAt: false }
@@ -66,17 +80,32 @@ describe('resolveRootDocumentId', () => {
   });
 
   it('uses a provided title when creating a new cloud root document', async () => {
+    (documentService.createCloudDocument as jest.Mock).mockResolvedValue({
+      id: 'generated-local-id',
+      ydoc: createdYDoc,
+      meta: {
+        ...createdMeta,
+        title: 'Project kickoff',
+      },
+    });
+
     await expect(
       resolveRootDocumentId({
         isAuthenticated: true,
         accessToken: 'token-2',
         title: 'Project kickoff',
       })
-    ).resolves.toBe('cloud-created-id');
+    ).resolves.toBe('generated-local-id');
 
-    expect(documentService.createCloudDocument).toHaveBeenCalledWith('token-2', 'Project kickoff');
+    expect(documentService.createCloudDocument).toHaveBeenCalledWith(
+      'token-2',
+      'generated-local-id',
+      'Project kickoff',
+      expect.any(Y.Doc),
+      null
+    );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
-      'cloud-created-id',
+      'generated-local-id',
       createdYDoc,
       expect.objectContaining({ title: 'Project kickoff' }),
       { touchUpdatedAt: false }
@@ -90,11 +119,17 @@ describe('resolveRootDocumentId', () => {
         accessToken: 'token-3',
         title: '   ',
       })
-    ).resolves.toBe('cloud-created-id');
+    ).resolves.toBe('generated-local-id');
 
-    expect(documentService.createCloudDocument).toHaveBeenCalledWith('token-3', 'Untitled');
+    expect(documentService.createCloudDocument).toHaveBeenCalledWith(
+      'token-3',
+      'generated-local-id',
+      'Untitled',
+      expect.any(Y.Doc),
+      null
+    );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
-      'cloud-created-id',
+      'generated-local-id',
       createdYDoc,
       expect.objectContaining({ title: 'Untitled' }),
       { touchUpdatedAt: false }

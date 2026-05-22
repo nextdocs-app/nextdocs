@@ -30,6 +30,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
+import { generateDocumentId } from '@/lib/document-id.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 
@@ -421,15 +422,18 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
   const handleCreateFile = useCallback(async () => {
     try {
-      let newId: string;
+      const newId = generateDocumentId();
+      const created = await documentService.createDocument();
+      await documentService.saveDocument(newId, created.ydoc, created.meta);
 
       if (isAuthenticated && accessToken) {
-        const created = await documentService.createCloudDocument(accessToken);
-        newId = created.id;
-      } else {
-        newId = crypto.randomUUID();
-        const { ydoc, meta } = await documentService.createDocument();
-        await documentService.saveDocument(newId, ydoc, meta);
+        await documentService.createCloudDocument(
+          accessToken,
+          newId,
+          created.meta.title || 'Untitled',
+          created.ydoc,
+          created.meta.createdBy ?? null
+        );
       }
 
       await refresh(false);

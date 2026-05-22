@@ -14,8 +14,6 @@ import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
-import com.nextdocs.api.document.dto.response.BulkImportItemResponse;
-import com.nextdocs.api.document.dto.response.BulkImportResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.service.DocumentService;
 import java.time.OffsetDateTime;
@@ -75,7 +73,8 @@ class DocumentControllerTest {
         DocumentResponse response = new DocumentResponse(
                 documentId, "My Doc", "AQID", "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
 
-        when(documentService.create(eq(userId), any())).thenReturn(response);
+        when(documentService.create(eq(userId), any()))
+                .thenReturn(new DocumentService.CreateDocumentResult(response, true));
 
         mockMvc.perform(post("/api/v1/documents")
                         .with(user(principal))
@@ -90,6 +89,30 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(documentId.toString()))
                 .andExpect(jsonPath("$.message").value("Document created."));
+    }
+
+    @Test
+    void create_existingClientDocument_returns200() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId, "My Doc", "AQID", "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+
+        when(documentService.create(eq(userId), any()))
+                .thenReturn(new DocumentService.CreateDocumentResult(response, false));
+
+        mockMvc.perform(post("/api/v1/documents")
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "id": "%s",
+                          "title": "My Doc",
+                          "yjsState": "AQID"
+                        }
+                        """.formatted(documentId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(documentId.toString()))
+                .andExpect(jsonPath("$.message").value("Document already exists."));
     }
 
     @Test
@@ -177,31 +200,6 @@ class DocumentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.title").value("Restored"));
-    }
-
-    @Test
-    void bulkImport_success_returns201() throws Exception {
-        BulkImportResponse response =
-                new BulkImportResponse(List.of(new BulkImportItemResponse("local-1", documentId, "Imported")));
-        when(documentService.bulkImport(eq(userId), any())).thenReturn(response);
-
-        mockMvc.perform(post("/api/v1/documents/bulk-import")
-                        .with(user(principal))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                        {
-                          "docs": [
-                            {
-                              "localId": "local-1",
-                              "title": "Imported",
-                              "yjsState": "AQID"
-                            }
-                          ]
-                        }
-                        """))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.imported[0].localId").value("local-1"));
     }
 
     @Test
