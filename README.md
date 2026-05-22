@@ -188,6 +188,7 @@ NextDocs is a monorepo with three core services:
 
 ## Roadmap
 
+**Planned for initial release**:
 - [x] Core features listed in <a href="#overview">overview</a>.
 - [x] Trash documents with recovery and auto-delete after 30 days.
 - [ ] Search Documents by content.
@@ -195,6 +196,7 @@ NextDocs is a monorepo with three core services:
 - [ ] OAuth login (Google, GitHub).
 - [ ] Document options like Export, font-options, etc.
 - [ ] Responsive design for all screen sizes.
-- [ ] Jitsi video call integration during collaboration.
+
+**Not planned for initial release**:
 - [ ] Document version history and snapshots (Coming soon in blocknote itself).
 - [ ] Workspace and team permission management.
