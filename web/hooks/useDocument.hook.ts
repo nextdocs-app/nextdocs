@@ -177,7 +177,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const id = documentId;
   const isSharedDocument = options?.isSharedDocument === true;
   const dispatch = useAppDispatch();
-  const { meta, isLoading, error } = useAppSelector((state) => state.document);
+  const { currentDocumentId, meta, isLoading, error } = useAppSelector((state) => state.document);
   const { isAuthenticated, accessToken, user, isInitializing, refresh } = useAuth();
   const { isOnline } = useNetworkStatus();
   const accessTokenRef = useRef<string | null>(accessToken);
@@ -353,11 +353,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         }
 
         if (!cancelled) {
+          const isTrashedDoc = !!result.meta.deletedAt;
           if (
             isAuthenticated &&
             token &&
             !isCloudReadInBackoff() &&
-            !hasPendingSyncForRequestedDoc
+            !hasPendingSyncForRequestedDoc &&
+            !isTrashedDoc
           ) {
             try {
               const myAccess = await documentService.getMyAccess(effectiveId, token);
@@ -407,12 +409,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
           } else {
             setAccessLevel(
-              isAuthenticated
-                ? resolveAuthenticatedFallbackAccessLevel(effectiveId, {
-                    currentAccessLevel: accessLevelRef.current,
-                    isSharedDocument,
-                  })
-                : guestAccessLevel
+              isTrashedDoc
+                ? 'VIEW'
+                : isAuthenticated
+                  ? resolveAuthenticatedFallbackAccessLevel(effectiveId, {
+                      currentAccessLevel: accessLevelRef.current,
+                      isSharedDocument,
+                    })
+                  : guestAccessLevel
             );
           }
 
@@ -458,6 +462,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     // Clear stale ydoc immediately so the editor shows loading state
     setLocalYDoc(null);
     setResolvedDocumentId(id);
+    dispatch(clearDocument());
     loadDoc();
 
     return () => {
@@ -636,7 +641,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       !accessToken ||
       !isOnline ||
       isCloudReadInBackoff() ||
-      !resolvedDocumentId
+      !resolvedDocumentId ||
+      resolvedDocumentId !== currentDocumentId ||
+      !!meta?.deletedAt
     ) {
       return;
     }
@@ -697,6 +704,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     accessToken,
     isOnline,
     resolvedDocumentId,
+    currentDocumentId,
+    meta,
     dispatch,
     isCloudReadInBackoff,
     refresh,
@@ -801,17 +810,74 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     ]
   );
 
+  // Listen for external restore events (e.g. from the sidebar)
+  useEffect(() => {
+    if (!resolvedDocumentId || !meta?.deletedAt) {
+      return;
+    }
+
+    const handleDocsChanged = async () => {
+      try {
+        const localCopy = await documentService.loadDocument(resolvedDocumentId);
+        if (localCopy && !localCopy.meta.deletedAt) {
+          const updatedAt = new Date().toISOString();
+          dispatch(
+            updateMetaAction({
+              deletedAt: undefined,
+              purgeAt: undefined,
+              updatedAt,
+            })
+          );
+          // We don't need to check for the access level and directly set it
+          // to OWNER because only they have the option to restore the document.
+          setAccessLevel('OWNER');
+          writeCachedDocumentAccessLevel(resolvedDocumentId, 'OWNER');
+        }
+      } catch (err) {
+        console.warn('Failed to check document status on docs changed:', err);
+      }
+    };
+
+    window.addEventListener('cloud-documents-changed', handleDocsChanged);
+    window.addEventListener('local-documents-changed', handleDocsChanged);
+
+    return () => {
+      window.removeEventListener('cloud-documents-changed', handleDocsChanged);
+      window.removeEventListener('local-documents-changed', handleDocsChanged);
+    };
+  }, [resolvedDocumentId, meta?.deletedAt, dispatch]);
+
+  const restore = useCallback(async () => {
+    if (!isAuthenticated || !accessToken || !resolvedDocumentId) {
+      return;
+    }
+    await documentService.restoreCloudDocumentFromTrash(resolvedDocumentId, accessToken);
+
+    const updatedAt = new Date().toISOString();
+    dispatch(
+      updateMetaAction({
+        deletedAt: undefined,
+        purgeAt: undefined,
+        updatedAt,
+      })
+    );
+
+    setAccessLevel('OWNER');
+    writeCachedDocumentAccessLevel(resolvedDocumentId, 'OWNER');
+  }, [isAuthenticated, accessToken, resolvedDocumentId, dispatch]);
+
   return {
     documentId: resolvedDocumentId,
     ydoc,
     meta,
     accessLevel,
-    isReadOnly: isReadOnlyAccessLevel(accessLevel),
+    isReadOnly: isReadOnlyAccessLevel(accessLevel) || !!meta?.deletedAt,
     isRealtimeConnected,
     realtimeProvider,
     errorState,
     isLoading,
     error: error ? new Error(error) : null,
     updateMeta,
+    restore,
   };
 }
