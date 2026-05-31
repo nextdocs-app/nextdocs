@@ -51,6 +51,10 @@ interface DocToolbarProps {
   showGuestNotice?: boolean;
   /** Callback for the guest notice auth CTA */
   onGuestNoticeCtaClick?: () => void;
+  /** Whether to show a trash notice in the top toolbar */
+  showTrashNotice?: boolean;
+  /** Callback to restore the document from trash */
+  onRestore?: () => void;
 }
 
 export function DocToolbar({
@@ -65,6 +69,8 @@ export function DocToolbar({
   onCommentsToggle,
   showGuestNotice = false,
   onGuestNoticeCtaClick,
+  showTrashNotice = false,
+  onRestore,
 }: DocToolbarProps) {
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [showOfflineTooltip, setShowOfflineTooltip] = useState(false);
@@ -152,6 +158,36 @@ export function DocToolbar({
 
       {/* ── Top-right toolbar ── */}
       <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5">
+        {showTrashNotice && onRestore && (
+          <div
+            className="
+              inline-flex items-center gap-1.5 rounded-lg
+              border border-border/70 bg-background/85 backdrop-blur-sm
+              px-3 py-1.5
+              text-[12px] text-muted-foreground
+              shadow-sm
+              whitespace-nowrap
+            "
+          >
+            <span>This document is in the trash.</span>
+            <button
+              type="button"
+              onClick={onRestore}
+              className="
+                rounded-sm px-0.5
+                font-medium text-foreground
+                underline decoration-foreground/30 underline-offset-3
+                hover:text-primary hover:decoration-primary/60
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50
+                transition-colors cursor-pointer
+              "
+            >
+              Restore
+            </button>
+            <span>it to make edits.</span>
+          </div>
+        )}
+
         {shouldShowGuestNotice && (
           <div
             className="
@@ -198,7 +234,7 @@ export function DocToolbar({
             aria-pressed={isCommentsSidebarOpen}
             aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
             className={[
-              'inline-flex items-center justify-center rounded-sm py-1 px-2 transition-colors duration-150',
+              'inline-flex items-center justify-center rounded-sm py-[5px] px-2 transition-colors duration-150',
               isCommentsButtonDisabled
                 ? 'text-muted-foreground opacity-60 cursor-not-allowed'
                 : isCommentsSidebarOpen
@@ -222,7 +258,7 @@ export function DocToolbar({
             className="
               inline-flex items-center gap-1.5 rounded-sm
               border border-border bg-background
-              px-3 py-1.5
+              px-2.5 py-[5px]
               text-[12.5px] font-medium leading-none text-foreground
               transition-colors duration-150
               hover:bg-[var(--nd-toolbar-hover-bg)]

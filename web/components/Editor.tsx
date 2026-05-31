@@ -145,6 +145,7 @@ export default function Editor() {
     isLoading,
     error,
     updateMeta,
+    restore,
   } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
   const [showCommentsSidebar, setShowCommentsSidebar] = useState(false);
@@ -153,7 +154,7 @@ export default function Editor() {
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
     Record<string, CommentThreadStats>
   >({});
-  const isGuestSharedView = !isAuthenticated && isSharedDocument && accessLevel === 'VIEW';
+  const isGuestSharedView = !isAuthenticated && accessLevel === 'VIEW';
   const isOffline = !isOnline;
   const { pendingEdits } = useYjsPersistence(
     documentId,
@@ -166,6 +167,23 @@ export default function Editor() {
   const openAuthModal = useCallback(() => {
     window.dispatchEvent(new CustomEvent('open-auth-modal'));
   }, []);
+
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const handleRestore = useCallback(async () => {
+    if (isRestoring) {
+      return;
+    }
+    setIsRestoring(true);
+    try {
+      await restore();
+    } catch (error) {
+      console.error('Failed to restore document:', error);
+      alert('Failed to restore document. Please try again.');
+    } finally {
+      setIsRestoring(false);
+    }
+  }, [restore, isRestoring]);
 
   // Look at the comment in useOfflineDocumentSelect file to know why we need this workaround.
   useOfflineDocumentSelect(setOfflineSelectedDocumentId);
@@ -276,6 +294,8 @@ export default function Editor() {
         pendingEdits={pendingEdits}
         showGuestNotice={isGuestSharedView}
         onGuestNoticeCtaClick={openAuthModal}
+        showTrashNotice={!!meta?.deletedAt}
+        onRestore={handleRestore}
         showCommentsButton={showCommentsButton}
         isCommentsSidebarOpen={isCommentsSidebarOpen}
         openCommentsCount={activeCommentStats.open}
