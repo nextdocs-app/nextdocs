@@ -185,7 +185,7 @@ function SidebarDocumentSection({
               {[1, 2, 3].map((i) => (
                 <div
                   key={`${title}-loading-${i}`}
-                  className="h-8 rounded-lg bg-sidebar-accent/30 animate-pulse"
+                  className="h-8 rounded-sm bg-sidebar-accent/30 animate-pulse"
                 />
               ))}
             </div>
@@ -207,7 +207,7 @@ function SidebarDocumentSection({
                   >
                     <button
                       onClick={() => onSelectDocument(doc.id)}
-                      className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
+                      className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                         isActive
                           ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
                           : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
@@ -239,7 +239,7 @@ function SidebarDocumentSection({
                   type="button"
                   onClick={onShowAll}
                   aria-label={`Show all ${title.toLowerCase()} documents`}
-                  className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
+                  className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
                 >
                   <MoreHorizontal className="flex-shrink-0" />
                   <span className="text-[13px] truncate">Show More</span>
@@ -278,7 +278,7 @@ function ProfileMenuPopup({
     <div
       ref={popupRef}
       style={style}
-      className={`fixed w-[14.3rem] text-[14px] z-30 rounded-xl border border-sidebar-border p-1.5 shadow-lg ${
+      className={`fixed w-[14.9rem] text-[14px] z-30 rounded-lg border border-sidebar-border p-1.5 ${
         theme === 'dark' ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
       }`}
       role="menu"
@@ -358,6 +358,53 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       : 'Guest User';
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(256);
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Load width on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('nextdocs-sidebar-width');
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (!isNaN(parsed) && parsed >= 256 && parsed <= 480) {
+        setSidebarWidth(parsed);
+      }
+    }
+  }, []);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback(
+    (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = Math.max(256, Math.min(480, e.clientX));
+      setSidebarWidth(newWidth);
+      localStorage.setItem('nextdocs-sidebar-width', String(newWidth));
+    },
+    [isResizing]
+  );
+
+  useEffect(() => {
+    if (isResizing) {
+      window.addEventListener('mousemove', resize);
+      window.addEventListener('mouseup', stopResizing);
+    } else {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    }
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [isResizing, resize, stopResizing]);
+
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const [isPrivateOpen, setIsPrivateOpen] = useState(true);
   const [isSharedOpen, setIsSharedOpen] = useState(true);
@@ -382,7 +429,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
   const isDocumentsPanelOpen = documentsPanelMode !== null;
   const isTrashPanel = documentsPanelMode === 'trash';
   const isSharedPanel = documentsPanelMode === 'shared';
-  const profileMenuStyle = { left: '0.75rem', bottom: '4.25rem' } as React.CSSProperties;
+  const profileMenuStyle = { left: '0.5rem', bottom: '4rem' } as React.CSSProperties;
 
   const panelDocuments = useMemo(
     () => (isTrashPanel ? trashedDocuments : isSharedPanel ? sharedDocuments : documents),
@@ -850,7 +897,10 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
   return (
     <aside
-      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'w-64 border-r'} border-sidebar-border flex-shrink-0 flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground select-none transition-all duration-300`}
+      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-all duration-300'} relative`}
+      style={{
+        width: isSidebarCollapsed ? undefined : `${sidebarWidth}px`,
+      }}
     >
       {/* Header */}
       {isSidebarCollapsed ? (
@@ -864,7 +914,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             aria-label="Expand sidebar"
             aria-expanded={false}
             title="Expand sidebar"
-            className={`flex items-center gap-3 px-2 py-2 rounded-lg text-sidebar-foreground/80 transition-colors duration-100 cursor-pointer overflow-hidden ${
+            className={`flex items-center gap-3 px-2 py-2 rounded-sm text-sidebar-foreground/80 transition-colors duration-100 cursor-pointer overflow-hidden ${
               isSidebarCollapseHoverGuard
                 ? ''
                 : 'hover:bg-sidebar-accent hover:text-sidebar-foreground'
@@ -875,7 +925,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         </div>
       ) : (
         <div className="flex items-center justify-between p-2">
-          <div className="flex items-center gap-2 py-1 px-1.5 rounded-lg cursor-pointer overflow-hidden">
+          <div className="flex items-center gap-2 py-1 px-1.5 rounded-sm cursor-pointer overflow-hidden">
             <NextDocs className="w-[25px] h-[25px] flex-shrink-0" />
             <span
               className="text-[21px] mt-[2px] font-[600] leading-none whitespace-nowrap"
@@ -898,7 +948,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             aria-label="Collapse sidebar"
             aria-expanded={true}
             title="Collapse sidebar"
-            className="inline-flex px-2 py-2 items-center justify-center rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
+            className="inline-flex px-2 py-2 items-center justify-center rounded-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
           >
             <CloseSidebar size={20} className="flex-shrink-0 opacity-80" />
           </button>
@@ -909,7 +959,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       <div className="flex flex-col py-2 px-2">
         <button
           onClick={handleCreateFile}
-          className="flex items-center gap-3 px-2 py-[7px] rounded-lg text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+          className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
         >
           <NewDocument size={20} className="flex-shrink-0 opacity-80" />
           <span
@@ -925,7 +975,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
         <button
           onClick={openAllDocumentsPanel}
-          className="flex items-center gap-3 px-2 py-[7px] rounded-lg text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+          className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
         >
           <Search size={20} className="flex-shrink-0 opacity-80" />
           <span
@@ -1005,7 +1055,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             onClick={() => setIsAccountMenuOpen((prev) => !prev)}
             aria-haspopup="menu"
             aria-expanded={isAccountMenuOpen}
-            className="group/account w-full rounded-lg px-1.5 py-2 text-left transition-colors hover:bg-sidebar-accent cursor-pointer flex items-center overflow-hidden"
+            className="group/account w-full rounded-sm px-1.5 py-2 text-left transition-colors hover:bg-sidebar-accent cursor-pointer flex items-center overflow-hidden"
           >
             <span
               aria-hidden="true"
@@ -1082,7 +1132,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         <div
           data-doc-actions-root={docActionsAnchor.documentId}
           style={{ left: docActionsAnchor.x, top: docActionsAnchor.y }}
-          className={`fixed z-50 min-w-[11.5rem] -translate-y-1/2 rounded-lg border border-sidebar-border p-1.5 shadow-xl ${
+          className={`fixed z-50 min-w-[11.5rem] -translate-y-1/2 rounded-sm border border-sidebar-border p-1.5 shadow-xl ${
             resolvedTheme === 'dark'
               ? 'bg-[#303030] text-white'
               : 'bg-popover text-popover-foreground'
@@ -1122,181 +1172,187 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       )}
 
       {isDocumentsPanelOpen && (
-        <div className="fixed inset-0 z-40">
-          <button
-            type="button"
-            aria-label="Close documents panel"
-            className="absolute inset-0 bg-black/30 backdrop-blur-[1px]"
-            onClick={closeDocumentsPanel}
-          />
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-label={
-              isTrashPanel
-                ? 'Trash documents'
-                : isSharedPanel
-                  ? 'Shared documents'
-                  : 'Private documents'
-            }
-            className="absolute inset-y-0 left-0 w-full max-w-[22rem] border-r border-sidebar-border bg-sidebar shadow-2xl flex flex-col animate-in slide-in-from-left-8 duration-300"
-          >
-            <div className="px-4 pt-4 pb-3 border-b border-sidebar-border bg-gradient-to-b from-sidebar to-sidebar/95">
-              <div className="flex items-center gap-2">
+        <section
+          role="dialog"
+          aria-modal="false"
+          aria-label={
+            isTrashPanel
+              ? 'Trash documents'
+              : isSharedPanel
+                ? 'Shared documents'
+                : 'Private documents'
+          }
+          className={`absolute inset-y-0 left-0 ${
+            isSidebarCollapsed ? 'border-r border-sidebar-border' : ''
+          } z-40 bg-sidebar flex flex-col animate-in slide-in-from-left-8 duration-300`}
+          style={{
+            width: isSidebarCollapsed ? `${sidebarWidth}px` : '100%',
+          }}
+        >
+          <div className="px-2 pt-4 pb-3 border-b border-sidebar-border bg-gradient-to-b from-sidebar to-sidebar/95">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={closeDocumentsPanel}
+                className="inline-flex items-center gap-1 rounded-md pr-2 py-1 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
+              >
+                <ChevronRight className="rotate-180 opacity-80" />
+                Back
+              </button>
+              <h2 className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
+                {isTrashPanel ? 'Trash' : isSharedPanel ? 'Shared' : 'Private'}
+              </h2>
+            </div>
+
+            <div className="mt-3 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-55" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={isTrashPanel ? 'Search trash' : 'Search documents'}
+                className="w-full rounded-sm border border-sidebar-border bg-sidebar-accent/50 pl-9 pr-9 py-2 text-[13px] text-sidebar-foreground outline-none ring-0 focus:border-sidebar-ring focus:bg-sidebar"
+              />
+              {searchQuery && (
                 <button
                   type="button"
-                  onClick={closeDocumentsPanel}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
                 >
-                  <ChevronRight className="rotate-180 opacity-80" />
-                  Back
+                  Clear
                 </button>
-                <h2 className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
-                  {isTrashPanel ? 'Trash' : isSharedPanel ? 'Shared' : 'Private'}
-                </h2>
-              </div>
-
-              <div className="mt-3 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-55" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder={isTrashPanel ? 'Search trash' : 'Search documents'}
-                  className="w-full rounded-lg border border-sidebar-border bg-sidebar-accent/50 pl-9 pr-9 py-2 text-[13px] text-sidebar-foreground outline-none ring-0 focus:border-sidebar-ring focus:bg-sidebar"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    aria-label="Clear search"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-2 py-3">
-              {panelIsLoadingInitial ? (
-                <DocumentsPanelSkeleton rows={6} />
-              ) : filteredDocuments.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
-                  <p className="text-[13px] text-muted-foreground">
-                    {searchQuery
-                      ? 'No documents match your search.'
-                      : isTrashPanel
-                        ? 'No documents in trash.'
-                        : isSharedPanel
-                          ? 'No shared documents yet.'
-                          : 'No documents yet.'}
-                  </p>
-                </div>
-              ) : (
-                <ul className="flex flex-col gap-1">
-                  {filteredDocuments.map((doc) => {
-                    const isActive = doc.id === activeDocId;
-                    return (
-                      <li key={`all-doc-${doc.id}`} className="relative group/doc">
-                        {isTrashPanel ? (
-                          <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
-                            <div className="w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-default text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground">
-                              <DocumentText className="flex-shrink-0 opacity-50" />
-                              <span className="text-[13px] truncate">
-                                {doc.meta.title || 'Untitled'}
-                              </span>
-                            </div>
-
-                            {isAuthenticated && accessToken && (
-                              <div
-                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity ${
-                                  trashActionLoadingDocId === doc.id
-                                    ? 'opacity-100'
-                                    : 'opacity-0 group-hover/doc:opacity-100'
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  aria-label={`Restore ${doc.meta.title || 'Untitled'}`}
-                                  disabled={
-                                    trashActionLoadingDocId === doc.id || isPermanentDeleteLoading
-                                  }
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void handleRestoreFromTrash(doc.id);
-                                  }}
-                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  <Restore className="opacity-90" />
-                                </button>
-                                <button
-                                  type="button"
-                                  aria-label={`Delete permanently ${doc.meta.title || 'Untitled'}`}
-                                  disabled={
-                                    trashActionLoadingDocId === doc.id || isPermanentDeleteLoading
-                                  }
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    handleRequestPermanentDelete(
-                                      doc.id,
-                                      doc.meta.title || 'Untitled'
-                                    );
-                                  }}
-                                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  <Trash className="opacity-90" />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => {
-                                setDocActionsAnchor(null);
-                                handleSelectDocument(doc.id);
-                                closeDocumentsPanel();
-                              }}
-                              className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-lg text-left transition-colors duration-100 cursor-pointer ${
-                                isActive
-                                  ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
-                                  : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
-                              }`}
-                            >
-                              <DocumentText className="flex-shrink-0 size-4 opacity-80" />
-                              <span className="text-[13px] truncate">
-                                {doc.meta.title || 'Untitled'}
-                              </span>
-                            </button>
-
-                            {isAuthenticated && accessToken && (
-                              <DocumentActionsButton
-                                documentId={doc.id}
-                                documentTitle={doc.meta.title || 'Untitled'}
-                                actionType={resolvePanelActionType(doc as SidebarSectionDocument)}
-                                isOpen={docActionsAnchor?.documentId === doc.id}
-                                onToggle={handleToggleDocumentActions}
-                              />
-                            )}
-                          </>
-                        )}
-                      </li>
-                    );
-                  })}
-
-                  {panelIsLoadingMore && (
-                    <li>
-                      <DocumentsPanelSkeleton rows={3} compact />
-                    </li>
-                  )}
-
-                  {panelHasMore && <li ref={documentsPanelSentinelRef} className="h-5 w-full" />}
-                </ul>
               )}
             </div>
-          </section>
-        </div>
+          </div>
+
+          <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-1.5 py-2">
+            {panelIsLoadingInitial ? (
+              <DocumentsPanelSkeleton rows={6} />
+            ) : filteredDocuments.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
+                <p className="text-[13px] text-muted-foreground">
+                  {searchQuery
+                    ? 'No documents match your search.'
+                    : isTrashPanel
+                      ? 'No documents in trash.'
+                      : isSharedPanel
+                        ? 'No shared documents yet.'
+                        : 'No documents yet.'}
+                </p>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-px">
+                {filteredDocuments.map((doc) => {
+                  const isActive = doc.id === activeDocId;
+                  return (
+                    <li key={`all-doc-${doc.id}`} className="relative group/doc">
+                      {isTrashPanel ? (
+                        <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
+                          <button
+                            onClick={() => {
+                              setDocActionsAnchor(null);
+                              handleSelectDocument(doc.id);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                              isActive
+                                ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
+                                : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
+                            }`}
+                          >
+                            <DocumentText size={16} className="flex-shrink-0 opacity-80" />
+                            <span className="text-[13px] truncate">
+                              {doc.meta.title || 'Untitled'}
+                            </span>
+                          </button>
+
+                          {isAuthenticated && accessToken && (
+                            <div
+                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity ${
+                                trashActionLoadingDocId === doc.id
+                                  ? 'opacity-100'
+                                  : 'opacity-0 group-hover/doc:opacity-100'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                aria-label={`Restore ${doc.meta.title || 'Untitled'}`}
+                                disabled={
+                                  trashActionLoadingDocId === doc.id || isPermanentDeleteLoading
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleRestoreFromTrash(doc.id);
+                                }}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <Restore className="opacity-90" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Delete permanently ${doc.meta.title || 'Untitled'}`}
+                                disabled={
+                                  trashActionLoadingDocId === doc.id || isPermanentDeleteLoading
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleRequestPermanentDelete(
+                                    doc.id,
+                                    doc.meta.title || 'Untitled'
+                                  );
+                                }}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <Trash className="opacity-90" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setDocActionsAnchor(null);
+                              handleSelectDocument(doc.id);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                              isActive
+                                ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
+                                : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
+                            }`}
+                          >
+                            <DocumentText size={16} className="flex-shrink-0 opacity-80" />
+                            <span className="text-[13px] truncate">
+                              {doc.meta.title || 'Untitled'}
+                            </span>
+                          </button>
+
+                          {isAuthenticated && accessToken && (
+                            <DocumentActionsButton
+                              documentId={doc.id}
+                              documentTitle={doc.meta.title || 'Untitled'}
+                              actionType={resolvePanelActionType(doc as SidebarSectionDocument)}
+                              isOpen={docActionsAnchor?.documentId === doc.id}
+                              onToggle={handleToggleDocumentActions}
+                            />
+                          )}
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+
+                {panelIsLoadingMore && (
+                  <li>
+                    <DocumentsPanelSkeleton rows={3} compact />
+                  </li>
+                )}
+
+                {panelHasMore && <li ref={documentsPanelSentinelRef} className="h-5 w-full" />}
+              </ul>
+            )}
+          </div>
+        </section>
       )}
 
       <ConfirmationModal
@@ -1320,6 +1376,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           void handleConfirmPermanentDelete();
         }}
       />
+
+      {!isSidebarCollapsed && (
+        <div
+          onMouseDown={startResizing}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors"
+        />
+      )}
     </aside>
   );
 }
