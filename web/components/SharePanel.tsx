@@ -546,7 +546,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
                     className="
                       flex-shrink-0 rounded-full bg-[#d7897f] hover:bg-[#C97B71]
                       focus-visible:ring-2 focus-visible:ring-[#C06D5B]/50 focus:bg-[#F2BEB6]
-                      px-5 py-2 text-black/85 font-semibold tracking-wide
+                      px-5 py-2 text-black/85 font-medium tracking-wide
                       text-[13px]
                       active:bg-[#B86D63] active:scale-95 transition-all cursor-pointer
                     "
