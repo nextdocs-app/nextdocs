@@ -10,7 +10,7 @@ type PopupMenuItemProps = {
 };
 
 const baseClassName =
-  'w-full rounded-lg px-3 py-1.5 text-left text-[13px] transition-colors cursor-pointer flex items-center gap-2';
+  'w-full rounded-sm px-2 py-1.5 text-left text-[13px] transition-colors cursor-pointer flex items-center gap-2';
 
 const iconSlotClassName = 'inline-flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center';
 

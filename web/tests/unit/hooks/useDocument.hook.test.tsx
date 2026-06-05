@@ -38,6 +38,7 @@ describe('useDocument', () => {
   let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
+  let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
 
   beforeEach(() => {
@@ -72,6 +73,9 @@ describe('useDocument', () => {
     updateCloudMetadataSpy = jest
       .spyOn(documentService, 'updateCloudMetadata')
       .mockImplementation(jest.fn());
+    restoreCloudDocumentFromTrashSpy = jest
+      .spyOn(documentService, 'restoreCloudDocumentFromTrash')
+      .mockImplementation(jest.fn());
     dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
@@ -96,6 +100,7 @@ describe('useDocument', () => {
     saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
+    restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
   });
 
@@ -966,5 +971,112 @@ describe('useDocument', () => {
     rerender({ docId: 'test-id' });
 
     expect(result.current.updateMeta).toBe(firstRef);
+  });
+
+  it('should restore a document, update local Redux state and cache access level to OWNER', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Trashed Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      deletedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-restore-test',
+    });
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    restoreCloudDocumentFromTrashSpy.mockResolvedValue(undefined);
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'trashed-id',
+      allowed: true,
+      accessLevel: 'OWNER',
+      owner: true,
+    });
+
+    const store = createTestStore();
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return <Provider store={store}>{children}</Provider>;
+    }
+
+    const { result } = renderHook(() => useDocument('trashed-id'), { wrapper: Wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+
+    await act(async () => {
+      await result.current.restore();
+    });
+
+    expect(restoreCloudDocumentFromTrashSpy).toHaveBeenCalledWith(
+      'trashed-id',
+      'token-restore-test'
+    );
+
+    expect(result.current.isReadOnly).toBe(false);
+    expect(result.current.meta?.deletedAt).toBeUndefined();
+    expect(result.current.accessLevel).toBe('OWNER');
+    expect(store.getState().document.meta?.deletedAt).toBeUndefined();
+  });
+
+  it('should detect external restore (e.g. from sidebar), update local Redux state and cache access level to OWNER', async () => {
+    const ydoc = new Y.Doc();
+    const trashedMeta = {
+      title: 'Trashed Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      deletedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-restore-test',
+    });
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'external-id',
+      allowed: true,
+      accessLevel: 'OWNER',
+      owner: true,
+    });
+
+    const store = createTestStore();
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return <Provider store={store}>{children}</Provider>;
+    }
+
+    const { result } = renderHook(() => useDocument('external-id'), { wrapper: Wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+
+    const restoredMeta = {
+      ...trashedMeta,
+      deletedAt: undefined,
+    };
+    loadDocumentSpy.mockResolvedValue({ ydoc, meta: restoredMeta });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('local-documents-changed'));
+    });
+
+    await waitFor(() => {
+      expect(result.current.isReadOnly).toBe(false);
+    });
+
+    expect(result.current.meta?.deletedAt).toBeUndefined();
+    expect(result.current.accessLevel).toBe('OWNER');
+    expect(store.getState().document.meta?.deletedAt).toBeUndefined();
   });
 });

@@ -233,11 +233,18 @@ class DocumentService {
     };
   }
 
-  public async getCloudDocument(id: string, accessToken: string): Promise<DocumentLoadResult> {
-    const body = await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
-      method: 'GET',
-      accessToken,
-    });
+  public async getCloudDocument(
+    id: string,
+    accessToken: string,
+    includeTrashed = true
+  ): Promise<DocumentLoadResult> {
+    const body = await this.fetchApi<ApiDocument>(
+      `/api/v1/documents/${encodeURIComponent(id)}${includeTrashed ? '?includeTrashed=true' : ''}`,
+      {
+        method: 'GET',
+        accessToken,
+      }
+    );
 
     const ydoc = body.yjsState
       ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
@@ -542,6 +549,14 @@ class DocumentService {
       accessToken,
       allowEmptyData: true,
     });
+
+    try {
+      if (await this.documentExists(id)) {
+        await this.updateMetadata(id, { deletedAt: undefined, purgeAt: undefined });
+      }
+    } catch (err) {
+      console.warn('Failed to update local metadata during restore:', err);
+    }
 
     this.emitCloudDocumentsChanged();
   }
