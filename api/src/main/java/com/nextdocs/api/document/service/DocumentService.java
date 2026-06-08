@@ -118,9 +118,22 @@ public class DocumentService {
     public DocumentResponse get(UUID userId, UUID documentId, boolean includeTrashed) {
         Document document;
         if (includeTrashed) {
-            document = documentRepository
-                    .findByIdAndUser_Id(documentId, userId)
-                    .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+            document = documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+            if (document.getDeletedAt() != null) {
+                // Document is in trash - only the owner can access it
+                if (!document.getUser().getId().equals(userId)) {
+                    throw new ApiException(ErrorCode.NOT_FOUND);
+                }
+            } else {
+                // Active document - check if the user is the owner or has valid collaborator/public access
+                if (!document.getUser().getId().equals(userId)) {
+                    DocumentAccessLevel effectiveAccess = resolveEffectiveNonOwnerAccess(userId, document);
+                    if (effectiveAccess == null) {
+                        throw new ApiException(ErrorCode.NOT_FOUND);
+                    }
+                }
+            }
         } else {
             document = findAccessibleActiveDocument(userId, documentId, false);
         }
