@@ -30,6 +30,7 @@ jest.mock('../../src/logger', () => ({
 jest.mock('../../src/yjs-utils', () => ({
   __esModule: true,
   setupWSConnection: jest.fn(),
+  updateConnectionAccessLevel: jest.fn(),
 }));
 
 jest.mock('../../src/config', () => ({

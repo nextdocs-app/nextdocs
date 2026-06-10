@@ -40,6 +40,8 @@ describe('Yjs Utils', () => {
   });
 
   afterEach(() => {
+    docs.forEach((doc) => doc.destroy());
+    docs.clear();
     jest.clearAllMocks();
   });
 
