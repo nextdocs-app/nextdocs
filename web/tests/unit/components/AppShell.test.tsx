@@ -14,7 +14,7 @@ jest.mock('../../../stores/hooks', () => ({
   useAppDispatch: jest.fn(),
 }));
 
-jest.mock('../../../components/Sidebar', () => ({
+jest.mock('../../../components/sidebar', () => ({
   __esModule: true,
   default: () => <aside data-testid="sidebar" />,
 }));

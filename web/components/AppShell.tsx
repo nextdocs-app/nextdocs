@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Suspense } from 'react';
-import Sidebar from '@/components/Sidebar';
+import Sidebar from '@/components/sidebar';
 import { AuthModal } from '@/components/AuthModal';
 import { LocalDocsPromotionModal } from '@/components/LocalDocsPromotionModal';
 import { RegistrationSyncOverlay } from '@/components/RegistrationSyncOverlay';

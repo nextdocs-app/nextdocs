@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Sidebar from '../../../components/Sidebar';
+import Sidebar from '../../../components/sidebar';
 import { useDocumentList } from '../../../hooks/useDocumentList.hook';
 import { documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';

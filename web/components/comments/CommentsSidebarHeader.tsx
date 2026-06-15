@@ -1,5 +1,6 @@
 import type { CommentsFilter, CommentsSort } from '@/components/comments/CommentProvider';
 import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
+import { Close } from '@/icons';
 
 const FILTER_OPTIONS: Array<{ value: CommentsFilter; label: string }> = [
   { value: 'open', label: 'Open' },
@@ -71,14 +72,7 @@ export function CommentsSidebarHeader({
             className="nd-comments-sidebar__close"
             aria-label="Close comments sidebar"
           >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path
-                d="M3 3l8 8M11 3L3 11"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-            </svg>
+            <Close size={14} />
           </button>
         </div>
       </div>

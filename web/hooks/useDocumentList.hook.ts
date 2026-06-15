@@ -104,7 +104,7 @@ export function useDocumentList() {
   const [hasMore, setHasMore] = useState(false);
   const [isShowingAll, setIsShowingAll] = useState(false);
   const [isTrashLoading, setIsTrashLoading] = useState(false);
-  const [isSharedLoading, setIsSharedLoading] = useState(false);
+  const [isSharedLoading, setIsSharedLoading] = useState(true);
   const [isSharedLoadingMore, setIsSharedLoadingMore] = useState(false);
   const [sharedWithMeHasMore, setSharedWithMeHasMore] = useState(false);
   const [ownerSharedHasMore, setOwnerSharedHasMore] = useState(false);
@@ -821,6 +821,7 @@ export function useDocumentList() {
   useEffect(() => {
     if (isInitializing) {
       setIsLoading(true);
+      setIsSharedLoading(true);
       return;
     }
 
