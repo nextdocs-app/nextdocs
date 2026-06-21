@@ -46,7 +46,7 @@ jest.mock('../../../services/document.service', () => ({
 
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
-import Editor from '../../../components/Editor';
+import Editor from '../../../components/editor';
 import { useDocument } from '../../../hooks/useDocument.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
