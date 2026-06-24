@@ -1,17 +1,21 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as baseRender, screen, waitFor } from '@testing-library/react';
+import React from 'react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import uiReducer from '../../../stores/ui/ui.slice';
+import toastsReducer from '../../../stores/toasts/toasts.slice';
 import * as Y from 'yjs';
 import { AppShell, getDocsEligibleForAccountMove } from '../../../components/AppShell';
 import { documentService } from '../../../services/document.service';
 import { useAuth } from '../../../hooks/useAuth.hook';
-import { useAppDispatch } from '../../../stores/hooks';
 import type { StoredDocument } from '../../../types/document.types';
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(),
 }));
 
-jest.mock('../../../stores/hooks', () => ({
-  useAppDispatch: jest.fn(),
+jest.mock('../../../stores/auth/auth.slice', () => ({
+  refreshSessionThunk: () => ({ type: 'auth/refreshSession/pending' }),
 }));
 
 jest.mock('../../../components/sidebar', () => ({
@@ -34,6 +38,24 @@ jest.mock('../../../components/LocalDocsPromotionModal', () => ({
 jest.mock('../../../components/RegistrationSyncOverlay', () => ({
   RegistrationSyncOverlay: () => <div data-testid="registration-sync-overlay" />,
 }));
+
+const render = (ui: React.ReactElement) => {
+  const store = configureStore({
+    reducer: {
+      ui: uiReducer,
+      toasts: toastsReducer,
+    },
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware({
+        serializableCheck: {
+          ignoredActions: ['ui/setLocalDocsToPromote'],
+          ignoredActionPaths: ['payload.localDocsToPromote'],
+          ignoredPaths: ['ui.localDocsToPromote'],
+        },
+      }),
+  });
+  return baseRender(<Provider store={store}>{ui}</Provider>);
+};
 
 function createStoredDocument(id: string, title: string, hasContent: boolean): StoredDocument {
   const ydoc = new Y.Doc();
@@ -83,7 +105,6 @@ describe('getDocsEligibleForAccountMove', () => {
 });
 
 describe('AppShell local guest document promotion', () => {
-  const mockDispatch = jest.fn();
   let getAllGuestDocumentsSpy: jest.SpyInstance;
   let deleteGuestDocumentsByIdsSpy: jest.SpyInstance;
 
@@ -91,7 +112,6 @@ describe('AppShell local guest document promotion', () => {
     jest.clearAllMocks();
     window.localStorage.clear();
 
-    jest.mocked(useAppDispatch).mockReturnValue(mockDispatch);
     (useAuth as jest.Mock).mockReturnValue({
       user: { id: 'user-1' },
       isTokenExpiringSoon: false,

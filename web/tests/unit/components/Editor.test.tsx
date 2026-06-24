@@ -45,7 +45,11 @@ jest.mock('../../../services/document.service', () => ({
 }));
 
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import React from 'react';
+import { render as baseRender, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import uiReducer from '../../../stores/ui/ui.slice';
 import Editor from '../../../components/editor';
 import { useDocument } from '../../../hooks/useDocument.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
@@ -57,6 +61,17 @@ import { BlockNoteView } from '@blocknote/shadcn';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
+
+const render = (
+  ui: React.ReactElement,
+  store = configureStore({ reducer: { ui: uiReducer } }),
+  options?: Parameters<typeof baseRender>[1]
+) => {
+  return baseRender(ui, {
+    wrapper: ({ children }) => <Provider store={store}>{children}</Provider>,
+    ...options,
+  });
+};
 
 // Mock hooks
 jest.mock('../../../hooks/useDocument.hook');
@@ -398,9 +413,14 @@ describe('Editor Component', () => {
       updateMeta: mockUpdateMeta,
     });
 
-    const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    const store = configureStore({
+      reducer: {
+        ui: uiReducer,
+      },
+    });
+    const dispatchSpy = jest.spyOn(store, 'dispatch');
 
-    render(<Editor />);
+    render(<Editor />, store);
 
     expect(
       screen.getByText(/You are viewing this shared document as a guest\./i)
@@ -408,11 +428,9 @@ describe('Editor Component', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /sign up or log in/i }));
 
-    expect(dispatchEventSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'open-auth-modal' })
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
     );
-
-    dispatchEventSpy.mockRestore();
   });
 
   it('shows offline badge when browser is offline even for local guest editing', () => {

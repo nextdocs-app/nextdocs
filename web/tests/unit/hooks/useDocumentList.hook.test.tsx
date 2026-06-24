@@ -1,4 +1,10 @@
-import { renderHook, waitFor, act } from '@testing-library/react';
+import { renderHook as baseRenderHook, waitFor, act } from '@testing-library/react';
+import React from 'react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import documentListReducer from '@/stores/documentList/documentList.slice';
+import authReducer from '@/stores/auth/auth.slice';
+import documentReducer from '@/stores/document/document.slice';
 import * as Y from 'yjs';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
@@ -21,6 +27,40 @@ jest.mock('../../../hooks/useAuth.hook', () => ({
 jest.mock('../../../hooks/useCloudBackoff.hook', () => ({
   useCloudBackoff: jest.fn(),
 }));
+
+const renderHook = <Result, Props>(
+  render: (props: Props) => Result,
+  options?: Parameters<typeof baseRenderHook>[1]
+) => {
+  const authMock = (useAuth as jest.Mock)();
+
+  const preloadedState = {
+    auth: {
+      user: authMock?.isAuthenticated ? { id: 'mock-user-id', email: 'mock@example.com' } : null,
+      accessToken: authMock?.accessToken || null,
+      expiresAt: authMock?.isAuthenticated ? Date.now() + 3600 * 1000 : null,
+      lastAuthAction: null,
+      isLoading: false,
+      isInitializing: authMock?.isInitializing ?? false,
+      error: null,
+    },
+  };
+
+  const store = configureStore({
+    reducer: {
+      auth: authReducer,
+      document: documentReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState,
+  });
+
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <Provider store={store}>{children}</Provider>
+  );
+
+  return baseRenderHook(render, { ...options, wrapper });
+};
 
 const waitForInitialLoad = async (
   result: { current: { isLoading: boolean; isSharedLoading: boolean } },
@@ -239,7 +279,9 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
     expect(mockTriggerCloudBackoff).not.toHaveBeenCalled();
     expect(result.current.documents.map((doc) => doc.id)).toEqual(['cached-doc']);
   });
@@ -560,7 +602,9 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
     expect(mockTriggerCloudBackoff).not.toHaveBeenCalled();
     expect(result.current.sharedDocuments).toEqual([]);
     expect(result.current.sharedHasMore).toBe(false);

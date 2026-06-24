@@ -5,6 +5,23 @@ import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { documentService } from '@/services/document.service';
+import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import {
+  setCollapsed,
+  setPanelMode,
+  setSearchQuery,
+  togglePrivateOpen,
+  toggleSharedOpen,
+  setDocActionsAnchor,
+} from '@/stores/sidebar/sidebar.slice';
+import {
+  setAuthModalOpen,
+  setSettingsModalOpen,
+  setAccountMenuOpen,
+  setPermanentDeleteTarget,
+} from '@/stores/ui/ui.slice';
+import { addToast } from '@/stores/toasts/toasts.slice';
+
 import {
   NewDocument,
   Search,
@@ -31,17 +48,12 @@ import { DocumentsPanel } from './DocumentsPanel';
 import { useSidebarResize } from './useSidebarResize';
 
 import { SIDEBAR_VISIBLE_COUNT } from './types';
-import type {
-  DocumentsPanelMode,
-  DocActionType,
-  DocActionsAnchor,
-  SidebarSectionDocument,
-} from './types';
+import type { DocActionType, SidebarSectionDocument } from './types';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_COLLAPSE_HOVER_GUARD_MS = 260;
 
-function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
+function Sidebar() {
   const router = useRouter();
   const params = useParams();
   const routeActiveDocId = (params?.id as string) || '';
@@ -81,24 +93,24 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       ? user.displayName
       : 'Guest User';
 
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const dispatch = useAppDispatch();
+  const isSidebarCollapsed = useAppSelector((state) => state.sidebar.isCollapsed);
+  const isPrivateOpen = useAppSelector((state) => state.sidebar.isPrivateOpen);
+  const isSharedOpen = useAppSelector((state) => state.sidebar.isSharedOpen);
+  const documentsPanelMode = useAppSelector((state) => state.sidebar.panelMode);
+  const docActionsAnchor = useAppSelector((state) => state.sidebar.docActionsAnchor);
+  const searchQuery = useAppSelector((state) => state.sidebar.searchQuery);
+
   const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
 
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
-  const [isPrivateOpen, setIsPrivateOpen] = useState(true);
-  const [isSharedOpen, setIsSharedOpen] = useState(true);
-  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [documentsPanelMode, setDocumentsPanelMode] = useState<DocumentsPanelMode>(null);
-  const [docActionsAnchor, setDocActionsAnchor] = useState<DocActionsAnchor | null>(null);
+  const isAccountMenuOpen = useAppSelector((state) => state.ui.isAccountMenuOpen);
+  const isSettingsOpen = useAppSelector((state) => state.ui.isSettingsModalOpen);
+  const permanentDeleteTarget = useAppSelector((state) => state.ui.permanentDeleteTarget);
   const [trashActionLoadingDocId, setTrashActionLoadingDocId] = useState<string | null>(null);
-  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<{
-    id: string;
-    title: string;
-  } | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
   const [isSidebarCollapseHoverGuard, setIsSidebarCollapseHoverGuard] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
   const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const accountMenuPopupRef = useRef<HTMLDivElement>(null);
@@ -164,10 +176,11 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       router.push(`/doc/${newId}`);
     } catch (error) {
       console.error('Failed to create document:', error);
-      // TODO: Replace alert with a non-blocking notification system (e.g., toast)
-      alert('Failed to create document. Please try again.');
+      dispatch(
+        addToast({ message: 'Failed to create document. Please try again.', type: 'error' })
+      );
     }
-  }, [router, refresh, isAuthenticated, accessToken]);
+  }, [router, refresh, isAuthenticated, accessToken, dispatch]);
 
   const handleSelectDocument = useCallback(
     (id: string) => {
@@ -229,13 +242,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       const isWithinTrigger = accountMenuTriggerRef.current?.contains(target);
       const isWithinPopup = accountMenuPopupRef.current?.contains(target);
       if (!isWithinTrigger && !isWithinPopup) {
-        setIsAccountMenuOpen(false);
+        dispatch(setAccountMenuOpen(false));
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsAccountMenuOpen(false);
+        dispatch(setAccountMenuOpen(false));
       }
     };
 
@@ -246,7 +259,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isAccountMenuOpen]);
+  }, [isAccountMenuOpen, dispatch]);
 
   useEffect(() => {
     if (!isSidebarCollapseHoverGuard) {
@@ -280,13 +293,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     const handleOutsideClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(`[data-doc-actions-root='${docActionsAnchor.documentId}']`)) {
-        setDocActionsAnchor(null);
+        dispatch(setDocActionsAnchor(null));
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setDocActionsAnchor(null);
+        dispatch(setDocActionsAnchor(null));
       }
     };
 
@@ -297,34 +310,39 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [docActionsAnchor]);
+  }, [docActionsAnchor, dispatch]);
 
   const openAllDocumentsPanel = useCallback(() => {
     if (!isShowingAll) {
       showAllDocuments();
     }
-    setSearchQuery('');
-    setDocumentsPanelMode('all');
-  }, [isShowingAll, showAllDocuments]);
+    dispatch(setSearchQuery(''));
+    dispatch(setPanelMode('all'));
+  }, [isShowingAll, showAllDocuments, dispatch]);
 
   const openSharedDocumentsPanel = useCallback(() => {
     if (!isShowingAllShared) {
       showAllSharedDocuments();
     }
-    setSearchQuery('');
-    setDocumentsPanelMode('shared');
-  }, [isShowingAllShared, showAllSharedDocuments]);
+    dispatch(setSearchQuery(''));
+    dispatch(setPanelMode('shared'));
+  }, [isShowingAllShared, showAllSharedDocuments, dispatch]);
 
   const openTrashDocumentsPanel = useCallback(() => {
-    setSearchQuery('');
-    setDocumentsPanelMode('trash');
+    dispatch(setSearchQuery(''));
+    dispatch(setPanelMode('trash'));
     void showTrashDocuments();
-  }, [showTrashDocuments]);
+  }, [showTrashDocuments, dispatch]);
+
+  const handleSetSearchQuery = useCallback(
+    (query: string) => dispatch(setSearchQuery(query)),
+    [dispatch]
+  );
 
   const closeDocumentsPanel = useCallback(() => {
-    setDocumentsPanelMode(null);
-    setSearchQuery('');
-  }, []);
+    dispatch(setPanelMode(null));
+    dispatch(setSearchQuery(''));
+  }, [dispatch]);
 
   const resolveSharedActionType = useCallback((doc: SidebarSectionDocument): DocActionType => {
     if ('relationship' in doc && doc.relationship === 'collaborator') {
@@ -345,20 +363,18 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       const button = event.currentTarget;
       const rect = button.getBoundingClientRect();
 
-      setDocActionsAnchor((prev) => {
-        if (prev?.documentId === documentId && prev.actionType === actionType) {
-          return null;
-        }
-
-        return {
-          documentId,
-          actionType,
-          x: rect.right + 8,
-          y: rect.top + rect.height / 2,
-        };
-      });
+      const newAnchor =
+        docActionsAnchor?.documentId === documentId && docActionsAnchor.actionType === actionType
+          ? null
+          : {
+              documentId,
+              actionType,
+              x: rect.right + 8,
+              y: rect.top + rect.height / 2,
+            };
+      dispatch(setDocActionsAnchor(newAnchor));
     },
-    []
+    [docActionsAnchor, dispatch]
   );
 
   const handleMoveToTrash = useCallback(
@@ -369,7 +385,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
       try {
         await documentService.moveCloudDocumentToTrash(docId, accessToken);
-        setDocActionsAnchor(null);
+        dispatch(setDocActionsAnchor(null));
 
         if (activeDocId === docId) {
           await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
@@ -379,7 +395,12 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         await refreshTrash(false);
       } catch (error) {
         console.error('Failed to move document to trash:', error);
-        alert('Failed to move document to trash. Please try again.');
+        dispatch(
+          addToast({
+            message: 'Failed to move document to trash. Please try again.',
+            type: 'error',
+          })
+        );
       }
     },
     [
@@ -389,6 +410,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       navigateToResolvedRootDocument,
       refresh,
       refreshTrash,
+      dispatch,
     ]
   );
 
@@ -406,12 +428,14 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         await refreshTrash(false);
       } catch (error) {
         console.error('Failed to restore document from trash:', error);
-        alert('Failed to restore document. Please try again.');
+        dispatch(
+          addToast({ message: 'Failed to restore document. Please try again.', type: 'error' })
+        );
       } finally {
         setTrashActionLoadingDocId(null);
       }
     },
-    [isAuthenticated, accessToken, refresh, refreshTrash]
+    [isAuthenticated, accessToken, refresh, refreshTrash, dispatch]
   );
 
   const handleLeaveSharedDocument = useCallback(
@@ -422,7 +446,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
 
       try {
         await documentService.leaveSharedDocument(docId, accessToken);
-        setDocActionsAnchor(null);
+        dispatch(setDocActionsAnchor(null));
 
         if (activeDocId === docId) {
           await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
@@ -431,15 +455,20 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         await refresh(false);
       } catch (error) {
         console.error('Failed to leave shared document:', error);
-        alert('Failed to leave shared document. Please try again.');
+        dispatch(
+          addToast({ message: 'Failed to leave shared document. Please try again.', type: 'error' })
+        );
       }
     },
-    [isAuthenticated, accessToken, activeDocId, navigateToResolvedRootDocument, refresh]
+    [isAuthenticated, accessToken, activeDocId, navigateToResolvedRootDocument, refresh, dispatch]
   );
 
-  const handleRequestPermanentDelete = useCallback((docId: string, title: string) => {
-    setPermanentDeleteTarget({ id: docId, title });
-  }, []);
+  const handleRequestPermanentDelete = useCallback(
+    (docId: string, title: string) => {
+      dispatch(setPermanentDeleteTarget({ id: docId, title }));
+    },
+    [dispatch]
+  );
 
   const handleConfirmPermanentDelete = useCallback(async () => {
     if (!isAuthenticated || !accessToken || !permanentDeleteTarget) {
@@ -451,7 +480,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     try {
       setIsPermanentDeleteLoading(true);
       await documentService.deleteCloudDocumentPermanently(id, accessToken);
-      setPermanentDeleteTarget(null);
+      dispatch(setPermanentDeleteTarget(null));
 
       if (activeDocId === id) {
         await navigateToResolvedRootDocument({ excludedDocumentIds: [id] });
@@ -461,7 +490,12 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
       await refreshTrash(false);
     } catch (error) {
       console.error('Failed to permanently delete document:', error);
-      alert('Failed to permanently delete document. Please try again.');
+      dispatch(
+        addToast({
+          message: 'Failed to permanently delete document. Please try again.',
+          type: 'error',
+        })
+      );
     } finally {
       setIsPermanentDeleteLoading(false);
     }
@@ -473,6 +507,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
     navigateToResolvedRootDocument,
     refresh,
     refreshTrash,
+    dispatch,
   ]);
 
   if (!isClient) {
@@ -492,7 +527,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           <button
             type="button"
             onClick={() => {
-              setIsSidebarCollapsed(false);
+              dispatch(setCollapsed(false));
               setIsSidebarCollapseHoverGuard(false);
             }}
             aria-label="Expand sidebar"
@@ -525,8 +560,8 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           <button
             type="button"
             onClick={() => {
-              setIsAccountMenuOpen(false);
-              setIsSidebarCollapsed(true);
+              dispatch(setAccountMenuOpen(false));
+              dispatch(setCollapsed(true));
               setIsSidebarCollapseHoverGuard(true);
             }}
             aria-label="Collapse sidebar"
@@ -581,13 +616,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             <SidebarDocumentSection
               title="Private"
               isOpen={isPrivateOpen}
-              onToggle={() => setIsPrivateOpen((prev) => !prev)}
+              onToggle={() => dispatch(togglePrivateOpen())}
               documents={documents}
               isLoading={isLoading}
               emptyText="No documents yet"
               activeDocId={activeDocId}
               onSelectDocument={(docId) => {
-                setDocActionsAnchor(null);
+                dispatch(setDocActionsAnchor(null));
                 handleSelectDocument(docId);
               }}
               isActionsEnabled={Boolean(isAuthenticated && accessToken)}
@@ -607,13 +642,13 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
                 title="Shared"
                 className="mt-1"
                 isOpen={isSharedOpen}
-                onToggle={() => setIsSharedOpen((prev) => !prev)}
+                onToggle={() => dispatch(toggleSharedOpen())}
                 documents={sharedDocuments}
                 isLoading={isSharedLoading}
                 emptyText="No shared documents"
                 activeDocId={activeDocId}
                 onSelectDocument={(docId) => {
-                  setDocActionsAnchor(null);
+                  dispatch(setDocActionsAnchor(null));
                   handleSelectDocument(docId);
                 }}
                 isActionsEnabled={Boolean(isAuthenticated && accessToken)}
@@ -636,7 +671,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         >
           <button
             ref={accountMenuTriggerRef}
-            onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+            onClick={() => dispatch(setAccountMenuOpen(!isAccountMenuOpen))}
             aria-haspopup="menu"
             aria-expanded={isAccountMenuOpen}
             className="group/account w-full rounded-sm px-1.5 py-2 text-left transition-colors hover:bg-sidebar-accent cursor-pointer flex items-center overflow-hidden"
@@ -677,15 +712,15 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
           isAuthenticated={isAuthenticated}
           onOpenSettings={() => {
-            setIsAccountMenuOpen(false);
-            setIsSettingsOpen(true);
+            dispatch(setAccountMenuOpen(false));
+            dispatch(setSettingsModalOpen(true));
           }}
           onOpenTrash={() => {
-            setIsAccountMenuOpen(false);
+            dispatch(setAccountMenuOpen(false));
             openTrashDocumentsPanel();
           }}
           onLogout={async () => {
-            setIsAccountMenuOpen(false);
+            dispatch(setAccountMenuOpen(false));
             await logout();
             await navigateToResolvedRootDocument({
               isAuthenticated: false,
@@ -693,15 +728,15 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
             });
           }}
           onOpenAuth={() => {
-            setIsAccountMenuOpen(false);
-            onOpenAuth();
+            dispatch(setAccountMenuOpen(false));
+            dispatch(setAuthModalOpen(true));
           }}
           style={profileMenuStyle}
           popupRef={accountMenuPopupRef}
         />
       )}
 
-      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      {isSettingsOpen && <SettingsModal onClose={() => dispatch(setSettingsModalOpen(false))} />}
 
       {docActionsAnchor && (
         <DocumentActionsMenu
@@ -718,7 +753,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           isSidebarCollapsed={isSidebarCollapsed}
           sidebarWidth={sidebarWidth}
           searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
+          setSearchQuery={handleSetSearchQuery}
           onClose={closeDocumentsPanel}
           isLoadingInitial={panelIsLoadingInitial}
           filteredDocuments={filteredDocuments}
@@ -733,7 +768,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
           docActionsAnchor={docActionsAnchor}
           onToggleDocumentActions={handleToggleDocumentActions}
           resolvePanelActionType={resolvePanelActionType}
-          setDocActionsAnchor={setDocActionsAnchor}
+          setDocActionsAnchor={(anchor) => dispatch(setDocActionsAnchor(anchor))}
           hasMore={panelHasMore}
           isLoadingMore={panelIsLoadingMore}
           onLoadMore={handleLoadMore}
@@ -754,7 +789,7 @@ function Sidebar({ onOpenAuth }: { onOpenAuth: () => void }) {
         isConfirming={isPermanentDeleteLoading}
         onCancel={() => {
           if (!isPermanentDeleteLoading) {
-            setPermanentDeleteTarget(null);
+            dispatch(setPermanentDeleteTarget(null));
           }
         }}
         onConfirm={() => {

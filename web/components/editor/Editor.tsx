@@ -13,6 +13,9 @@ import type { CommentsFilter, CommentsSort } from '@/components/comments/Comment
 import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { EMPTY_COMMENT_STATS } from './comment.utils';
 import { EditorContent } from './EditorContent';
+import { useAppDispatch } from '@/stores/hooks';
+import { setAuthModalOpen } from '@/stores/ui/ui.slice';
+import { addToast } from '@/stores/toasts/toasts.slice';
 
 export default function Editor() {
   const params = useParams();
@@ -59,9 +62,11 @@ export default function Editor() {
     !(isReadOnly || isGuestSharedView)
   );
 
+  const dispatch = useAppDispatch();
+
   const openAuthModal = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('open-auth-modal'));
-  }, []);
+    dispatch(setAuthModalOpen(true));
+  }, [dispatch]);
 
   const [isRestoring, setIsRestoring] = useState(false);
 
@@ -74,11 +79,13 @@ export default function Editor() {
       await restore();
     } catch (error) {
       console.error('Failed to restore document:', error);
-      alert('Failed to restore document. Please try again.');
+      dispatch(
+        addToast({ message: 'Failed to restore document. Please try again.', type: 'error' })
+      );
     } finally {
       setIsRestoring(false);
     }
-  }, [restore, isRestoring]);
+  }, [restore, isRestoring, dispatch]);
 
   // Look at the comment in useOfflineDocumentSelect file to know why we need this workaround.
   useOfflineDocumentSelect(setOfflineSelectedDocumentId);

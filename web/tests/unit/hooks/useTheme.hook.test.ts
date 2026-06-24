@@ -1,5 +1,21 @@
-import { renderHook, act } from '@testing-library/react';
+import { renderHook as baseRenderHook, act, waitFor } from '@testing-library/react';
+import React from 'react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import themeReducer from '../../../stores/theme/theme.slice';
 import { useTheme } from '../../../hooks/useTheme.hook';
+
+const renderHook = <T>(render: () => T, options?: Parameters<typeof baseRenderHook>[1]) => {
+  const store = configureStore({
+    reducer: {
+      theme: themeReducer,
+    },
+  });
+  return baseRenderHook(render, {
+    wrapper: ({ children }) => React.createElement(Provider, { store }, children),
+    ...options,
+  });
+};
 
 function stubMatchMedia(prefersDark: boolean) {
   Object.defineProperty(window, 'matchMedia', {
@@ -39,12 +55,14 @@ describe('useTheme', () => {
     expect(localStorage.getItem('theme')).toBe('dark');
   });
 
-  it('a StorageEvent for "theme" syncs the theme state across hook instances', () => {
+  it('a StorageEvent for "theme" syncs the theme state across hook instances', async () => {
     const { result } = renderHook(() => useTheme());
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', { key: 'theme', newValue: 'dark' }));
     });
-    expect(result.current.theme).toBe('dark');
+    await waitFor(() => {
+      expect(result.current.theme).toBe('dark');
+    });
   });
 
   it('resolvedTheme follows OS preference when theme is "system"', () => {

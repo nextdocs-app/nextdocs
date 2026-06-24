@@ -1,13 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Suspense } from 'react';
 import Sidebar from '@/components/sidebar';
 import { AuthModal } from '@/components/AuthModal';
+import { ToastContainer } from '@/components/ToastContainer';
 import { LocalDocsPromotionModal } from '@/components/LocalDocsPromotionModal';
 import { RegistrationSyncOverlay } from '@/components/RegistrationSyncOverlay';
-import { useAppDispatch } from '@/stores/hooks';
+import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { refreshSessionThunk } from '@/stores/auth/auth.slice';
+import {
+  setAuthModalOpen,
+  setLocalDocsModalOpen,
+  setLocalDocsToPromote,
+  setImportingLocalDocs,
+  setLocalDocsError,
+  setRegistrationSyncOverlayOpen,
+  resetPromotionFlow,
+} from '@/stores/ui/ui.slice';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { documentService } from '@/services/document.service';
 import { isUntitledTitle, isEmptyLocalDocument } from '@/lib/document-content.util';
@@ -57,15 +67,15 @@ export function getDocsEligibleForAccountMove(docs: StoredDocument[]): StoredDoc
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [isLocalDocsModalOpen, setIsLocalDocsModalOpen] = useState(false);
-  const [localDocsToPromote, setLocalDocsToPromote] = useState<StoredDocument[]>([]);
-  const [isImportingLocalDocs, setIsImportingLocalDocs] = useState(false);
-  const [localDocsError, setLocalDocsError] = useState<string | null>(null);
-  const [isRegistrationSyncOverlayOpen, setIsRegistrationSyncOverlayOpen] = useState(false);
-  const openAuthModal = useCallback(() => {
-    setIsAuthOpen(true);
-  }, []);
+  const isAuthOpen = useAppSelector((state) => state.ui.isAuthModalOpen);
+  const isLocalDocsModalOpen = useAppSelector((state) => state.ui.isLocalDocsModalOpen);
+  const localDocsToPromote = useAppSelector((state) => state.ui.localDocsToPromote);
+  const isImportingLocalDocs = useAppSelector((state) => state.ui.isImportingLocalDocs);
+  const localDocsError = useAppSelector((state) => state.ui.localDocsError);
+  const isRegistrationSyncOverlayOpen = useAppSelector(
+    (state) => state.ui.isRegistrationSyncOverlayOpen
+  );
+
   const { user, isTokenExpiringSoon, isAuthenticated, accessToken, lastAuthAction } = useAuth();
   const didPromptImportRef = useRef(false);
   const ownsLocalPromotionLockRef = useRef(false);
@@ -145,22 +155,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const closePromotionFlow = useCallback(() => {
     didPromptImportRef.current = true;
-    setIsLocalDocsModalOpen(false);
-    setLocalDocsToPromote([]);
-    setIsImportingLocalDocs(false);
-    setLocalDocsError(null);
-    setIsRegistrationSyncOverlayOpen(false);
+    dispatch(resetPromotionFlow());
     releasePromotionLockIfOwned();
-  }, [releasePromotionLockIfOwned]);
+  }, [dispatch, releasePromotionLockIfOwned]);
 
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {
     dispatch(refreshSessionThunk());
 
-    const handleOpenAuth = () => setIsAuthOpen(true);
+    const handleOpenAuth = () => dispatch(setAuthModalOpen(true));
     window.addEventListener('open-auth-modal', handleOpenAuth);
     return () => window.removeEventListener('open-auth-modal', handleOpenAuth);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dispatch]);
 
   // Auto-refresh token just before it expires to prevent UX drops
   useEffect(() => {
@@ -241,16 +247,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         if (cancelled || promotableLocalDocs.length === 0) {
           didPromptImportRef.current = true;
-          setIsRegistrationSyncOverlayOpen(false);
+          dispatch(setRegistrationSyncOverlayOpen(false));
           releasePromotionLockIfOwned();
           return;
         }
 
         if (isRegistrationFlow) {
-          setLocalDocsToPromote(promotableLocalDocs);
-          setIsRegistrationSyncOverlayOpen(true);
-          setIsImportingLocalDocs(true);
-          setLocalDocsError(null);
+          dispatch(setLocalDocsToPromote(promotableLocalDocs));
+          dispatch(setRegistrationSyncOverlayOpen(true));
+          dispatch(setImportingLocalDocs(true));
+          dispatch(setLocalDocsError(null));
 
           await waitForNextPaint();
           const syncStartedAt = Date.now();
@@ -266,14 +272,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        setLocalDocsToPromote(promotableLocalDocs);
-        setIsLocalDocsModalOpen(true);
+        dispatch(setLocalDocsToPromote(promotableLocalDocs));
+        dispatch(setLocalDocsModalOpen(true));
       } catch (error) {
         console.error('Failed to promote local documents:', error);
-        setIsImportingLocalDocs(false);
-        setIsRegistrationSyncOverlayOpen(lastAuthAction === 'register');
-        setLocalDocsError(
-          error instanceof Error ? error.message : 'Failed to promote local documents.'
+        dispatch(setImportingLocalDocs(false));
+        dispatch(setRegistrationSyncOverlayOpen(lastAuthAction === 'register'));
+        dispatch(
+          setLocalDocsError(
+            error instanceof Error ? error.message : 'Failed to promote local documents.'
+          )
         );
 
         if (!isRegistrationFlow) {
@@ -303,6 +311,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     moveLocalDocsToAccount,
     releasePromotionLockIfOwned,
     waitForPromotionInFlight,
+    dispatch,
   ]);
 
   const runMoveToAccount = useCallback(async () => {
@@ -311,10 +320,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      setIsLocalDocsModalOpen(false);
-      setIsRegistrationSyncOverlayOpen(true);
-      setIsImportingLocalDocs(true);
-      setLocalDocsError(null);
+      dispatch(setLocalDocsModalOpen(false));
+      dispatch(setRegistrationSyncOverlayOpen(true));
+      dispatch(setImportingLocalDocs(true));
+      dispatch(setLocalDocsError(null));
 
       await waitForNextPaint();
       const syncStartedAt = Date.now();
@@ -328,12 +337,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       closePromotionFlow();
     } catch (error) {
-      setIsImportingLocalDocs(false);
-      setLocalDocsError(
-        error instanceof Error ? error.message : 'Failed to promote local documents.'
+      dispatch(setImportingLocalDocs(false));
+      dispatch(
+        setLocalDocsError(
+          error instanceof Error ? error.message : 'Failed to promote local documents.'
+        )
       );
     }
-  }, [accessToken, user?.id, localDocsToPromote, moveLocalDocsToAccount, closePromotionFlow]);
+  }, [
+    accessToken,
+    user?.id,
+    localDocsToPromote,
+    moveLocalDocsToAccount,
+    closePromotionFlow,
+    dispatch,
+  ]);
 
   const handleDiscardLocalData = async () => {
     if (localDocsToPromote.length === 0) {
@@ -342,22 +360,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      setIsImportingLocalDocs(true);
-      setLocalDocsError(null);
+      dispatch(setImportingLocalDocs(true));
+      dispatch(setLocalDocsError(null));
 
       await documentService.deleteGuestDocumentsByIds(localDocsToPromote.map((doc) => doc.id));
 
       closePromotionFlow();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to discard local documents.';
-      setLocalDocsError(message);
-      setIsImportingLocalDocs(false);
+      dispatch(setLocalDocsError(message));
+      dispatch(setImportingLocalDocs(false));
     }
   };
 
   return (
     <div className="flex h-screen">
-      <Sidebar onOpenAuth={openAuthModal} />
+      <Sidebar />
       <main className="nd-app-shell-main flex-1 flex flex-col min-w-0 bg-background text-foreground relative overflow-hidden">
         {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling 
         the browser that the scrollable region starts below the toolbar's height.*/}
@@ -368,7 +386,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </main>
-      {isAuthOpen && <AuthModal onClose={() => setIsAuthOpen(false)} />}
+      {isAuthOpen && <AuthModal onClose={() => dispatch(setAuthModalOpen(false))} />}
       {isLocalDocsModalOpen && (
         <LocalDocsPromotionModal
           count={localDocsToPromote.length}
@@ -386,6 +404,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onRetry={runMoveToAccount}
         />
       )}
+      <ToastContainer />
     </div>
   );
 }
