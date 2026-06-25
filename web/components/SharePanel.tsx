@@ -10,6 +10,7 @@ import {
 } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
+import { ChainLink, Check, ChevronDown, Close, GlobeSolid, Lock } from '@/icons';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -131,20 +132,10 @@ function AccessDropdown({
         aria-expanded={open}
       >
         <span>{selected?.label ?? value}</span>
-        <svg
-          viewBox="0 0 16 16"
+        <ChevronDown
+          size={14}
           className={`h-3.5 w-3.5 flex-shrink-0 text-foreground/50 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          aria-hidden="true"
-        >
-          <path
-            d="M4 6l4 4 4-4"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        />
       </button>
 
       {open && (
@@ -185,17 +176,7 @@ function AccessDropdown({
                 `}
               >
                 <span className="flex-shrink-0 w-3.5">
-                  {isSelected && (
-                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 text-foreground" fill="none">
-                      <path
-                        d="M2.5 8l4 4L13.5 4"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  )}
+                  {isSelected && <Check size={14} className="h-3.5 w-3.5 text-foreground" />}
                 </span>
                 <span>{opt.label}</span>
               </button>
@@ -204,47 +185,6 @@ function AccessDropdown({
         </div>
       )}
     </div>
-  );
-}
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
-
-function GlobeIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-5 w-5" fill="currentColor" aria-hidden="true">
-      <path d="M10 2a8 8 0 1 0 0 16A8 8 0 0 0 10 2zm0 1.5a6.5 6.5 0 0 1 4.47 11.26c-.2-.68-.62-1.3-1.25-1.73l-2.38-1.59a1 1 0 0 1-.44-.84V9.5a.5.5 0 0 1 .5-.5h.6c.3 0 .6-.13.8-.37l.77-.92a1 1 0 0 0 .18-1.05l-.26-.65a1 1 0 0 0-.47-.52L10.85 5a1 1 0 0 0-1.26.38L9 6.17a1 1 0 0 1-.87.5H7.5A1.5 1.5 0 0 0 6 8.17v.16a1.5 1.5 0 0 0 .6 1.2l.4.3a1 1 0 0 1 0 1.6l-.35.26a2 2 0 0 0-.78 1.74l.04.82A6.5 6.5 0 0 1 10 3.5z" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-5 w-5" fill="currentColor" aria-hidden="true">
-      <path
-        fillRule="evenodd"
-        clipRule="evenodd"
-        d="M10 2a4 4 0 0 0-4 4v2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm2.5 6V6a2.5 2.5 0 0 0-5 0v2h5zm-2.5 3a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0v-2a1 1 0 0 0-1-1z"
-      />
-    </svg>
-  );
-}
-
-function ChainLinkIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L9.5 5.5"
-        stroke="currentColor"
-        strokeWidth="1.65"
-        strokeLinecap="round"
-      />
-      <path
-        d="M11.5 8.5a3.5 3.5 0 0 0-5 0l-2.5 2.5a3.5 3.5 0 0 0 5 5L10.5 14.5"
-        stroke="currentColor"
-        strokeWidth="1.65"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 
@@ -645,14 +585,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
                               transition-all cursor-pointer
                             "
                           >
-                            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none">
-                              <path
-                                d="M4 4l8 8M12 4l-8 8"
-                                stroke="currentColor"
-                                strokeWidth="1.6"
-                                strokeLinecap="round"
-                              />
-                            </svg>
+                            <Close size={14} className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </li>
@@ -678,7 +611,11 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
                       }
                     `}
                   >
-                    {isAnyoneWithLink ? <GlobeIcon /> : <LockIcon />}
+                    {isAnyoneWithLink ? (
+                      <GlobeSolid className="h-5 w-5" />
+                    ) : (
+                      <Lock className="h-5 w-5" />
+                    )}
                   </span>
 
                   <div className="flex-1 min-w-0">
@@ -725,7 +662,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
             active:scale-95 transition-all cursor-pointer
           "
         >
-          <ChainLinkIcon />
+          <ChainLink className="h-4 w-4" />
           {copied ? 'Copied!' : 'Copy link'}
         </button>
 

@@ -231,6 +231,54 @@ class DocumentServiceTest {
         verify(documentRepository, never()).save(any(Document.class));
     }
 
+    @Test
+    void get_allowsCollaboratorAccessWhenIncludeTrashedIsTrue() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.VIEW);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, requesterId))
+                .thenReturn(Optional.empty()); // link access allows VIEW
+
+        var response = documentService.get(requesterId, documentId, true);
+
+        assertEquals(documentId, response.id());
+        assertEquals("Shared doc", response.title());
+    }
+
+    @Test
+    void get_rejectsCollaboratorAccessWhenDocumentIsTrashedAndIncludeTrashedIsTrue() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.VIEW);
+        document.setDeletedAt(OffsetDateTime.now(ZoneOffset.UTC));
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> documentService.get(requesterId, documentId, true));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void get_rejectsAccessWhenCollaboratorHasNoAccessAndIncludeTrashedIsTrue() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.VIEW);
+        document.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, requesterId))
+                .thenReturn(Optional.empty());
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> documentService.get(requesterId, documentId, true));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {
         User owner = User.builder()
                 .id(UUID.randomUUID())

@@ -1,6 +1,11 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render as baseRender, screen, waitFor, within } from '@testing-library/react';
+import React from 'react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import sidebarReducer from '../../../stores/sidebar/sidebar.slice';
+import uiReducer from '../../../stores/ui/ui.slice';
 import userEvent from '@testing-library/user-event';
-import Sidebar from '../../../components/Sidebar';
+import Sidebar from '../../../components/sidebar';
 import { useDocumentList } from '../../../hooks/useDocumentList.hook';
 import { documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
@@ -9,6 +14,17 @@ import { useTheme } from '../../../hooks/useTheme.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import { resolveRootDocumentId } from '../../../lib/root-document.util';
 import * as Y from 'yjs';
+
+const render = (
+  ui: React.ReactElement,
+  store = configureStore({ reducer: { sidebar: sidebarReducer, ui: uiReducer } }),
+  options?: Parameters<typeof baseRender>[1]
+) => {
+  return baseRender(ui, {
+    wrapper: ({ children }) => <Provider store={store}>{children}</Provider>,
+    ...options,
+  });
+};
 
 jest.mock('../../../hooks/useDocumentList.hook');
 jest.mock('next/navigation');
@@ -191,12 +207,21 @@ it('collapses and expands the document list', async () => {
   expect(screen.getByRole('button', { name: /Doc 1/i })).toBeInTheDocument();
 });
 
-it('calls onOpenAuth when "Log in" is selected from the account menu', async () => {
+it('dispatches auth modal open action when "Log in" is selected from the account menu', async () => {
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      ui: uiReducer,
+    },
+  });
+  const dispatchSpy = jest.spyOn(store, 'dispatch');
   const user = userEvent.setup();
-  render(<Sidebar onOpenAuth={mockOnOpenAuth} />);
+  render(<Sidebar />, store);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log in/i }));
-  expect(mockOnOpenAuth).toHaveBeenCalledTimes(1);
+  expect(dispatchSpy).toHaveBeenCalledWith(
+    expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
+  );
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 

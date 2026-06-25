@@ -9,6 +9,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useTheme, type Theme } from '@/hooks/useTheme.hook';
+import { Close } from '@/icons';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -187,18 +188,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                          hover:bg-sidebar-accent hover:text-foreground transition-colors cursor-pointer"
               aria-label="Close settings"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
+              <Close size={14} />
             </button>
           </div>
 

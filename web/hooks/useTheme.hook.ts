@@ -1,6 +1,6 @@
-'use client';
-
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
+import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { setThemeInStore } from '@/stores/theme/theme.slice';
 
 export type Theme = 'light' | 'dark' | 'system';
 
@@ -26,22 +26,31 @@ export function applyTheme(theme: Theme) {
 }
 
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+  const dispatch = useAppDispatch();
+  const theme = useAppSelector((state) => state.theme.theme);
 
+  // Sync state with DOM on theme changes
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Initialize store from localStorage exactly once on mount
+  useEffect(() => {
+    const stored = getStoredTheme();
+    dispatch(setThemeInStore(stored));
+  }, [dispatch]);
 
   // Sync all useTheme instances within the same tab via a manually dispatched storage event
   useEffect(() => {
     const handler = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) {
-        setThemeState(isTheme(e.newValue) ? e.newValue : 'system');
+        const nextTheme = isTheme(e.newValue) ? e.newValue : 'system';
+        dispatch(setThemeInStore(nextTheme));
       }
     };
     window.addEventListener('storage', handler);
     return () => window.removeEventListener('storage', handler);
-  }, []);
+  }, [dispatch]);
 
   // Respond to OS preference changes when in system mode
   useEffect(() => {
@@ -49,22 +58,24 @@ export function useTheme() {
     const handler = () => {
       const current = getStoredTheme();
       if (current === 'system') {
-        // In system mode, OS preference changes should immediately update DOM classes.
         applyTheme('system');
-        setThemeState('system');
+        dispatch(setThemeInStore('system'));
       }
     };
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
-  }, []);
+  }, [dispatch]);
 
-  const setTheme = useCallback((newTheme: Theme) => {
-    setThemeState(newTheme);
-    localStorage.setItem(STORAGE_KEY, newTheme);
-    // Dispatching on window notifies all other useTheme instances in this tab
-    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY, newValue: newTheme }));
-    applyTheme(newTheme);
-  }, []);
+  const setTheme = useCallback(
+    (newTheme: Theme) => {
+      dispatch(setThemeInStore(newTheme));
+      localStorage.setItem(STORAGE_KEY, newTheme);
+      // Dispatching on window notifies all other useTheme instances in this tab
+      window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY, newValue: newTheme }));
+      applyTheme(newTheme);
+    },
+    [dispatch]
+  );
 
   // Resolved to the actual applied theme — never 'system'
   const resolvedTheme: 'light' | 'dark' =
