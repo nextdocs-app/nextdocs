@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import config from './config';
+import config from './config.js';
 
 const LOG_LEVELS = {
   error: 0,

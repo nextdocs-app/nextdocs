@@ -1,5 +1,6 @@
 {
   "name": "realtime",
+  "type": "module",
   "version": "1.0.0",
   "description": "Realtime collaboration server for NextDocs document editor",
   "main": "dist/server.js",
@@ -18,8 +19,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "tsx src/server.ts",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
     "test": "jest",
     "test:coverage": "jest --coverage",
     "lint": "eslint",

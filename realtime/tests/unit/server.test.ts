@@ -3,7 +3,6 @@ import request from 'supertest';
 import { EventEmitter } from 'events';
 
 jest.mock('ws', () => {
-  const { EventEmitter } = require('events');
   class MockWebSocketServer extends EventEmitter {
     clients = { size: 0 };
     close = jest.fn();

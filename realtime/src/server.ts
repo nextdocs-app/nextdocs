@@ -5,9 +5,9 @@ import {
   setupWSConnection,
   updateConnectionAccessLevel,
   type RealtimeAccessLevel,
-} from './yjs-utils';
-import config from './config';
-import logger from './logger';
+} from './yjs-utils.js';
+import config from './config.js';
+import logger from './logger.js';
 
 interface RoomData {
   lastActivity: number;
@@ -765,57 +765,4 @@ export function cleanupInactiveRooms(): void {
       activeRooms: rooms.size,
     });
   }
-}
-
-// Only start the server if this file is run directly
-if (require.main === module) {
-  const cleanupInterval = setInterval(cleanupInactiveRooms, config.roomCleanupInterval);
-
-  function shutdown(signal: string): void {
-    logger.info('Shutdown signal received', { signal });
-
-    clearInterval(cleanupInterval);
-
-    wss.clients.forEach((client) => {
-      client.close(1001, 'Server shutting down');
-    });
-
-    server.close(() => {
-      logger.info('Server closed successfully');
-      process.exit(0);
-    });
-
-    // Force exit if graceful shutdown takes too long
-    setTimeout(() => {
-      logger.error('Forced shutdown after timeout');
-      process.exit(1);
-    }, 10000);
-  }
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-
-  process.on('uncaughtException', (error: Error) => {
-    logger.error('Uncaught exception', {
-      error: error.message,
-      stack: error.stack,
-    });
-    process.exit(1);
-  });
-
-  process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
-    logger.error('Unhandled rejection', { reason, promise });
-    process.exit(1);
-  });
-
-  server.listen(config.port, config.host, () => {
-    logger.info('NextDocs Realtime Server started', {
-      host: config.host,
-      port: config.port,
-      corsOrigins: config.corsOrigins,
-      nodeVersion: process.version,
-    });
-    logger.info('Health check available at /health');
-    logger.info('Metrics available at /metrics');
-  });
 }

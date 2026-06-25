@@ -6,7 +6,7 @@ import * as decoding from 'lib0/decoding';
 import * as map from 'lib0/map';
 import { WebSocket } from 'ws';
 
-import logger from './logger';
+import logger from './logger.js';
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;

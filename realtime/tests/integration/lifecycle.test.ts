@@ -2,8 +2,8 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import net, { AddressInfo } from 'net';
 
-const SERVER_PATH = path.join(__dirname, '../../src/server.ts');
-const TSX_PATH = path.join(__dirname, '../../node_modules/.bin/tsx');
+const SERVER_PATH = path.join(__dirname, '../../src/main.ts');
+const TSX_PATH = path.resolve(path.dirname(require.resolve('tsx/package.json')), 'dist/cli.mjs');
 
 describe('Server Lifecycle Integration', () => {
   let serverProcess: ChildProcess | null = null;
