@@ -135,7 +135,8 @@ function getYDoc(docName: string): WSSharedDoc {
 function shouldRejectSyncMessage(
   doc: WSSharedDoc,
   conn: WebSocket,
-  syncMessageType: number
+  syncMessageType: number,
+  decoder?: decoding.Decoder
 ): boolean {
   const state = doc.conns.get(conn);
   if (!state) {
@@ -144,18 +145,33 @@ function shouldRejectSyncMessage(
 
   // Only EDIT/OWNER can write document content
   if (!canWriteDocument(state.accessLevel)) {
-    // COMMENT connections may only complete initial sync acknowledgement.
-    // Update messages require explicit server-side validation before acceptance.
     if (state.accessLevel === 'COMMENT') {
-      if (syncMessageType === SYNC_MESSAGE_STEP_2) {
-        return false;
+      if (syncMessageType === SYNC_MESSAGE_STEP_2 || syncMessageType === SYNC_MESSAGE_UPDATE) {
+        if (!decoder) {
+          return true;
+        }
+
+        try {
+          const update = decoding.readVarUint8Array(decoder);
+          const tempDoc = new Y.Doc();
+          Y.applyUpdate(tempDoc, update);
+
+          for (const key of tempDoc.share.keys()) {
+            if (key !== 'threads' && key !== 'comment-users') {
+              return true; // Block edits modifying anything else
+            }
+          }
+          return false; // Allowed! Only modified threads or comment-users
+        } catch (err) {
+          logger.error('Failed to parse sync update for COMMENT connection', {
+            error: (err as Error).message,
+          });
+          return true; // Reject if update is malformed/cannot be parsed
+        }
       }
 
-      if (syncMessageType === SYNC_MESSAGE_UPDATE) {
-        return true;
-      }
-
-      return true;
+      // Any other sync messages (like sync step 1) are allowed since they don't perform writes
+      return false;
     }
 
     // VIEW users cannot send any sync messages
@@ -174,7 +190,7 @@ function handleMessage(conn: WebSocket, doc: WSSharedDoc, message: Uint8Array): 
 
     if (inspectionMessageType === MESSAGE_SYNC) {
       const syncMessageType = decoding.readVarUint(inspectionDecoder);
-      if (shouldRejectSyncMessage(doc, conn, syncMessageType)) {
+      if (shouldRejectSyncMessage(doc, conn, syncMessageType, inspectionDecoder)) {
         const state = doc.conns.get(conn);
         logger.warn('Blocked sync write message from read-only connection', {
           docName: doc.name,

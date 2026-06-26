@@ -27,6 +27,38 @@ jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
   })),
 }));
 
+const mockOn = jest.fn();
+const mockOff = jest.fn();
+const mockDestroy = jest.fn();
+const mockSetLocalStateField = jest.fn();
+
+type ProviderEventHandler = (event: { status: string } | { code: number }) => void;
+
+let registeredStatusHandler: ProviderEventHandler | null = null;
+let registeredCloseHandler: ProviderEventHandler | null = null;
+
+mockOn.mockImplementation((event: string, handler: ProviderEventHandler) => {
+  if (event === 'status') {
+    registeredStatusHandler = handler;
+  } else if (event === 'connection-close') {
+    registeredCloseHandler = handler;
+  }
+});
+
+const mockProviderInstance = {
+  on: mockOn,
+  off: mockOff,
+  destroy: mockDestroy,
+  shouldConnect: true,
+  awareness: {
+    setLocalStateField: mockSetLocalStateField,
+  },
+};
+
+jest.mock('y-websocket', () => ({
+  WebsocketProvider: jest.fn().mockImplementation(() => mockProviderInstance),
+}));
+
 describe('useDocument', () => {
   let getOrCreateDocumentSpy: jest.SpyInstance;
   let getCloudDocumentSpy: jest.SpyInstance;
@@ -1078,5 +1110,201 @@ describe('useDocument', () => {
     expect(result.current.meta?.deletedAt).toBeUndefined();
     expect(result.current.accessLevel).toBe('OWNER');
     expect(store.getState().document.meta?.deletedAt).toBeUndefined();
+  });
+
+  describe('realtime access revalidation and close handling', () => {
+    const validUuid = '12345678-1234-1234-1234-123456789012';
+
+    beforeEach(() => {
+      registeredStatusHandler = null;
+      registeredCloseHandler = null;
+      mockOn.mockClear();
+      mockOff.mockClear();
+      mockDestroy.mockClear();
+      mockSetLocalStateField.mockClear();
+    });
+
+    it('should skip access polling when isRealtimeConnected is true', async () => {
+      jest.useFakeTimers();
+
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-realtime',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await act(async () => {
+        // Flush initial mount loadDoc promise chain
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      // Verify the websocket provider was created and status handler was registered
+      expect(registeredStatusHandler).not.toBeNull();
+
+      // Simulate websocket connection status change to 'connected'
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // Advance timers by 5000ms. Since isRealtimeConnected is true, polling should be skipped.
+      getMyAccessSpy.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+
+      // getMyAccess should NOT have been called again (which would happen if client polled)
+      expect(getMyAccessSpy).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
+
+    it('should handle websocket 1008 close code by verifying access and refreshing token on 401', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      const refresh = jest.fn();
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-realtime',
+        isInitializing: false,
+        refresh,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      // Initial access check is allowed
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await act(async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      expect(registeredStatusHandler).not.toBeNull();
+
+      // Simulate websocket connection status change to 'connected'
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // Mock getMyAccess during close to throw 401 (stale session)
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
+
+      // Simulate connection close with 1008
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      // Verify refresh was triggered and errorState was not set to restricted
+      await waitFor(() => {
+        expect(refresh).toHaveBeenCalledTimes(1);
+      });
+      expect(result.current.errorState).toBeNull();
+    });
+
+    it('should handle websocket 1008 close code by showing restricted error on 403/404', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-realtime',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+
+      // Initial access check is allowed
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await act(async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      expect(registeredStatusHandler).not.toBeNull();
+
+      // Simulate websocket connection status change to 'connected'
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // Mock getMyAccess to throw 403 (access revoked)
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Forbidden', 403));
+
+      // Simulate connection close with 1008
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      // Verify UI is transitioned to restricted error state
+      await waitFor(() => {
+        expect(result.current.errorState).toMatchObject({
+          kind: 'restricted',
+          statusCode: 403,
+        });
+      });
+      expect(result.current.ydoc).toBeNull();
+    });
   });
 });
