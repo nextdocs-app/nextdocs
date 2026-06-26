@@ -243,6 +243,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       return;
     }
 
+    // If access was already revoked (e.g. from websocket close handler), stay in restricted state
+    if (errorState?.kind === 'restricted') {
+      dispatch(setLoading(false));
+      return;
+    }
+
     const loadContextKey = [
       id,
       isAuthenticated ? 'auth' : 'guest',
@@ -468,6 +474,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     id,
     dispatch,
@@ -516,14 +523,76 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     const statusHandler = (event: { status: 'connected' | 'disconnected' | 'connecting' }) => {
       setIsRealtimeConnected(event.status === 'connected');
     };
+    let closeHandlerCancelled = false;
+
     const connectionCloseHandler = (event: CloseEvent | null) => {
       if (!event || event.code !== 1008) {
         return;
       }
 
+      // We perform a one-off /my-access fetch to distinguish between a stale token/expired session (401)
+      // and a true access revocation (403/404). This prevents locking the user out unnecessarily
+      // when their session simply needs to be refreshed.
+      // Prevent reconnection race: stop reconnection before the async verification
       provider.shouldConnect = false;
-      setIsRealtimeConnected(false);
-      setRealtimeProvider((current) => (current === provider ? null : current));
+
+      const verifyAccessAndHandleClose = async () => {
+        try {
+          const token = accessTokenRef.current;
+          if (token) {
+            const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+            if (closeHandlerCancelled) return;
+            if (!myAccess.allowed || !myAccess.accessLevel) {
+              handleAccessRevoked(404);
+              return;
+            }
+            // Access is still valid - allow reconnection
+            provider.shouldConnect = true;
+          } else {
+            handleAccessRevoked(401);
+            return;
+          }
+        } catch (err) {
+          if (err instanceof DocumentServiceApiError && err.status === 401) {
+            if (closeHandlerCancelled) return;
+            // Token is stale, trigger silent session refresh.
+            // Reconnection will automatically use the new token on the next retry.
+            void refresh();
+            return;
+          }
+          if (
+            err instanceof DocumentServiceApiError &&
+            (err.status === 403 || err.status === 404)
+          ) {
+            if (closeHandlerCancelled) return;
+            // Access has been officially revoked/restricted.
+            handleAccessRevoked(err.status);
+            return;
+          }
+        }
+
+        // For transient errors or if access is still valid, we let the provider continue reconnecting
+      };
+
+      const handleAccessRevoked = (statusCode: number = 404) => {
+        if (closeHandlerCancelled) return;
+        clearCachedDocumentAccessLevel(resolvedDocumentId);
+        const restrictedError = buildDocumentErrorState(
+          new DocumentServiceApiError('The requested resource was not found.', statusCode)
+        );
+        setErrorState(restrictedError);
+        setLocalYDoc(null);
+        setYDoc(null);
+        dispatch(clearDocument());
+        dispatch(setError(restrictedError.description));
+        setAccessLevel(null);
+
+        provider.shouldConnect = false;
+        setIsRealtimeConnected(false);
+        setRealtimeProvider((current) => (current === provider ? null : current));
+      };
+
+      void verifyAccessAndHandleClose();
     };
 
     provider.on('status', statusHandler);
@@ -538,6 +607,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     });
 
     return () => {
+      closeHandlerCancelled = true;
       provider.off('status', statusHandler);
       provider.off('connection-close', connectionCloseHandler);
       provider.shouldConnect = false;
@@ -557,6 +627,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     user?.email,
     user?.displayName,
     isCloudReadInBackoff,
+    refresh,
+    dispatch,
   ]);
 
   // Listen for server-pushed access-level changes and apply them immediately.
@@ -643,7 +715,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       isCloudReadInBackoff() ||
       !resolvedDocumentId ||
       resolvedDocumentId !== currentDocumentId ||
-      !!meta?.deletedAt
+      !!meta?.deletedAt ||
+      isRealtimeConnected // Skip polling if we have an active realtime WebSocket connection
     ) {
       return;
     }
@@ -709,6 +782,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     dispatch,
     isCloudReadInBackoff,
     refresh,
+    isRealtimeConnected,
   ]);
 
   const updateMeta = useCallback(
