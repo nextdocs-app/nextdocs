@@ -285,6 +285,108 @@ describe('Yjs Utils', () => {
       expect(blockedWarnings).toHaveLength(0);
     });
 
+    it('should allow sync update writes for comment connections if they only modify comment threads or comment users', () => {
+      const commentConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      const writableConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(commentConn, docName, 'COMMENT');
+      setupWSConnection(writableConn, docName, 'EDIT');
+
+      commentConn.send.mockClear();
+      writableConn.send.mockClear();
+
+      const commentMessageHandlerCall = commentConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!commentMessageHandlerCall) {
+        throw new Error('message handler not found for comment connection');
+      }
+
+      const commentMessageHandler = commentMessageHandlerCall[1];
+      const sourceDoc = new Y.Doc();
+      sourceDoc.getMap('threads').set('thread1', 'comment1');
+      sourceDoc.getMap('comment-users').set('user1', 'profile1');
+      const update = Y.encodeStateAsUpdate(sourceDoc);
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeUpdate(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+
+      (logger.warn as jest.Mock).mockClear();
+
+      commentMessageHandler(Buffer.from(message));
+
+      expect(writableConn.send).toHaveBeenCalled();
+
+      const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
+        ([warningMessage]) =>
+          warningMessage === 'Blocked sync write message from read-only connection'
+      );
+      expect(blockedWarnings).toHaveLength(0);
+    });
+
+    it('should block sync step 2 writes for comment connections if they modify other fields', () => {
+      const commentConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      const writableConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(commentConn, docName, 'COMMENT');
+      setupWSConnection(writableConn, docName, 'EDIT');
+
+      commentConn.send.mockClear();
+      writableConn.send.mockClear();
+
+      const commentMessageHandlerCall = commentConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!commentMessageHandlerCall) {
+        throw new Error('message handler not found for comment connection');
+      }
+
+      const commentMessageHandler = commentMessageHandlerCall[1];
+      const sourceDoc = new Y.Doc();
+      sourceDoc.getText('blocknote').insert(0, 'malicious edit');
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeSyncStep2(encoder, sourceDoc);
+      const message = encoding.toUint8Array(encoder);
+
+      (logger.warn as jest.Mock).mockClear();
+
+      commentMessageHandler(Buffer.from(message));
+
+      expect(writableConn.send).not.toHaveBeenCalled();
+
+      const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
+        ([warningMessage]) =>
+          warningMessage === 'Blocked sync write message from read-only connection'
+      );
+      expect(blockedWarnings.length).toBeGreaterThan(0);
+    });
+
     it('should allow write updates after permission upgrade', () => {
       const upgradedConn: any = {
         send: jest.fn(),
