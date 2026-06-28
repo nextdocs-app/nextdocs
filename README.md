@@ -12,7 +12,6 @@
   <a href="https://github.com/santhoshh-kumar/nextdocs/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-3B82F6?style=flat-square" alt="License"></a> 
   <a href="https://www.blocknotejs.org/"><img src="https://img.shields.io/badge/Powered--by-BlockNote-7C3AED?style=flat-square" alt="BlockNote"></a> 
   <a href="https://yjs.dev/"><img src="https://img.shields.io/badge/Collaboration-Yjs-F59E0B?style=flat-square" alt="Yjs"></a>
-  <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Production--ready-Not%20yet-red?style=flat-square" alt="Production Status"></a> 
   <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Release-Pre--alpha-orange?style=flat-square" alt="Release Status"></a>
 </p>
 
@@ -191,12 +190,14 @@ NextDocs is a monorepo with three core services:
 **Planned for initial release**:
 - [x] Core features listed in <a href="#overview">overview</a>.
 - [x] Trash documents with recovery and auto-delete after 30 days.
-- [ ] Search Documents by content.
-- [ ] Polish blocknote editor.
+- [ ] Unified self-referential document tree with fractional indexing for drag-drop ordering.
+- [ ] Icons + covers for documents.
 - [ ] OAuth login (Google, GitHub).
+- [ ] Search documents by content.
+- [ ] Polish blocknote editor.
 - [ ] Document options like Export, font-options, etc.
 - [ ] Responsive design for all screen sizes.
+- [ ] Self-hosting with Docker Compose.
 
 **Not planned for initial release**:
 - [ ] Document version history and snapshots (Coming soon in blocknote itself).
-- [ ] Workspace and team permission management.
