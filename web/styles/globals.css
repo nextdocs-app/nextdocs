@@ -35,6 +35,16 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   --nd-comments-rail-width: 20rem;
+
+  /* Editor Dropdown / Suggestion Menu Custom Variables */
+  --editor-dropdown-radius: 8px;
+  --editor-dropdown-item-radius: 6px;
+  --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  --editor-dropdown-divider: 1.5px solid rgba(0, 0, 0, 0.15);
+  --editor-dropdown-item-font-size: 13px;
+  --editor-dropdown-label-font-size: 11px;
+  --editor-dropdown-icon-container-size: 28px;
+  --editor-dropdown-icon-size: 16px;
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
@@ -64,6 +74,10 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
+  --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --editor-dropdown-divider: 1.5px solid rgba(255, 255, 255, 0.15);
 }
 
 @theme inline {
@@ -107,7 +121,7 @@
   * {
     @apply border-border outline-ring/50;
   }
-  
+
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
@@ -1072,3 +1086,207 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Block menu options color picker scrollable fix and left sidebar theme styling */
+.bn-color-picker-dropdown {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  padding: 6px !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  max-height: min(500px, 85vh) !important; /* Increased container height */
+  overflow-y: auto !important;
+  min-width: 190px !important;
+
+  /* Centering the sub-menu vertically relative to "Colors >" trigger using margin-top offset to avoid conflict with Radix absolute transform coordinates */
+  margin-top: calc(18px - min(500px, 85vh) / 2) !important;
+}
+
+/* Category labels (Text, Background headers) */
+.bn-color-picker-dropdown [data-slot="dropdown-menu-label"] {
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.55 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-weight: 700 !important;
+  padding: 10px 12px 6px !important;
+}
+
+/* Spacing and a visible line separating background and text section */
+.bn-color-picker-dropdown [data-slot="dropdown-menu-label"]:not(:first-of-type) {
+  border-top: var(--editor-dropdown-divider) !important;
+  margin-top: 8px !important;
+  padding-top: 14px !important;
+}
+
+/* Dropdown color checkbox items */
+.bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"],
+.bn-color-picker-dropdown [role="menuitemcheckbox"] {
+  color: var(--sidebar-foreground) !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 500 !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 6px 36px 6px 12px !important;
+  margin: 1px 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+  gap: 12px !important; /* Increased gap between icon and color name */
+}
+
+/* Move tick mark (indicator) to the right side of the item */
+.bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"] > span:first-of-type,
+.bn-color-picker-dropdown [role="menuitemcheckbox"] > span:first-of-type {
+  left: auto !important;
+  right: 12px !important;
+}
+
+/* Hover / Focus / Highlight states matching sidebar accents */
+.bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"]:hover,
+.bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"]:focus,
+.bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"][data-highlighted],
+.bn-color-picker-dropdown [role="menuitemcheckbox"]:hover,
+.bn-color-picker-dropdown [role="menuitemcheckbox"]:focus,
+.bn-color-picker-dropdown [role="menuitemcheckbox"][data-highlighted] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Color indicator icons styling */
+.bn-color-picker-dropdown .bn-color-icon {
+  border-radius: 4px !important;
+  border: 1px solid var(--sidebar-border) !important;
+}
+
+/* Fallback background only for default background icons */
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="default"] {
+  background-color: rgba(0, 0, 0, 0.02) !important;
+}
+
+.dark .bn-color-picker-dropdown .bn-color-icon[data-background-color="default"] {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* Slash / Suggestion Command Menu matching sidebar theme */
+.bn-suggestion-menu {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  padding: 4px !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  max-height: min(450px, 80vh) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Category headers inside suggestion menu */
+.bn-suggestion-menu-label {
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.55 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-weight: 700 !important;
+  padding: 8px 10px 4px !important;
+}
+
+/* Divider separating sections in suggestion menu if any label other than first */
+.bn-suggestion-menu-label:not(:first-of-type) {
+  border-top: var(--editor-dropdown-divider) !important;
+  margin-top: 6px !important;
+  padding-top: 12px !important;
+}
+
+/* Suggestion items - Compact spacing */
+.bn-suggestion-menu-item {
+  color: var(--sidebar-foreground) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 4px 8px !important;
+  margin: 1px 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.1s ease, color 0.1s ease !important;
+  gap: 10px !important;
+}
+
+/* Hover / Focus / Selected states matching sidebar accents */
+.bn-suggestion-menu-item:hover,
+.bn-suggestion-menu-item:focus,
+.bn-suggestion-menu-item[aria-selected="true"] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Suggestion icon container styling - Theme borders */
+.bn-suggestion-menu-item div[data-position="left"] {
+  padding: 4px !important;
+  border-radius: 4px !important;
+  border: 1px solid var(--sidebar-border) !important;
+  background-color: rgba(0, 0, 0, 0.02) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: var(--editor-dropdown-icon-container-size) !important;
+  height: var(--editor-dropdown-icon-container-size) !important;
+  flex-shrink: 0 !important;
+}
+
+.dark .bn-suggestion-menu-item div[data-position="left"] {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* Align and scale internal SVGs */
+.bn-suggestion-menu-item div[data-position="left"] svg {
+  width: var(--editor-dropdown-icon-size) !important;
+  height: var(--editor-dropdown-icon-size) !important;
+  color: inherit !important;
+  opacity: 1 !important;
+}
+
+/* Item Title - Cleaner typography */
+.bn-suggestion-menu-item .text-base,
+.bn-suggestion-menu-item .text-sm {
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 550 !important;
+  line-height: 1.25 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* Item Description (subtext) - Always visible, compact, and clean */
+.bn-suggestion-menu-item .text-xs {
+  display: block !important;
+  color: inherit !important;
+  opacity: 0.75 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  margin-top: -1px !important;
+  line-height: 1.25 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* Keyboard Shortcut/Badge - Keycap-style badges */
+.bn-suggestion-menu-item [data-position="right"] {
+  flex-shrink: 0 !important;
+}
+
+.bn-suggestion-menu-item [data-position="right"] * {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 1px 4px !important;
+  height: auto !important;
+  line-height: 1.2 !important;
+  border-radius: 3px !important;
+  background-color: rgba(0, 0, 0, 0.05) !important;
+  color: inherit !important;
+  border: 1px solid var(--sidebar-border) !important;
+  opacity: 1 !important;
+}
+
+.dark .bn-suggestion-menu-item [data-position="right"] * {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
