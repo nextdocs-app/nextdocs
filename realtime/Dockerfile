@@ -1,4 +1,4 @@
-FROM node:26.3.0-alpine AS deps
+FROM node:26.4.0-alpine AS deps
 WORKDIR /app
 ENV HUSKY=0
 COPY package.json package-lock.json ./
@@ -6,7 +6,7 @@ COPY realtime/package.json ./realtime/package.json
 COPY web/package.json ./web/package.json
 RUN npm ci --workspace realtime --include-workspace-root=false --ignore-scripts
 
-FROM node:26.3.0-alpine AS builder
+FROM node:26.4.0-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/ ./
 COPY tsconfig.base.json ./tsconfig.base.json
@@ -14,7 +14,7 @@ COPY realtime/ ./realtime/
 WORKDIR /app/realtime
 RUN npm run build
 
-FROM node:26.3.0-alpine AS runner
+FROM node:26.4.0-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HUSKY=0
