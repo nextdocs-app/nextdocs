@@ -12,6 +12,11 @@ public record DocumentResponse(
         @Schema(description = "Base64-encoded Yjs state when requested")
         String yjsState,
 
+        @Schema(description = "Parent document ID, null for root-level")
+        UUID parentId,
+
+        @Schema(description = "Fractional ordering key") String orderKey,
+
         @Schema(description = "Creator label") String createdBy,
         @Schema(description = "Creation timestamp") OffsetDateTime createdAt,
         @Schema(description = "Last update timestamp") OffsetDateTime updatedAt,

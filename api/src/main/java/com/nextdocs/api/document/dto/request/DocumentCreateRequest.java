@@ -24,4 +24,13 @@ public record DocumentCreateRequest(
 
         @Schema(description = "Optional creator label", example = "Anonymous")
         @Size(max = 255, message = "createdBy must be at most 255 characters")
-        String createdBy) {}
+        String createdBy,
+
+        @Schema(description = "Parent document ID. Null creates the document at root level.")
+        UUID parentId,
+
+        @Schema(description = "ID of the sibling immediately before this document's initial position.")
+        UUID prevSiblingId,
+
+        @Schema(description = "ID of the sibling immediately after this document's initial position.")
+        UUID nextSiblingId) {}
