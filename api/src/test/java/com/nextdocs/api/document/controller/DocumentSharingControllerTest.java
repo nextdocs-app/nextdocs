@@ -235,7 +235,16 @@ class DocumentSharingControllerTest {
     @Test
     void listSharedWithMe_success_returns200() throws Exception {
         DocumentResponse doc = new DocumentResponse(
-                documentId, "Shared Doc", null, "Owner", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "Shared Doc",
+                null,
+                null,
+                null,
+                "Owner",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(doc), PageRequest.of(0, 20), 1);
         when(sharingService.listSharedWithMe(eq(userId), any())).thenReturn(page);

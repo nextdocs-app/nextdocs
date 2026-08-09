@@ -15,11 +15,19 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
+import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.util.FractionalIndex;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -29,13 +37,21 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class DocumentSharingService {
 
+    private static final int MAX_ORDER_UPSERT_ATTEMPTS = 3;
+
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
+    private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
+    private final PermissionService permissionService;
+
+    @Autowired
+    @Lazy
+    private DocumentSharingService selfProxy;
 
     @Transactional(readOnly = true)
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
-        Document doc = requireAccessibleActiveDocument(requesterId, documentId);
+        Document doc = permissionService.requireReadAccessOrTrashOwner(requesterId, documentId);
 
         CollaboratorResponse owner = new CollaboratorResponse(
                 doc.getUser().getId(),
@@ -57,9 +73,34 @@ public class DocumentSharingService {
                 .toList();
     }
 
-    @Transactional
     public CollaboratorResponse upsertCollaborator(UUID ownerId, UUID documentId, CollaboratorUpsertRequest request) {
-        Document doc = requireOwnedActiveDocument(ownerId, documentId);
+        int attempt = 0;
+        while (true) {
+            try {
+                return selfProxy != null
+                        ? selfProxy.upsertCollaboratorAndPersist(ownerId, documentId, request)
+                        : upsertCollaboratorAndPersist(ownerId, documentId, request);
+            } catch (DataIntegrityViolationException ex) {
+                attempt++;
+                if (attempt >= MAX_ORDER_UPSERT_ATTEMPTS) {
+                    throw ex;
+                }
+            }
+        }
+    }
+
+    /**
+     * Adds or updates a collaborator on a document.
+     *
+     * <p>TODO(full-access): sharing administration is direct-owner-only because no
+     * FULL_ACCESS access level exists yet - collaborators cannot re-share documents
+     * shared with them. Until that level is implemented, moving documents between two
+     * shared trees is intentionally blocked in the web UI for non-owners.
+     */
+    @Transactional
+    public CollaboratorResponse upsertCollaboratorAndPersist(
+            UUID ownerId, UUID documentId, CollaboratorUpsertRequest request) {
+        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
         DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
 
         User targetUser = userRepository
@@ -82,6 +123,10 @@ public class DocumentSharingService {
 
         DocumentCollaborator saved = collaboratorRepository.save(collaborator);
 
+        // Ensure the collaborator has a UserDocumentOrder entry for their Shared
+        // section so root documents and floated nested documents can be reordered.
+        ensureCollaboratorOrder(doc, targetUser);
+
         return new CollaboratorResponse(
                 saved.getUser().getId(),
                 saved.getUser().getEmail(),
@@ -93,7 +138,7 @@ public class DocumentSharingService {
     @Transactional
     public CollaboratorResponse updateCollaboratorAccess(
             UUID ownerId, UUID documentId, UUID collaboratorUserId, CollaboratorAccessUpdateRequest request) {
-        requireOwnedActiveDocument(ownerId, documentId);
+        permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
 
         if (ownerId.equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be changed.");
@@ -116,7 +161,7 @@ public class DocumentSharingService {
 
     @Transactional
     public void removeCollaborator(UUID ownerId, UUID documentId, UUID collaboratorUserId) {
-        requireOwnedActiveDocument(ownerId, documentId);
+        permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
 
         if (ownerId.equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
@@ -128,11 +173,12 @@ public class DocumentSharingService {
         }
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
+        userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
     }
 
     @Transactional
     public void leaveSharedDocument(UUID userId, UUID documentId) {
-        Document doc = requireAccessibleActiveDocument(userId, documentId);
+        Document doc = permissionService.requireReadAccess(userId, documentId);
 
         if (doc.getUser().getId().equals(userId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owners cannot leave their own documents.");
@@ -144,11 +190,12 @@ public class DocumentSharingService {
         }
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, userId);
+        userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(userId, documentId);
     }
 
     @Transactional(readOnly = true)
     public SharingSettingsResponse getSharingSettings(UUID ownerId, UUID documentId) {
-        Document doc = requireOwnedActiveDocument(ownerId, documentId);
+        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
         boolean hasActiveLink = doc.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK;
 
         return new SharingSettingsResponse(doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink);
@@ -157,7 +204,7 @@ public class DocumentSharingService {
     @Transactional
     public SharingSettingsResponse updateSharingSettings(
             UUID ownerId, UUID documentId, SharingSettingsUpdateRequest request) {
-        Document doc = requireOwnedActiveDocument(ownerId, documentId);
+        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
 
         DocumentGeneralAccessMode mode = request.generalAccessMode();
         if (mode == null) {
@@ -177,12 +224,28 @@ public class DocumentSharingService {
 
     @Transactional(readOnly = true)
     public Page<DocumentResponse> listSharedWithMe(UUID userId, Pageable pageable) {
-        return documentRepository.findSharedWithUserId(userId, pageable).map(this::toDocumentSummaryResponse);
+        Page<Document> page = documentRepository.findSharedWithUserId(userId, pageable);
+        List<UUID> ids = page.getContent().stream().map(Document::getId).toList();
+        Map<UUID, String> navOrderKeys = fetchUserNavOrderKeys(userId, ids);
+        return page.map(doc -> toDocumentSummaryResponse(doc, navOrderKeys.get(doc.getId())));
     }
 
     @Transactional(readOnly = true)
     public DocumentAccessResponse getMyAccess(UUID userId, UUID documentId) {
-        return computeAccess(userId, documentId);
+        Document active =
+                documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
+        if (active != null) {
+            return computeActiveAccess(userId, documentId, active);
+        }
+
+        // Trashed documents: report the caller's pre-trash access so the UI can offer a
+        // read-only trash view (any level) versus manage actions (EDIT and above).
+        DocumentAccessLevel trashAccess = permissionService.resolveTrashAccess(userId, documentId);
+        if (trashAccess == null) {
+            return new DocumentAccessResponse(documentId, false, null, false, true);
+        }
+        boolean owner = trashAccess == DocumentAccessLevel.OWNER;
+        return new DocumentAccessResponse(documentId, true, trashAccess, owner, true);
     }
 
     @Transactional(readOnly = true)
@@ -190,62 +253,42 @@ public class DocumentSharingService {
         return computeAccess(userId, documentId);
     }
 
+    private void ensureCollaboratorOrder(Document doc, User targetUser) {
+        if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), doc.getId())) {
+            return;
+        }
+        String minKey = userDocumentOrderRepository
+                .findMinOrderKeyByUserId(targetUser.getId(), doc.getId())
+                .filter(FractionalIndex::isValidOrderKey)
+                .orElse(null);
+        UserDocumentOrder udo = UserDocumentOrder.builder()
+                .user(targetUser)
+                .document(doc)
+                .orderKey(FractionalIndex.keyBetween(null, minKey))
+                .build();
+        userDocumentOrderRepository.saveAndFlush(udo);
+    }
+
     private DocumentAccessResponse computeAccess(UUID userId, UUID documentId) {
         Document doc = documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
         if (doc == null) {
-            return new DocumentAccessResponse(documentId, false, null, false);
+            // Strict: realtime connection gating relies on trashed documents being denied here.
+            return new DocumentAccessResponse(documentId, false, null, false, true);
         }
-
-        if (doc.getUser().getId().equals(userId)) {
-            return new DocumentAccessResponse(documentId, true, DocumentAccessLevel.OWNER, true);
-        }
-
-        DocumentCollaborator collaborator = collaboratorRepository
-                .findByDocument_IdAndUser_Id(documentId, userId)
-                .orElse(null);
-        DocumentAccessLevel collaboratorAccess = collaborator == null ? null : collaborator.getAccessLevel();
-        if (collaboratorAccess != null) {
-            return new DocumentAccessResponse(documentId, true, collaboratorAccess, false);
-        }
-
-        DocumentAccessLevel effectiveAccess = resolveGeneralAccessLevel(doc);
-
-        if (effectiveAccess != null) {
-            return new DocumentAccessResponse(documentId, true, effectiveAccess, false);
-        }
-
-        return new DocumentAccessResponse(documentId, false, null, false);
+        return computeActiveAccess(userId, documentId, doc);
     }
 
-    private DocumentAccessLevel resolveGeneralAccessLevel(Document document) {
-        if (document.getGeneralAccessMode() != DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
-            return null;
+    private DocumentAccessResponse computeActiveAccess(UUID userId, UUID documentId, Document doc) {
+        boolean isOwner = doc.getUser().getId().equals(userId);
+        if (isOwner) {
+            return new DocumentAccessResponse(documentId, true, DocumentAccessLevel.OWNER, true, false);
         }
 
-        return document.getLinkAccessLevel();
-    }
-
-    private Document requireOwnedActiveDocument(UUID ownerId, UUID documentId) {
-        return documentRepository
-                .findByIdAndUser_IdAndDeletedAtIsNull(documentId, ownerId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-    }
-
-    private Document requireAccessibleActiveDocument(UUID userId, UUID documentId) {
-        Document doc = documentRepository
-                .findByIdAndDeletedAtIsNull(documentId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-
-        if (doc.getUser().getId().equals(userId)) {
-            return doc;
+        DocumentAccessLevel level = permissionService.resolveAccess(userId, documentId);
+        if (level == null) {
+            return new DocumentAccessResponse(documentId, false, null, false, false);
         }
-
-        boolean isCollaborator = collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, userId);
-        if (!isCollaborator) {
-            throw new ApiException(ErrorCode.NOT_FOUND);
-        }
-
-        return doc;
+        return new DocumentAccessResponse(documentId, true, level, false, false);
     }
 
     private static DocumentAccessLevel normalizeCollaboratorAccess(DocumentAccessLevel accessLevel) {
@@ -268,11 +311,25 @@ public class DocumentSharingService {
         return accessLevel;
     }
 
-    private DocumentResponse toDocumentSummaryResponse(Document document) {
+    private Map<UUID, String> fetchUserNavOrderKeys(UUID userId, List<UUID> documentIds) {
+        if (documentIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, String> orderKeys = new HashMap<>();
+        for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, documentIds)) {
+            orderKeys.put((UUID) row[0], (String) row[1]);
+        }
+        return orderKeys;
+    }
+
+    private DocumentResponse toDocumentSummaryResponse(Document document, String navOrderKey) {
+        String orderKey = document.getParent() == null ? navOrderKey : document.getSiblingOrderKey();
         return new DocumentResponse(
                 document.getId(),
                 document.getTitle(),
                 null,
+                document.getParent() != null ? document.getParent().getId() : null,
+                orderKey,
                 document.getCreatedBy(),
                 document.getCreatedAt(),
                 document.getUpdatedAt(),
