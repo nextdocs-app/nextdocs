@@ -1306,5 +1306,125 @@ describe('useDocument', () => {
       });
       expect(result.current.ydoc).toBeNull();
     });
+
+    it('should not establish realtime connection for a trashed document owned by the user', async () => {
+      const ydoc = new Y.Doc();
+      const trashedMeta = {
+        title: 'Trashed Document',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        deletedAt: '2024-01-02T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-trashed',
+        isInitializing: false,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      // The trashed document loads for the owner without an access check and stays open.
+      expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+      expect(result.current.isReadOnly).toBe(true);
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.ydoc).toBe(ydoc);
+      expect(getMyAccessSpy).not.toHaveBeenCalled();
+
+      // No realtime provider should be created for a trashed document: the realtime
+      // server strictly rejects access checks for trashed docs (1008 close), which would
+      // otherwise trigger a spurious "access restricted" error for the owner.
+      expect(mockOn).not.toHaveBeenCalled();
+      expect(registeredStatusHandler).toBeNull();
+      expect(registeredCloseHandler).toBeNull();
+    });
+
+    it('should keep a trashed document open as a read-only trash view when realtime access is revoked after the doc is trashed elsewhere', async () => {
+      const ydoc = new Y.Doc();
+      const activeMeta = {
+        title: 'Active Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const trashedMeta = {
+        ...activeMeta,
+        deletedAt: '2024-01-02T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-trashed-elsewhere',
+        isInitializing: false,
+      });
+
+      // getCloudDocument: initial load returns the active doc; the access-revocation
+      // re-check returns the trashed copy (owner can still view it via REST).
+      getCloudDocumentSpy
+        .mockResolvedValueOnce({ ydoc, meta: activeMeta })
+        .mockResolvedValueOnce({ ydoc, meta: trashedMeta });
+
+      // getMyAccess: the loadDoc check and the immediate revalidation check are allowed;
+      // the realtime close-handler recheck reports access revoked for the trashed doc.
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: false,
+          accessLevel: null,
+          owner: false,
+        });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await act(async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      expect(registeredStatusHandler).not.toBeNull();
+
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // Simulate the realtime server closing the connection after its periodic access
+      // revalidation rejects the now-trashed document.
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      // The owner keeps seeing the document as a read-only trash view instead of a
+      // spurious "access restricted" error.
+      await waitFor(() => {
+        expect(result.current.errorState).toBeNull();
+      });
+      expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+      expect(result.current.accessLevel).toBe('VIEW');
+      expect(result.current.isReadOnly).toBe(true);
+      expect(result.current.ydoc).toBe(ydoc);
+    });
   });
 });
