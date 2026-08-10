@@ -173,6 +173,25 @@ async function resolveLocalFallbackDocument(
   };
 }
 
+/**
+ * Fetches a document whose active access may have just been revoked (e.g. it was moved to
+ * trash from another tab/device). Returns the trashed copy when the caller is the owner -
+ * trashed documents are served read-only to their owner over REST (includeTrashed=true) -
+ * or null when the document is truly inaccessible (active but revoked, permanently deleted,
+ * or not the owner).
+ */
+async function loadTrashedDocumentIfVisible(
+  documentId: string,
+  token: string
+): Promise<DocumentLoadResult | null> {
+  try {
+    const result = await documentService.getCloudDocument(documentId, token);
+    return result.meta.deletedAt ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const id = documentId;
   const isSharedDocument = options?.isSharedDocument === true;
@@ -204,6 +223,29 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // when a new document is loaded (instead of reading from
   // the module-level singleton at render time, which may be stale)
   const [ydoc, setLocalYDoc] = useState<Y.Doc | null>(null);
+
+  // When the owner loses active access because their document was moved to trash
+  // (e.g. from another tab/device), surface the read-only trash view instead of a
+  // spurious "access restricted" error.
+  const applyTrashedDocumentView = useCallback(
+    (documentId: string, result: DocumentLoadResult) => {
+      setLocalYDoc(result.ydoc);
+      setYDoc(result.ydoc);
+      dispatch(
+        setCurrentDocument({
+          id: documentId,
+          meta: result.meta,
+        })
+      );
+      setAccessLevel('VIEW');
+      // The trashed doc renders read-only; don't leave a stale cached level (e.g. EDIT)
+      // behind that could misrepresent permissions.
+      clearCachedDocumentAccessLevel(documentId);
+      setErrorState(null);
+      dispatch(setError(null));
+    },
+    [dispatch]
+  );
 
   useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -501,6 +543,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       !isOnline ||
       isLoading ||
       errorState !== null ||
+      // Trashed documents are served as a read-only, REST-only view (restore/trash UI).
+      // The realtime server strictly rejects access checks for trashed documents, so
+      // connecting would trigger a 1008 close followed by a spurious "access restricted"
+      // error for the document owner.
+      !!meta?.deletedAt ||
       isCloudReadInBackoff() ||
       !isAuthenticated ||
       !accessTokenRef.current
@@ -543,6 +590,19 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
             if (closeHandlerCancelled) return;
             if (!myAccess.allowed || !myAccess.accessLevel) {
+              // The realtime server rejected this connection (1008). Before treating it as
+              // a revocation, check whether the user can still view the document from trash
+              // (e.g. it was moved to trash from another tab/device). Trashed documents are
+              // served read-only to their owner over REST.
+              const trashedCopy = await loadTrashedDocumentIfVisible(resolvedDocumentId, token);
+              if (closeHandlerCancelled) return;
+              if (trashedCopy) {
+                applyTrashedDocumentView(resolvedDocumentId, trashedCopy);
+                provider.shouldConnect = false;
+                setIsRealtimeConnected(false);
+                setRealtimeProvider((current) => (current === provider ? null : current));
+                return;
+              }
               handleAccessRevoked(404);
               return;
             }
@@ -623,12 +683,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     errorState,
     isAuthenticated,
     meta?.createdBy,
+    meta?.deletedAt,
     user?.id,
     user?.email,
     user?.displayName,
     isCloudReadInBackoff,
     refresh,
     dispatch,
+    applyTrashedDocumentView,
   ]);
 
   // Listen for server-pushed access-level changes and apply them immediately.
@@ -725,6 +787,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       try {
         const myAccess = await documentService.getMyAccess(resolvedDocumentId, accessToken);
         if (!myAccess.allowed || !myAccess.accessLevel) {
+          // Before treating this as a revocation, check whether the user can still view
+          // the document from trash (e.g. it was moved to trash from another tab/device).
+          const trashedCopy = await loadTrashedDocumentIfVisible(resolvedDocumentId, accessToken);
+          if (trashedCopy) {
+            applyTrashedDocumentView(resolvedDocumentId, trashedCopy);
+            return;
+          }
           clearCachedDocumentAccessLevel(resolvedDocumentId);
           const restrictedError = buildDocumentErrorState(
             new DocumentServiceApiError('The requested resource was not found.', 404)
@@ -783,6 +852,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isCloudReadInBackoff,
     refresh,
     isRealtimeConnected,
+    applyTrashedDocumentView,
   ]);
 
   const updateMeta = useCallback(
