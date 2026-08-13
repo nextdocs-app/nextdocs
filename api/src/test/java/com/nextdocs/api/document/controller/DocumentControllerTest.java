@@ -16,6 +16,7 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.service.DocumentService;
+import com.nextdocs.api.document.service.DocumentTreeService;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +47,9 @@ class DocumentControllerTest {
     private DocumentService documentService;
 
     @MockitoBean
+    private DocumentTreeService documentTreeService;
+
+    @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
 
     @MockitoBean
@@ -71,7 +75,16 @@ class DocumentControllerTest {
     @Test
     void create_success_returns201() throws Exception {
         DocumentResponse response = new DocumentResponse(
-                documentId, "My Doc", "AQID", "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "My Doc",
+                "AQID",
+                null,
+                null,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         when(documentService.create(eq(userId), any()))
                 .thenReturn(new DocumentService.CreateDocumentResult(response, true));
@@ -94,7 +107,16 @@ class DocumentControllerTest {
     @Test
     void create_existingClientDocument_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
-                documentId, "My Doc", "AQID", "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "My Doc",
+                "AQID",
+                null,
+                null,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         when(documentService.create(eq(userId), any()))
                 .thenReturn(new DocumentService.CreateDocumentResult(response, false));
@@ -118,7 +140,16 @@ class DocumentControllerTest {
     @Test
     void list_success_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
-                documentId, "My Doc", null, "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "My Doc",
+                null,
+                null,
+                null,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
         when(documentService.list(eq(userId), any(), eq(false))).thenReturn(page);
@@ -142,7 +173,16 @@ class DocumentControllerTest {
     @Test
     void update_success_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
-                documentId, "Updated", "AQID", "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "Updated",
+                "AQID",
+                null,
+                null,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         when(documentService.update(eq(userId), eq(documentId), any())).thenReturn(response);
 
@@ -174,6 +214,8 @@ class DocumentControllerTest {
                 documentId,
                 "Trashed",
                 null,
+                null,
+                null,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -192,7 +234,16 @@ class DocumentControllerTest {
     @Test
     void restore_success_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
-                documentId, "Restored", null, "Alice", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
+                documentId,
+                "Restored",
+                null,
+                null,
+                null,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
 
         when(documentService.restore(eq(userId), eq(documentId))).thenReturn(response);
 
