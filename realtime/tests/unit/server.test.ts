@@ -2,65 +2,9 @@ import { jest } from '@jest/globals';
 import request from 'supertest';
 import { EventEmitter } from 'events';
 
-jest.mock('ws', () => {
-  class MockWebSocketServer extends EventEmitter {
-    clients = { size: 0 };
-    close = jest.fn();
-    constructor() {
-      super();
-    }
-  }
-  return {
-    WebSocketServer: MockWebSocketServer,
-    WebSocket: { OPEN: 1 },
-  };
-});
-
-jest.mock('../../src/logger', () => ({
-  __esModule: true,
-  default: {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
-  },
-}));
-
-jest.mock('../../src/yjs-utils', () => ({
-  __esModule: true,
-  setupWSConnection: jest.fn(),
-  updateConnectionAccessLevel: jest.fn(),
-}));
-
-jest.mock('../../src/config', () => ({
-  __esModule: true,
-  default: {
-    port: 1234,
-    host: '0.0.0.0',
-    apiBaseUrl: 'http://localhost:8080',
-    corsOrigins: ['*'],
-    logLevel: 'info',
-    roomCleanupInterval: 300000,
-    roomInactiveTimeout: 3600000,
-    accessRevalidationIntervalMs: 5000,
-    fetchTimeoutMs: 5000,
-    unauthorizedAccessCooldownMs: 15000,
-    unauthorizedAccessWarnIntervalMs: 10000,
-    enforceMemoryThreshold: false,
-    limits: {
-      maxPayload: 5 * 1024 * 1024,
-      maxConnsPerIp: 200,
-      maxGlobalConns: 10000,
-      maxConnRatePerMin: 100,
-      maxMsgRatePerSec: 100,
-      memoryThreshold: 0.95,
-    },
-  },
-}));
-
-import { WebSocket } from 'ws';
-
 const VALID_ROOM_ID = '11111111-1111-1111-1111-111111111111';
+
+const WS_OPEN = 1;
 
 const waitForConnectionProcessing = async () => {
   await Promise.resolve();
@@ -77,6 +21,62 @@ describe('Server', () => {
 
   beforeEach(async () => {
     jest.resetModules();
+
+    await jest.unstable_mockModule('ws', () => {
+      class MockWebSocketServer extends EventEmitter {
+        clients: any = { size: 0 };
+        close = jest.fn();
+        constructor() {
+          super();
+        }
+      }
+      return {
+        WebSocketServer: MockWebSocketServer,
+        WebSocket: { OPEN: 1 },
+      };
+    });
+
+    await jest.unstable_mockModule('../../src/logger.js', () => ({
+      __esModule: true,
+      default: {
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn(),
+      },
+    }));
+
+    await jest.unstable_mockModule('../../src/yjs-utils.js', () => ({
+      __esModule: true,
+      setupWSConnection: jest.fn(),
+      updateConnectionAccessLevel: jest.fn(),
+    }));
+
+    await jest.unstable_mockModule('../../src/config.js', () => ({
+      __esModule: true,
+      default: {
+        port: 1234,
+        host: '0.0.0.0',
+        apiBaseUrl: 'http://localhost:8080',
+        corsOrigins: ['*'],
+        logLevel: 'info',
+        roomCleanupInterval: 300000,
+        roomInactiveTimeout: 3600000,
+        accessRevalidationIntervalMs: 5000,
+        fetchTimeoutMs: 5000,
+        unauthorizedAccessCooldownMs: 15000,
+        unauthorizedAccessWarnIntervalMs: 10000,
+        enforceMemoryThreshold: false,
+        limits: {
+          maxPayload: 5 * 1024 * 1024,
+          maxConnsPerIp: 200,
+          maxGlobalConns: 10000,
+          maxConnRatePerMin: 100,
+          maxMsgRatePerSec: 100,
+          memoryThreshold: 0.95,
+        },
+      },
+    }));
 
     fetchMock = jest.fn() as jest.MockedFunction<typeof fetch>;
     fetchMock.mockResolvedValue({
@@ -101,12 +101,12 @@ describe('Server', () => {
       arrayBuffers: 0,
     } as NodeJS.MemoryUsage);
 
-    const serverModule = await import('../../src/server');
+    const serverModule = await import('../../src/server.js');
     server = serverModule.server;
     wss = serverModule.wss;
     cleanupInactiveRooms = serverModule.cleanupInactiveRooms;
 
-    const yjsUtilsModule = await import('../../src/yjs-utils');
+    const yjsUtilsModule = await import('../../src/yjs-utils.js');
     setupWSConnectionMock = yjsUtilsModule.setupWSConnection;
   });
 
@@ -150,7 +150,7 @@ describe('Server', () => {
       };
       mockConn = new EventEmitter();
       (mockConn as any).close = jest.fn();
-      (mockConn as any).readyState = WebSocket.OPEN;
+      (mockConn as any).readyState = WS_OPEN;
       wss.clients.size = 0;
     });
 
@@ -235,7 +235,7 @@ describe('Server', () => {
 
         const firstConn: any = new EventEmitter();
         firstConn.close = jest.fn();
-        firstConn.readyState = WebSocket.OPEN;
+        firstConn.readyState = WS_OPEN;
         wss.emit('connection', firstConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -244,7 +244,7 @@ describe('Server', () => {
 
         const secondConn: any = new EventEmitter();
         secondConn.close = jest.fn();
-        secondConn.readyState = WebSocket.OPEN;
+        secondConn.readyState = WS_OPEN;
         wss.emit('connection', secondConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -255,7 +255,7 @@ describe('Server', () => {
 
         const thirdConn: any = new EventEmitter();
         thirdConn.close = jest.fn();
-        thirdConn.readyState = WebSocket.OPEN;
+        thirdConn.readyState = WS_OPEN;
         wss.emit('connection', thirdConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -284,7 +284,7 @@ describe('Server', () => {
 
         const firstConn: any = new EventEmitter();
         firstConn.close = jest.fn();
-        firstConn.readyState = WebSocket.OPEN;
+        firstConn.readyState = WS_OPEN;
         wss.emit('connection', firstConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -295,7 +295,7 @@ describe('Server', () => {
 
         const secondConn: any = new EventEmitter();
         secondConn.close = jest.fn();
-        secondConn.readyState = WebSocket.OPEN;
+        secondConn.readyState = WS_OPEN;
         wss.emit('connection', secondConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -306,7 +306,7 @@ describe('Server', () => {
 
         const thirdConn: any = new EventEmitter();
         thirdConn.close = jest.fn();
-        thirdConn.readyState = WebSocket.OPEN;
+        thirdConn.readyState = WS_OPEN;
         wss.emit('connection', thirdConn, mockReq);
         await waitForConnectionProcessing();
 
@@ -357,7 +357,7 @@ describe('Server', () => {
       };
       mockConn = new EventEmitter();
       (mockConn as any).close = jest.fn();
-      (mockConn as any).readyState = WebSocket.OPEN;
+      (mockConn as any).readyState = WS_OPEN;
 
       wss.clients.size = 0;
     });
@@ -475,7 +475,7 @@ describe('Server', () => {
       };
       mockConn = new EventEmitter();
       (mockConn as any).close = jest.fn();
-      (mockConn as any).readyState = WebSocket.OPEN;
+      (mockConn as any).readyState = WS_OPEN;
       wss.clients.size = 0;
     });
 

@@ -4,10 +4,9 @@ import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import * as Y from 'yjs';
 import { WebSocket } from 'ws';
-import logger from '../../src/logger';
 
-// Mock logger to avoid console output during tests
-jest.mock('../../src/logger', () => ({
+// Mock logger to avoid console output during tests (ESM)
+jest.unstable_mockModule('../../src/logger.js', () => ({
   __esModule: true,
   default: {
     debug: jest.fn(),
@@ -17,12 +16,10 @@ jest.mock('../../src/logger', () => ({
   },
 }));
 
-import {
-  setupWSConnection,
-  updateConnectionAccessLevel,
-  docs,
-  getDocsStats,
-} from '../../src/yjs-utils';
+const { default: logger } = await import('../../src/logger.js');
+
+const { setupWSConnection, updateConnectionAccessLevel, docs, getDocsStats } =
+  await import('../../src/yjs-utils.js');
 
 describe('Yjs Utils', () => {
   let mockConn: any;
