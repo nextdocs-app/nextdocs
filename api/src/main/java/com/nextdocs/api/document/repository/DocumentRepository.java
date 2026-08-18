@@ -37,12 +37,20 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // All direct children for a collection of parents, including trashed
     List<Document> findAllByParent_IdIn(Collection<UUID> parentIds);
 
-    // Private root documents owned by userId with personal navigation order
+    // Private root documents owned by userId without collaborators with personal navigation order
+    @Query("SELECT d, udo.orderKey FROM Document d "
+            + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
+            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
+            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id) "
+            + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
+    Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
+
+    // All owned root documents (private + owner-shared) owned by userId with personal navigation order
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
-    Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
+    Page<Object[]> findAllRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
     // Shared root documents (shared with userId OR owned by userId with collaborators)
     @Query("SELECT d, udo.orderKey FROM Document d "
@@ -106,6 +114,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // root (topmost contiguous trashed ancestor, or the document itself).
     @Query(value = "SELECT resolve_trash_access(:userId, :documentId)", nativeQuery = true)
     String resolveTrashAccess(@Param("userId") UUID userId, @Param("documentId") UUID documentId);
+
+    @Query(
+            value = "SELECT u.id::uuid AS document_id, resolve_trash_access(:userId, u.id::uuid) AS access_level "
+                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
+            nativeQuery = true)
+    List<Object[]> resolveTrashAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
 
     // Trashed documents the user may manage: EDIT-level trash access on the trash bundle root.
     // Documents grafted into another user's trashed subtree follow that subtree's fate and are

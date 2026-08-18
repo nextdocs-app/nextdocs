@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,7 +14,6 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
-import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -37,10 +35,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 
 @ExtendWith(MockitoExtension.class)
 class DocumentSharingServiceTest {
@@ -376,49 +370,6 @@ class DocumentSharingServiceTest {
         ArgumentCaptor<UserDocumentOrder> orderCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
         verify(userDocumentOrderRepository).saveAndFlush(orderCaptor.capture());
         assertTrue(orderCaptor.getValue().getOrderKey().compareTo("a5") < 0);
-    }
-
-    @Test
-    void listSharedWithMe_returnsUserNavOrderKeyForRootDocuments() {
-        UUID userId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
-
-        Document rootDoc = Document.builder()
-                .id(UUID.randomUUID())
-                .user(owner)
-                .title("Shared root")
-                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .build();
-
-        Document parent = Document.builder()
-                .id(UUID.randomUUID())
-                .user(owner)
-                .title("Parent")
-                .build();
-        Document nestedDoc = Document.builder()
-                .id(UUID.randomUUID())
-                .user(owner)
-                .title("Shared nested")
-                .parent(parent)
-                .siblingOrderKey("c0")
-                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .build();
-
-        Pageable pageable = PageRequest.of(0, 50);
-        Page<Document> page = new PageImpl<>(List.of(rootDoc, nestedDoc));
-
-        when(documentRepository.findSharedWithUserId(userId, pageable)).thenReturn(page);
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
-                .thenReturn(List.<Object[]>of(new Object[] {rootDoc.getId(), "a0"}));
-
-        Page<DocumentResponse> result = sharingService.listSharedWithMe(userId, pageable);
-
-        assertEquals("a0", result.getContent().get(0).orderKey());
-        assertNull(result.getContent().get(0).parentId());
-        assertEquals("c0", result.getContent().get(1).orderKey());
-        assertEquals(parent.getId(), result.getContent().get(1).parentId());
     }
 
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {

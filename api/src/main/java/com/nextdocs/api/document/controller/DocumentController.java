@@ -7,7 +7,6 @@ import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
-import com.nextdocs.api.document.dto.response.DocumentTreeNodeResponse;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -62,15 +61,18 @@ public class DocumentController {
     }
 
     @Operation(
-            summary = "List current user's documents",
-            description = "Returns a paged list of documents. By default only active documents owned by "
-                    + "the authenticated user are returned (ordered by last update). Use trashed=true to list "
-                    + "documents in trash (ordered by time moved to trash): those the user owns plus shared "
-                    + "documents on which they have at least EDIT access.",
+            summary = "List documents",
+            description = "Returns a paged list of documents filtered by parentId, scope, and trashed. "
+                    + "Use parentId=root for root-level documents, or parentId=<UUID> for direct children. "
+                    + "Use scope=private for unshared owned documents, scope=shared for shared documents, "
+                    + "or scope=all for all owned documents. Use trashed=true for trash.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
                         description = "Documents returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "400",
+                        description = "Invalid filter parameters"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "401",
                         description = "Authentication required")
@@ -78,10 +80,11 @@ public class DocumentController {
     @GetMapping
     public ResponseEntity<ApiResponse<PagedResponse<DocumentResponse>>> list(
             @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false) String parentId,
+            @RequestParam(required = false, defaultValue = "all") String scope,
             @RequestParam(required = false) Boolean trashed,
             @PageableDefault(size = 20) Pageable pageable) {
-        boolean trashedOnly = Boolean.TRUE.equals(trashed);
-        Page<DocumentResponse> page = documentService.list(principal.getId(), pageable, trashedOnly);
+        Page<DocumentResponse> page = documentService.list(principal.getId(), parentId, scope, trashed, pageable);
         return ResponseEntity.ok(ApiResponse.ok(PagedResponse.from(page)));
     }
 
@@ -210,69 +213,6 @@ public class DocumentController {
     }
 
     @Operation(
-            summary = "List root-level documents for the sidebar (paginated)",
-            description = "Returns root-level (no parent) non-trashed documents owned by "
-                    + "the authenticated user, ordered by order_key. Paginated.",
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
-                        description = "Root documents returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
-            })
-    @GetMapping("/tree/root")
-    public ResponseEntity<ApiResponse<PagedResponse<DocumentTreeNodeResponse>>> getRootDocuments(
-            @AuthenticationPrincipal UserPrincipal principal, @PageableDefault(size = 50) Pageable pageable) {
-        return ResponseEntity.ok(
-                ApiResponse.ok(PagedResponse.from(documentTreeService.getRootDocuments(principal.getId(), pageable))));
-    }
-
-    @Operation(
-            summary = "List shared documents for the sidebar (paginated)",
-            description = "Returns root-level documents in the authenticated user's Shared section "
-                    + "(both owner-shared and shared-with-me), ordered by personal order_key. Paginated.",
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
-                        description = "Shared documents returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
-            })
-    @GetMapping("/tree/shared")
-    public ResponseEntity<ApiResponse<PagedResponse<DocumentTreeNodeResponse>>> getSharedDocuments(
-            @AuthenticationPrincipal UserPrincipal principal, @PageableDefault(size = 50) Pageable pageable) {
-        return ResponseEntity.ok(ApiResponse.ok(
-                PagedResponse.from(documentTreeService.getSharedDocuments(principal.getId(), pageable))));
-    }
-
-    @Operation(
-            summary = "List direct children of a document (paginated)",
-            description = "Returns the direct non-trashed children of the given document, "
-                    + "ordered by order_key. Paginated. The authenticated user must be the owner "
-                    + "or have at least VIEW access.",
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
-                        description = "Children returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "404",
-                        description = "Parent document not found")
-            })
-    @GetMapping("/{id}/children")
-    public ResponseEntity<ApiResponse<PagedResponse<DocumentTreeNodeResponse>>> getChildren(
-            @AuthenticationPrincipal UserPrincipal principal,
-            @PathVariable UUID id,
-            @PageableDefault(size = 50) Pageable pageable) {
-        return ResponseEntity.ok(
-                ApiResponse.ok(PagedResponse.from(documentTreeService.getChildren(principal.getId(), id, pageable))));
-    }
-
-    @Operation(
             summary = "Move a document to a new parent / position",
             description =
                     "Relocates a document within the tree by updating its parent or personal navigation order. "
@@ -298,7 +238,7 @@ public class DocumentController {
                         description = "Document or sibling not found")
             })
     @PostMapping("/{id}/move")
-    public ResponseEntity<ApiResponse<DocumentTreeNodeResponse>> move(
+    public ResponseEntity<ApiResponse<DocumentResponse>> move(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @Valid @RequestBody DocumentMoveRequest request) {

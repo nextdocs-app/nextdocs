@@ -14,7 +14,9 @@ import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
 import java.time.OffsetDateTime;
@@ -80,6 +82,9 @@ class DocumentControllerTest {
                 "AQID",
                 null,
                 null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -112,6 +117,9 @@ class DocumentControllerTest {
                 "AQID",
                 null,
                 null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -138,13 +146,16 @@ class DocumentControllerTest {
     }
 
     @Test
-    void list_success_returns200() throws Exception {
+    void list_default_success_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
                 documentId,
                 "My Doc",
                 null,
                 null,
-                null,
+                "a0",
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -152,12 +163,137 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
-        when(documentService.list(eq(userId), any(), eq(false))).thenReturn(page);
+        when(documentService.list(eq(userId), eq(null), eq("all"), eq(null), any()))
+                .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents").with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.content[0].id").value(documentId.toString()));
+                .andExpect(jsonPath("$.data.content[0].id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data.content[0].hasChildren").value(false))
+                .andExpect(jsonPath("$.data.content[0].accessLevel").value("OWNER"));
+    }
+
+    @Test
+    void list_rootPrivate_success_returns200() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Root Private",
+                null,
+                null,
+                "a0",
+                true,
+                false,
+                DocumentAccessLevel.OWNER,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
+        when(documentService.list(eq(userId), eq("root"), eq("private"), eq(null), any()))
+                .thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents")
+                        .param("parentId", "root")
+                        .param("scope", "private")
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data.content[0].hasChildren").value(true))
+                .andExpect(jsonPath("$.data.content[0].hasCollaborators").value(false));
+    }
+
+    @Test
+    void list_rootShared_success_returns200() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Root Shared",
+                null,
+                null,
+                "a0",
+                false,
+                true,
+                DocumentAccessLevel.EDIT,
+                "Bob",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
+        when(documentService.list(eq(userId), eq("root"), eq("shared"), eq(null), any()))
+                .thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents")
+                        .param("parentId", "root")
+                        .param("scope", "shared")
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data.content[0].hasCollaborators").value(true))
+                .andExpect(jsonPath("$.data.content[0].accessLevel").value("EDIT"));
+    }
+
+    @Test
+    void list_children_success_returns200() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Child Doc",
+                null,
+                parentId,
+                "a0",
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
+        when(documentService.list(eq(userId), eq(parentId.toString()), eq("all"), eq(null), any()))
+                .thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents")
+                        .param("parentId", parentId.toString())
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].parentId").value(parentId.toString()));
+    }
+
+    @Test
+    void list_trashed_success_returns200() throws Exception {
+        OffsetDateTime deleted = OffsetDateTime.parse("2025-01-01T00:00:00Z");
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Trashed",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                deleted,
+                deleted.plusDays(30));
+
+        Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
+        when(documentService.list(eq(userId), eq(null), eq("all"), eq(true), any()))
+                .thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents").param("trashed", "true").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].deletedAt").exists());
     }
 
     @Test
@@ -178,6 +314,9 @@ class DocumentControllerTest {
                 "AQID",
                 null,
                 null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -208,30 +347,6 @@ class DocumentControllerTest {
     }
 
     @Test
-    void list_trashed_success_returns200() throws Exception {
-        OffsetDateTime deleted = OffsetDateTime.parse("2025-01-01T00:00:00Z");
-        DocumentResponse response = new DocumentResponse(
-                documentId,
-                "Trashed",
-                null,
-                null,
-                null,
-                "Alice",
-                OffsetDateTime.now(),
-                OffsetDateTime.now(),
-                deleted,
-                deleted.plusDays(30));
-
-        Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
-        when(documentService.list(eq(userId), any(), eq(true))).thenReturn(page);
-
-        mockMvc.perform(get("/api/v1/documents").param("trashed", "true").with(user(principal)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.content[0].deletedAt").exists());
-    }
-
-    @Test
     void restore_success_returns200() throws Exception {
         DocumentResponse response = new DocumentResponse(
                 documentId,
@@ -239,6 +354,9 @@ class DocumentControllerTest {
                 null,
                 null,
                 null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
@@ -251,6 +369,53 @@ class DocumentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.title").value("Restored"));
+    }
+
+    @Test
+    void move_success_returns200() throws Exception {
+        DocumentResponse moved = new DocumentResponse(
+                documentId,
+                "Moved",
+                null,
+                null,
+                "a1",
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        when(documentTreeService.move(eq(userId), eq(documentId), any(DocumentMoveRequest.class)))
+                .thenReturn(moved);
+
+        mockMvc.perform(post("/api/v1/documents/{id}/move", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "newParentId": null,
+                          "prevSiblingId": null,
+                          "nextSiblingId": null
+                        }
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data.orderKey").value("a1"));
+    }
+
+    @Test
+    void retiredTreeEndpoints_return404() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/tree/root").with(user(principal)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/documents/tree/shared").with(user(principal)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/documents/{id}/children", UUID.randomUUID())
+                        .with(user(principal)))
+                .andExpect(status().isNotFound());
     }
 
     @Test

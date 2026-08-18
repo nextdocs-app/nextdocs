@@ -9,7 +9,6 @@ import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
-import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -20,16 +19,12 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -223,14 +218,6 @@ public class DocumentSharingService {
     }
 
     @Transactional(readOnly = true)
-    public Page<DocumentResponse> listSharedWithMe(UUID userId, Pageable pageable) {
-        Page<Document> page = documentRepository.findSharedWithUserId(userId, pageable);
-        List<UUID> ids = page.getContent().stream().map(Document::getId).toList();
-        Map<UUID, String> navOrderKeys = fetchUserNavOrderKeys(userId, ids);
-        return page.map(doc -> toDocumentSummaryResponse(doc, navOrderKeys.get(doc.getId())));
-    }
-
-    @Transactional(readOnly = true)
     public DocumentAccessResponse getMyAccess(UUID userId, UUID documentId) {
         Document active =
                 documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
@@ -309,31 +296,5 @@ public class DocumentSharingService {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "OWNER is not allowed for share links.");
         }
         return accessLevel;
-    }
-
-    private Map<UUID, String> fetchUserNavOrderKeys(UUID userId, List<UUID> documentIds) {
-        if (documentIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, String> orderKeys = new HashMap<>();
-        for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, documentIds)) {
-            orderKeys.put((UUID) row[0], (String) row[1]);
-        }
-        return orderKeys;
-    }
-
-    private DocumentResponse toDocumentSummaryResponse(Document document, String navOrderKey) {
-        String orderKey = document.getParent() == null ? navOrderKey : document.getSiblingOrderKey();
-        return new DocumentResponse(
-                document.getId(),
-                document.getTitle(),
-                null,
-                document.getParent() != null ? document.getParent().getId() : null,
-                orderKey,
-                document.getCreatedBy(),
-                document.getCreatedAt(),
-                document.getUpdatedAt(),
-                document.getDeletedAt(),
-                null);
     }
 }

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -45,7 +46,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 
 @ExtendWith(MockitoExtension.class)
 class DocumentServiceTest {
@@ -65,6 +65,9 @@ class DocumentServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private DocumentListQueryHelper queryHelper;
+
     private DocumentProperties documentProperties;
 
     private DocumentService documentService;
@@ -79,7 +82,8 @@ class DocumentServiceTest {
                 userDocumentOrderRepository,
                 userRepository,
                 documentProperties,
-                permissionService);
+                permissionService,
+                queryHelper);
     }
 
     @Test
@@ -296,7 +300,7 @@ class DocumentServiceTest {
                 documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
 
         assertEquals("Updated title", response.title());
-        verify(permissionService).resolveAccess(requesterId, documentId);
+        verify(permissionService, atLeastOnce()).resolveAccess(requesterId, documentId);
     }
 
     @Test
@@ -355,20 +359,14 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
-        Page<Document> page = new PageImpl<>(List.of(root1, root2, child));
-        when(documentRepository.findAllByUser_IdAndDeletedAtIsNull(eq(userId), any(Pageable.class)))
+        Page<DocumentResponse> page = new PageImpl<>(List.of());
+        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(false), any()))
                 .thenReturn(page);
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(
-                        eq(userId), eq(List.of(root1.getId(), root2.getId()))))
-                .thenReturn(List.<Object[]>of(new Object[] {root1.getId(), "a1"}, new Object[] {root2.getId(), "a2"}));
 
-        Page<DocumentResponse> result = documentService.list(userId, null, false);
+        Page<DocumentResponse> result = documentService.list(userId, null, "all", false, null);
 
-        assertEquals(3, result.getContent().size());
-        assertEquals("a1", result.getContent().get(0).orderKey());
-        assertEquals("a2", result.getContent().get(1).orderKey());
-        assertEquals("b5", result.getContent().get(2).orderKey());
-        verify(userDocumentOrderRepository, never()).findOrderKeyByUserIdAndDocumentId(any(), any());
+        assertEquals(0, result.getContent().size());
+        verify(queryHelper).list(eq(userId), eq(null), eq("all"), eq(false), any());
     }
 
     @Test
@@ -1232,10 +1230,24 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
-        when(documentRepository.findAccessibleTrashedDocuments(eq(userId), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(trashed)));
+        DocumentResponse trashedResponse = new DocumentResponse(
+                trashed.getId(),
+                "Trashed",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                "T",
+                trashed.getCreatedAt(),
+                trashed.getUpdatedAt(),
+                trashed.getDeletedAt(),
+                null);
+        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(true), any()))
+                .thenReturn(new PageImpl<>(List.of(trashedResponse)));
 
-        Page<DocumentResponse> result = documentService.list(userId, null, true);
+        Page<DocumentResponse> result = documentService.list(userId, null, "all", true, null);
 
         assertEquals(1, result.getContent().size());
         assertNotNull(result.getContent().get(0).deletedAt());

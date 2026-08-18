@@ -1,5 +1,6 @@
 package com.nextdocs.api.document.dto.response;
 
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -16,6 +17,15 @@ public record DocumentResponse(
         UUID parentId,
 
         @Schema(description = "Fractional ordering key") String orderKey,
+
+        @Schema(description = "Whether this document has active non-trashed children")
+        boolean hasChildren,
+
+        @Schema(description = "Whether this document has external collaborators")
+        boolean hasCollaborators,
+
+        @Schema(description = "Effective access level of the requesting user")
+        DocumentAccessLevel accessLevel,
 
         @Schema(description = "Creator label") String createdBy,
         @Schema(description = "Creation timestamp") OffsetDateTime createdAt,

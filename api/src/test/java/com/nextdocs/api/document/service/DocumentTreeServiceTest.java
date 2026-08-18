@@ -15,7 +15,7 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
-import com.nextdocs.api.document.dto.response.DocumentTreeNodeResponse;
+import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -34,10 +34,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 
 @ExtendWith(MockitoExtension.class)
 class DocumentTreeServiceTest {
@@ -79,167 +75,6 @@ class DocumentTreeServiceTest {
     }
 
     @Test
-    void getRootDocuments_returnsPrivateRootOrderedList() {
-        Document root1 = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Root 1")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        Document root2 = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Root 2")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 50);
-        Page<Object[]> queryPage = new PageImpl<>(List.of(new Object[] {root1, "a0"}, new Object[] {root2, "a1"}));
-
-        when(documentRepository.findPrivateRootDocuments(userId, pageable)).thenReturn(queryPage);
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-
-        Page<DocumentTreeNodeResponse> result = documentTreeService.getRootDocuments(userId, pageable);
-
-        assertEquals(2, result.getContent().size());
-        assertEquals("Root 1", result.getContent().get(0).title());
-        assertEquals("a0", result.getContent().get(0).orderKey());
-        assertEquals(DocumentAccessLevel.OWNER, result.getContent().get(0).effectiveAccessLevel());
-        assertEquals("Root 2", result.getContent().get(1).title());
-        assertEquals("a1", result.getContent().get(1).orderKey());
-    }
-
-    @Test
-    void getSharedDocuments_returnsSharedRootOrderedList() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        Document sharedWithMe = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Shared with me")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        Document ownerShared = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Shared by me")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 50);
-        Page<Object[]> queryPage =
-                new PageImpl<>(List.of(new Object[] {sharedWithMe, "a0"}, new Object[] {ownerShared, "a1"}));
-
-        when(documentRepository.findSharedRootDocuments(userId, pageable)).thenReturn(queryPage);
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.<Object[]>of(new Object[] {sharedWithMe.getId(), "EDIT"}));
-
-        Page<DocumentTreeNodeResponse> result = documentTreeService.getSharedDocuments(userId, pageable);
-
-        assertEquals(2, result.getContent().size());
-        assertEquals("Shared with me", result.getContent().get(0).title());
-        assertEquals("a0", result.getContent().get(0).orderKey());
-        assertEquals(DocumentAccessLevel.EDIT, result.getContent().get(0).effectiveAccessLevel());
-        assertEquals("Shared by me", result.getContent().get(1).title());
-        assertEquals("a1", result.getContent().get(1).orderKey());
-        assertEquals(DocumentAccessLevel.OWNER, result.getContent().get(1).effectiveAccessLevel());
-    }
-
-    @Test
-    void getChildren_returnsOrderedList() {
-        UUID parentId = UUID.randomUUID();
-        Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
-
-        Document child1 = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Child1")
-                .parent(parent)
-                .siblingOrderKey("a0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        Document child2 = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Child2")
-                .parent(parent)
-                .siblingOrderKey("a1")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 50);
-        Page<Document> childrenPage = new PageImpl<>(List.of(child1, child2));
-
-        when(permissionService.requireReadAccess(userId, parentId)).thenReturn(parent);
-        when(documentRepository.findAllByParent_IdAndDeletedAtIsNull(eq(parentId), any(Pageable.class)))
-                .thenReturn(childrenPage);
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.of());
-
-        Page<DocumentTreeNodeResponse> children = documentTreeService.getChildren(userId, parentId, pageable);
-
-        assertEquals(2, children.getContent().size());
-        assertEquals("Child1", children.getContent().get(0).title());
-        assertEquals("a0", children.getContent().get(0).orderKey());
-        assertEquals("Child2", children.getContent().get(1).title());
-        assertEquals("a1", children.getContent().get(1).orderKey());
-    }
-
-    @Test
-    void getChildren_withCustomSort_preservesSort() {
-        UUID parentId = UUID.randomUUID();
-        Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
-        Document child = Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Child")
-                .parent(parent)
-                .siblingOrderKey("a0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(
-                0, 10, org.springframework.data.domain.Sort.by("title").descending());
-        Page<Document> childrenPage = new PageImpl<>(List.of(child));
-
-        when(permissionService.requireReadAccess(userId, parentId)).thenReturn(parent);
-        org.mockito.ArgumentCaptor<Pageable> pageableCaptor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
-        when(documentRepository.findAllByParent_IdAndDeletedAtIsNull(eq(parentId), pageableCaptor.capture()))
-                .thenReturn(childrenPage);
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.of());
-
-        Page<DocumentTreeNodeResponse> children = documentTreeService.getChildren(userId, parentId, pageable);
-
-        assertEquals(1, children.getContent().size());
-        assertEquals(pageable.getSort(), pageableCaptor.getValue().getSort());
-    }
-
-    @Test
-    void getChildren_noAccess_throwsNotFound() {
-        UUID parentId = UUID.randomUUID();
-
-        when(permissionService.requireReadAccess(userId, parentId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
-
-        assertThrows(
-                ApiException.class, () -> documentTreeService.getChildren(userId, parentId, PageRequest.of(0, 50)));
-    }
-
-    @Test
     void move_reparent_deletesOwnerUserDocumentOrder_andPreservesCollaboratorOrders() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
@@ -277,7 +112,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a0") > 0);
@@ -325,12 +160,12 @@ class DocumentTreeServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNull(result.parentId());
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a0") > 0);
-        assertEquals(DocumentAccessLevel.VIEW, result.effectiveAccessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
 
         // Verify ONLY userDocumentOrder was saved, and Document was NOT modified/saved!
         verify(userDocumentOrderRepository).saveAndFlush(any(UserDocumentOrder.class));
@@ -378,7 +213,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertEquals(parentId, result.parentId());
         assertNotNull(result.orderKey());
@@ -430,7 +265,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         // One row for the lazily-created sibling order, one for the moved doc.
@@ -478,14 +313,14 @@ class DocumentTreeServiceTest {
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNull(result.parentId());
         assertNotNull(result.orderKey());
         // Generated key should be strictly between a0 and a2
         assertTrue(result.orderKey().compareTo("a0") > 0);
         assertTrue(result.orderKey().compareTo("a2") < 0);
-        assertEquals(DocumentAccessLevel.VIEW, result.effectiveAccessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
 
         // Verify ONLY userDocumentOrder for userId was saved, Document and owner's orders were never touched
         ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
@@ -666,7 +501,7 @@ class DocumentTreeServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         verify(documentRepository, times(2)).saveAndFlush(any(Document.class));
         assertNotNull(result.orderKey());
@@ -715,7 +550,7 @@ class DocumentTreeServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNull(result.parentId());
         assertNotNull(result.orderKey());
@@ -787,7 +622,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         verify(userDocumentOrderRepository, times(2)).saveAndFlush(any(UserDocumentOrder.class));
@@ -838,7 +673,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a4") > 0);
@@ -889,7 +724,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a4zt") > 0);
@@ -932,7 +767,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a4") > 0);
@@ -988,7 +823,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertEquals("a8", siblingOrder.getOrderKey());
@@ -1031,11 +866,11 @@ class DocumentTreeServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
-        DocumentTreeNodeResponse result = documentTreeService.move(userId, docId, request);
+        DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a0") > 0);
-        assertEquals(DocumentAccessLevel.VIEW, result.effectiveAccessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
     }
 
     @Test
@@ -1085,73 +920,5 @@ class DocumentTreeServiceTest {
         ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertEquals("sibling does not belong to root navigation", ex.getMessage());
-    }
-
-    @Test
-    void getSharedDocuments_returnsSharedRootAndFloatedNestedDocuments() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        Document parent = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Company Wiki")
-                .build();
-        Document nestedFloated = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Design System")
-                .parent(parent)
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 50);
-        List<Object[]> rows = List.<Object[]>of(new Object[] {nestedFloated, "a0"});
-        Page<Object[]> queryPage = new PageImpl<>(rows);
-
-        when(documentRepository.findSharedRootDocuments(userId, pageable)).thenReturn(queryPage);
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.<Object[]>of(new Object[] {nestedFloated.getId(), "EDIT"}));
-
-        Page<DocumentTreeNodeResponse> result = documentTreeService.getSharedDocuments(userId, pageable);
-
-        assertEquals(1, result.getContent().size());
-        assertEquals("Design System", result.getContent().get(0).title());
-        assertEquals(parent.getId(), result.getContent().get(0).parentId());
-        assertEquals("a0", result.getContent().get(0).orderKey());
-        assertEquals(DocumentAccessLevel.EDIT, result.getContent().get(0).effectiveAccessLevel());
-    }
-
-    @Test
-    void getChildren_batchQueriesWithDifferentDriverTypes_handlesCastingSafely() {
-        UUID parentId = UUID.randomUUID();
-        UUID childId = UUID.randomUUID();
-        Document childDoc = Document.builder()
-                .id(childId)
-                .user(user)
-                .title("Child Doc")
-                .siblingOrderKey("a0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        when(permissionService.requireReadAccess(userId, parentId)).thenReturn(childDoc);
-        when(documentRepository.findAllByParent_IdAndDeletedAtIsNull(eq(parentId), any()))
-                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(childDoc)));
-
-        // Simulate native query returning String docId and Integer/BigInteger count
-        when(documentRepository.countNonTrashedChildrenByParentIds(any()))
-                .thenReturn(List.<Object[]>of(new Object[] {childId.toString(), Integer.valueOf(3)}));
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.<Object[]>of(new Object[] {childId.toString(), "EDIT"}));
-
-        var page = documentTreeService.getChildren(
-                userId, parentId, org.springframework.data.domain.PageRequest.of(0, 10));
-
-        assertEquals(1, page.getContent().size());
-        DocumentTreeNodeResponse node = page.getContent().get(0);
-        assertEquals(childId, node.id());
-        assertTrue(node.hasChildren());
-        assertEquals(DocumentAccessLevel.EDIT, node.effectiveAccessLevel());
     }
 }

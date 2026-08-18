@@ -5,7 +5,7 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
-import com.nextdocs.api.document.dto.response.DocumentTreeNodeResponse;
+import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -14,21 +14,13 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,110 +45,7 @@ public class DocumentTreeService {
     @Lazy
     private DocumentTreeService selfProxy;
 
-    @Transactional(readOnly = true)
-    public Page<DocumentTreeNodeResponse> getRootDocuments(UUID userId, Pageable pageable) {
-        Page<Object[]> rows = documentRepository.findPrivateRootDocuments(userId, pageable);
-        List<Document> docs =
-                rows.getContent().stream().map(r -> (Document) r[0]).toList();
-        if (docs.isEmpty()) {
-            return Page.empty(pageable);
-        }
-
-        List<UUID> docIds = docs.stream().map(Document::getId).toList();
-        Map<UUID, Long> childCounts = fetchChildCounts(docIds);
-
-        List<DocumentTreeNodeResponse> nodes = rows.getContent().stream()
-                .map(r -> {
-                    Document doc = (Document) r[0];
-                    String orderKey = (String) r[1];
-                    boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
-                    return new DocumentTreeNodeResponse(
-                            doc.getId(),
-                            doc.getTitle(),
-                            null,
-                            orderKey,
-                            hasChildren,
-                            DocumentAccessLevel.OWNER,
-                            doc.getCreatedAt(),
-                            doc.getUpdatedAt());
-                })
-                .toList();
-
-        return new PageImpl<>(nodes, pageable, rows.getTotalElements());
-    }
-
-    @Transactional(readOnly = true)
-    public Page<DocumentTreeNodeResponse> getSharedDocuments(UUID userId, Pageable pageable) {
-        Page<Object[]> rows = documentRepository.findSharedRootDocuments(userId, pageable);
-        List<Document> docs =
-                rows.getContent().stream().map(r -> (Document) r[0]).toList();
-        if (docs.isEmpty()) {
-            return Page.empty(pageable);
-        }
-
-        List<UUID> docIds = docs.stream().map(Document::getId).toList();
-        Map<UUID, Long> childCounts = fetchChildCounts(docIds);
-        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
-
-        List<DocumentTreeNodeResponse> nodes = rows.getContent().stream()
-                .map(r -> {
-                    Document doc = (Document) r[0];
-                    String orderKey = (String) r[1];
-                    boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
-                    DocumentAccessLevel access = doc.getUser().getId().equals(userId)
-                            ? DocumentAccessLevel.OWNER
-                            : accessLevels.getOrDefault(doc.getId(), null);
-                    UUID parentId = doc.getParent() != null ? doc.getParent().getId() : null;
-                    return new DocumentTreeNodeResponse(
-                            doc.getId(),
-                            doc.getTitle(),
-                            parentId,
-                            orderKey,
-                            hasChildren,
-                            access,
-                            doc.getCreatedAt(),
-                            doc.getUpdatedAt());
-                })
-                .toList();
-
-        return new PageImpl<>(nodes, pageable, rows.getTotalElements());
-    }
-
-    @Transactional(readOnly = true)
-    public Page<DocumentTreeNodeResponse> getChildren(UUID userId, UUID parentId, Pageable pageable) {
-        permissionService.requireReadAccess(userId, parentId);
-
-        Pageable effectivePageable = pageable;
-        if (effectivePageable == null) {
-            effectivePageable = PageRequest.of(0, 50, Sort.by("siblingOrderKey"));
-        } else if (effectivePageable.getSort().isUnsorted()) {
-            effectivePageable = PageRequest.of(
-                    effectivePageable.getPageNumber(),
-                    effectivePageable.getPageSize(),
-                    Sort.by(Sort.Order.asc("siblingOrderKey"), Sort.Order.asc("id")));
-        }
-        Page<Document> page = documentRepository.findAllByParent_IdAndDeletedAtIsNull(parentId, effectivePageable);
-
-        List<UUID> ids = page.getContent().stream().map(Document::getId).toList();
-        if (ids.isEmpty()) {
-            return Page.empty(pageable);
-        }
-
-        Map<UUID, Long> childCounts = fetchChildCounts(ids);
-        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, ids);
-
-        return page.map(doc -> new DocumentTreeNodeResponse(
-                doc.getId(),
-                doc.getTitle(),
-                parentId,
-                doc.getSiblingOrderKey(),
-                childCounts.getOrDefault(doc.getId(), 0L) > 0,
-                accessLevels.getOrDefault(doc.getId(), null),
-                doc.getCreatedAt(),
-                doc.getUpdatedAt()));
-    }
-
-    public DocumentTreeNodeResponse move(UUID userId, UUID documentId, DocumentMoveRequest request) {
+    public DocumentResponse move(UUID userId, UUID documentId, DocumentMoveRequest request) {
         int attempt = 0;
         while (true) {
             try {
@@ -179,7 +68,7 @@ public class DocumentTreeService {
     }
 
     @Transactional
-    public DocumentTreeNodeResponse moveAndPersist(
+    public DocumentResponse moveAndPersist(
             UUID userId, UUID documentId, DocumentMoveRequest request, boolean rebuildFirst) {
         Document doc;
         if (request.newParentId() != null) {
@@ -250,16 +139,22 @@ public class DocumentTreeService {
             }
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
+            boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
             DocumentAccessLevel access = permissionService.resolveAccess(userId, documentId);
-            return new DocumentTreeNodeResponse(
+            return new DocumentResponse(
                     saved.getId(),
                     saved.getTitle(),
+                    null,
                     newParent.getId(),
                     newSiblingOrderKey,
                     hasChildren,
+                    hasCollaborators,
                     access,
+                    saved.getCreatedBy(),
                     saved.getCreatedAt(),
-                    saved.getUpdatedAt());
+                    saved.getUpdatedAt(),
+                    null,
+                    null);
         } else {
             // Root-level move or personal Shared section reordering
             Document targetDoc = documentRepository
@@ -363,21 +258,27 @@ public class DocumentTreeService {
             }
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
+            boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
             DocumentAccessLevel access = doc.getUser().getId().equals(userId)
                     ? DocumentAccessLevel.OWNER
                     : permissionService.resolveAccess(userId, documentId);
 
             UUID resultParentId = doc.getParent() != null ? doc.getParent().getId() : null;
 
-            return new DocumentTreeNodeResponse(
+            return new DocumentResponse(
                     doc.getId(),
                     doc.getTitle(),
+                    null,
                     resultParentId,
                     newUserOrderKey,
                     hasChildren,
+                    hasCollaborators,
                     access,
+                    doc.getCreatedBy(),
                     doc.getCreatedAt(),
-                    doc.getUpdatedAt());
+                    doc.getUpdatedAt(),
+                    null,
+                    null);
         }
     }
 
@@ -533,29 +434,5 @@ public class DocumentTreeService {
             cursor = ancestor.getParent() != null ? ancestor.getParent().getId() : null;
             depth++;
         }
-    }
-
-    private Map<UUID, Long> fetchChildCounts(List<UUID> docIds) {
-        Map<UUID, Long> childCounts = new HashMap<>();
-        for (Object[] row : documentRepository.countNonTrashedChildrenByParentIds(docIds)) {
-            if (row[0] != null && row[1] != null) {
-                UUID parentId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
-                long count = ((Number) row[1]).longValue();
-                childCounts.put(parentId, count);
-            }
-        }
-        return childCounts;
-    }
-
-    private Map<UUID, DocumentAccessLevel> fetchAccessLevels(UUID userId, List<UUID> docIds) {
-        Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
-        String joinedIds = docIds.stream().map(UUID::toString).collect(Collectors.joining(","));
-        for (Object[] row : documentRepository.resolveEffectiveAccessBatch(userId, joinedIds)) {
-            if (row[0] != null && row[1] != null) {
-                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
-                accessLevels.put(docId, DocumentAccessLevel.valueOf(row[1].toString()));
-            }
-        }
-        return accessLevels;
     }
 }

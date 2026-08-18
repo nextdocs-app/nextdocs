@@ -31,9 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +53,7 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
+    private final DocumentListQueryHelper queryHelper;
 
     @Autowired
     @Lazy
@@ -152,27 +151,8 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
-    public Page<DocumentResponse> list(UUID userId, Pageable pageable, boolean trashedOnly) {
-        Pageable effectivePageable = pageable;
-        if (effectivePageable == null) {
-            effectivePageable = PageRequest.of(0, 20);
-        }
-
-        if (effectivePageable.getSort().isUnsorted()) {
-            Sort sort = trashedOnly
-                    ? Sort.by(Sort.Order.desc("deletedAt"), Sort.Order.asc("id"))
-                    : Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.desc("createdAt"), Sort.Order.asc("id"));
-            effectivePageable =
-                    PageRequest.of(effectivePageable.getPageNumber(), effectivePageable.getPageSize(), sort);
-        }
-
-        Page<Document> page = trashedOnly
-                ? documentRepository.findAccessibleTrashedDocuments(userId, effectivePageable)
-                : documentRepository.findAllByUser_IdAndDeletedAtIsNull(userId, effectivePageable);
-
-        Map<UUID, String> rootOrderKeys = trashedOnly ? Map.of() : fetchRootOrderKeys(userId, page.getContent());
-
-        return page.map(document -> toResponse(document, false, rootOrderKeys));
+    public Page<DocumentResponse> list(UUID userId, String parentId, String scope, Boolean trashed, Pageable pageable) {
+        return queryHelper.list(userId, parentId, scope, trashed, pageable);
     }
 
     @Transactional(readOnly = true)
@@ -456,10 +436,20 @@ public class DocumentService {
                                 ? userDocumentOrderRepository
                                         .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
                                         .orElse(null)
-                                : userDocumentOrderRepository
-                                        .findOrderKeyByUserIdAndDocumentId(
-                                                document.getUser().getId(), document.getId())
-                                        .orElse(null);
+                                : null;
+
+        boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(document.getId());
+        boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(document.getId());
+        DocumentAccessLevel accessLevel;
+        if (callerUserId == null) {
+            accessLevel = DocumentAccessLevel.VIEW;
+        } else if (document.getUser().getId().equals(callerUserId)) {
+            accessLevel = DocumentAccessLevel.OWNER;
+        } else if (document.getDeletedAt() != null) {
+            accessLevel = permissionService.resolveTrashAccess(callerUserId, document.getId());
+        } else {
+            accessLevel = permissionService.resolveAccess(callerUserId, document.getId());
+        }
 
         return new DocumentResponse(
                 document.getId(),
@@ -471,6 +461,9 @@ public class DocumentService {
                         : null,
                 document.getParent() != null ? document.getParent().getId() : null,
                 orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
                 document.getCreatedBy(),
                 document.getCreatedAt(),
                 document.getUpdatedAt(),
