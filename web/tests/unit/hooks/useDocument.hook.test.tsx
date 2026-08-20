@@ -324,7 +324,9 @@ describe('useDocument', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(getCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', 'token-1');
+    expect(getCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', 'token-1', {
+      includeTrashed: true,
+    });
     expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, {
       touchUpdatedAt: false,
     });
@@ -668,7 +670,9 @@ describe('useDocument', () => {
     });
 
     expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
-    expect(getCloudDocumentSpy).toHaveBeenLastCalledWith('cloud-id', 'token-1');
+    expect(getCloudDocumentSpy).toHaveBeenLastCalledWith('cloud-id', 'token-1', {
+      includeTrashed: true,
+    });
 
     authState.accessToken = 'token-2';
     rerender();
@@ -1057,6 +1061,58 @@ describe('useDocument', () => {
     expect(store.getState().document.meta?.deletedAt).toBeUndefined();
   });
 
+  it('should restore document as an EDIT collaborator and retain EDIT accessLevel', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Collaborator Trashed Doc',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      deletedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-restore-test',
+    });
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    restoreCloudDocumentFromTrashSpy.mockResolvedValue(undefined);
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'trashed-collab-id',
+      allowed: true,
+      accessLevel: 'EDIT',
+      owner: false,
+    });
+
+    const store = createTestStore();
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return <Provider store={store}>{children}</Provider>;
+    }
+
+    const { result } = renderHook(() => useDocument('trashed-collab-id'), { wrapper: Wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+
+    await act(async () => {
+      await result.current.restore();
+    });
+
+    expect(restoreCloudDocumentFromTrashSpy).toHaveBeenCalledWith(
+      'trashed-collab-id',
+      'token-restore-test'
+    );
+
+    expect(result.current.isReadOnly).toBe(false);
+    expect(result.current.meta?.deletedAt).toBeUndefined();
+    expect(result.current.accessLevel).toBe('EDIT');
+    expect(store.getState().document.meta?.deletedAt).toBeUndefined();
+  });
+
   it('should detect external restore (e.g. from sidebar), update local Redux state and cache access level to OWNER', async () => {
     const ydoc = new Y.Doc();
     const trashedMeta = {
@@ -1109,6 +1165,61 @@ describe('useDocument', () => {
 
     expect(result.current.meta?.deletedAt).toBeUndefined();
     expect(result.current.accessLevel).toBe('OWNER');
+    expect(store.getState().document.meta?.deletedAt).toBeUndefined();
+  });
+
+  it('should detect external restore as an EDIT collaborator and retain EDIT accessLevel', async () => {
+    const ydoc = new Y.Doc();
+    const trashedMeta = {
+      title: 'Trashed Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      deletedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-restore-test',
+    });
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'external-collab-id',
+      allowed: true,
+      accessLevel: 'EDIT',
+      owner: false,
+    });
+
+    const store = createTestStore();
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return <Provider store={store}>{children}</Provider>;
+    }
+
+    const { result } = renderHook(() => useDocument('external-collab-id'), { wrapper: Wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+
+    const restoredMeta = {
+      ...trashedMeta,
+      deletedAt: undefined,
+    };
+    loadDocumentSpy.mockResolvedValue({ ydoc, meta: restoredMeta });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('local-documents-changed'));
+    });
+
+    await waitFor(() => {
+      expect(result.current.isReadOnly).toBe(false);
+    });
+
+    expect(result.current.meta?.deletedAt).toBeUndefined();
+    expect(result.current.accessLevel).toBe('EDIT');
     expect(store.getState().document.meta?.deletedAt).toBeUndefined();
   });
 
@@ -1323,6 +1434,13 @@ describe('useDocument', () => {
       });
 
       getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'OWNER',
+        owner: true,
+        trashed: true,
+      });
 
       const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
 
@@ -1330,12 +1448,14 @@ describe('useDocument', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      // The trashed document loads for the owner without an access check and stays open.
+      // The trashed document loads read-only for the owner with their real trash-scope
+      // access level (drives the manage-style trash banner).
       expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
+      expect(result.current.accessLevel).toBe('OWNER');
       expect(result.current.isReadOnly).toBe(true);
       expect(result.current.errorState).toBeNull();
       expect(result.current.ydoc).toBe(ydoc);
-      expect(getMyAccessSpy).not.toHaveBeenCalled();
+      expect(getMyAccessSpy).toHaveBeenCalled();
 
       // No realtime provider should be created for a trashed document: the realtime
       // server strictly rejects access checks for trashed docs (1008 close), which would
@@ -1363,14 +1483,14 @@ describe('useDocument', () => {
         isInitializing: false,
       });
 
-      // getCloudDocument: initial load returns the active doc; the access-revocation
-      // re-check returns the trashed copy (owner can still view it via REST).
+      // getCloudDocument: initial load returns the active doc; the realtime close-handler
+      // re-check returns the trashed copy (the user can still view it via REST).
       getCloudDocumentSpy
         .mockResolvedValueOnce({ ydoc, meta: activeMeta })
         .mockResolvedValueOnce({ ydoc, meta: trashedMeta });
 
-      // getMyAccess: the loadDoc check and the immediate revalidation check are allowed;
-      // the realtime close-handler recheck reports access revoked for the trashed doc.
+      // getMyAccess: the loadDoc check sees an active document; the realtime close-handler
+      // recheck reports the document is now trashed with pre-trash access preserved.
       getMyAccessSpy
         .mockResolvedValueOnce({
           documentId: validUuid,
@@ -1383,12 +1503,7 @@ describe('useDocument', () => {
           allowed: true,
           accessLevel: 'EDIT',
           owner: false,
-        })
-        .mockResolvedValueOnce({
-          documentId: validUuid,
-          allowed: false,
-          accessLevel: null,
-          owner: false,
+          trashed: true,
         });
 
       const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
@@ -1416,15 +1531,179 @@ describe('useDocument', () => {
         registeredCloseHandler!({ code: 1008 });
       });
 
-      // The owner keeps seeing the document as a read-only trash view instead of a
-      // spurious "access restricted" error.
+      // The user keeps seeing the document as a read-only trash view instead of a
+      // spurious "access restricted" error, with their real pre-trash access level.
       await waitFor(() => {
         expect(result.current.errorState).toBeNull();
       });
       expect(result.current.meta?.deletedAt).toBe('2024-01-02T00:00:00.000Z');
-      expect(result.current.accessLevel).toBe('VIEW');
+      expect(result.current.accessLevel).toBe('EDIT');
       expect(result.current.isReadOnly).toBe(true);
       expect(result.current.ydoc).toBe(ydoc);
+    });
+
+    it('should fallback to VIEW accessLevel when getMyAccess transiently fails for a trashed doc', async () => {
+      const ydoc = new Y.Doc();
+      const trashedMeta = {
+        title: 'Trashed Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        deletedAt: '2024-01-02T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-1',
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+      getMyAccessSpy.mockRejectedValueOnce(new TypeError('Network error'));
+
+      const { result } = renderHook(() => useDocument('trashed-doc-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.accessLevel).toBe('VIEW');
+      expect(result.current.isReadOnly).toBe(true);
+    });
+
+    it('should not enter restricted state if a document was restored between getMyAccess and getCloudDocument on close', async () => {
+      const ydoc = new Y.Doc();
+      const activeMeta = {
+        title: 'Restored Document',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      const validUuid = '550e8400-e29b-41d4-a716-446655440000';
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-race-test',
+      });
+
+      // Initial load: returns active doc
+      // Close recheck: returns active restored doc (deletedAt is undefined)
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: activeMeta });
+
+      // getMyAccess in close handler saw trashed: true
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          trashed: true,
+        });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+
+      // Trigger 1008 close
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      // Document was restored, so access should NOT be revoked (no restricted error)
+      await act(async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.meta?.deletedAt).toBeUndefined();
+    });
+
+    it('should initialize isReadOnly to true for shared documents before getMyAccess resolves', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Shared Document',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-shared',
+      });
+
+      let resolveAccess!: (val: unknown) => void;
+      const accessPromise = new Promise((res) => {
+        resolveAccess = res;
+      });
+      getMyAccessSpy.mockReturnValue(accessPromise);
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      const { result } = renderHook(
+        () => useDocument('shared-doc-id', { isSharedDocument: true }),
+        { wrapper: createWrapper() }
+      );
+
+      // Initially, isReadOnly must be true (safe default for shared docs)
+      expect(result.current.isReadOnly).toBe(true);
+
+      // Now resolve access to EDIT
+      await act(async () => {
+        resolveAccess({
+          documentId: 'shared-doc-id',
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+        });
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.accessLevel).toBe('EDIT');
+      expect(result.current.isReadOnly).toBe(false);
+    });
+
+    it('should preserve cached accessLevel on trashed document when network error occurs', async () => {
+      const ydoc = new Y.Doc();
+      const trashedMeta = {
+        title: 'Trashed Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        deletedAt: '2024-01-02T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-1',
+      });
+
+      writeCachedDocumentAccessLevel('cached-trash-id', 'EDIT');
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+      getMyAccessSpy.mockRejectedValueOnce(new TypeError('Network error'));
+
+      const { result } = renderHook(() => useDocument('cached-trash-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.accessLevel).toBe('EDIT');
+      expect(result.current.isReadOnly).toBe(true);
     });
   });
 });

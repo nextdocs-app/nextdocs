@@ -173,25 +173,6 @@ async function resolveLocalFallbackDocument(
   };
 }
 
-/**
- * Fetches a document whose active access may have just been revoked (e.g. it was moved to
- * trash from another tab/device). Returns the trashed copy when the caller is the owner -
- * trashed documents are served read-only to their owner over REST (includeTrashed=true) -
- * or null when the document is truly inaccessible (active but revoked, permanently deleted,
- * or not the owner).
- */
-async function loadTrashedDocumentIfVisible(
-  documentId: string,
-  token: string
-): Promise<DocumentLoadResult | null> {
-  try {
-    const result = await documentService.getCloudDocument(documentId, token);
-    return result.meta.deletedAt ? result : null;
-  } catch {
-    return null;
-  }
-}
-
 export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const id = documentId;
   const isSharedDocument = options?.isSharedDocument === true;
@@ -199,10 +180,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const { currentDocumentId, meta, isLoading, error } = useAppSelector((state) => state.document);
   const { isAuthenticated, accessToken, user, isInitializing, refresh } = useAuth();
   const { isOnline } = useNetworkStatus();
+  const initialFallbackAccessLevel =
+    readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
   const accessTokenRef = useRef<string | null>(accessToken);
-  const accessLevelRef = useRef<DocumentAccessLevel | null>('EDIT');
+  const accessLevelRef = useRef<DocumentAccessLevel | null>(initialFallbackAccessLevel);
   const [resolvedDocumentId, setResolvedDocumentId] = useState(id);
-  const [accessLevel, setAccessLevel] = useState<DocumentAccessLevel | null>('EDIT');
+  const [accessLevel, setAccessLevel] = useState<DocumentAccessLevel | null>(
+    initialFallbackAccessLevel
+  );
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
@@ -223,12 +208,18 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // when a new document is loaded (instead of reading from
   // the module-level singleton at render time, which may be stale)
   const [ydoc, setLocalYDoc] = useState<Y.Doc | null>(null);
+  const ydocRef = useRef<Y.Doc | null>(null);
 
-  // When the owner loses active access because their document was moved to trash
-  // (e.g. from another tab/device), surface the read-only trash view instead of a
-  // spurious "access restricted" error.
+  // When a document is moved to trash (e.g. from another tab/device), surface the
+  // read-only trash view instead of a spurious "access restricted" error. Anyone who
+  // held pre-trash access gets the view; only EDIT/OWNER holders may restore.
   const applyTrashedDocumentView = useCallback(
-    (documentId: string, result: DocumentLoadResult) => {
+    (
+      documentId: string,
+      result: DocumentLoadResult,
+      trashAccessLevel?: DocumentAccessLevel | null
+    ) => {
+      ydocRef.current = result.ydoc;
       setLocalYDoc(result.ydoc);
       setYDoc(result.ydoc);
       dispatch(
@@ -237,12 +228,44 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           meta: result.meta,
         })
       );
-      setAccessLevel('VIEW');
-      // The trashed doc renders read-only; don't leave a stale cached level (e.g. EDIT)
-      // behind that could misrepresent permissions.
-      clearCachedDocumentAccessLevel(documentId);
+      const nextLevel = trashAccessLevel ?? 'VIEW';
+      accessLevelRef.current = nextLevel;
+      setAccessLevel(nextLevel);
+      // Preserve the pre-trash access level in cache so a refresh shows the
+      // correct Restore affordance immediately (Editor.tsx canManageTrash).
+      // Reading is still gated by meta.deletedAt, so cached EDIT does not
+      // make a trashed doc editable.
+      if (trashAccessLevel) {
+        writeCachedDocumentAccessLevel(documentId, trashAccessLevel);
+      } else {
+        clearCachedDocumentAccessLevel(documentId);
+      }
       setErrorState(null);
       dispatch(setError(null));
+    },
+    [dispatch]
+  );
+
+  // Shared transition for "you can no longer see this document": drops the in-memory doc,
+  // clears any cached access level, and surfaces the restricted-error panel. `source` is
+  // either a status code (generic not-found) or the API error that triggered it.
+  const enterRestrictedState = useCallback(
+    (documentId: string, source: DocumentServiceApiError | number) => {
+      clearCachedDocumentAccessLevel(documentId);
+      const restrictedError =
+        typeof source === 'number'
+          ? buildDocumentErrorState(
+              new DocumentServiceApiError('The requested resource was not found.', source)
+            )
+          : buildDocumentErrorState(source);
+      setErrorState(restrictedError);
+      ydocRef.current = null;
+      setLocalYDoc(null);
+      setYDoc(null);
+      dispatch(clearDocument());
+      dispatch(setError(restrictedError.description));
+      accessLevelRef.current = null;
+      setAccessLevel(null);
     },
     [dispatch]
   );
@@ -254,6 +277,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   useEffect(() => {
     accessLevelRef.current = accessLevel;
   }, [accessLevel]);
+
+  useEffect(() => {
+    ydocRef.current = ydoc;
+  }, [ydoc]);
 
   useEffect(() => {
     if (!isAuthenticated || isInitializing || errorState === null || ydoc !== null || isLoading) {
@@ -280,8 +307,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       dispatch(setError(null));
       setErrorState(null);
       setLocalYDoc(null);
+      ydocRef.current = null;
       setResolvedDocumentId(id);
       lastLoadContextKeyRef.current = null;
+      const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
+      accessLevelRef.current = initialLevel;
+      setAccessLevel(initialLevel);
       return;
     }
 
@@ -298,13 +329,16 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       isSharedDocument ? 'shared' : 'private',
     ].join(':');
     const isSameLoadContext = lastLoadContextKeyRef.current === loadContextKey;
-    const hasLoadedDocumentForContext = isSameLoadContext && ydoc !== null;
+    const hasLoadedDocumentForContext = isSameLoadContext && ydocRef.current !== null;
 
     if (hasLoadedDocumentForContext) {
       return;
     }
 
     lastLoadContextKeyRef.current = loadContextKey;
+    const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
+    accessLevelRef.current = initialLevel;
+    setAccessLevel(initialLevel);
 
     let cancelled = false;
 
@@ -334,15 +368,22 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             result = fallback.result;
           } else {
             try {
-              result = await documentService.getCloudDocument(id, token);
+              result = await documentService.getCloudDocument(id, token, {
+                includeTrashed: true,
+              });
               loadedFromCloud = true;
-
               clearCloudReadBackoff();
             } catch (cloudErr) {
               if (cloudErr instanceof DocumentServiceApiError && cloudErr.status === 401) {
                 // Stale token: trigger silent re-auth and fall back to local IDB.
                 // The new accessToken from refreshSessionThunk will re-trigger loadDoc.
                 void refresh();
+              } else if (
+                cloudErr instanceof DocumentServiceApiError &&
+                (cloudErr.status === 403 || cloudErr.status === 404)
+              ) {
+                enterRestrictedState(id, cloudErr);
+                return;
               } else if (!isConnectivityError(cloudErr)) {
                 throw cloudErr;
               } else {
@@ -400,72 +441,63 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           }
         }
 
+        const isTrashedDoc = !!result.meta.deletedAt;
+
+        if (isTrashedDoc && !isAuthenticated) {
+          enterRestrictedState(effectiveId, 404);
+          return;
+        }
+
         if (!cancelled) {
-          const isTrashedDoc = !!result.meta.deletedAt;
           if (
             isAuthenticated &&
             token &&
             !isCloudReadInBackoff() &&
-            !hasPendingSyncForRequestedDoc &&
-            !isTrashedDoc
+            !hasPendingSyncForRequestedDoc
           ) {
             try {
               const myAccess = await documentService.getMyAccess(effectiveId, token);
               if (!myAccess.allowed || !myAccess.accessLevel) {
-                clearCachedDocumentAccessLevel(effectiveId);
-                const restrictedError = buildDocumentErrorState(
-                  new DocumentServiceApiError('The requested resource was not found.', 404)
-                );
-                setErrorState(restrictedError);
-                setLocalYDoc(null);
-                setYDoc(null);
-                dispatch(clearDocument());
-                dispatch(setError(restrictedError.description));
-                setAccessLevel(null);
+                enterRestrictedState(effectiveId, 404);
                 return;
               }
+              // Cache the level even for trashed docs so refresh does not
+              // flicker to read-only before getMyAccess resolves. The doc
+              // stays read-only via meta.deletedAt regardless of cached level.
               writeCachedDocumentAccessLevel(effectiveId, myAccess.accessLevel);
+              accessLevelRef.current = myAccess.accessLevel;
               setAccessLevel(myAccess.accessLevel);
             } catch (accessErr) {
               if (
                 accessErr instanceof DocumentServiceApiError &&
                 (accessErr.status === 403 || accessErr.status === 404)
               ) {
-                clearCachedDocumentAccessLevel(effectiveId);
-                const restrictedError = buildDocumentErrorState(accessErr);
-                setErrorState(restrictedError);
-                setLocalYDoc(null);
-                setYDoc(null);
-                dispatch(clearDocument());
-                dispatch(setError(restrictedError.description));
-                setAccessLevel(null);
+                enterRestrictedState(effectiveId, accessErr);
                 return;
               }
 
               // Access lookup is advisory for UI state; keep the most recently known access level
               // when the network drops so cached shared docs do not become editable offline.
-              console.warn(
-                'Unable to fetch document access level, using cached/default access level:',
-                accessErr
-              );
-              setAccessLevel(
-                resolveAuthenticatedFallbackAccessLevel(effectiveId, {
-                  currentAccessLevel: accessLevelRef.current,
-                  isSharedDocument,
-                })
-              );
+              const fallbackLevel = isTrashedDoc
+                ? (readCachedDocumentAccessLevel(effectiveId) ?? accessLevelRef.current ?? 'VIEW')
+                : resolveAuthenticatedFallbackAccessLevel(effectiveId, {
+                    currentAccessLevel: accessLevelRef.current,
+                    isSharedDocument,
+                  });
+              accessLevelRef.current = fallbackLevel;
+              setAccessLevel(fallbackLevel);
             }
           } else {
-            setAccessLevel(
-              isTrashedDoc
-                ? 'VIEW'
-                : isAuthenticated
-                  ? resolveAuthenticatedFallbackAccessLevel(effectiveId, {
-                      currentAccessLevel: accessLevelRef.current,
-                      isSharedDocument,
-                    })
-                  : guestAccessLevel
-            );
+            const fallbackLevel = isTrashedDoc
+              ? (readCachedDocumentAccessLevel(effectiveId) ?? accessLevelRef.current ?? 'VIEW')
+              : isAuthenticated
+                ? resolveAuthenticatedFallbackAccessLevel(effectiveId, {
+                    currentAccessLevel: accessLevelRef.current,
+                    isSharedDocument,
+                  })
+                : guestAccessLevel;
+            accessLevelRef.current = fallbackLevel;
+            setAccessLevel(fallbackLevel);
           }
 
           if (isAuthenticated && token && loadedFromCloud) {
@@ -479,6 +511,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
           }
 
+          ydocRef.current = result.ydoc;
           setResolvedDocumentId(effectiveId);
           setYDoc(result.ydoc);
           setLocalYDoc(result.ydoc);
@@ -495,6 +528,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         if (!cancelled) {
           const nextError = buildDocumentErrorState(err);
           setErrorState(nextError);
+          ydocRef.current = null;
           setLocalYDoc(null);
           setYDoc(null);
           dispatch(clearDocument());
@@ -509,6 +543,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
     // Clear stale ydoc immediately so the editor shows loading state
     setLocalYDoc(null);
+    ydocRef.current = null;
     setResolvedDocumentId(id);
     dispatch(clearDocument());
     loadDoc();
@@ -523,7 +558,6 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isAuthenticated,
     accessToken,
     isInitializing,
-    ydoc,
     isOnline,
     isSharedDocument,
     user?.id,
@@ -589,20 +623,47 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           if (token) {
             const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
             if (closeHandlerCancelled) return;
-            if (!myAccess.allowed || !myAccess.accessLevel) {
-              // The realtime server rejected this connection (1008). Before treating it as
-              // a revocation, check whether the user can still view the document from trash
-              // (e.g. it was moved to trash from another tab/device). Trashed documents are
-              // served read-only to their owner over REST.
-              const trashedCopy = await loadTrashedDocumentIfVisible(resolvedDocumentId, token);
-              if (closeHandlerCancelled) return;
-              if (trashedCopy) {
-                applyTrashedDocumentView(resolvedDocumentId, trashedCopy);
-                provider.shouldConnect = false;
-                setIsRealtimeConnected(false);
-                setRealtimeProvider((current) => (current === provider ? null : current));
+            if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
+              // The realtime server strictly rejects access checks for trashed documents,
+              // so a 1008 close here means the document moved to trash (from another
+              // tab/device), not that access was revoked. Anyone who held pre-trash access
+              // gets the read-only trash view.
+              try {
+                const cloudCopy = await documentService.getCloudDocument(
+                  resolvedDocumentId,
+                  token,
+                  { includeTrashed: true }
+                );
+                if (closeHandlerCancelled) return;
+                if (cloudCopy.meta.deletedAt) {
+                  applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
+                  provider.shouldConnect = false;
+                  setIsRealtimeConnected(false);
+                  setRealtimeProvider((current) => (current === provider ? null : current));
+                  return;
+                }
+                // The document was restored between getMyAccess and getCloudDocument:
+                // keep the document active and allow reconnection.
+                writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
+                setAccessLevel(myAccess.accessLevel);
+                provider.shouldConnect = true;
+                return;
+              } catch (cloudErr) {
+                if (closeHandlerCancelled) return;
+                if (
+                  cloudErr instanceof DocumentServiceApiError &&
+                  (cloudErr.status === 403 || cloudErr.status === 404)
+                ) {
+                  // Trash view unavailable (e.g. purged in the meantime) - treat as revoked.
+                  handleAccessRevoked(cloudErr.status);
+                  return;
+                }
+                console.warn('Failed to fetch trashed document status on close:', cloudErr);
                 return;
               }
+            }
+            if (!myAccess.allowed || !myAccess.accessLevel) {
+              // Access has been officially revoked/restricted.
               handleAccessRevoked(404);
               return;
             }
@@ -636,16 +697,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
       const handleAccessRevoked = (statusCode: number = 404) => {
         if (closeHandlerCancelled) return;
-        clearCachedDocumentAccessLevel(resolvedDocumentId);
-        const restrictedError = buildDocumentErrorState(
-          new DocumentServiceApiError('The requested resource was not found.', statusCode)
-        );
-        setErrorState(restrictedError);
-        setLocalYDoc(null);
-        setYDoc(null);
-        dispatch(clearDocument());
-        dispatch(setError(restrictedError.description));
-        setAccessLevel(null);
+        enterRestrictedState(resolvedDocumentId, statusCode);
 
         provider.shouldConnect = false;
         setIsRealtimeConnected(false);
@@ -691,6 +743,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     refresh,
     dispatch,
     applyTrashedDocumentView,
+    enterRestrictedState,
   ]);
 
   // Listen for server-pushed access-level changes and apply them immediately.
@@ -786,24 +839,37 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     const checkAccessLevel = async () => {
       try {
         const myAccess = await documentService.getMyAccess(resolvedDocumentId, accessToken);
-        if (!myAccess.allowed || !myAccess.accessLevel) {
-          // Before treating this as a revocation, check whether the user can still view
-          // the document from trash (e.g. it was moved to trash from another tab/device).
-          const trashedCopy = await loadTrashedDocumentIfVisible(resolvedDocumentId, accessToken);
-          if (trashedCopy) {
-            applyTrashedDocumentView(resolvedDocumentId, trashedCopy);
+        if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
+          // The document moved to trash between polls - swap to the read-only trash view
+          // for anyone who held pre-trash access.
+          try {
+            const cloudCopy = await documentService.getCloudDocument(
+              resolvedDocumentId,
+              accessToken,
+              { includeTrashed: true }
+            );
+            if (cloudCopy.meta.deletedAt) {
+              applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
+              return;
+            }
+            // The document was restored between getMyAccess and getCloudDocument:
+            writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
+            setAccessLevel(myAccess.accessLevel);
+            return;
+          } catch (cloudErr) {
+            if (
+              cloudErr instanceof DocumentServiceApiError &&
+              (cloudErr.status === 403 || cloudErr.status === 404)
+            ) {
+              enterRestrictedState(resolvedDocumentId, cloudErr);
+              return;
+            }
+            console.warn('Failed to fetch trashed document status:', cloudErr);
             return;
           }
-          clearCachedDocumentAccessLevel(resolvedDocumentId);
-          const restrictedError = buildDocumentErrorState(
-            new DocumentServiceApiError('The requested resource was not found.', 404)
-          );
-          setErrorState(restrictedError);
-          setLocalYDoc(null);
-          setYDoc(null);
-          dispatch(clearDocument());
-          dispatch(setError(restrictedError.description));
-          setAccessLevel(null);
+        }
+        if (!myAccess.allowed || !myAccess.accessLevel) {
+          enterRestrictedState(resolvedDocumentId, 404);
           return;
         }
         writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
@@ -818,14 +884,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         }
 
         if (err instanceof DocumentServiceApiError && (err.status === 403 || err.status === 404)) {
-          clearCachedDocumentAccessLevel(resolvedDocumentId);
-          const restrictedError = buildDocumentErrorState(err);
-          setErrorState(restrictedError);
-          setLocalYDoc(null);
-          setYDoc(null);
-          dispatch(clearDocument());
-          dispatch(setError(restrictedError.description));
-          setAccessLevel(null);
+          enterRestrictedState(resolvedDocumentId, err);
           return;
         }
 
@@ -853,6 +912,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     refresh,
     isRealtimeConnected,
     applyTrashedDocumentView,
+    enterRestrictedState,
   ]);
 
   const updateMeta = useCallback(
@@ -972,10 +1032,20 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               updatedAt,
             })
           );
-          // We don't need to check for the access level and directly set it
-          // to OWNER because only they have the option to restore the document.
-          setAccessLevel('OWNER');
-          writeCachedDocumentAccessLevel(resolvedDocumentId, 'OWNER');
+          let nextLevel: DocumentAccessLevel = accessLevelRef.current ?? 'OWNER';
+          const token = accessTokenRef.current;
+          if (token) {
+            try {
+              const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+              if (myAccess.allowed && myAccess.accessLevel) {
+                nextLevel = myAccess.accessLevel;
+              }
+            } catch {
+              // fallback
+            }
+          }
+          setAccessLevel(nextLevel);
+          writeCachedDocumentAccessLevel(resolvedDocumentId, nextLevel);
         }
       } catch (err) {
         console.warn('Failed to check document status on docs changed:', err);
@@ -1006,8 +1076,19 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       })
     );
 
-    setAccessLevel('OWNER');
-    writeCachedDocumentAccessLevel(resolvedDocumentId, 'OWNER');
+    let nextLevel: DocumentAccessLevel = accessLevelRef.current ?? 'OWNER';
+    try {
+      const myAccess = await documentService.getMyAccess(resolvedDocumentId, accessToken);
+      if (myAccess.allowed && myAccess.accessLevel) {
+        nextLevel = myAccess.accessLevel;
+      }
+    } catch {
+      // fallback
+    }
+
+    accessLevelRef.current = nextLevel;
+    setAccessLevel(nextLevel);
+    writeCachedDocumentAccessLevel(resolvedDocumentId, nextLevel);
   }, [isAuthenticated, accessToken, resolvedDocumentId, dispatch]);
 
   return {
@@ -1015,7 +1096,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     ydoc,
     meta,
     accessLevel,
-    isReadOnly: isReadOnlyAccessLevel(accessLevel) || !!meta?.deletedAt,
+    isReadOnly:
+      isReadOnlyAccessLevel(accessLevel) ||
+      (isSharedDocument && accessLevel === null) ||
+      !!meta?.deletedAt,
     isRealtimeConnected,
     realtimeProvider,
     errorState,

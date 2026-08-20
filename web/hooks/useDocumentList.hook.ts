@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
@@ -22,6 +22,8 @@ import {
   setShowingAll,
   setShowingAllShared,
 } from '@/stores/documentList/documentList.slice';
+import { resetTree as resetSidebarTree } from '@/stores/sidebarTree/sidebarTree.slice';
+import { resetTree as resetSharedTree } from '@/stores/sharedTree/sharedTree.slice';
 
 export type { LocalDocumentEntry, SharedDocumentEntry };
 
@@ -53,6 +55,11 @@ export function useDocumentList() {
     trashHasMore,
   } = useAppSelector((state) => state.documentList);
 
+  const sharedDocuments = useMemo(
+    () => combineSharedDocuments(sharedWithMeDocuments, ownerSharedDocuments),
+    [sharedWithMeDocuments, ownerSharedDocuments]
+  );
+
   useEffect(() => {
     if (isInitializing) {
       return;
@@ -63,6 +70,8 @@ export function useDocumentList() {
 
     if (isAuthTransition) {
       dispatch(resetOnAuthTransition({ isAuthenticated }));
+      dispatch(resetSidebarTree());
+      dispatch(resetSharedTree());
     }
 
     prevIsAuthenticatedRef.current = isAuthenticated;
@@ -394,7 +403,7 @@ export function useDocumentList() {
 
   return {
     documents,
-    sharedDocuments: combineSharedDocuments(sharedWithMeDocuments, ownerSharedDocuments),
+    sharedDocuments,
     trashedDocuments,
     isLoading,
     isLoadingMore,

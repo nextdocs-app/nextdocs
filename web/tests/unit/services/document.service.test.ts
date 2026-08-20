@@ -396,4 +396,160 @@ describe('document.service', () => {
       window.removeEventListener('local-documents-changed', listener);
     });
   });
+
+  describe('getMyAccess', () => {
+    it('should fetch and return document access including trashed status', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            documentId: 'doc-123',
+            allowed: true,
+            accessLevel: 'EDIT',
+            owner: false,
+            trashed: true,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.getMyAccess('doc-123', 'access-token');
+
+      expect(access).toEqual({
+        documentId: 'doc-123',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        trashed: true,
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc-123/my-access'),
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer access-token',
+          }),
+        })
+      );
+    });
+  });
+
+  describe('getCloudDocument', () => {
+    it('should not append includeTrashed query param by default', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'doc-123',
+            title: 'Doc',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.getCloudDocument('doc-123', 'access-token');
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123',
+        expect.anything()
+      );
+    });
+
+    it('should append includeTrashed=true when explicitly requested', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'doc-123',
+            title: 'Doc',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.getCloudDocument('doc-123', 'access-token', {
+        includeTrashed: true,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123?includeTrashed=true',
+        expect.anything()
+      );
+    });
+
+    it('should support legacy boolean param for includeTrashed', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'doc-123',
+            title: 'Doc',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.getCloudDocument(
+        'doc-123',
+        'access-token',
+        true as unknown as { includeTrashed: boolean }
+      );
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123?includeTrashed=true',
+        expect.anything()
+      );
+    });
+  });
+
+  describe('fetchApi error message handling', () => {
+    it('should prioritize message over error when both are provided', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          success: false,
+          data: null,
+          error: 'Validation failed',
+          message: 'parentId cannot be combined with trashed=true',
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(documentService.getCloudDocument('doc-123', 'access-token')).rejects.toThrow(
+        'parentId cannot be combined with trashed=true'
+      );
+    });
+
+    it('should fall back to error when message is omitted', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          success: false,
+          data: null,
+          error: 'Validation failed',
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(documentService.getCloudDocument('doc-123', 'access-token')).rejects.toThrow(
+        'Validation failed'
+      );
+    });
+  });
 });

@@ -3,9 +3,9 @@ import { toSortableTimestamp } from '@/lib/timestamp.util';
 import type { DocumentMeta } from '@/types/document.types';
 import type { LocalDocumentEntry, SharedDocumentEntry } from './documentList.types';
 
-export const INITIAL_DOCS_COUNT = 7;
-export const PAGE_SIZE = 20;
-export const COLLABORATOR_CHECK_CONCURRENCY = 4;
+export const DOCS_PAGE_SIZE = 50;
+export const INITIAL_DOCS_COUNT = DOCS_PAGE_SIZE;
+export const PAGE_SIZE = DOCS_PAGE_SIZE;
 export const CACHE_SYNC_CONCURRENCY = 4;
 
 export async function mapWithConcurrency<T, R>(
@@ -81,33 +81,25 @@ export function combineSharedDocuments(
   return mergeUniqueDocuments(sharedWithMeDocuments, ownerSharedDocuments);
 }
 
-export async function classifyOwnedDocuments(
-  docs: LocalDocumentEntry[],
-  isAuthenticated: boolean,
-  accessToken: string | null
-): Promise<{ privateDocs: LocalDocumentEntry[]; sharedByOwnerDocs: SharedDocumentEntry[] }> {
-  if (!isAuthenticated || !accessToken || docs.length === 0) {
-    return { privateDocs: docs, sharedByOwnerDocs: [] };
+export function classifyOwnedDocuments(
+  docs: (LocalDocumentEntry & { parentId: string | null; hasCollaborators?: boolean })[]
+): { privateDocs: LocalDocumentEntry[]; sharedByOwnerDocs: SharedDocumentEntry[] } {
+  if (docs.length === 0) {
+    return { privateDocs: [], sharedByOwnerDocs: [] };
   }
 
-  const checks = await mapWithConcurrency(docs, COLLABORATOR_CHECK_CONCURRENCY, async (doc) => {
-    try {
-      const collaborators = await documentService.listCollaborators(doc.id, accessToken);
-      const hasExtraUser = collaborators.some(
-        (collaborator) => collaborator.accessLevel !== 'OWNER'
-      );
-      return { doc, hasExtraUser };
-    } catch (error) {
-      console.warn(`Failed to resolve collaborators for document ${doc.id}:`, error);
-      return { doc, hasExtraUser: false };
-    }
-  });
-
   return {
-    privateDocs: checks.filter((entry) => !entry.hasExtraUser).map((entry) => entry.doc),
-    sharedByOwnerDocs: checks
-      .filter((entry) => entry.hasExtraUser)
-      .map((entry) => ({ ...entry.doc, relationship: 'owner' })),
+    // Nested documents (real parentId set) stay in the private tree under their
+    // actual parent even when they have collaborators; only root-level shared
+    // documents are surfaced in the Shared section.
+    privateDocs: docs.filter((doc) => !doc.hasCollaborators || doc.parentId != null),
+    sharedByOwnerDocs: docs
+      .filter((doc) => Boolean(doc.hasCollaborators) && doc.parentId == null)
+      .map((doc) => ({
+        ...doc,
+        relationship: 'owner' as const,
+        accessLevel: 'OWNER' as const,
+      })),
   };
 }
 
@@ -151,7 +143,9 @@ export async function ensureCloudDocsCachedLocally(
     cacheSyncInFlight.add(flightKey);
 
     try {
-      const cloudDoc = await documentService.getCloudDocument(doc.id, accessToken);
+      const cloudDoc = await documentService.getCloudDocument(doc.id, accessToken, {
+        includeTrashed: false,
+      });
       await documentService.saveDocument(doc.id, cloudDoc.ydoc, cloudDoc.meta, {
         touchUpdatedAt: false,
       });
