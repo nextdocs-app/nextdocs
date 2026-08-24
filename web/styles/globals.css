@@ -193,6 +193,34 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
 
+/* Sidebar tree drag & drop indicators.
+   Reorder line and reparent highlight use the same blue as the block editor
+   (block selection outline / drop cursor) in both light and dark modes. */
+.nd-tree-drop-line {
+  background-color: rgb(100 160 255 / 0.5);
+}
+
+.nd-tree-drop-highlight {
+  background-color: rgb(100 160 255 / 0.2) !important;
+}
+
+/* Grabbing hand cursor while a sidebar tree drag is in progress */
+body.nd-is-dragging,
+body.nd-is-dragging * {
+  cursor: grabbing !important;
+}
+
+/* Block editor drop cursor: same blue as the sidebar tree indicators.
+   BlockNote sets the background color inline, so !important is required. */
+.prosemirror-dropcursor-block,
+.prosemirror-dropcursor-block-horizontal,
+.prosemirror-dropcursor-block-vertical-left,
+.prosemirror-dropcursor-block-vertical-right,
+.prosemirror-dropcursor-inline,
+.prosemirror-dropcursor-vertical {
+  background-color: rgb(100 160 255 / 0.5) !important;
+}
+
 @layer components {
   .document-title-input {
     -webkit-font-smoothing: antialiased;

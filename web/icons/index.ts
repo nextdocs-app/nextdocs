@@ -23,4 +23,5 @@ export { GlobeSolid } from './GlobeSolid';
 export { Google } from './Google';
 export { Lock } from './Lock';
 export { UserCircle } from './UserCircle';
+export { Plus } from './Plus';
 export type { IconProps } from './IconBase';

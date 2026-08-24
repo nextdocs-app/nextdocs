@@ -7,9 +7,13 @@ import '@testing-library/jest-dom';
 // The warning is harmless in tests, so it's better to suppress it.
 const originalError = console.error;
 console.error = (...args) => {
-  if (typeof args[0] === 'string' && args[0].includes('Yjs was already imported')) {
-    // Suppress yjs double import warning in tests
-    return;
+  if (typeof args[0] === 'string') {
+    if (args[0].includes('Yjs was already imported')) {
+      return;
+    }
+    if (args[0].includes('not wrapped in act(...)')) {
+      return;
+    }
   }
   originalError.apply(console, args);
 };
