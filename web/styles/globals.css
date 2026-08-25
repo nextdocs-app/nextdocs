@@ -35,6 +35,7 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   --nd-comments-rail-width: 20rem;
+  --nd-sidebar-width: 256px;
 
   /* Editor Dropdown / Suggestion Menu Custom Variables */
   --editor-dropdown-radius: 8px;
@@ -1088,6 +1089,10 @@ body.nd-is-dragging * {
 
 .nd-doc-toolbar {
   transition: right 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nd-doc-toolbar-left {
+  transition: left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (min-width: 768px) {
