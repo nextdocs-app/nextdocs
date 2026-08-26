@@ -6,6 +6,7 @@ import com.nextdocs.api.common.response.PagedResponse;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
+import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
@@ -14,6 +15,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -129,6 +131,43 @@ public class DocumentController {
     @GetMapping("/{id}/public")
     public ResponseEntity<ApiResponse<DocumentResponse>> getPublic(@PathVariable UUID id) {
         return ResponseEntity.ok(ApiResponse.ok(documentService.getPublic(id)));
+    }
+
+    @Operation(
+            summary = "Get document breadcrumbs hierarchy",
+            description = "Returns the ancestor hierarchy path from the root document down to the specified document.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Hierarchy path returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found")
+            })
+    @GetMapping("/{id}/path")
+    public ResponseEntity<ApiResponse<List<DocumentBreadcrumbResponse>>> getBreadcrumbs(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(documentService.getBreadcrumbs(principal.getId(), id)));
+    }
+
+    @Operation(
+            summary = "Get public document breadcrumbs hierarchy",
+            description = "Returns the ancestor hierarchy path for a publicly accessible document.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Public hierarchy path returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found or not shared publicly")
+            })
+    @SecurityRequirements({})
+    @GetMapping("/{id}/public/path")
+    public ResponseEntity<ApiResponse<List<DocumentBreadcrumbResponse>>> getPublicBreadcrumbs(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(documentService.getPublicBreadcrumbs(id)));
     }
 
     @Operation(

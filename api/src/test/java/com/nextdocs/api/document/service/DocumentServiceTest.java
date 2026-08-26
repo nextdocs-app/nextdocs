@@ -22,6 +22,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
+import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -1252,6 +1253,301 @@ class DocumentServiceTest {
         assertEquals(1, result.getContent().size());
         assertNotNull(result.getContent().get(0).deletedAt());
         assertNull(result.getContent().get(0).orderKey());
+    }
+
+    @Test
+    void getBreadcrumbs_owner_returnsFullHierarchy() {
+        UUID ownerId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Root")
+                .parent(null)
+                .build();
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Child")
+                .parent(root)
+                .build();
+
+        Document subChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("SubChild")
+                .parent(child)
+                .build();
+
+        when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
+        when(permissionService.resolveAccess(ownerId, subChild.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveAccess(ownerId, child.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, subChild.getId());
+
+        assertEquals(3, crumbs.size());
+        assertEquals("Root", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertEquals("Child", crumbs.get(1).title());
+        assertEquals(root.getId(), crumbs.get(1).parentId());
+        assertEquals("SubChild", crumbs.get(2).title());
+        assertEquals(child.getId(), crumbs.get(2).parentId());
+    }
+
+    @Test
+    void getBreadcrumbs_trashedDocument_returnsBreadcrumbsForUserWithTrashAccess() {
+        UUID ownerId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Project Alpha")
+                .parent(null)
+                .build();
+
+        Document trashedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Deleted Spec")
+                .parent(root)
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(documentRepository.findById(trashedChild.getId())).thenReturn(Optional.of(trashedChild));
+        when(permissionService.resolveTrashAccess(ownerId, trashedChild.getId()))
+                .thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, trashedChild.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Project Alpha", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertEquals("Deleted Spec", crumbs.get(1).title());
+        assertEquals(root.getId(), crumbs.get(1).parentId());
+    }
+
+    @Test
+    void getBreadcrumbs_collaboratorOnlyOnChild_stopsAtChildAndDoesNotExposePrivateParents() {
+        UUID collaboratorId = UUID.randomUUID();
+        User owner =
+                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Secret Root")
+                .parent(null)
+                .build();
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Secret Parent")
+                .parent(root)
+                .build();
+
+        Document subChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Shared SubChild")
+                .parent(child)
+                .build();
+
+        when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
+        when(permissionService.resolveAccess(collaboratorId, subChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        // Collaborator does NOT have access to the parent "Secret Parent"
+        when(permissionService.resolveAccess(collaboratorId, child.getId())).thenReturn(null);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(collaboratorId, subChild.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Shared SubChild", crumbs.get(0).title());
+        assertEquals(subChild.getId(), crumbs.get(0).id());
+        assertNull(crumbs.get(0).parentId());
+        // Verify that resolveAccess on root was never even attempted
+        verify(permissionService, never()).resolveAccess(collaboratorId, root.getId());
+    }
+
+    @Test
+    void getBreadcrumbs_collaboratorOnParent_stopsAtParent() {
+        UUID collaboratorId = UUID.randomUUID();
+        User owner =
+                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Secret Company Root")
+                .parent(null)
+                .build();
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Shared Project")
+                .parent(root)
+                .build();
+
+        Document subChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Tasks")
+                .parent(child)
+                .build();
+
+        when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
+        when(permissionService.resolveAccess(collaboratorId, subChild.getId())).thenReturn(DocumentAccessLevel.EDIT);
+        // Collaborator has access to "Shared Project"
+        when(permissionService.resolveAccess(collaboratorId, child.getId())).thenReturn(DocumentAccessLevel.EDIT);
+        // But NOT to "Secret Company Root"
+        when(permissionService.resolveAccess(collaboratorId, root.getId())).thenReturn(null);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(collaboratorId, subChild.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Shared Project", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertEquals("Tasks", crumbs.get(1).title());
+        assertEquals(child.getId(), crumbs.get(1).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_publicDocWithPrivateParent_stopsAtPublicDoc() {
+        Document privateRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Private Org")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .parent(null)
+                .build();
+
+        Document publicDoc = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Spec")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(privateRoot)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Public Spec", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_publicDocWithPublicParent_returnsPublicHierarchy() {
+        Document publicParent = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Project")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(null)
+                .build();
+
+        Document publicChild = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Task")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(publicParent)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Public Project", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertEquals("Public Task", crumbs.get(1).title());
+        assertEquals(publicParent.getId(), crumbs.get(1).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_trashedPublicDoc_throwsNotFound() {
+        UUID docId = UUID.randomUUID();
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class, () -> documentService.getPublicBreadcrumbs(docId));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_trashedParent_stopsAtPublicChild() {
+        Document trashedPublicParent = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Trashed Public Parent")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .parent(null)
+                .build();
+
+        Document publicChild = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Child")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(trashedPublicParent)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Public Child", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+    }
+
+    @Test
+    void getBreadcrumbs_blankOrNullTitle_fallsBackToUntitled() {
+        UUID ownerId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("   ")
+                .parent(null)
+                .build();
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title(null)
+                .parent(root)
+                .build();
+
+        when(documentRepository.findById(child.getId())).thenReturn(Optional.of(child));
+        when(permissionService.resolveAccess(ownerId, child.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, child.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Untitled", crumbs.get(0).title());
+        assertEquals("Untitled", crumbs.get(1).title());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_blankOrNullTitle_fallsBackToUntitled() {
+        Document publicDoc = Document.builder()
+                .id(UUID.randomUUID())
+                .title("   ")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(null)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Untitled", crumbs.get(0).title());
     }
 
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {

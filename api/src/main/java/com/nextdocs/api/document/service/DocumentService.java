@@ -7,6 +7,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
+import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -192,6 +193,92 @@ public class DocumentService {
         }
 
         return toResponse(document, true);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DocumentBreadcrumbResponse> getBreadcrumbs(UUID userId, UUID documentId) {
+        Document target =
+                documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        DocumentAccessLevel targetAccess = target.getDeletedAt() != null
+                ? permissionService.resolveTrashAccess(userId, documentId)
+                : permissionService.resolveAccess(userId, documentId);
+        if (targetAccess == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+
+        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
+        Document current = target;
+        int depth = 0;
+        while (current != null && depth < MAX_TREE_DEPTH) {
+            Document parent = current.getParent();
+            UUID parentId = null;
+
+            if (parent != null) {
+                DocumentAccessLevel parentAccess = parent.getDeletedAt() != null
+                        ? permissionService.resolveTrashAccess(userId, parent.getId())
+                        : permissionService.resolveAccess(userId, parent.getId());
+                if (parentAccess != null) {
+                    parentId = parent.getId();
+                }
+            }
+
+            // Document icon is reserved for future icon/cover support when introduced to the Document entity model
+            path.add(new DocumentBreadcrumbResponse(
+                    current.getId(), formatBreadcrumbTitle(current.getTitle()), null, parentId));
+
+            if (parentId == null) {
+                // Reached the top of the user's accessible hierarchy
+                break;
+            }
+
+            current = parent;
+            depth++;
+        }
+        Collections.reverse(path);
+        return path;
+    }
+
+    @Transactional(readOnly = true)
+    public List<DocumentBreadcrumbResponse> getPublicBreadcrumbs(UUID documentId) {
+        Document target = documentRepository
+                .findByIdAndDeletedAtIsNull(documentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        if (target.getGeneralAccessMode() != DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+
+        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
+        Document current = target;
+        int depth = 0;
+        while (current != null && depth < MAX_TREE_DEPTH) {
+            Document parent = current.getParent();
+            UUID parentId = null;
+
+            if (parent != null) {
+                // For public access, the parent must also be non-trashed and shared as ANYONE_WITH_LINK.
+                // If the parent is private/restricted or trashed, we stop here so public viewers cannot see private
+                // parent titles.
+                if (parent.getDeletedAt() == null
+                        && parent.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+                    parentId = parent.getId();
+                }
+            }
+
+            // Document icon is reserved for future icon/cover support when introduced to the Document entity model
+            path.add(new DocumentBreadcrumbResponse(
+                    current.getId(), formatBreadcrumbTitle(current.getTitle()), null, parentId));
+
+            if (parentId == null) {
+                // Reached the top of public access
+                break;
+            }
+
+            current = parent;
+            depth++;
+        }
+        Collections.reverse(path);
+        return path;
     }
 
     @Transactional
@@ -394,6 +481,10 @@ public class DocumentService {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "Title must not be blank.");
         }
         return value;
+    }
+
+    private static String formatBreadcrumbTitle(String title) {
+        return (title == null || title.isBlank()) ? "Untitled" : title.strip();
     }
 
     private static byte[] decodeBase64State(String yjsState) {

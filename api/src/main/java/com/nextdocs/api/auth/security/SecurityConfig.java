@@ -40,6 +40,7 @@ public class SecurityConfig {
         "/api/v1/auth/login",
         "/api/v1/auth/refresh",
         "/api/v1/documents/*/public",
+        "/api/v1/documents/*/public/path",
         // OpenAPI / Swagger UI
         "/v3/api-docs/**",
         "/swagger-ui/**",

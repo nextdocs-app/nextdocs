@@ -15,6 +15,7 @@ import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
+import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.DocumentService;
@@ -405,6 +406,36 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(documentId.toString()))
                 .andExpect(jsonPath("$.data.orderKey").value("a1"));
+    }
+
+    @Test
+    void getBreadcrumbs_success_returns200() throws Exception {
+        UUID rootId = UUID.randomUUID();
+        DocumentBreadcrumbResponse root = new DocumentBreadcrumbResponse(rootId, "Root Page", null, null);
+        DocumentBreadcrumbResponse child = new DocumentBreadcrumbResponse(documentId, "Child Page", null, rootId);
+
+        when(documentService.getBreadcrumbs(eq(userId), eq(documentId))).thenReturn(List.of(root, child));
+
+        mockMvc.perform(get("/api/v1/documents/{id}/path", documentId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].id").value(rootId.toString()))
+                .andExpect(jsonPath("$.data[0].title").value("Root Page"))
+                .andExpect(jsonPath("$.data[1].id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data[1].title").value("Child Page"));
+    }
+
+    @Test
+    void getPublicBreadcrumbs_success_returns200() throws Exception {
+        DocumentBreadcrumbResponse item = new DocumentBreadcrumbResponse(documentId, "Public Doc", null, null);
+
+        when(documentService.getPublicBreadcrumbs(eq(documentId))).thenReturn(List.of(item));
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public/path", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].id").value(documentId.toString()))
+                .andExpect(jsonPath("$.data[0].title").value("Public Doc"));
     }
 
     @Test
