@@ -112,6 +112,13 @@ export interface SharingSettings {
   hasActiveLink: boolean;
 }
 
+export interface DocumentBreadcrumbItem {
+  id: string;
+  title: string;
+  icon?: string | null;
+  parentId?: string | null;
+}
+
 export class DocumentServiceApiError extends Error {
   readonly status: number;
 
@@ -394,6 +401,28 @@ class DocumentService {
       ydoc,
       meta: this.toDocumentMeta(body),
     };
+  }
+
+  public async getDocumentBreadcrumbs(
+    id: string,
+    accessToken?: string | null
+  ): Promise<DocumentBreadcrumbItem[]> {
+    if (accessToken) {
+      return await this.fetchApi<DocumentBreadcrumbItem[]>(
+        `/api/v1/documents/${encodeURIComponent(id)}/path`,
+        {
+          method: 'GET',
+          accessToken,
+        }
+      );
+    } else {
+      return await this.fetchApi<DocumentBreadcrumbItem[]>(
+        `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
+        {
+          method: 'GET',
+        }
+      );
+    }
   }
 
   public async getMyAccess(id: string, accessToken: string): Promise<DocumentAccess> {
