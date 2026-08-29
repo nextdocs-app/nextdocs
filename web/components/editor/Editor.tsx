@@ -192,6 +192,8 @@ export default function Editor() {
     <>
       <DocToolbar
         documentId={documentId}
+        documentTitle={meta.title}
+        documentIcon={meta.icon}
         isShareEnabled={isAuthenticated}
         updatedAt={meta.updatedAt}
         isOffline={isOffline}
