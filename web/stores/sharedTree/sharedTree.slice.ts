@@ -322,9 +322,21 @@ const sharedTreeSlice = createSlice({
         state.rootIds = state.rootIds.filter((rid) => rid !== updatedNode.id);
       }
 
-      // Update node record
+      // Update node record.
+      // If a moved document has a parentId that is not in state.nodes, its parent is private to
+      // the owner and not shared with this user. It therefore acts as a floated root in the
+      // caller's Shared tree (effectiveParentId = null).
+      // Note: Storing effectiveParentId into state.nodes[id].parentId is intentional for SidebarTreeNode
+      // UI state so that tree rendering, reachability, and root drag-and-drop constraints function
+      // correctly without referencing missing private parent nodes.
+      const isFloatedRoot = Boolean(updatedNode.parentId && !state.nodes[updatedNode.parentId]);
+      const effectiveParentId = isFloatedRoot ? null : updatedNode.parentId;
+
       state.nodes[updatedNode.id] = toSidebarTreeNode(
-        updatedNode,
+        {
+          ...updatedNode,
+          parentId: effectiveParentId,
+        },
         existing ? existing.isExpanded : false
       );
       if (existing) {
@@ -332,9 +344,8 @@ const sharedTreeSlice = createSlice({
         state.nodes[updatedNode.id].childrenLoaded = existing.childrenLoaded;
       }
 
-      const newParentId = updatedNode.parentId;
-      if (newParentId && state.nodes[newParentId]) {
-        const newParent = state.nodes[newParentId];
+      if (effectiveParentId && state.nodes[effectiveParentId]) {
+        const newParent = state.nodes[effectiveParentId];
         newParent.hasChildren = true;
         if (!newParent.children.includes(updatedNode.id)) {
           newParent.children.push(updatedNode.id);
@@ -345,8 +356,9 @@ const sharedTreeSlice = createSlice({
           const keyB = state.nodes[bId]?.orderKey ?? '';
           return compareOrderKeys(keyA, keyB);
         });
-      } else if (!newParentId) {
-        // Root-level move: place the node and sort by personal orderKey
+      } else {
+        // Root-level move or floated nested document (whose parent is external):
+        // place the node at the root of the Shared tree and sort by personal orderKey.
         if (!state.rootIds.includes(updatedNode.id)) {
           state.rootIds.push(updatedNode.id);
         }

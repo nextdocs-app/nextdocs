@@ -487,6 +487,166 @@ describe('sharedTree.slice moveDocumentThunk.fulfilled', () => {
     expect(state.nodes['doc-stm'].orderKey).toBe('a1');
   });
 
+  it('correctly floats and reorders a nested shared document whose parent is not in the shared tree', () => {
+    const initialState: SharedTreeState = {
+      nodes: {
+        'doc-s1': {
+          id: 'doc-s1',
+          title: 'Shared 1',
+          parentId: null,
+          orderKey: 'a0',
+          hasChildren: false,
+          effectiveAccessLevel: 'OWNER',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        'doc-s2': {
+          id: 'doc-s2',
+          title: 'Shared 2',
+          parentId: null,
+          orderKey: 'a2',
+          hasChildren: false,
+          effectiveAccessLevel: 'OWNER',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        'doc-floated': {
+          id: 'doc-floated',
+          title: 'Floated Doc',
+          parentId: null,
+          orderKey: 'a3',
+          hasChildren: false,
+          effectiveAccessLevel: 'VIEW',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+      },
+      rootIds: ['doc-s1', 'doc-s2', 'doc-floated'],
+    };
+
+    // Backend returns parentId: 'private-parent-uuid' (owner's private parent), but it's not in shared tree
+    const state = sharedTreeReducer(initialState, {
+      type: 'sharedTree/moveDocument/fulfilled',
+      payload: {
+        updatedNode: {
+          id: 'doc-floated',
+          title: 'Floated Doc',
+          parentId: 'private-parent-uuid',
+          orderKey: 'a1',
+          hasChildren: false,
+          effectiveAccessLevel: 'VIEW',
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        prevSiblingId: 'doc-s1',
+        nextSiblingId: 'doc-s2',
+      },
+    });
+
+    expect(state.rootIds).toEqual(['doc-s1', 'doc-floated', 'doc-s2']);
+    expect(state.nodes['doc-floated'].parentId).toBeNull();
+    expect(state.nodes['doc-floated'].orderKey).toBe('a1');
+  });
+
+  it('correctly nests and reorders a child document whose parent exists in the shared tree', () => {
+    const initialState: SharedTreeState = {
+      nodes: {
+        'shared-parent': {
+          id: 'shared-parent',
+          title: 'Shared Parent',
+          parentId: null,
+          orderKey: 'a0',
+          hasChildren: true,
+          effectiveAccessLevel: 'OWNER',
+          isExpanded: true,
+          isLoading: false,
+          children: ['child-1', 'child-2'],
+          childrenLoaded: true,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        'child-1': {
+          id: 'child-1',
+          title: 'Child 1',
+          parentId: 'shared-parent',
+          orderKey: 'c0',
+          hasChildren: false,
+          effectiveAccessLevel: 'EDIT',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        'child-2': {
+          id: 'child-2',
+          title: 'Child 2',
+          parentId: 'shared-parent',
+          orderKey: 'c2',
+          hasChildren: false,
+          effectiveAccessLevel: 'EDIT',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        'child-3': {
+          id: 'child-3',
+          title: 'Child 3',
+          parentId: 'shared-parent',
+          orderKey: 'c3',
+          hasChildren: false,
+          effectiveAccessLevel: 'EDIT',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+      },
+      rootIds: ['shared-parent'],
+    };
+
+    // Child 3 moved between child 1 and child 2
+    const state = sharedTreeReducer(initialState, {
+      type: 'sharedTree/moveDocument/fulfilled',
+      payload: {
+        updatedNode: {
+          id: 'child-3',
+          title: 'Child 3',
+          parentId: 'shared-parent',
+          orderKey: 'c1',
+          hasChildren: false,
+          effectiveAccessLevel: 'EDIT',
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T11:00:00Z',
+        },
+        prevSiblingId: 'child-1',
+        nextSiblingId: 'child-2',
+      },
+    });
+
+    expect(state.nodes['shared-parent'].children).toEqual(['child-1', 'child-3', 'child-2']);
+    expect(state.nodes['child-3'].parentId).toBe('shared-parent');
+    expect(state.nodes['child-3'].orderKey).toBe('c1');
+  });
+
   it('preserves existing non-fallback orderKey when syncSharedRoots receives entry without orderKey', () => {
     const previous: SharedTreeState = {
       nodes: {
