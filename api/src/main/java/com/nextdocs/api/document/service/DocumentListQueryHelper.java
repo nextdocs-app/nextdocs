@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -333,13 +334,28 @@ public class DocumentListQueryHelper {
             Set<UUID> collaboratorDocIds =
                     new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
             Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
-            Map<UUID, String> rootOrderKeys = fetchRootOrderKeys(userId, docs);
+
+            Set<UUID> parentIds = docs.stream()
+                    .map(Document::getParent)
+                    .filter(Objects::nonNull)
+                    .map(Document::getId)
+                    .collect(Collectors.toSet());
+            Map<UUID, DocumentAccessLevel> parentAccess = fetchAccessLevels(userId, parentIds);
+
+            List<UUID> rootAndFloatedDocIds = docs.stream()
+                    .filter(d -> d.getParent() == null
+                            || parentAccess.get(d.getParent().getId()) == null)
+                    .map(Document::getId)
+                    .toList();
+            Map<UUID, String> userOrderKeys = fetchUserOrderKeys(userId, rootAndFloatedDocIds);
 
             return page.map(doc -> {
                 boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
                 boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
                 DocumentAccessLevel access = accessLevels.getOrDefault(doc.getId(), null);
-                String orderKey = doc.getParent() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
+                boolean isRootForUser = doc.getParent() == null
+                        || parentAccess.get(doc.getParent().getId()) == null;
+                String orderKey = isRootForUser ? userOrderKeys.get(doc.getId()) : doc.getSiblingOrderKey();
                 UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
                 return new DocumentResponse(
@@ -432,18 +448,22 @@ public class DocumentListQueryHelper {
         return accessLevels;
     }
 
+    private Map<UUID, String> fetchUserOrderKeys(UUID userId, Collection<UUID> docIds) {
+        if (docIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, String> orderKeys = new HashMap<>();
+        for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, docIds)) {
+            orderKeys.put((UUID) row[0], (String) row[1]);
+        }
+        return orderKeys;
+    }
+
     private Map<UUID, String> fetchRootOrderKeys(UUID userId, List<Document> docs) {
         List<UUID> rootIds = docs.stream()
                 .filter(document -> document.getParent() == null)
                 .map(Document::getId)
                 .toList();
-        if (rootIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, String> orderKeys = new HashMap<>();
-        for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, rootIds)) {
-            orderKeys.put((UUID) row[0], (String) row[1]);
-        }
-        return orderKeys;
+        return fetchUserOrderKeys(userId, rootIds);
     }
 }

@@ -25,10 +25,15 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     Optional<Document> findByIdAndDeletedAtIsNull(UUID id);
 
-    @Query("SELECT d FROM Document d "
-            + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-            + "WHERE c.user.id = :userId AND d.deletedAt IS NULL "
-            + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC")
+    @Query(
+            value = "SELECT d FROM Document d "
+                    + "LEFT JOIN FETCH d.parent "
+                    + "JOIN DocumentCollaborator c ON c.document.id = d.id "
+                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL "
+                    + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC",
+            countQuery = "SELECT count(d) FROM Document d "
+                    + "JOIN DocumentCollaborator c ON c.document.id = d.id "
+                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL")
     Page<Document> findSharedWithUserId(@Param("userId") UUID userId, Pageable pageable);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.

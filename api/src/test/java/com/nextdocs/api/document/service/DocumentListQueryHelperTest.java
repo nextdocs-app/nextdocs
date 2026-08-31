@@ -137,6 +137,138 @@ class DocumentListQueryHelperTest {
     }
 
     @Test
+    void list_flatShared_returnsUserDocumentOrderForNestedFloatedSharedDocuments() {
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+        UUID privateParentId = UUID.randomUUID();
+        Document privateParent = Document.builder()
+                .id(privateParentId)
+                .user(otherOwner)
+                .title("Private Parent")
+                .build();
+
+        Document floatedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(otherOwner)
+                .title("Floated Child")
+                .parent(privateParent)
+                .siblingOrderKey("sibling-0")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(documentRepository.findSharedWithUserId(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(floatedChild)));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        // Parent is inaccessible (not returned in resolveEffectiveAccessBatch for parentIds)
+        when(documentRepository.resolveEffectiveAccessBatch(
+                        eq(userId), eq(floatedChild.getId().toString())))
+                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "VIEW"}));
+        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(privateParentId.toString())))
+                .thenReturn(List.of());
+        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "user-order-1"}));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+
+        assertEquals(1, result.getContent().size());
+        DocumentResponse doc = result.getContent().get(0);
+        assertEquals("Floated Child", doc.title());
+        assertEquals(privateParentId, doc.parentId());
+        // Should return the user's personal UserDocumentOrder key, not the owner's siblingOrderKey
+        assertEquals("user-order-1", doc.orderKey());
+        assertEquals(DocumentAccessLevel.VIEW, doc.accessLevel());
+    }
+
+    @Test
+    void list_flatShared_returnsNullOrderKeyForFloatedDocumentWithoutUserDocumentOrder() {
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+        UUID privateParentId = UUID.randomUUID();
+        Document privateParent = Document.builder()
+                .id(privateParentId)
+                .user(otherOwner)
+                .title("Private Parent")
+                .build();
+
+        Document floatedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(otherOwner)
+                .title("Floated Child")
+                .parent(privateParent)
+                .siblingOrderKey("sibling-0")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(documentRepository.findSharedWithUserId(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(floatedChild)));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        // Parent is inaccessible (not returned in resolveEffectiveAccessBatch for parentIds)
+        when(documentRepository.resolveEffectiveAccessBatch(
+                        eq(userId), eq(floatedChild.getId().toString())))
+                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "VIEW"}));
+        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(privateParentId.toString())))
+                .thenReturn(List.of());
+        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+                .thenReturn(List.of());
+
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+
+        assertEquals(1, result.getContent().size());
+        DocumentResponse doc = result.getContent().get(0);
+        assertEquals("Floated Child", doc.title());
+        assertEquals(privateParentId, doc.parentId());
+        // Should return null (not the owner's siblingOrderKey) when no personal UserDocumentOrder exists
+        assertNull(doc.orderKey());
+        assertEquals(DocumentAccessLevel.VIEW, doc.accessLevel());
+    }
+
+    @Test
+    void list_flatShared_returnsSiblingOrderKeyForChildOfAccessibleSharedParent() {
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+        UUID sharedParentId = UUID.randomUUID();
+        Document sharedParent = Document.builder()
+                .id(sharedParentId)
+                .user(otherOwner)
+                .title("Shared Parent")
+                .build();
+
+        Document sharedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(otherOwner)
+                .title("Shared Child")
+                .parent(sharedParent)
+                .siblingOrderKey("sibling-0")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(documentRepository.findSharedWithUserId(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(sharedChild)));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        // Parent IS accessible
+        when(documentRepository.resolveEffectiveAccessBatch(
+                        eq(userId), eq(sharedChild.getId().toString())))
+                .thenReturn(List.<Object[]>of(new Object[] {sharedChild.getId(), "VIEW"}));
+        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(sharedParentId.toString())))
+                .thenReturn(List.<Object[]>of(new Object[] {sharedParentId, "VIEW"}));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+
+        assertEquals(1, result.getContent().size());
+        DocumentResponse doc = result.getContent().get(0);
+        assertEquals("Shared Child", doc.title());
+        assertEquals(sharedParentId, doc.parentId());
+        // Should keep siblingOrderKey since its parent is accessible/shared
+        assertEquals("sibling-0", doc.orderKey());
+    }
+
+    @Test
     void list_emptyPagePreservesTotalElements() {
         PageRequest pageable = PageRequest.of(2, 10);
         Page<Object[]> emptyPageWithTotals = new PageImpl<>(List.of(), pageable, 25);

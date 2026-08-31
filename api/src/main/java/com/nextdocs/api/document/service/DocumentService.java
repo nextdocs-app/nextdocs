@@ -23,9 +23,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -500,34 +498,53 @@ public class DocumentService {
     }
 
     private DocumentResponse toResponse(Document document, boolean includeState) {
-        return toResponse(document, includeState, (Map<UUID, String>) null);
+        return toResponse(document, includeState, null);
     }
 
+    /**
+     * Converts a single Document entity to DocumentResponse DTO.
+     * Note: This method accesses document.getParent() lazily and makes individual permission checks,
+     * so it MUST be executed within an active @Transactional context. It is intended solely for
+     * single-document operations (create, get, update, reorder); batch listings must use batch queries
+     * via DocumentListQueryHelper instead.
+     */
     private DocumentResponse toResponse(Document document, boolean includeState, UUID callerUserId) {
-        return toResponse(document, includeState, callerUserId, null);
-    }
-
-    private DocumentResponse toResponse(Document document, boolean includeState, Map<UUID, String> rootOrderKeys) {
-        return toResponse(document, includeState, null, rootOrderKeys);
-    }
-
-    private DocumentResponse toResponse(
-            Document document, boolean includeState, UUID callerUserId, Map<UUID, String> rootOrderKeys) {
         OffsetDateTime deletedAt = document.getDeletedAt();
         OffsetDateTime purgeAt = null;
         if (deletedAt != null) {
             purgeAt = deletedAt.plusDays(documentProperties.getTrashRetentionDays());
         }
 
-        String orderKey = document.getParent() != null
-                ? document.getSiblingOrderKey()
-                : rootOrderKeys != null
-                        ? rootOrderKeys.get(document.getId())
-                        : callerUserId != null
-                                ? userDocumentOrderRepository
-                                        .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
-                                        .orElse(null)
-                                : null;
+        String orderKey;
+        if (callerUserId != null && !document.getUser().getId().equals(callerUserId)) {
+            boolean isFloatedOrRoot;
+            if (document.getParent() == null) {
+                isFloatedOrRoot = true;
+            } else {
+                DocumentAccessLevel parentAccess =
+                        (document.getParent().getDeletedAt() != null || document.getDeletedAt() != null)
+                                ? permissionService.resolveTrashAccess(
+                                        callerUserId, document.getParent().getId())
+                                : permissionService.resolveAccess(
+                                        callerUserId, document.getParent().getId());
+                isFloatedOrRoot = (parentAccess == null);
+            }
+            if (isFloatedOrRoot) {
+                orderKey = userDocumentOrderRepository
+                        .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
+                        .orElse(null);
+            } else {
+                orderKey = document.getSiblingOrderKey();
+            }
+        } else if (document.getParent() != null) {
+            orderKey = document.getSiblingOrderKey();
+        } else if (callerUserId != null) {
+            orderKey = userDocumentOrderRepository
+                    .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
+                    .orElse(null);
+        } else {
+            orderKey = null;
+        }
 
         boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(document.getId());
         boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(document.getId());
@@ -560,21 +577,6 @@ public class DocumentService {
                 document.getUpdatedAt(),
                 deletedAt,
                 purgeAt);
-    }
-
-    private Map<UUID, String> fetchRootOrderKeys(UUID userId, List<Document> docs) {
-        List<UUID> rootIds = docs.stream()
-                .filter(document -> document.getParent() == null)
-                .map(Document::getId)
-                .toList();
-        if (rootIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, String> orderKeys = new HashMap<>();
-        for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, rootIds)) {
-            orderKeys.put((UUID) row[0], (String) row[1]);
-        }
-        return orderKeys;
     }
 
     private List<Document> collectAllDescendants(UUID rootId) {

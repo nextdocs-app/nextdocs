@@ -288,6 +288,132 @@ class DocumentServiceTest {
     }
 
     @Test
+    void get_floatedSharedDocument_returnsUserDocumentOrderKey() {
+        UUID requesterId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID privateParentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document privateParent =
+                Document.builder().id(privateParentId).user(owner).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Floated Doc")
+                .parent(privateParent)
+                .siblingOrderKey("owner-sibling-key")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
+        // Parent is inaccessible to requester
+        when(permissionService.resolveAccess(requesterId, privateParentId)).thenReturn(null);
+        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
+                .thenReturn(Optional.of("user-order-key-1"));
+
+        var response = documentService.get(requesterId, documentId, false);
+
+        assertEquals(documentId, response.id());
+        assertEquals("user-order-key-1", response.orderKey());
+    }
+
+    @Test
+    void get_floatedSharedDocument_withoutUserDocumentOrder_returnsNullOrderKey() {
+        UUID requesterId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID privateParentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document privateParent =
+                Document.builder().id(privateParentId).user(owner).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Floated Doc")
+                .parent(privateParent)
+                .siblingOrderKey("owner-sibling-key")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
+        // Parent is inaccessible to requester
+        when(permissionService.resolveAccess(requesterId, privateParentId)).thenReturn(null);
+        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
+                .thenReturn(Optional.empty());
+
+        var response = documentService.get(requesterId, documentId, false);
+
+        assertEquals(documentId, response.id());
+        assertNull(response.orderKey());
+    }
+
+    @Test
+    void get_nestedSharedDocumentUnderAccessibleParent_returnsSiblingOrderKey() {
+        UUID requesterId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID sharedParentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document sharedParent =
+                Document.builder().id(sharedParentId).user(owner).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Nested Doc")
+                .parent(sharedParent)
+                .siblingOrderKey("sibling-key-1")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
+        // Parent IS accessible to requester
+        when(permissionService.resolveAccess(requesterId, sharedParentId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        var response = documentService.get(requesterId, documentId, false);
+
+        assertEquals(documentId, response.id());
+        assertEquals("sibling-key-1", response.orderKey());
+    }
+
+    @Test
+    void get_includeTrashed_childOfTrashedAccessibleParent_resolvesParentTrashAccessAndReturnsSiblingKey() {
+        UUID requesterId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID sharedParentId = UUID.randomUUID();
+        OffsetDateTime deletedAt = OffsetDateTime.now(ZoneOffset.UTC);
+        User owner = User.builder().id(ownerId).build();
+        Document sharedParent = Document.builder()
+                .id(sharedParentId)
+                .user(owner)
+                .deletedAt(deletedAt)
+                .build();
+        Document trashedChild = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Trashed Child")
+                .parent(sharedParent)
+                .siblingOrderKey("sibling-key-2")
+                .deletedAt(deletedAt)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(trashedChild));
+        when(permissionService.resolveTrashAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(permissionService.resolveTrashAccess(requesterId, sharedParentId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        var response = documentService.get(requesterId, documentId, true);
+
+        assertEquals(documentId, response.id());
+        assertEquals("sibling-key-2", response.orderKey());
+        assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
+    }
+
+    @Test
     void update_allowsEditWhenGeneralAccessIsEdit() {
         UUID requesterId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
