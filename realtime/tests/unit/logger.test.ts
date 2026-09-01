@@ -1,14 +1,14 @@
 import { jest } from '@jest/globals';
 
-// Mock config module before importing logger
-jest.mock('../../src/config', () => ({
+// Mock config module before importing logger (ESM)
+jest.unstable_mockModule('../../src/config.js', () => ({
   __esModule: true,
   default: {
     logLevel: 'debug', // Default to debug for testing all levels
   },
 }));
 
-import logger from '../../src/logger';
+const { default: logger } = await import('../../src/logger.js');
 
 describe('Logger', () => {
   let consoleSpy: {
@@ -68,12 +68,12 @@ describe('Logger', () => {
   describe('Log Levels', () => {
     it('should not log debug when level is info', async () => {
       jest.resetModules();
-      jest.doMock('../../src/config', () => ({
+      jest.unstable_mockModule('../../src/config.js', () => ({
         __esModule: true,
         default: { logLevel: 'info' },
       }));
 
-      const { default: loggerInfo } = await import('../../src/logger');
+      const { default: loggerInfo } = await import('../../src/logger.js');
 
       loggerInfo.debug('debug message');
       expect(consoleSpy.log).not.toHaveBeenCalled();
@@ -84,11 +84,11 @@ describe('Logger', () => {
 
     it('should not log info when level is warn', async () => {
       jest.resetModules();
-      jest.doMock('../../src/config', () => ({
+      jest.unstable_mockModule('../../src/config.js', () => ({
         __esModule: true,
         default: { logLevel: 'warn' },
       }));
-      const { default: loggerWarn } = await import('../../src/logger');
+      const { default: loggerWarn } = await import('../../src/logger.js');
 
       loggerWarn.info('info message');
       expect(consoleSpy.log).not.toHaveBeenCalled();
@@ -99,11 +99,11 @@ describe('Logger', () => {
 
     it('should not log warn when level is error', async () => {
       jest.resetModules();
-      jest.doMock('../../src/config', () => ({
+      jest.unstable_mockModule('../../src/config.js', () => ({
         __esModule: true,
         default: { logLevel: 'error' },
       }));
-      const { default: loggerError } = await import('../../src/logger');
+      const { default: loggerError } = await import('../../src/logger.js');
 
       loggerError.warn('warn message');
       expect(consoleSpy.warn).not.toHaveBeenCalled();

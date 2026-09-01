@@ -6,15 +6,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import jakarta.persistence.PersistenceException;
 import java.util.Base64;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class OAuthTokenAttributeConverterTest {
 
     private static final String KEY_PROPERTY = "oauth.token.encryption.key-base64";
 
+    private String originalKeyProperty;
+
+    @BeforeEach
+    void captureKeyProperty() {
+        originalKeyProperty = System.getProperty(KEY_PROPERTY);
+    }
+
     @AfterEach
     void tearDown() {
-        System.clearProperty(KEY_PROPERTY);
+        if (originalKeyProperty == null) {
+            System.clearProperty(KEY_PROPERTY);
+        } else {
+            System.setProperty(KEY_PROPERTY, originalKeyProperty);
+        }
     }
 
     @Test
@@ -44,6 +56,8 @@ class OAuthTokenAttributeConverterTest {
     @Test
     void constructor_whenKeyMissing_throwsPersistenceException() {
         // Key is resolved at construction time — no key means immediate failure (fail-fast).
+        System.clearProperty(KEY_PROPERTY);
+
         assertThatThrownBy(OAuthTokenAttributeConverter::new)
                 .isInstanceOf(PersistenceException.class)
                 .hasMessageContaining("not configured");

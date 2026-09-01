@@ -3,6 +3,7 @@ import type { DocumentsPanelMode, DocActionsAnchor } from '@/components/sidebar/
 
 export interface SidebarState {
   isCollapsed: boolean;
+  sidebarWidth: number;
   panelMode: DocumentsPanelMode;
   searchQuery: string;
   isPrivateOpen: boolean;
@@ -12,6 +13,7 @@ export interface SidebarState {
 
 const initialState: SidebarState = {
   isCollapsed: false,
+  sidebarWidth: 256,
   panelMode: null,
   searchQuery: '',
   isPrivateOpen: true,
@@ -28,6 +30,9 @@ const sidebarSlice = createSlice({
     },
     setCollapsed(state, action: PayloadAction<boolean>) {
       state.isCollapsed = action.payload;
+    },
+    setSidebarWidth(state, action: PayloadAction<number>) {
+      state.sidebarWidth = action.payload;
     },
     setPanelMode(state, action: PayloadAction<DocumentsPanelMode>) {
       state.panelMode = action.payload;
@@ -55,6 +60,7 @@ const sidebarSlice = createSlice({
 export const {
   toggleCollapsed,
   setCollapsed,
+  setSidebarWidth,
   setPanelMode,
   setSearchQuery,
   togglePrivateOpen,

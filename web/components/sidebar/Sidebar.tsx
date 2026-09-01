@@ -7,6 +7,10 @@ import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
+  selectRootLevelOwnerSharedDocumentIds,
+  selectSharedWithMeDocumentIds,
+} from '@/stores/documentList/documentList.selectors';
+import {
   setCollapsed,
   setPanelMode,
   setSearchQuery,
@@ -39,15 +43,42 @@ import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook'
 import { generateDocumentId } from '@/lib/document-id.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
+import {
+  isSidebarDropAllowed,
+  resolveSidebarMoveRoute,
+  type SidebarDropZone,
+} from '@/lib/sidebar-drop-rules';
+
+import {
+  fetchRootNodesThunk,
+  fetchChildrenThunk,
+  removeNode,
+  toggleExpanded as privateToggleExpanded,
+  moveDocumentThunk as privateMoveDocumentThunk,
+  resetTree as resetSidebarTree,
+} from '@/stores/sidebarTree/sidebarTree.slice';
+import {
+  fetchChildrenThunk as fetchSharedChildrenThunk,
+  syncSharedRoots,
+  removeNode as sharedRemoveNode,
+  toggleExpanded as sharedToggleExpanded,
+  moveDocumentThunk as sharedMoveDocumentThunk,
+  resetTree as resetSharedTree,
+} from '@/stores/sharedTree/sharedTree.slice';
 
 // Import sub-components
-import { SidebarDocumentSection } from './SidebarDocumentSection';
+import { SharedTree } from './SharedTree';
+import { SidebarTree } from './SidebarTree';
 import { ProfileMenuPopup } from './ProfileMenuPopup';
 import { DocumentActionsMenu } from './DocumentActionsMenu';
 import { DocumentsPanel } from './DocumentsPanel';
 import { useSidebarResize } from './useSidebarResize';
+import {
+  SidebarTreeDndContext,
+  type MoveDocumentArgs,
+  type TreeApi,
+} from './SidebarTreeDndContext';
 
-import { SIDEBAR_VISIBLE_COUNT } from './types';
 import type { DocActionType, SidebarSectionDocument } from './types';
 
 const emptySubscribe = () => () => {};
@@ -61,7 +92,6 @@ function Sidebar() {
     documents,
     sharedDocuments = [],
     trashedDocuments,
-    isLoading,
     isSharedLoading = false,
     isSharedLoadingMore = false,
     sharedHasMore = false,
@@ -100,6 +130,15 @@ function Sidebar() {
   const documentsPanelMode = useAppSelector((state) => state.sidebar.panelMode);
   const docActionsAnchor = useAppSelector((state) => state.sidebar.docActionsAnchor);
   const searchQuery = useAppSelector((state) => state.sidebar.searchQuery);
+  const privateTreeNodes = useAppSelector((state) => state.sidebarTree?.nodes ?? {});
+  const privateTreeRootIds = useAppSelector((state) => state.sidebarTree?.rootIds ?? []);
+  const privateRootHasMore = useAppSelector((state) => state.sidebarTree?.rootHasMore ?? false);
+  const privateRootPage = useAppSelector((state) => state.sidebarTree?.rootPage ?? 0);
+  const privateRootLoading = useAppSelector((state) => state.sidebarTree?.isRootLoading ?? false);
+  const sharedTreeNodes = useAppSelector((state) => state.sharedTree?.nodes ?? {});
+  const sharedTreeRootIds = useAppSelector((state) => state.sharedTree?.rootIds ?? []);
+  const sharedWithMeDocumentIds = useAppSelector(selectSharedWithMeDocumentIds);
+  const rootLevelOwnerSharedDocumentIds = useAppSelector(selectRootLevelOwnerSharedDocumentIds);
 
   const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
 
@@ -131,11 +170,6 @@ function Sidebar() {
     : isSharedPanel
       ? isSharedLoadingMore
       : isLoadingMore;
-  const panelIsLoadingInitial = isTrashPanel
-    ? isTrashLoading
-    : isSharedPanel
-      ? isSharedLoading && panelDocuments.length === 0
-      : isLoading && panelDocuments.length === 0;
 
   const filteredDocuments = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -148,6 +182,247 @@ function Sidebar() {
     );
   }, [panelDocuments, searchQuery]);
 
+  const panelTreeApi = useMemo<TreeApi | null>(() => {
+    if (isTrashPanel) {
+      return null;
+    }
+
+    if (isSharedPanel) {
+      return {
+        nodes: sharedTreeNodes,
+        rootIds: sharedTreeRootIds,
+        toggleExpanded: (id) => dispatch(sharedToggleExpanded(id)),
+        fetchChildren: (parentId) => void dispatch(fetchSharedChildrenThunk({ parentId })),
+        moveDocument: (args) => void dispatch(sharedMoveDocumentThunk(args)),
+        canPlaceAtRoot: (draggedId) => sharedTreeNodes[draggedId]?.parentId == null,
+      };
+    }
+
+    return {
+      nodes: privateTreeNodes,
+      rootIds: privateTreeRootIds,
+      toggleExpanded: (id) => dispatch(privateToggleExpanded(id)),
+      fetchChildren: (parentId) => void dispatch(fetchChildrenThunk({ parentId })),
+      moveDocument: (args) => void dispatch(privateMoveDocumentThunk(args)),
+      // Mirror sidebarTreeApi: shared nodes may only be placed at root if they
+      // are already roots; private nodes are always allowed at root.
+      canPlaceAtRoot: (draggedId) =>
+        Object.hasOwn(sharedTreeNodes, draggedId)
+          ? sharedTreeNodes[draggedId]?.parentId == null
+          : true,
+    };
+  }, [
+    isTrashPanel,
+    isSharedPanel,
+    dispatch,
+    sharedTreeNodes,
+    sharedTreeRootIds,
+    privateTreeNodes,
+    privateTreeRootIds,
+  ]);
+
+  const isPanelSearching = searchQuery.trim().length > 0;
+
+  const panelIsLoadingInitial = isTrashPanel
+    ? isTrashLoading
+    : isSharedPanel
+      ? isSharedLoading && panelTreeApi?.rootIds.length === 0
+      : privateRootLoading && panelTreeApi?.rootIds.length === 0;
+
+  // Documents that live in the Shared section (shared with me, or root-level
+  // documents shared by me) must not be listed in the Private section's tree or
+  // "show more" panel. Nested documents that were shared stay under their
+  // actual parent in the Private tree.
+  const excludedNodeIds = useMemo(() => {
+    const excluded = new Set<string>(sharedWithMeDocumentIds);
+    for (const id of rootLevelOwnerSharedDocumentIds) {
+      excluded.add(id);
+    }
+    return excluded;
+  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
+
+  const isPrivatePanel = !isTrashPanel && !isSharedPanel;
+
+  /**
+   * Cross-tree move router for the unified sidebar DnD context.
+   *
+   * TODO(full-access): collaborators cannot re-share documents they do not own yet
+   * (sharing administration is owner-only; no FULL_ACCESS access level exists). Until
+   * that ships, moving a document between two shared documents is blocked in the UI -
+   * only sibling reordering inside the Shared section is offered. Dropping a private
+   * document into a shared document IS allowed: the backend transfers ownership of the
+   * moved subtree to the host tree's owner (location authority), and access then flows
+   * from the new parent chain.
+   */
+  const handleSidebarTreeMove = useCallback(
+    (args: MoveDocumentArgs) => {
+      const route = resolveSidebarMoveRoute(args, {
+        draggedIsShared: Object.hasOwn(sharedTreeNodes, args.documentId),
+        targetParentIdIsShared:
+          args.newParentId != null && Object.hasOwn(sharedTreeNodes, args.newParentId),
+      });
+
+      if (route.kind === 'shared-reorder') {
+        void dispatch(sharedMoveDocumentThunk(args))
+          .unwrap()
+          .catch((error) => {
+            console.error('Failed to reorder shared document:', error);
+            dispatch(
+              addToast({ message: 'Failed to move document. Please try again.', type: 'error' })
+            );
+          });
+        return;
+      }
+      if (route.kind === 'private') {
+        void dispatch(privateMoveDocumentThunk(args))
+          .unwrap()
+          .catch((error) => {
+            console.error('Failed to move document:', error);
+            dispatch(
+              addToast({ message: 'Failed to move document. Please try again.', type: 'error' })
+            );
+          });
+        return;
+      }
+      if (route.kind === 'shared-nest-adopt') {
+        void (async () => {
+          try {
+            const result = await dispatch(sharedMoveDocumentThunk(args));
+            if (!sharedMoveDocumentThunk.fulfilled.match(result)) {
+              throw new Error('Move request failed');
+            }
+            // The document left the private tree: drop it from that store and
+            // refresh roots so section membership stays accurate.
+            dispatch(removeNode(args.documentId));
+            await dispatch(fetchRootNodesThunk());
+            await refresh(false);
+            dispatch(
+              addToast({
+                message: 'Moved into the shared document. Its access now follows the new location.',
+                type: 'info',
+              })
+            );
+          } catch (error) {
+            console.error('Failed to move document into shared tree:', error);
+            dispatch(
+              addToast({ message: 'Failed to move document. Please try again.', type: 'error' })
+            );
+          }
+        })();
+        return;
+      }
+
+      // Blocked until FULL_ACCESS exists.
+      dispatch(
+        addToast({
+          message:
+            'Moving documents between shared documents requires re-sharing permissions, which are not available yet.',
+          type: 'info',
+        })
+      );
+    },
+    [dispatch, sharedTreeNodes, refresh]
+  );
+
+  /**
+   * Single DnD tree api spanning both sections so drags can cross them. Node ids are
+   * UUIDs, so the merged map is collision-free; routing keys off which store holds a node.
+   */
+  const sidebarTreeApi = useMemo<TreeApi>(() => {
+    const mergedNodes = { ...privateTreeNodes, ...sharedTreeNodes };
+    const isSharedNode = (id: string) => Object.hasOwn(sharedTreeNodes, id);
+    const visiblePrivateRootIds = privateTreeRootIds.filter((id) => !excludedNodeIds.has(id));
+    return {
+      nodes: mergedNodes,
+      rootIds: [...visiblePrivateRootIds, ...sharedTreeRootIds],
+      getRootIds: (nodeId: string) =>
+        isSharedNode(nodeId) ? sharedTreeRootIds : visiblePrivateRootIds,
+      toggleExpanded: (id) =>
+        dispatch(isSharedNode(id) ? sharedToggleExpanded(id) : privateToggleExpanded(id)),
+      fetchChildren: (parentId) =>
+        void dispatch(
+          isSharedNode(parentId)
+            ? fetchSharedChildrenThunk({ parentId })
+            : fetchChildrenThunk({ parentId })
+        ),
+      canPlaceAtRoot: (draggedId) =>
+        isSharedNode(draggedId) ? mergedNodes[draggedId]?.parentId == null : true,
+      resolveDrop: (draggedId, { nodeId, zone }) =>
+        isSidebarDropAllowed(zone as SidebarDropZone, {
+          draggedId,
+          draggedIsShared: isSharedNode(draggedId),
+          targetIsShared: isSharedNode(nodeId),
+          draggedParentId: mergedNodes[draggedId]?.parentId ?? null,
+          targetParentId: mergedNodes[nodeId]?.parentId ?? null,
+        }),
+      moveDocument: handleSidebarTreeMove,
+    };
+  }, [
+    privateTreeNodes,
+    sharedTreeNodes,
+    privateTreeRootIds,
+    sharedTreeRootIds,
+    excludedNodeIds,
+    dispatch,
+    handleSidebarTreeMove,
+  ]);
+
+  // Search-filtered tree: a node is visible when its title matches or when any
+  // of its (loaded) descendants matches. Ancestors of matches stay visible.
+  const { visibleRootIds, visibleIds } = useMemo(() => {
+    if (!panelTreeApi) {
+      return { visibleRootIds: [], visibleIds: null };
+    }
+
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return {
+        visibleRootIds: isPrivatePanel
+          ? panelTreeApi.rootIds.filter((rootId) => !excludedNodeIds.has(rootId))
+          : panelTreeApi.rootIds,
+        visibleIds: null,
+      };
+    }
+
+    const { nodes, rootIds } = panelTreeApi;
+    const visible = new Set<string>();
+    const visit = (id: string): boolean => {
+      const node = nodes[id];
+      if (!node) {
+        return false;
+      }
+      const selfMatch = (node.title || 'Untitled').toLowerCase().includes(query);
+      const hasVisibleChild = node.children.some(visit);
+      if (selfMatch || hasVisibleChild) {
+        visible.add(id);
+        return true;
+      }
+      return false;
+    };
+    rootIds.forEach(visit);
+
+    return {
+      visibleRootIds: rootIds.filter(
+        (id) => visible.has(id) && (!isPrivatePanel || !excludedNodeIds.has(id))
+      ),
+      visibleIds: visible,
+    };
+  }, [panelTreeApi, searchQuery, isPrivatePanel, excludedNodeIds]);
+
+  const resolvePanelTreeActionType = useCallback(
+    (documentId: string): DocActionType => {
+      if (isSharedPanel) {
+        const node = sharedTreeNodes[documentId];
+        if (node?.parentId != null) {
+          return 'move-to-trash';
+        }
+        return node?.effectiveAccessLevel === 'OWNER' ? 'move-to-trash' : 'leave-shared';
+      }
+      return 'move-to-trash';
+    },
+    [isSharedPanel, sharedTreeNodes]
+  );
+
   // Use useSyncExternalStore to safely detect if we are on the client
   // without triggering "cascading render" lint errors or hydration mismatches.
   const isClient = useSyncExternalStore(
@@ -156,31 +431,43 @@ function Sidebar() {
     () => false
   );
 
-  const handleCreateFile = useCallback(async () => {
-    try {
-      const newId = generateDocumentId();
-      const created = await documentService.createDocument();
-      await documentService.saveDocument(newId, created.ydoc, created.meta);
+  const handleCreateFile = useCallback(
+    async (parentId?: string) => {
+      try {
+        const newId = generateDocumentId();
+        const created = await documentService.createDocument();
+        await documentService.saveDocument(newId, created.ydoc, created.meta);
 
-      if (isAuthenticated && accessToken) {
-        await documentService.createCloudDocument(
-          accessToken,
-          newId,
-          created.meta.title || 'Untitled',
-          created.ydoc,
-          created.meta.createdBy ?? null
+        if (isAuthenticated && accessToken) {
+          await documentService.createCloudDocument(
+            accessToken,
+            newId,
+            created.meta.title || 'Untitled',
+            created.ydoc,
+            created.meta.createdBy ?? null,
+            parentId ?? null
+          );
+          void dispatch(fetchRootNodesThunk());
+          if (parentId) {
+            if (sharedTreeNodes[parentId]) {
+              void dispatch(fetchSharedChildrenThunk({ parentId }));
+            } else {
+              void dispatch(fetchChildrenThunk({ parentId }));
+            }
+          }
+        }
+
+        await refresh(false);
+        router.push(`/doc/${newId}`);
+      } catch (error) {
+        console.error('Failed to create document:', error);
+        dispatch(
+          addToast({ message: 'Failed to create document. Please try again.', type: 'error' })
         );
       }
-
-      await refresh(false);
-      router.push(`/doc/${newId}`);
-    } catch (error) {
-      console.error('Failed to create document:', error);
-      dispatch(
-        addToast({ message: 'Failed to create document. Please try again.', type: 'error' })
-      );
-    }
-  }, [router, refresh, isAuthenticated, accessToken, dispatch]);
+    },
+    [router, refresh, isAuthenticated, accessToken, dispatch, sharedTreeNodes]
+  );
 
   const handleSelectDocument = useCallback(
     (id: string) => {
@@ -318,15 +605,42 @@ function Sidebar() {
     }
     dispatch(setSearchQuery(''));
     dispatch(setPanelMode('all'));
-  }, [isShowingAll, showAllDocuments, dispatch]);
+    // Ensure the private tree is loaded even when the sidebar is collapsed
+    // (the sidebar tree only fetches roots while it is rendered).
+    if (privateTreeRootIds.length === 0) {
+      void dispatch(fetchRootNodesThunk());
+    }
+  }, [isShowingAll, showAllDocuments, dispatch, privateTreeRootIds.length]);
 
   const openSharedDocumentsPanel = useCallback(() => {
     if (!isShowingAllShared) {
       showAllSharedDocuments();
     }
+    dispatch(syncSharedRoots(sharedDocuments));
     dispatch(setSearchQuery(''));
     dispatch(setPanelMode('shared'));
-  }, [isShowingAllShared, showAllSharedDocuments, dispatch]);
+  }, [isShowingAllShared, showAllSharedDocuments, dispatch, sharedDocuments]);
+
+  const handleLoadMoreRoots = useCallback(() => {
+    if (isSharedPanel) {
+      if (!isSharedLoadingMore && sharedHasMore) {
+        void loadMoreSharedDocuments();
+      }
+      return;
+    }
+    if (!isTrashPanel && !privateRootLoading) {
+      void dispatch(fetchRootNodesThunk({ page: privateRootPage + 1, append: true }));
+    }
+  }, [
+    isTrashPanel,
+    isSharedPanel,
+    dispatch,
+    privateRootLoading,
+    privateRootPage,
+    isSharedLoadingMore,
+    sharedHasMore,
+    loadMoreSharedDocuments,
+  ]);
 
   const openTrashDocumentsPanel = useCallback(() => {
     dispatch(setSearchQuery(''));
@@ -350,6 +664,14 @@ function Sidebar() {
     }
     return 'move-to-trash';
   }, []);
+
+  const resolveSharedTreeActionType = useCallback(
+    (documentId: string): DocActionType => {
+      const doc = sharedDocuments.find((entry) => entry.id === documentId);
+      return doc ? resolveSharedActionType(doc) : 'move-to-trash';
+    },
+    [sharedDocuments, resolveSharedActionType]
+  );
 
   const resolvePanelActionType = useCallback(
     (doc: SidebarSectionDocument): DocActionType =>
@@ -386,6 +708,8 @@ function Sidebar() {
       try {
         await documentService.moveCloudDocumentToTrash(docId, accessToken);
         dispatch(setDocActionsAnchor(null));
+        dispatch(removeNode(docId));
+        dispatch(sharedRemoveNode(docId));
 
         if (activeDocId === docId) {
           await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
@@ -423,6 +747,7 @@ function Sidebar() {
       try {
         setTrashActionLoadingDocId(docId);
         await documentService.restoreCloudDocumentFromTrash(docId, accessToken);
+        void dispatch(fetchRootNodesThunk());
 
         await refresh(false);
         await refreshTrash(false);
@@ -577,7 +902,7 @@ function Sidebar() {
       {/* Action buttons */}
       <div className="flex flex-col py-2 px-2">
         <button
-          onClick={handleCreateFile}
+          onClick={() => void handleCreateFile()}
           className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
         >
           <NewDocument size={20} className="flex-shrink-0 opacity-80" />
@@ -613,56 +938,48 @@ function Sidebar() {
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
         {!isSidebarCollapsed && (
           <div className="ml-1">
-            <SidebarDocumentSection
-              title="Private"
-              isOpen={isPrivateOpen}
-              onToggle={() => dispatch(togglePrivateOpen())}
-              documents={documents}
-              isLoading={isLoading}
-              emptyText="No documents yet"
-              activeDocId={activeDocId}
-              onSelectDocument={(docId) => {
-                dispatch(setDocActionsAnchor(null));
-                handleSelectDocument(docId);
-              }}
-              isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-              docActionsAnchor={docActionsAnchor}
-              onToggleDocumentActions={handleToggleDocumentActions}
-              resolveActionType={() => 'move-to-trash'}
-              showAllButtonVisible={
-                !isLoading &&
-                documents.length > 0 &&
-                (hasMore || documents.length > SIDEBAR_VISIBLE_COUNT)
-              }
-              onShowAll={openAllDocumentsPanel}
-            />
-
-            {isAuthenticated && (
-              <SidebarDocumentSection
-                title="Shared"
-                className="mt-1"
-                isOpen={isSharedOpen}
-                onToggle={() => dispatch(toggleSharedOpen())}
-                documents={sharedDocuments}
-                isLoading={isSharedLoading}
-                emptyText="No shared documents"
+            <SidebarTreeDndContext treeApi={sidebarTreeApi}>
+              <SidebarTree
+                excludedNodeIds={excludedNodeIds}
+                isOpen={isPrivateOpen}
+                onToggle={() => dispatch(togglePrivateOpen())}
                 activeDocId={activeDocId}
                 onSelectDocument={(docId) => {
                   dispatch(setDocActionsAnchor(null));
                   handleSelectDocument(docId);
                 }}
+                onCreateChild={(parentId) => {
+                  void handleCreateFile(parentId);
+                }}
                 isActionsEnabled={Boolean(isAuthenticated && accessToken)}
                 docActionsAnchor={docActionsAnchor}
                 onToggleDocumentActions={handleToggleDocumentActions}
-                resolveActionType={resolveSharedActionType}
-                showAllButtonVisible={
-                  !isSharedLoading &&
-                  sharedDocuments.length > 0 &&
-                  (sharedHasMore || sharedDocuments.length > SIDEBAR_VISIBLE_COUNT)
-                }
-                onShowAll={openSharedDocumentsPanel}
+                onShowAll={openAllDocumentsPanel}
               />
-            )}
+
+              {isAuthenticated && (
+                <SharedTree
+                  className="mt-1"
+                  isOpen={isSharedOpen}
+                  onToggle={() => dispatch(toggleSharedOpen())}
+                  documents={sharedDocuments}
+                  isLoading={isSharedLoading}
+                  activeDocId={activeDocId}
+                  onSelectDocument={(docId) => {
+                    dispatch(setDocActionsAnchor(null));
+                    handleSelectDocument(docId);
+                  }}
+                  onCreateChild={(parentId) => {
+                    void handleCreateFile(parentId);
+                  }}
+                  isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+                  docActionsAnchor={docActionsAnchor}
+                  onToggleDocumentActions={handleToggleDocumentActions}
+                  resolveActionType={resolveSharedTreeActionType}
+                  onShowAll={openSharedDocumentsPanel}
+                />
+              )}
+            </SidebarTreeDndContext>
           </div>
         )}
 
@@ -721,6 +1038,8 @@ function Sidebar() {
           }}
           onLogout={async () => {
             dispatch(setAccountMenuOpen(false));
+            dispatch(resetSidebarTree());
+            dispatch(resetSharedTree());
             await logout();
             await navigateToResolvedRootDocument({
               isAuthenticated: false,
@@ -757,6 +1076,24 @@ function Sidebar() {
           onClose={closeDocumentsPanel}
           isLoadingInitial={panelIsLoadingInitial}
           filteredDocuments={filteredDocuments}
+          trashedDocuments={trashedDocuments}
+          treeApi={panelTreeApi}
+          excludedNodeIds={isPrivatePanel ? excludedNodeIds : undefined}
+          visibleRootIds={visibleRootIds}
+          visibleIds={visibleIds}
+          isSearching={isPanelSearching}
+          onCreateChild={(parentId) => {
+            void handleCreateFile(parentId);
+          }}
+          rootHasMore={isSharedPanel ? sharedHasMore : !isTrashPanel ? privateRootHasMore : false}
+          isLoadingRootMore={
+            isSharedPanel
+              ? isSharedLoadingMore
+              : !isTrashPanel
+                ? privateRootLoading && privateTreeRootIds.length > 0
+                : false
+          }
+          onLoadMoreRoots={handleLoadMoreRoots}
           activeDocId={activeDocId}
           isAuthenticated={isAuthenticated}
           accessToken={accessToken}
@@ -768,6 +1105,7 @@ function Sidebar() {
           docActionsAnchor={docActionsAnchor}
           onToggleDocumentActions={handleToggleDocumentActions}
           resolvePanelActionType={resolvePanelActionType}
+          resolvePanelTreeActionType={resolvePanelTreeActionType}
           setDocActionsAnchor={(anchor) => dispatch(setDocActionsAnchor(anchor))}
           hasMore={panelHasMore}
           isLoadingMore={panelIsLoadingMore}

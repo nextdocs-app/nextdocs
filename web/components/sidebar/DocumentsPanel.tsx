@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { ChevronRight, Search, DocumentText, Restore, Trash } from '@/icons';
 import { DocumentsPanelSkeleton } from './DocumentsPanelSkeleton';
 import { DocumentActionsButton } from './DocumentActionsButton';
+import { SidebarTreeItem } from './SidebarTreeItem';
+import { SidebarTreeDndContext } from './SidebarTreeDndContext';
+import type { TreeApi } from './SidebarTreeDndContext';
 import type {
   DocumentsPanelMode,
   SidebarSectionDocument,
@@ -17,7 +20,22 @@ export type DocumentsPanelProps = {
   setSearchQuery: (query: string) => void;
   onClose: () => void;
   isLoadingInitial: boolean;
+  /** Flat list — used only by the trash panel. */
   filteredDocuments: SidebarSectionDocument[];
+  /** Full list of trashed documents (unfiltered) for accurate parent hierarchy checks */
+  trashedDocuments?: SidebarSectionDocument[];
+  /** Tree data — used by the private and shared panels. */
+  treeApi: TreeApi | null;
+  /** Node ids (e.g. shared documents) that must not render inside this tree. */
+  excludedNodeIds?: ReadonlySet<string>;
+  visibleRootIds: string[];
+  /** When searching, the set of node ids that should be rendered. */
+  visibleIds: ReadonlySet<string> | null;
+  isSearching: boolean;
+  onCreateChild: (parentId: string) => void;
+  rootHasMore: boolean;
+  isLoadingRootMore: boolean;
+  onLoadMoreRoots: () => void;
   activeDocId: string;
   isAuthenticated: boolean;
   accessToken: string | null;
@@ -33,6 +51,7 @@ export type DocumentsPanelProps = {
     actionType: DocActionType
   ) => void;
   resolvePanelActionType: (doc: SidebarSectionDocument) => DocActionType;
+  resolvePanelTreeActionType: (documentId: string) => DocActionType;
   setDocActionsAnchor: (anchor: DocActionsAnchor | null) => void;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -48,6 +67,16 @@ export function DocumentsPanel({
   onClose,
   isLoadingInitial,
   filteredDocuments,
+  trashedDocuments: trashedDocumentsProp,
+  treeApi,
+  excludedNodeIds,
+  visibleRootIds,
+  visibleIds,
+  isSearching,
+  onCreateChild,
+  rootHasMore,
+  isLoadingRootMore,
+  onLoadMoreRoots,
   activeDocId,
   isAuthenticated,
   accessToken,
@@ -59,16 +88,19 @@ export function DocumentsPanel({
   docActionsAnchor,
   onToggleDocumentActions,
   resolvePanelActionType,
+  resolvePanelTreeActionType,
   setDocActionsAnchor,
   hasMore,
   isLoadingMore,
   onLoadMore,
 }: DocumentsPanelProps) {
   const documentsPanelScrollRef = useRef<HTMLDivElement>(null);
-  const documentsPanelSentinelRef = useRef<HTMLLIElement>(null);
+  const treeSentinelRef = useRef<HTMLLIElement>(null);
+  const trashSentinelRef = useRef<HTMLLIElement>(null);
 
   const isTrashPanel = mode === 'trash';
   const isSharedPanel = mode === 'shared';
+  const isTreePanel = !isTrashPanel;
 
   // Handle Escape key to close the panel
   useEffect(() => {
@@ -84,9 +116,9 @@ export function DocumentsPanel({
     };
   }, [onClose]);
 
-  // Infinite scroll IntersectionObserver
+  // Infinite scroll IntersectionObserver (flat trash list)
   useEffect(() => {
-    if (!hasMore || isLoadingInitial || isLoadingMore) {
+    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore) {
       return;
     }
 
@@ -95,7 +127,7 @@ export function DocumentsPanel({
     }
 
     const root = documentsPanelScrollRef.current;
-    const target = documentsPanelSentinelRef.current;
+    const target = trashSentinelRef.current;
     if (!root || !target) {
       return;
     }
@@ -119,23 +151,112 @@ export function DocumentsPanel({
     return () => {
       observer.disconnect();
     };
-  }, [hasMore, isLoadingInitial, isLoadingMore, onLoadMore, filteredDocuments.length]);
+  }, [
+    isTrashPanel,
+    hasMore,
+    isLoadingInitial,
+    isLoadingMore,
+    onLoadMore,
+    filteredDocuments.length,
+  ]);
 
-  // Keep fetching pages while list does not fill the panel viewport yet
+  // Infinite scroll for the tree panels (next page of root documents)
   useEffect(() => {
-    if (!hasMore || isLoadingInitial || isLoadingMore) {
+    if (!isTreePanel || !rootHasMore || isLoadingRootMore) {
+      return;
+    }
+
+    if (typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const root = documentsPanelScrollRef.current;
+    const target = treeSentinelRef.current;
+    if (!root || !target) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const isIntersecting = entries.some((entry) => entry.isIntersecting);
+        if (isIntersecting && !isLoadingRootMore) {
+          onLoadMoreRoots();
+        }
+      },
+      {
+        root,
+        rootMargin: '120px',
+        threshold: 0.1,
+      }
+    );
+
+    observer.observe(target);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [isTreePanel, rootHasMore, isLoadingRootMore, onLoadMoreRoots, visibleRootIds.length]);
+
+  // Keep fetching pages while the list does not fill the panel viewport yet
+  useEffect(() => {
+    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore) {
       return;
     }
 
     const container = documentsPanelScrollRef.current;
-    if (!container) {
+    if (!container || container.clientHeight === 0) {
       return;
     }
 
     if (container.scrollHeight <= container.clientHeight + 24) {
       void onLoadMore();
     }
-  }, [hasMore, isLoadingInitial, isLoadingMore, onLoadMore, filteredDocuments.length]);
+  }, [
+    isTrashPanel,
+    hasMore,
+    isLoadingInitial,
+    isLoadingMore,
+    onLoadMore,
+    filteredDocuments.length,
+  ]);
+
+  // Keep fetching root pages while the tree does not fill the panel viewport yet
+  useEffect(() => {
+    if (!isTreePanel || !rootHasMore || isLoadingRootMore) {
+      return;
+    }
+
+    const container = documentsPanelScrollRef.current;
+    if (!container || container.clientHeight === 0) {
+      return;
+    }
+
+    if (container.scrollHeight <= container.clientHeight + 24) {
+      onLoadMoreRoots();
+    }
+  }, [isTreePanel, rootHasMore, isLoadingRootMore, onLoadMoreRoots, visibleRootIds.length]);
+
+  const trashedDocIds = useMemo(() => {
+    if (!isTrashPanel) {
+      return new Set<string>();
+    }
+    const source = trashedDocumentsProp ?? filteredDocuments;
+    return new Set(source.map((d) => d.id));
+  }, [isTrashPanel, trashedDocumentsProp, filteredDocuments]);
+
+  const renderEmptyState = () => (
+    <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
+      <p className="text-[13px] text-muted-foreground">
+        {searchQuery
+          ? 'No documents match your search.'
+          : isTrashPanel
+            ? 'No documents in trash.'
+            : isSharedPanel
+              ? 'No shared documents yet.'
+              : 'No documents yet.'}
+      </p>
+    </div>
+  );
 
   return (
     <section
@@ -191,22 +312,55 @@ export function DocumentsPanel({
       <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-1.5 py-2">
         {isLoadingInitial ? (
           <DocumentsPanelSkeleton rows={6} />
+        ) : isTreePanel && treeApi ? (
+          visibleRootIds.length === 0 ? (
+            renderEmptyState()
+          ) : (
+            <SidebarTreeDndContext treeApi={treeApi}>
+              <ul className="flex flex-col gap-px">
+                {visibleRootIds.map((rootId) => (
+                  <SidebarTreeItem
+                    key={rootId}
+                    nodeId={rootId}
+                    depth={0}
+                    treeApi={treeApi}
+                    visibleIds={visibleIds}
+                    forceShowChildren={isSearching}
+                    activeDocId={activeDocId}
+                    onSelectDocument={(id) => {
+                      setDocActionsAnchor(null);
+                      onSelectDocument(id);
+                    }}
+                    onCreateChild={onCreateChild}
+                    isActionsEnabled={isAuthenticated && Boolean(accessToken)}
+                    docActionsAnchor={docActionsAnchor}
+                    onToggleDocumentActions={onToggleDocumentActions}
+                    resolveActionType={resolvePanelTreeActionType}
+                    excludedNodeIds={excludedNodeIds}
+                    reorderEnabled={isSharedPanel}
+                  />
+                ))}
+
+                {isLoadingRootMore && (
+                  <li>
+                    <DocumentsPanelSkeleton rows={3} compact />
+                  </li>
+                )}
+
+                {rootHasMore && !isLoadingRootMore && (
+                  <li ref={treeSentinelRef} className="h-5 w-full" />
+                )}
+              </ul>
+            </SidebarTreeDndContext>
+          )
         ) : filteredDocuments.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
-            <p className="text-[13px] text-muted-foreground">
-              {searchQuery
-                ? 'No documents match your search.'
-                : isTrashPanel
-                  ? 'No documents in trash.'
-                  : isSharedPanel
-                    ? 'No shared documents yet.'
-                    : 'No documents yet.'}
-            </p>
-          </div>
+          renderEmptyState()
         ) : (
           <ul className="flex flex-col gap-px">
             {filteredDocuments.map((doc) => {
               const isActive = doc.id === activeDocId;
+              const isChildOfTrashedParent =
+                isTrashPanel && doc.parentId != null && trashedDocIds.has(doc.parentId);
               return (
                 <li key={`all-doc-${doc.id}`} className="relative group/doc">
                   {isTrashPanel ? (
@@ -218,7 +372,7 @@ export function DocumentsPanel({
                         }}
                         className={`w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
-                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
+                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
@@ -226,7 +380,7 @@ export function DocumentsPanel({
                         <span className="text-[13px] truncate">{doc.meta.title || 'Untitled'}</span>
                       </button>
 
-                      {isAuthenticated && accessToken && (
+                      {isAuthenticated && accessToken && !isChildOfTrashedParent && (
                         <div
                           className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity ${
                             trashActionLoadingDocId === doc.id
@@ -274,7 +428,7 @@ export function DocumentsPanel({
                         }}
                         className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
-                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-accent-foreground'
+                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
@@ -303,7 +457,7 @@ export function DocumentsPanel({
               </li>
             )}
 
-            {hasMore && <li ref={documentsPanelSentinelRef} className="h-5 w-full" />}
+            {hasMore && <li ref={trashSentinelRef} className="h-5 w-full" />}
           </ul>
         )}
       </div>

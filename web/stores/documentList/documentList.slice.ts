@@ -10,8 +10,7 @@ import type {
   SharedDocumentEntry,
 } from './documentList.types';
 import {
-  INITIAL_DOCS_COUNT,
-  PAGE_SIZE,
+  DOCS_PAGE_SIZE,
   sortByUpdatedAtDesc,
   mergeUniqueDocuments,
   updateDocumentMetaInList,
@@ -83,37 +82,11 @@ export const fetchDocumentsThunk = createAsyncThunk<
     const expandedMode = keepExpanded && isShowingAll;
 
     if (isAuthenticated && accessToken && !isCloudUnavailable) {
-      const pageSize = expandedMode ? PAGE_SIZE : INITIAL_DOCS_COUNT;
+      const pageSize = DOCS_PAGE_SIZE;
       try {
         const page = await documentService.listCloudDocuments(accessToken, 0, pageSize);
-        let { privateDocs, sharedByOwnerDocs } = await classifyOwnedDocuments(
-          page.items,
-          isAuthenticated,
-          accessToken
-        );
-        let hasMoreAfterClassify = page.hasMore;
-
-        if (
-          !expandedMode &&
-          page.hasMore &&
-          page.items.length === INITIAL_DOCS_COUNT &&
-          sharedByOwnerDocs.length > 0 &&
-          privateDocs.length < INITIAL_DOCS_COUNT
-        ) {
-          const expandedSeedPage = await documentService.listCloudDocuments(
-            accessToken,
-            0,
-            PAGE_SIZE
-          );
-          const expandedClassified = await classifyOwnedDocuments(
-            expandedSeedPage.items,
-            isAuthenticated,
-            accessToken
-          );
-          privateDocs = expandedClassified.privateDocs;
-          sharedByOwnerDocs = expandedClassified.sharedByOwnerDocs;
-          hasMoreAfterClassify = expandedSeedPage.hasMore;
-        }
+        const { privateDocs, sharedByOwnerDocs } = classifyOwnedDocuments(page.items);
+        const hasMoreAfterClassify = page.hasMore;
 
         void ensureCloudDocsCachedLocally(
           [...privateDocs, ...sharedByOwnerDocs],
@@ -150,9 +123,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
         ]);
 
         const localPrivateDocs = allLocalDocs.filter((doc) => !sharedDocIds.has(doc.id));
-        const initialCount = expandedMode
-          ? Math.min(PAGE_SIZE, localPrivateDocs.length)
-          : Math.min(INITIAL_DOCS_COUNT, localPrivateDocs.length);
+        const initialCount = Math.min(DOCS_PAGE_SIZE, localPrivateDocs.length);
         const initialDocs = localPrivateDocs.slice(0, initialCount);
 
         return {
@@ -182,9 +153,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
       privateDocs = docs;
     }
 
-    const initialCount = expandedMode
-      ? Math.min(PAGE_SIZE, privateDocs.length)
-      : Math.min(INITIAL_DOCS_COUNT, privateDocs.length);
+    const initialCount = Math.min(DOCS_PAGE_SIZE, privateDocs.length);
     const initialDocs = privateDocs.slice(0, initialCount);
 
     return {
@@ -222,7 +191,6 @@ export const fetchSharedDocumentsThunk = createAsyncThunk<
     const state = getState();
     const { user, accessToken } = state.auth;
     const isAuthenticated = !!user && !!accessToken;
-    const { isShowingAllShared } = state.documentList;
 
     if (!isAuthenticated || !accessToken) {
       return {
@@ -240,7 +208,7 @@ export const fetchSharedDocumentsThunk = createAsyncThunk<
       };
     }
 
-    const pageSize = isShowingAllShared ? PAGE_SIZE : INITIAL_DOCS_COUNT;
+    const pageSize = DOCS_PAGE_SIZE;
     try {
       const sharedPage = await documentService.listSharedDocuments(accessToken, 0, pageSize);
       const items = sharedPage.items.map((doc) => ({
@@ -311,7 +279,7 @@ export const fetchTrashDocumentsThunk = createAsyncThunk<
   }
 
   try {
-    const page = await documentService.listCloudDocuments(accessToken, 0, PAGE_SIZE, {
+    const page = await documentService.listCloudDocuments(accessToken, 0, DOCS_PAGE_SIZE, {
       trashed: true,
     });
     return {
@@ -371,10 +339,10 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
         const page = await documentService.listCloudDocuments(
           accessToken,
           nextCloudPage,
-          PAGE_SIZE
+          DOCS_PAGE_SIZE
         );
         const { privateDocs: nextPrivateDocs, sharedByOwnerDocs: nextOwnerSharedDocs } =
-          await classifyOwnedDocuments(page.items, isAuthenticated, accessToken);
+          classifyOwnedDocuments(page.items);
 
         const seen = new Set(documents.map((doc) => doc.id));
         const filteredDocs = nextPrivateDocs.filter((doc) => !seen.has(doc.id));
@@ -421,7 +389,7 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
       ]);
 
       const localPrivateDocs = localAllDocs.filter((doc) => !sharedDocIds.has(doc.id));
-      const nextChunk = localPrivateDocs.slice(localLoadedCount, localLoadedCount + PAGE_SIZE);
+      const nextChunk = localPrivateDocs.slice(localLoadedCount, localLoadedCount + DOCS_PAGE_SIZE);
 
       const seen = new Set(documents.map((doc) => doc.id));
       const filteredDocs = nextChunk.filter((doc) => !seen.has(doc.id));
@@ -470,7 +438,7 @@ export const loadMoreSharedDocumentsThunk = createAsyncThunk<
       const page = await documentService.listSharedDocuments(
         accessToken!,
         nextSharedPage,
-        PAGE_SIZE
+        DOCS_PAGE_SIZE
       );
       const mapped = page.items.map((doc) => ({
         ...doc,
@@ -555,7 +523,7 @@ export const loadMoreTrashDocumentsThunk = createAsyncThunk<
       const page = await documentService.listCloudDocuments(
         accessToken!,
         nextTrashCloudPage,
-        PAGE_SIZE,
+        DOCS_PAGE_SIZE,
         { trashed: true }
       );
 
@@ -638,7 +606,7 @@ const documentListSlice = createSlice({
 
         state.documents = state.isShowingAll
           ? sortedPrivateDocs
-          : sortedPrivateDocs.slice(0, INITIAL_DOCS_COUNT);
+          : sortedPrivateDocs.slice(0, DOCS_PAGE_SIZE);
       }
 
       const existsLocally = state.localAllDocs.some((doc) => doc.id === id);

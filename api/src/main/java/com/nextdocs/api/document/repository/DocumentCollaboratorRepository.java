@@ -16,5 +16,17 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
 
     boolean existsByDocument_IdAndUser_Id(UUID documentId, UUID userId);
 
+    boolean existsByDocument_Id(UUID documentId);
+
     void deleteByDocument_IdAndUser_Id(UUID documentId, UUID userId);
+
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query(
+            "DELETE FROM DocumentCollaborator c WHERE c.document.id = :documentId")
+    void deleteByDocument_Id(@org.springframework.data.repository.query.Param("documentId") UUID documentId);
+
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT DISTINCT c.document.id FROM DocumentCollaborator c WHERE c.document.id IN :documentIds")
+    List<UUID> findDocumentIdsWithCollaborators(
+            @org.springframework.data.repository.query.Param("documentIds") java.util.Collection<UUID> documentIds);
 }

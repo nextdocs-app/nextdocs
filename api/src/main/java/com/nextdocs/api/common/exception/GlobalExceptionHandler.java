@@ -1,6 +1,7 @@
 package com.nextdocs.api.common.exception;
 
 import com.nextdocs.api.common.response.ApiResponse;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -23,8 +24,12 @@ public class GlobalExceptionHandler {
         } else {
             log.debug("ApiException [{}]: {}", ex.getErrorCode(), ex.getMessage());
         }
+        String detail = ex.getMessage();
+        if (detail != null && Objects.equals(detail, ex.getErrorCode().defaultMessage())) {
+            detail = null;
+        }
         return ResponseEntity.status(ex.getErrorCode().httpStatus())
-                .body(ApiResponse.error(ex.getErrorCode().defaultMessage()));
+                .body(ApiResponse.error(ex.getErrorCode().defaultMessage(), detail));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -53,6 +58,14 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(ErrorCode.VALIDATION_FAILED.defaultMessage(), detail));
+    }
+
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResourceFound(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.debug("Resource not found: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.error(ErrorCode.NOT_FOUND.defaultMessage()));
     }
 
     @ExceptionHandler(AccessDeniedException.class)

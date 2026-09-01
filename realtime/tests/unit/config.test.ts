@@ -21,7 +21,7 @@ describe('Config', () => {
     delete process.env.ROOM_INACTIVE_TIMEOUT;
     delete process.env.ACCESS_REVALIDATION_INTERVAL_MS;
 
-    const config = (await import('../../src/config')).default;
+    const config = (await import('../../src/config.js')).default;
 
     expect(config.port).toBe(1234);
     expect(config.host).toBe('0.0.0.0');
@@ -41,7 +41,7 @@ describe('Config', () => {
     process.env.ROOM_INACTIVE_TIMEOUT = '120000';
     process.env.ACCESS_REVALIDATION_INTERVAL_MS = '15000';
 
-    const config = (await import('../../src/config')).default;
+    const config = (await import('../../src/config.js')).default;
 
     expect(config.port).toBe(8080);
     expect(config.host).toBe('127.0.0.1');
@@ -54,80 +54,80 @@ describe('Config', () => {
 
   it('should trim CORS origins', async () => {
     process.env.CORS_ORIGINS = ' http://example.com , http://test.com ';
-    const config = (await import('../../src/config')).default;
+    const config = (await import('../../src/config.js')).default;
     expect(config.corsOrigins).toEqual(['http://example.com', 'http://test.com']);
   });
 
   it('should filter out empty CORS origins', async () => {
     process.env.CORS_ORIGINS = 'http://example.com,, ,http://test.com';
-    const config = (await import('../../src/config')).default;
+    const config = (await import('../../src/config.js')).default;
     expect(config.corsOrigins).toEqual(['http://example.com', 'http://test.com']);
   });
 
   it('should fallback to default log level for invalid value', async () => {
     process.env.LOG_LEVEL = 'invalid_level';
-    const config = (await import('../../src/config')).default;
+    const config = (await import('../../src/config.js')).default;
     expect(config.logLevel).toBe('info');
   });
 
   it('should throw error for invalid PORT', async () => {
     process.env.PORT = '-1';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid PORT');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
 
     resetEnv();
     process.env.PORT = '70000';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid PORT');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
 
     resetEnv();
     process.env.PORT = 'abc';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid PORT');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
   });
 
   it('should throw error for invalid ROOM_CLEANUP_INTERVAL', async () => {
     process.env.ROOM_CLEANUP_INTERVAL = '-5';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid ROOM_CLEANUP_INTERVAL');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid ROOM_CLEANUP_INTERVAL');
   });
 
   it('should throw error for invalid ROOM_INACTIVE_TIMEOUT', async () => {
     process.env.ROOM_INACTIVE_TIMEOUT = '0';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid ROOM_INACTIVE_TIMEOUT');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid ROOM_INACTIVE_TIMEOUT');
   });
 
   it('should throw error for invalid ACCESS_REVALIDATION_INTERVAL_MS', async () => {
     process.env.ACCESS_REVALIDATION_INTERVAL_MS = '0';
-    await expect(import('../../src/config')).rejects.toThrow(
+    await expect(import('../../src/config.js')).rejects.toThrow(
       'Invalid ACCESS_REVALIDATION_INTERVAL_MS'
     );
   });
 
   it('should throw error for invalid MAX_PAYLOAD', async () => {
     process.env.MAX_PAYLOAD = '-1';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MAX_PAYLOAD');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_PAYLOAD');
   });
 
   it('should throw error for invalid MAX_CONNS_PER_IP', async () => {
     process.env.MAX_CONNS_PER_IP = '0';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MAX_CONNS_PER_IP');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_CONNS_PER_IP');
   });
 
   it('should throw error for invalid MAX_GLOBAL_CONNS', async () => {
     process.env.MAX_GLOBAL_CONNS = '-100';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MAX_GLOBAL_CONNS');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_GLOBAL_CONNS');
   });
 
   it('should throw error for invalid MAX_CONN_RATE_PER_MIN', async () => {
     process.env.MAX_CONN_RATE_PER_MIN = '0';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MAX_CONN_RATE_PER_MIN');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_CONN_RATE_PER_MIN');
   });
 
   it('should throw error for invalid MAX_MSG_RATE_PER_SEC', async () => {
     process.env.MAX_MSG_RATE_PER_SEC = '-10';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MAX_MSG_RATE_PER_SEC');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_MSG_RATE_PER_SEC');
   });
 
   it('should throw error for invalid MEMORY_THRESHOLD', async () => {
     process.env.MEMORY_THRESHOLD = 'invalid';
-    await expect(import('../../src/config')).rejects.toThrow('Invalid MEMORY_THRESHOLD');
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MEMORY_THRESHOLD');
   });
 
   function resetEnv() {

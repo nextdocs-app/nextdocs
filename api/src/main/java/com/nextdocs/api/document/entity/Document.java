@@ -15,7 +15,8 @@ import org.hibernate.type.SqlTypes;
         name = "documents",
         indexes = {
             @Index(name = "idx_documents_user_created", columnList = "user_id,created_at"),
-            @Index(name = "idx_documents_user_updated", columnList = "user_id,updated_at")
+            @Index(name = "idx_documents_user_updated", columnList = "user_id,updated_at"),
+            @Index(name = "idx_documents_parent_sibling_order", columnList = "parent_id,sibling_order_key")
         })
 @Getter
 @Setter
@@ -53,6 +54,13 @@ public class Document {
     @Column(name = "link_access_level", nullable = false, length = 16)
     @Builder.Default
     private DocumentAccessLevel linkAccessLevel = DocumentAccessLevel.VIEW;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_id")
+    private Document parent;
+
+    @Column(name = "sibling_order_key")
+    private String siblingOrderKey;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

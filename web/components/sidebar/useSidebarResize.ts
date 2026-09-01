@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useAppDispatch } from '@/stores/hooks';
+import { setSidebarWidth as setSidebarWidthAction } from '@/stores/sidebar/sidebar.slice';
 
 export function useSidebarResize(initialWidth = 256, minWidth = 256, maxWidth = 480) {
+  const dispatch = useAppDispatch();
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('nextdocs-sidebar-width');
@@ -14,6 +17,13 @@ export function useSidebarResize(initialWidth = 256, minWidth = 256, maxWidth = 
     return initialWidth;
   });
   const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+    dispatch(setSidebarWidthAction(sidebarWidth));
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--nd-sidebar-width', `${sidebarWidth}px`);
+    }
+  }, [sidebarWidth, dispatch]);
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

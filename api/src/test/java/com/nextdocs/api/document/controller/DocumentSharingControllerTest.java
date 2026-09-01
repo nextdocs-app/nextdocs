@@ -19,7 +19,6 @@ import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
-import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
@@ -32,9 +31,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -230,20 +226,6 @@ class DocumentSharingControllerTest {
                                 "linkAccessLevel must be omitted unless generalAccessMode is ANYONE_WITH_LINK.")));
 
         verifyNoInteractions(sharingService);
-    }
-
-    @Test
-    void listSharedWithMe_success_returns200() throws Exception {
-        DocumentResponse doc = new DocumentResponse(
-                documentId, "Shared Doc", null, "Owner", OffsetDateTime.now(), OffsetDateTime.now(), null, null);
-
-        Page<DocumentResponse> page = new PageImpl<>(List.of(doc), PageRequest.of(0, 20), 1);
-        when(sharingService.listSharedWithMe(eq(userId), any())).thenReturn(page);
-
-        mockMvc.perform(get("/api/v1/documents/shared-with-me").with(user(principal)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.content[0].id").value(documentId.toString()));
     }
 
     @Test

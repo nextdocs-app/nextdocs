@@ -54,6 +54,10 @@ export default function Editor() {
   >({});
   const isGuestSharedView = !isAuthenticated && accessLevel === 'VIEW';
   const isOffline = !isOnline;
+  const isTrashedDocument = !!meta?.deletedAt;
+  // Only EDIT holders and owners may restore/purge; viewers and commenters get the
+  // read-only trash notice instead.
+  const canManageTrash = isTrashedDocument && (accessLevel === 'EDIT' || accessLevel === 'OWNER');
   const { pendingEdits } = useYjsPersistence(
     documentId,
     ydoc,
@@ -188,13 +192,16 @@ export default function Editor() {
     <>
       <DocToolbar
         documentId={documentId}
+        documentTitle={meta.title}
+        documentIcon={meta.icon}
         isShareEnabled={isAuthenticated}
         updatedAt={meta.updatedAt}
         isOffline={isOffline}
         pendingEdits={pendingEdits}
         showGuestNotice={isGuestSharedView}
         onGuestNoticeCtaClick={openAuthModal}
-        showTrashNotice={!!meta?.deletedAt}
+        showTrashNotice={isTrashedDocument}
+        canManageTrash={canManageTrash}
         onRestore={handleRestore}
         showCommentsButton={showCommentsButton}
         isCommentsSidebarOpen={isCommentsSidebarOpen}

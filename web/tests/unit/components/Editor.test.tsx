@@ -41,6 +41,7 @@ jest.mock('@blocknote/core/comments', () => ({
 jest.mock('../../../services/document.service', () => ({
   documentService: {
     listCollaborators: jest.fn().mockResolvedValue([]),
+    getDocumentBreadcrumbs: jest.fn().mockResolvedValue([]),
   },
 }));
 

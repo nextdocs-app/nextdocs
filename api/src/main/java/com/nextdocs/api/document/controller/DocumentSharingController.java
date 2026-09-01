@@ -2,13 +2,11 @@ package com.nextdocs.api.document.controller;
 
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
-import com.nextdocs.api.common.response.PagedResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
-import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -18,9 +16,6 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -200,24 +195,6 @@ public class DocumentSharingController {
             @PathVariable UUID id,
             @Valid @RequestBody SharingSettingsUpdateRequest request) {
         return ResponseEntity.ok(ApiResponse.ok(sharingService.updateSharingSettings(principal.getId(), id, request)));
-    }
-
-    @Operation(
-            summary = "List documents shared with me",
-            description = "Returns a paged list of active documents shared with the authenticated user.",
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
-                        description = "Shared documents returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
-            })
-    @GetMapping("/shared-with-me")
-    public ResponseEntity<ApiResponse<PagedResponse<DocumentResponse>>> listSharedWithMe(
-            @AuthenticationPrincipal UserPrincipal principal, @PageableDefault(size = 20) Pageable pageable) {
-        Page<DocumentResponse> page = sharingService.listSharedWithMe(principal.getId(), pageable);
-        return ResponseEntity.ok(ApiResponse.ok(PagedResponse.from(page)));
     }
 
     @Operation(

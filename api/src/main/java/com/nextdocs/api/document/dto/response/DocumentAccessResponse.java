@@ -11,4 +11,15 @@ public record DocumentAccessResponse(
         @Schema(description = "Effective access level") DocumentAccessLevel accessLevel,
 
         @Schema(description = "Whether current user is owner")
-        boolean owner) {}
+        boolean owner,
+
+        @Schema(
+                description =
+                        "Whether the document is currently in trash. Trash-scope responses report the caller's pre-trash access level.",
+                defaultValue = "false")
+        boolean trashed) {
+
+    public DocumentAccessResponse(UUID documentId, boolean allowed, DocumentAccessLevel accessLevel, boolean owner) {
+        this(documentId, allowed, accessLevel, owner, false);
+    }
+}

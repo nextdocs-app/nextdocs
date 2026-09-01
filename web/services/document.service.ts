@@ -7,6 +7,7 @@ import {
   createDefaultDocumentMeta,
 } from '@/lib/yjs.util';
 import type { DocumentMeta, DocumentLoadResult, StoredDocument } from '@/types/document.types';
+import type { TreeNode, TreeNodePage, MoveDocumentRequest } from '@/types/tree.types';
 
 const CURRENT_SCHEMA_VERSION = 1;
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
@@ -34,6 +35,11 @@ interface ApiDocument {
   icon?: string | null;
   coverImage?: string | null;
   yjsState?: string | null;
+  parentId?: string | null;
+  orderKey?: string | null;
+  hasChildren?: boolean;
+  hasCollaborators?: boolean;
+  accessLevel?: DocumentAccessLevel | null;
   createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +55,7 @@ interface ApiDocumentAccess {
   allowed: boolean;
   accessLevel: DocumentAccessLevel | null;
   owner: boolean;
+  trashed?: boolean;
 }
 
 interface ApiCollaborator {
@@ -66,7 +73,15 @@ interface ApiSharingSettings {
 }
 
 export interface CloudDocumentsPage {
-  items: { id: string; meta: DocumentMeta }[];
+  items: {
+    id: string;
+    meta: DocumentMeta;
+    parentId: string | null;
+    orderKey?: string | null;
+    hasChildren?: boolean;
+    hasCollaborators?: boolean;
+    accessLevel?: DocumentAccessLevel | null;
+  }[];
   page: number;
   size: number;
   totalElements: number;
@@ -79,6 +94,8 @@ export interface DocumentAccess {
   allowed: boolean;
   accessLevel: DocumentAccessLevel | null;
   owner: boolean;
+  /** True when the document is in trash; accessLevel then reflects pre-trash access. */
+  trashed?: boolean;
 }
 
 export interface Collaborator {
@@ -93,6 +110,13 @@ export interface SharingSettings {
   generalAccessMode: DocumentGeneralAccessMode;
   linkAccessLevel: DocumentAccessLevel;
   hasActiveLink: boolean;
+}
+
+export interface DocumentBreadcrumbItem {
+  id: string;
+  title: string;
+  icon?: string | null;
+  parentId?: string | null;
 }
 
 export class DocumentServiceApiError extends Error {
@@ -202,15 +226,29 @@ class DocumentService {
     accessToken: string,
     page = 0,
     size = 20,
-    options?: { trashed?: boolean }
+    options?: {
+      parentId?: string;
+      scope?: 'all' | 'private' | 'shared';
+      trashed?: boolean;
+      sort?: string;
+    }
   ): Promise<CloudDocumentsPage> {
     const params = new URLSearchParams({
       page: String(page),
       size: String(size),
     });
 
+    if (options?.parentId) {
+      params.set('parentId', options.parentId);
+    }
+    if (options?.scope) {
+      params.set('scope', options.scope);
+    }
     if (options?.trashed) {
       params.set('trashed', 'true');
+    }
+    if (options?.sort) {
+      params.set('sort', options.sort);
     }
 
     const body = await this.fetchApi<ApiPage<ApiDocument>>(
@@ -221,7 +259,15 @@ class DocumentService {
       }
     );
 
-    const items = body.content.map((doc) => ({ id: doc.id, meta: this.toDocumentMeta(doc) }));
+    const items = body.content.map((doc) => ({
+      id: doc.id,
+      meta: this.toDocumentMeta(doc),
+      parentId: doc.parentId ?? null,
+      orderKey: doc.orderKey ?? null,
+      hasChildren: doc.hasChildren ?? false,
+      hasCollaborators: doc.hasCollaborators ?? false,
+      accessLevel: doc.accessLevel ?? null,
+    }));
 
     return {
       items,
@@ -233,11 +279,94 @@ class DocumentService {
     };
   }
 
+  public async listRootTreeNodes(accessToken: string, page = 0, size = 50): Promise<TreeNodePage> {
+    const pageResult = await this.listCloudDocuments(accessToken, page, size, {
+      parentId: 'root',
+      scope: 'private',
+    });
+
+    return {
+      items: pageResult.items.map((item) => ({
+        id: item.id,
+        title: item.meta.title,
+        parentId: item.parentId,
+        orderKey: item.orderKey ?? '',
+        hasChildren: item.hasChildren ?? false,
+        effectiveAccessLevel: item.accessLevel ?? 'OWNER',
+        createdAt: item.meta.createdAt,
+        updatedAt: item.meta.updatedAt,
+      })),
+      page: pageResult.page,
+      size: pageResult.size,
+      totalElements: pageResult.totalElements,
+      totalPages: pageResult.totalPages,
+      hasMore: pageResult.hasMore,
+    };
+  }
+
+  public async listChildTreeNodes(
+    parentId: string,
+    accessToken: string,
+    page = 0,
+    size = 50
+  ): Promise<TreeNodePage> {
+    const pageResult = await this.listCloudDocuments(accessToken, page, size, {
+      parentId,
+    });
+
+    return {
+      items: pageResult.items.map((item) => ({
+        id: item.id,
+        title: item.meta.title,
+        parentId: item.parentId,
+        orderKey: item.orderKey ?? '',
+        hasChildren: item.hasChildren ?? false,
+        effectiveAccessLevel: item.accessLevel ?? null,
+        createdAt: item.meta.createdAt,
+        updatedAt: item.meta.updatedAt,
+      })),
+      page: pageResult.page,
+      size: pageResult.size,
+      totalElements: pageResult.totalElements,
+      totalPages: pageResult.totalPages,
+      hasMore: pageResult.hasMore,
+    };
+  }
+
+  public async moveDocument(
+    documentId: string,
+    request: MoveDocumentRequest,
+    accessToken: string
+  ): Promise<TreeNode> {
+    const body = await this.fetchApi<ApiDocument>(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/move`,
+      {
+        method: 'POST',
+        accessToken,
+        body: JSON.stringify(request),
+      }
+    );
+
+    this.emitCloudDocumentsChanged();
+    return {
+      id: body.id,
+      title: body.title,
+      parentId: body.parentId ?? null,
+      orderKey: body.orderKey ?? '',
+      hasChildren: body.hasChildren ?? false,
+      effectiveAccessLevel: body.accessLevel ?? null,
+      createdAt: body.createdAt,
+      updatedAt: body.updatedAt,
+    };
+  }
+
   public async getCloudDocument(
     id: string,
     accessToken: string,
-    includeTrashed = true
+    options?: { includeTrashed?: boolean } | boolean
   ): Promise<DocumentLoadResult> {
+    const includeTrashed =
+      typeof options === 'boolean' ? options : (options?.includeTrashed ?? false);
     const body = await this.fetchApi<ApiDocument>(
       `/api/v1/documents/${encodeURIComponent(id)}${includeTrashed ? '?includeTrashed=true' : ''}`,
       {
@@ -274,6 +403,28 @@ class DocumentService {
     };
   }
 
+  public async getDocumentBreadcrumbs(
+    id: string,
+    accessToken?: string | null
+  ): Promise<DocumentBreadcrumbItem[]> {
+    if (accessToken) {
+      return await this.fetchApi<DocumentBreadcrumbItem[]>(
+        `/api/v1/documents/${encodeURIComponent(id)}/path`,
+        {
+          method: 'GET',
+          accessToken,
+        }
+      );
+    } else {
+      return await this.fetchApi<DocumentBreadcrumbItem[]>(
+        `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
+        {
+          method: 'GET',
+        }
+      );
+    }
+  }
+
   public async getMyAccess(id: string, accessToken: string): Promise<DocumentAccess> {
     const body = await this.fetchApi<ApiDocumentAccess>(
       `/api/v1/documents/${encodeURIComponent(id)}/my-access`,
@@ -288,6 +439,7 @@ class DocumentService {
       allowed: body.allowed,
       accessLevel: body.accessLevel,
       owner: body.owner,
+      trashed: body.trashed,
     };
   }
 
@@ -296,29 +448,9 @@ class DocumentService {
     page = 0,
     size = 20
   ): Promise<CloudDocumentsPage> {
-    const params = new URLSearchParams({
-      page: String(page),
-      size: String(size),
+    return this.listCloudDocuments(accessToken, page, size, {
+      scope: 'shared',
     });
-
-    const body = await this.fetchApi<ApiPage<ApiDocument>>(
-      `/api/v1/documents/shared-with-me?${params.toString()}`,
-      {
-        method: 'GET',
-        accessToken,
-      }
-    );
-
-    const items = body.content.map((doc) => ({ id: doc.id, meta: this.toDocumentMeta(doc) }));
-
-    return {
-      items,
-      page: body.number,
-      size: body.size,
-      totalElements: body.totalElements,
-      totalPages: body.totalPages,
-      hasMore: !body.last,
-    };
   }
 
   public async listCollaborators(documentId: string, accessToken: string): Promise<Collaborator[]> {
@@ -468,7 +600,10 @@ class DocumentService {
     id: string,
     title = 'Untitled',
     ydoc?: Y.Doc,
-    createdBy?: string | null
+    createdBy?: string | null,
+    parentId?: string | null,
+    prevSiblingId?: string | null,
+    nextSiblingId?: string | null
   ): Promise<{ id: string; ydoc: Y.Doc; meta: DocumentMeta }> {
     const documentYDoc = ydoc ?? createYjsDoc();
     const payload = {
@@ -476,6 +611,9 @@ class DocumentService {
       title,
       yjsState: this.uint8ArrayToBase64(encodeYjsState(documentYDoc)),
       createdBy: createdBy ?? 'NextDocs User',
+      parentId: parentId ?? null,
+      prevSiblingId: prevSiblingId ?? null,
+      nextSiblingId: nextSiblingId ?? null,
     };
 
     const body = await this.fetchApi<ApiDocument>('/api/v1/documents', {
@@ -743,7 +881,7 @@ class DocumentService {
 
     if (!res.ok || !body?.success || body.data == null) {
       throw new DocumentServiceApiError(
-        body?.error ?? `Request failed: ${options.method} ${path}`,
+        body?.message || body?.error || `Request failed: ${options.method} ${path}`,
         res.status
       );
     }

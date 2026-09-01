@@ -36,7 +36,15 @@ const renderHook = <Result, Props>(
 
   const preloadedState = {
     auth: {
-      user: authMock?.isAuthenticated ? { id: 'mock-user-id', email: 'mock@example.com' } : null,
+      user: authMock?.isAuthenticated
+        ? {
+            id: 'mock-user-id',
+            email: 'mock@example.com',
+            displayName: 'Mock User',
+            avatarUrl: null,
+            emailVerified: true,
+          }
+        : null,
       accessToken: authMock?.accessToken || null,
       expiresAt: authMock?.isAuthenticated ? Date.now() + 3600 * 1000 : null,
       lastAuthAction: null,
@@ -136,12 +144,12 @@ describe('useDocumentList', () => {
     saveDocumentSpy.mockRestore();
   });
 
-  it('loads only first 7 local documents initially', async () => {
-    const docs = Array.from({ length: 10 }, (_, i) => ({
+  it('loads only first 50 local documents initially', async () => {
+    const docs = Array.from({ length: 60 }, (_, i) => ({
       id: `doc-${i + 1}`,
       meta: {
         title: `Doc ${i + 1}`,
-        updatedAt: `2024-01-${String(10 + i).padStart(2, '0')}T10:00:00Z`,
+        updatedAt: `2024-01-${String(10 + (i % 20)).padStart(2, '0')}T10:00:00Z`,
         createdAt: '2024-01-01T10:00:00Z',
       },
     }));
@@ -152,7 +160,7 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(result.current.documents).toHaveLength(7);
+    expect(result.current.documents).toHaveLength(50);
     expect(result.current.canShowAll).toBe(true);
     expect(result.current.isShowingAll).toBe(false);
   });
@@ -185,7 +193,7 @@ describe('useDocumentList', () => {
     expect(result.current.documents.length).toBeGreaterThan(7);
   });
 
-  it('loads first cloud page with size 7 when authenticated', async () => {
+  it('loads first cloud page with size 50 when authenticated', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
@@ -203,19 +211,19 @@ describe('useDocumentList', () => {
         },
       ],
       page: 0,
-      size: 7,
+      size: 50,
       totalElements: 25,
-      totalPages: 4,
-      hasMore: true,
+      totalPages: 1,
+      hasMore: false,
     });
 
     const { result } = renderHook(() => useDocumentList());
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 7);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
     expect(result.current.documents[0].id).toBe('cloud-1');
-    expect(result.current.canShowAll).toBe(true);
+    expect(result.current.canShowAll).toBe(false);
   });
 
   it('falls back to local documents when cloud list is unreachable', async () => {
@@ -348,7 +356,7 @@ describe('useDocumentList', () => {
     });
 
     await waitFor(() => {
-      expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
+      expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
     });
 
     await waitFor(() => {
@@ -360,9 +368,7 @@ describe('useDocumentList', () => {
       await result.current.loadMore();
     });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 7);
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 20);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 50);
     expect(result.current.documents.length).toBe(30);
     expect(result.current.hasMore).toBe(false);
   });
@@ -426,6 +432,7 @@ describe('useDocumentList', () => {
       items: [
         {
           id: 'owner-private-doc',
+          parentId: null,
           meta: {
             title: 'Owner Private',
             updatedAt: '2024-01-01T12:00:00Z',
@@ -434,6 +441,8 @@ describe('useDocumentList', () => {
         },
         {
           id: 'owner-shared-doc',
+          parentId: null,
+          hasCollaborators: true,
           meta: {
             title: 'Owner Shared',
             updatedAt: '2024-01-01T13:00:00Z',
@@ -485,6 +494,80 @@ describe('useDocumentList', () => {
 
     expect(result.current.documents.map((doc) => doc.id)).toEqual(['owner-private-doc']);
     expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual(['owner-shared-doc']);
+  });
+
+  it('keeps nested owner documents with collaborators in the private list', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+
+    listCloudDocumentsSpy.mockResolvedValue({
+      items: [
+        {
+          id: 'nested-shared-doc',
+          parentId: 'private-parent-doc',
+          hasCollaborators: true,
+          meta: {
+            title: 'Nested Shared',
+            updatedAt: '2024-01-01T12:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+        {
+          id: 'root-shared-doc',
+          parentId: null,
+          hasCollaborators: true,
+          meta: {
+            title: 'Root Shared',
+            updatedAt: '2024-01-01T13:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+      ],
+      page: 0,
+      size: 7,
+      totalElements: 2,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    listCollaboratorsSpy.mockImplementation(async (documentId: string) => {
+      if (documentId === 'nested-shared-doc' || documentId === 'root-shared-doc') {
+        return [
+          {
+            userId: 'owner-1',
+            email: 'owner@example.com',
+            displayName: 'Owner',
+            accessLevel: 'OWNER',
+            addedAt: '2024-01-01T10:00:00Z',
+          },
+          {
+            userId: 'collab-1',
+            email: 'collab@example.com',
+            displayName: 'Collaborator',
+            accessLevel: 'EDIT',
+            addedAt: '2024-01-01T11:00:00Z',
+          },
+        ];
+      }
+
+      return [];
+    });
+
+    const { result } = renderHook(() => useDocumentList());
+
+    await waitForInitialLoad(result, { includeShared: true });
+
+    // The nested document stays in the private list under its real parent;
+    // only the root-level shared document moves to the shared section.
+    expect(result.current.documents.map((doc) => doc.id)).toEqual(['nested-shared-doc']);
+    expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual(['root-shared-doc']);
+    expect(result.current.sharedDocuments[0]).toMatchObject({
+      id: 'root-shared-doc',
+      relationship: 'owner',
+      parentId: null,
+    });
   });
 
   it('shows all shared documents and paginates shared-with-me list', async () => {
@@ -558,7 +641,7 @@ describe('useDocumentList', () => {
     });
 
     await waitFor(() => {
-      expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
+      expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
       expect(result.current.isShowingAllShared).toBe(true);
     });
 
@@ -571,9 +654,7 @@ describe('useDocumentList', () => {
       await result.current.loadMoreSharedDocuments();
     });
 
-    expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 7);
-    expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
-    expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 20);
+    expect(listSharedDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 50);
     expect(result.current.sharedDocuments.length).toBe(30);
     expect(result.current.sharedHasMore).toBe(false);
   });
@@ -662,7 +743,7 @@ describe('useDocumentList', () => {
     expect(result.current.sharedHasMore).toBe(false);
   });
 
-  it('reconciles owner-shared split before exposing hasMore', async () => {
+  it('exposes owner-shared docs from the initial page and reports truthful hasMore', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
@@ -679,18 +760,16 @@ describe('useDocumentList', () => {
       })),
       {
         id: 'owner-shared-1',
+        hasCollaborators: true,
         meta: {
           title: 'Owner Shared 1',
           updatedAt: '2024-01-01T13:00:00Z',
           createdAt: '2024-01-01T10:00:00Z',
         },
       },
-    ];
-
-    const expandedSeedPage = [
-      ...firstPage,
       {
         id: 'owner-shared-2',
+        hasCollaborators: true,
         meta: {
           title: 'Owner Shared 2',
           updatedAt: '2024-01-01T12:30:00Z',
@@ -699,23 +778,14 @@ describe('useDocumentList', () => {
       },
     ];
 
-    listCloudDocumentsSpy
-      .mockResolvedValueOnce({
-        items: firstPage,
-        page: 0,
-        size: 7,
-        totalElements: 8,
-        totalPages: 2,
-        hasMore: true,
-      })
-      .mockResolvedValueOnce({
-        items: expandedSeedPage,
-        page: 0,
-        size: 20,
-        totalElements: 8,
-        totalPages: 1,
-        hasMore: false,
-      });
+    listCloudDocumentsSpy.mockResolvedValueOnce({
+      items: firstPage,
+      page: 0,
+      size: 50,
+      totalElements: 30,
+      totalPages: 1,
+      hasMore: true,
+    });
 
     listSharedDocumentsSpy.mockResolvedValue({
       items: [],
@@ -755,16 +825,15 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 7);
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 20);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledTimes(1);
     expect(result.current.documents).toHaveLength(6);
     expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual([
       'owner-shared-1',
       'owner-shared-2',
     ]);
-    expect(result.current.hasMore).toBe(false);
-    expect(result.current.sharedHasMore).toBe(false);
-    expect(result.current.canShowAll).toBe(false);
+    expect(result.current.hasMore).toBe(true);
+    expect(result.current.canShowAll).toBe(true);
   });
 
   it('reports sharedHasMore when owner-shared pagination still has more', async () => {
@@ -777,6 +846,7 @@ describe('useDocumentList', () => {
       items: [
         {
           id: 'owner-shared-doc',
+          hasCollaborators: true,
           meta: {
             title: 'Owner Shared',
             updatedAt: '2024-01-01T13:00:00Z',
@@ -1042,6 +1112,7 @@ describe('useDocumentList', () => {
       items: [
         {
           id: 'owner-shared-1',
+          hasCollaborators: true,
           meta: {
             title: 'Owner Shared 1',
             updatedAt: '2024-01-02T13:00:00Z',
@@ -1050,6 +1121,7 @@ describe('useDocumentList', () => {
         },
         {
           id: 'owner-shared-2',
+          hasCollaborators: true,
           meta: {
             title: 'Owner Shared 2',
             updatedAt: '2024-01-02T12:00:00Z',
@@ -1091,11 +1163,11 @@ describe('useDocumentList', () => {
     ]);
 
     getAllDocumentsMetaSpy.mockResolvedValue(
-      Array.from({ length: 10 }, (_, index) => ({
+      Array.from({ length: 60 }, (_, index) => ({
         id: `local-private-${index + 1}`,
         meta: {
           title: `Local Private ${index + 1}`,
-          updatedAt: `2024-01-${String(10 + index).padStart(2, '0')}T10:00:00Z`,
+          updatedAt: `2024-01-${String(10 + (index % 20)).padStart(2, '0')}T10:00:00Z`,
           createdAt: '2024-01-01T10:00:00Z',
         },
       }))
@@ -1120,7 +1192,7 @@ describe('useDocumentList', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.documents).toHaveLength(7);
+      expect(result.current.documents).toHaveLength(50);
       expect(result.current.hasMore).toBe(true);
       expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual([
         'owner-shared-1',
@@ -1230,6 +1302,7 @@ describe('useDocumentList', () => {
         },
         {
           id: 'owner-shared-1',
+          hasCollaborators: true,
           meta: {
             title: 'Owner Shared 1',
             updatedAt: '2024-01-01T12:00:00Z',

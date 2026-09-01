@@ -1,6 +1,12 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import net, { AddressInfo } from 'net';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const SERVER_PATH = path.join(__dirname, '../../src/main.ts');
 const TSX_PATH = path.resolve(path.dirname(require.resolve('tsx/package.json')), 'dist/cli.mjs');
