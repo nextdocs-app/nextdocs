@@ -190,7 +190,7 @@ NextDocs is a monorepo with three core services:
 **Planned for initial release**:
 - [x] Core features listed in <a href="#overview">overview</a>.
 - [x] Trash documents with recovery and auto-delete after 30 days.
-- [ ] Unified self-referential document tree with fractional indexing for drag-drop ordering.
+- [x] Unified self-referential document tree with fractional indexing for drag-drop ordering.
 - [ ] Icons + covers for documents.
 - [ ] OAuth login (Google, GitHub).
 - [ ] Search documents by content.
