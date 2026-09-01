@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.1.0</version>
+		<version>4.1.1</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.nextdocs</groupId>
@@ -31,7 +31,7 @@
 		<bucket4j.version>8.19.0</bucket4j.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<!-- springdoc 3.x supports Spring Boot 4 -->
-		<springdoc.version>3.0.3</springdoc.version>
+		<springdoc.version>3.1.0</springdoc.version>
 	</properties>
 	<dependencies>
 		<!-- Web MVC -->
@@ -193,7 +193,7 @@
 			<plugin>
 				<groupId>com.diffplug.spotless</groupId>
 				<artifactId>spotless-maven-plugin</artifactId>
-				<version>3.8.0</version>
+				<version>3.10.1</version>
 				<configuration>
 					<java>
 						<includes>
