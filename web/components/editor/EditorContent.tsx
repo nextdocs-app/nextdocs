@@ -1,6 +1,5 @@
 'use client';
 
-import '@blocknote/core/fonts/inter.css';
 import {
   CommentsExtension,
   DefaultThreadStoreAuth,
