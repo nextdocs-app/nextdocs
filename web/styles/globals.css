@@ -127,6 +127,16 @@
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
   }
+
+  /* While sidebar is being resized, keep breadcrumbs/toolbar fixed to sidebar edge without lag */
+  body.nd-sidebar-resizing .nd-doc-toolbar-left,
+  html.nd-sidebar-resizing .nd-doc-toolbar-left {
+    transition: none !important;
+  }
+  body.nd-sidebar-resizing,
+  html.nd-sidebar-resizing {
+    cursor: col-resize !important;
+  }
 }
 
 /* Scrollbars Style */

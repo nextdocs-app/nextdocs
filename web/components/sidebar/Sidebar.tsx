@@ -841,9 +841,9 @@ function Sidebar() {
 
   return (
     <aside
-      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-all duration-300'} relative`}
+      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: isSidebarCollapsed ? undefined : `${sidebarWidth}px`,
+        width: isSidebarCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
       }}
     >
       {/* Header */}
@@ -1137,8 +1137,12 @@ function Sidebar() {
 
       {!isSidebarCollapsed && (
         <div
-          onMouseDown={startResizing}
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors"
+          onPointerDown={startResizing}
+          onMouseDown={(e) => {
+            if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
+            startResizing(e);
+          }}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
         />
       )}
     </aside>
