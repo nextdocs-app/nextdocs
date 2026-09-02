@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 
 /* Code needed for ShadCN with BlockNote - from official example */
-@source "../../node_modules/@blocknote/shadcn";
+@source "../node_modules/@blocknote/shadcn";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -50,7 +50,7 @@
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
 .dark {
-  --background: #1f1f1f;
+  --background: #1A1A18;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
   --card-foreground: oklch(0.985 0 0);
@@ -69,9 +69,9 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --sidebar: #181818;
+  --sidebar: #1F1F1D;
   --sidebar-foreground: oklch(91.279% 0.0001 271.152);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: #2A2A27;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
@@ -227,26 +227,26 @@ body.nd-is-dragging * {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-family: var(--font-sans);
-    font-size: 3em; /* BlockNote H1 size */
+    font-size: 2.35em;
     font-weight: 700;
-    line-height: 1.5; /* Matches .bn-block-outer */
-    color: #3f3f3f; /* --bn-colors-editor-text light mode */
+    line-height: 1.2;
+    color: #3f3f3f;
     background: transparent;
     border: none;
     outline: none;
     resize: none;
     width: 100%;
     margin: 0;
-    padding: 3px 0; /* Matches BlockNote heading internal padding */
-    display: block; /* Remove inline descender gap */
-    box-sizing: border-box; /* Include padding in height correctly */
+    padding: 3px 0;
+    display: block;
+    box-sizing: border-box;
   }
 
   /* BlockNote aligns its content 54px from the edges for handles */
   .document-title-container {
     padding-inline: 54px;
     padding-top: 0;
-    padding-bottom: 0;
+    padding-bottom: 12px;
     width: 100%;
     display: flex; /* Prevent wrapper from adding extra line height or gaps */
     flex-direction: column;
@@ -281,25 +281,111 @@ body.nd-is-dragging * {
     color: rgba(63, 63, 63, 0.3);
   }
 
-  /* Override BlockNote default text color for dark mode */
+
+  .bn-root .bn-default-styles,
+  .bn-default-styles {
+    font-size: 15px !important;
+    line-height: 1.5;
+  }
+  .bn-editor [data-content-type="heading"],
+  [data-content-type="heading"] {
+    --level: 1.85em !important;
+    font-weight: 600 !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="2"],
+  [data-content-type="heading"][data-level="2"] {
+    --level: 1.55em !important;
+    font-weight: 600 !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="3"],
+  [data-content-type="heading"][data-level="3"] {
+    --level: 1.3em !important;
+    font-weight: 600 !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="4"],
+  [data-content-type="heading"][data-level="4"] {
+    --level: 1.15em !important;
+    font-weight: 600 !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="5"],
+  [data-content-type="heading"][data-level="5"] {
+    --level: 1.05em !important;
+    font-weight: 600 !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="6"],
+  [data-content-type="heading"][data-level="6"] {
+    --level: 0.95em !important;
+    font-weight: 600 !important;
+  }
+
+  /* Override BlockNote colors — keep defaults but force editor bg to --background (#1A1A18 in dark) */
+  .dark .bn-root,
   .dark .bn-container,
+  .bn-root[data-color-scheme="dark"],
   .bn-container[data-color-scheme="dark"] {
     --bn-colors-editor-text: #f2f2f2 !important;
+    --bn-colors-editor-background: var(--background) !important;
   }
 
   @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]):not([data-theme="dark"]) .bn-root,
     html:not([data-theme="light"]):not([data-theme="dark"]) .bn-container {
       --bn-colors-editor-text: #f2f2f2 !important;
+      --bn-colors-editor-background: var(--background) !important;
     }
   }
 
-  /* Explicit light override for BlockNote — beats stale data-color-scheme="dark" */
+  /* Explicit light override — beats stale data-color-scheme="dark" */
+  html[data-theme="light"] .bn-root,
   html[data-theme="light"] .bn-container {
     --bn-colors-editor-text: #3f3f3f !important;
+    --bn-colors-editor-background: var(--background) !important;
   }
 }
 
-/* Comments Sidebar — fixed panel that escapes AppShell */
+/* BlockNote link — Dark mode */
+.bn-shadcn .bn-editor a,
+.bn-editor a {
+  color: #a1a1aa !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(161, 161, 170, 0.6);
+  cursor: pointer !important;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.bn-shadcn .bn-editor a:visited,
+.bn-editor a:visited {
+  color: #a1a1aa !important;
+}
+
+.bn-shadcn .bn-editor a:hover,
+.bn-editor a:hover,
+.bn-shadcn .bn-editor a:visited:hover,
+.bn-editor a:visited:hover {
+  color: #e4e4e7 !important;
+  text-decoration-color: #e4e4e7;
+}
+
+/* BlockNote link — Light mode */
+html:not(.dark) .bn-shadcn .bn-editor a,
+html:not(.dark) .bn-editor a {
+  color: #52525b !important;
+  text-decoration-color: rgba(82, 82, 91, 0.6);
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:visited,
+html:not(.dark) .bn-editor a:visited {
+  color: #52525b !important;
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:hover,
+html:not(.dark) .bn-editor a:hover,
+html:not(.dark) .bn-shadcn .bn-editor a:visited:hover,
+html:not(.dark) .bn-editor a:visited:hover {
+  color: #18181b !important;
+  text-decoration-color: #18181b;
+}
 
 /* Backdrop overlay (mobile + click-away) */
 .nd-comments-backdrop {
