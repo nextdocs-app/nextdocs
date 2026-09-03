@@ -31,11 +31,36 @@ jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
 }));
 
+jest.mock('@blocknote/core', () => {
+  const fallback = {
+    BlockNoteSchema: {
+      create: jest.fn(() => ({
+        extend: jest.fn().mockReturnValue({ isExtendedSchema: true }),
+      })),
+    },
+    createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
+  };
+  try {
+    return {
+      ...jest.requireActual('@blocknote/core'),
+      ...fallback,
+    };
+  } catch {
+    // Jest cannot load the real @blocknote/core (ESM via prosemirror-highlight
+    // without extra transform), so fall back to the wholesale mock above.
+    return fallback;
+  }
+});
+
 jest.mock('@blocknote/core/comments', () => ({
   CommentsExtension: jest.fn(() => ({})),
   ThreadStoreAuth: class ThreadStoreAuth {},
   DefaultThreadStoreAuth: jest.fn(),
   YjsThreadStore: jest.fn(),
+}));
+
+jest.mock('@blocknote/code-block', () => ({
+  codeBlockOptions: { defaultLanguage: 'javascript', createHighlighter: jest.fn() },
 }));
 
 jest.mock('../../../services/document.service', () => ({
@@ -59,6 +84,8 @@ import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
+import { createCodeBlockSpec } from '@blocknote/core';
+import { codeBlockOptions } from '@blocknote/code-block';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
@@ -83,6 +110,12 @@ jest.mock('next/navigation');
 jest.mock('../../../hooks/useTheme.hook', () => ({
   useTheme: jest.fn(() => ({ theme: 'system', setTheme: jest.fn(), resolvedTheme: 'light' })),
 }));
+
+// createCodeBlockSpec is called once at EditorContent module load, before
+// beforeEach(jest.clearAllMocks()) wipes mock history. Capture the custom
+// options here so the highlighter wrapper test can invoke it later.
+const capturedCustomCodeBlockOptions = (createCodeBlockSpec as unknown as jest.Mock).mock
+  .calls[0]?.[0];
 
 describe('Editor Component', () => {
   const mockUpdateMeta = jest.fn();
@@ -577,6 +610,49 @@ describe('Editor Component', () => {
       useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
     expect(lastConfig.extensions).toHaveLength(1);
     expect(CommentsExtension).toHaveBeenCalled();
+  });
+
+  it('should initialize BlockNote with custom codeBlock schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.schema).toEqual(expect.objectContaining({ isExtendedSchema: true }));
+  });
+
+  it('should strip single theme and force dual themes in code highlighter', async () => {
+    const origCodeToTokens = jest.fn().mockReturnValue({ tokens: [] });
+    const fakeHighlighter = { codeToTokens: origCodeToTokens };
+    (codeBlockOptions.createHighlighter as jest.Mock).mockResolvedValue(fakeHighlighter);
+
+    const createCodeBlockSpecMock = createCodeBlockSpec as unknown as jest.Mock;
+    const customOptions =
+      capturedCustomCodeBlockOptions ??
+      createCodeBlockSpecMock.mock.calls[createCodeBlockSpecMock.mock.calls.length - 1]?.[0];
+    expect(customOptions?.createHighlighter).toBeDefined();
+
+    const wrappedHighlighter = await customOptions.createHighlighter();
+    expect(wrappedHighlighter).toBe(fakeHighlighter);
+
+    wrappedHighlighter.codeToTokens('const x = 1', {
+      lang: 'javascript',
+      theme: 'github-dark',
+    });
+
+    expect(origCodeToTokens).toHaveBeenCalledTimes(1);
+    const [codeArg, optionsArg] = origCodeToTokens.mock.calls[0];
+    expect(codeArg).toBe('const x = 1');
+    expect(optionsArg).toEqual(
+      expect.objectContaining({
+        lang: 'javascript',
+        themes: { light: 'github-light', dark: 'github-dark' },
+        defaultColor: false,
+      })
+    );
+    expect(optionsArg).not.toHaveProperty('theme');
   });
 
   it('should preserve selection for first comment click in comment-only mode', () => {

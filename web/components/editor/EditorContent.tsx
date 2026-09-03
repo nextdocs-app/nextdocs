@@ -1,5 +1,6 @@
 'use client';
 
+import { BlockNoteSchema, createCodeBlockSpec } from '@blocknote/core';
 import {
   CommentsExtension,
   DefaultThreadStoreAuth,
@@ -14,6 +15,7 @@ import {
 } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import '@blocknote/shadcn/style.css';
+import { codeBlockOptions } from '@blocknote/code-block';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
@@ -36,6 +38,36 @@ import {
 } from './comment.utils';
 import type { SharedCommentUserProfile } from './comment.utils';
 import { useCommentComposerPatch } from './useCommentComposerPatch';
+
+const customCodeBlockOptions = {
+  ...codeBlockOptions,
+  createHighlighter: async () => {
+    const highlighter = await codeBlockOptions.createHighlighter();
+    const origCodeToTokens = highlighter.codeToTokens.bind(highlighter);
+    highlighter.codeToTokens = (code: string, options: Parameters<typeof origCodeToTokens>[1]) => {
+      // At runtime prosemirror-highlight falls back to a single `theme`
+      // (`{ theme: firstLoadedTheme }`), which the Shiki v4 type omits in favor
+      // of dual `themes`. Strip it so only dual `themes` applies.
+      const restOptions = { ...(options as unknown as Record<string, unknown>) };
+      delete restOptions.theme;
+      return origCodeToTokens(code, {
+        ...(restOptions as unknown as typeof options),
+        themes: {
+          light: 'github-light',
+          dark: 'github-dark',
+        },
+        defaultColor: false,
+      });
+    };
+    return highlighter;
+  },
+};
+
+const editorSchema = BlockNoteSchema.create().extend({
+  blockSpecs: {
+    codeBlock: createCodeBlockSpec(customCodeBlockOptions),
+  },
+});
 
 export function EditorContent({
   documentId,
@@ -214,8 +246,19 @@ export function EditorContent({
     return new YjsThreadStore(activeCommentUser.id, ydoc.getMap('threads'), auth);
   }, [activeCommentUser.id, canComment, commentRole, commentsFeatureEnabled, ydoc]);
 
+  const editorExtensions = useMemo(() => {
+    // NOTE: @blocknote/code-block@0.51.4 only exports `codeBlockOptions` —
+    // highlighting is embedded in the codeBlock spec via `createHighlighter`,
+    // no separate `syntaxHighlighter` extension exists in this version.
+    if (commentsFeatureEnabled && threadStore) {
+      return [CommentsExtension({ threadStore, resolveUsers })];
+    }
+    return [];
+  }, [commentsFeatureEnabled, resolveUsers, threadStore]);
+
   const editor = useCreateBlockNote(
     {
+      schema: editorSchema,
       collaboration: {
         provider: realtimeProvider || undefined,
         fragment: ydoc.getXmlFragment('blocknote'),
@@ -225,20 +268,15 @@ export function EditorContent({
         },
       },
       dictionary: commentsDictionary,
-      extensions:
-        commentsFeatureEnabled && threadStore
-          ? [CommentsExtension({ threadStore, resolveUsers })]
-          : [],
+      extensions: editorExtensions,
     },
     [
       activeCommentUser.id,
       activeCommentUser.username,
       commentsDictionary,
-      commentsFeatureEnabled,
       documentId,
+      editorExtensions,
       realtimeProvider,
-      resolveUsers,
-      threadStore,
       ydoc,
     ]
   );

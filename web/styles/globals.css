@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 
 /* Code needed for ShadCN with BlockNote - from official example */
-@source "../node_modules/@blocknote/shadcn";
+@source "../../node_modules/@blocknote/shadcn";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -46,6 +46,10 @@
   --editor-dropdown-label-font-size: 11px;
   --editor-dropdown-icon-container-size: 28px;
   --editor-dropdown-icon-size: 16px;
+
+  /* Code Block Language Picker Caret */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
@@ -79,6 +83,10 @@
   /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
   --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --editor-dropdown-divider: 1.5px solid rgba(255, 255, 255, 0.15);
+
+  /* Code Block Language Picker Dark Overrides */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 @theme inline {
@@ -335,6 +343,8 @@ body.nd-is-dragging * {
   .bn-container[data-color-scheme="dark"] {
     --bn-colors-editor-text: #f2f2f2 !important;
     --bn-colors-editor-background: var(--background) !important;
+    --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -342,6 +352,8 @@ body.nd-is-dragging * {
     html:not([data-theme="light"]):not([data-theme="dark"]) .bn-container {
       --bn-colors-editor-text: #f2f2f2 !important;
       --bn-colors-editor-background: var(--background) !important;
+      --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     }
   }
 
@@ -350,6 +362,155 @@ body.nd-is-dragging * {
   html[data-theme="light"] .bn-container {
     --bn-colors-editor-text: #3f3f3f !important;
     --bn-colors-editor-background: var(--background) !important;
+    --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  /* Code Block Background & Text — Light Mode */
+  .bn-block-content[data-content-type="codeBlock"] {
+    background-color: #f7f7f6 !important;
+    color: #24292e !important;
+    /* By default, the code block has very less gap between it's neighboring blocks.
+    To make it look clean, we are adding some gap using margin. */
+    margin-block: 10px !important;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre {
+    background-color: transparent !important;
+    white-space: pre !important;
+    overflow-x: auto !important;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre {
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  }
+
+  /* WebKit / Chromium custom thin horizontal scrollbar (5px) */
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 9999px;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.35);
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.4);
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre > code,
+  .bn-block-content[data-content-type="codeBlock"] .bn-inline-content {
+    white-space: pre !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  /* Shiki Syntax Highlighting — Light Mode */
+  .bn-block-content[data-content-type="codeBlock"] .shiki {
+    color: var(--shiki-light, inherit);
+  }
+
+  /* Code Block Background & Text — Dark Mode */
+  .dark .bn-block-content[data-content-type="codeBlock"],
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"],
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] {
+    background-color: #21211F !important;
+    color: #e1e4e8 !important;
+  }
+
+  /* Shiki Syntax Highlighting — Dark Mode */
+  .dark .bn-block-content[data-content-type="codeBlock"] .shiki,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] .shiki,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] .shiki {
+    color: var(--shiki-dark, inherit);
+  }
+
+  /* Code Block Language Picker */
+  .bn-block-content[data-content-type="codeBlock"] > div > select {
+    position: absolute !important;
+    left: auto !important;
+    right: 12px !important;
+    field-sizing: content;
+    z-index: 2;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    box-sizing: border-box !important;
+    height: 24px !important;
+    line-height: 22px !important;
+    font-family: inherit !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.01em !important;
+    padding: 0 20px 0 8px !important;
+    cursor: pointer !important;
+    border-radius: 5px !important;
+    backdrop-filter: blur(8px) !important;
+    background-color: var(--sidebar) !important;
+    background-image: var(--code-language-caret) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 6px center !important;
+    background-size: 10px 10px !important;
+    color: var(--sidebar-foreground) !important;
+    border: 1px solid var(--sidebar-border) !important;
+    box-shadow: var(--code-language-shadow) !important;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.15s ease,
+      background-color 0.1s ease,
+      border-color 0.1s ease !important;
+  }
+
+  /* Reveal language picker on code block hover or when select is focused */
+  .bn-block-content[data-content-type="codeBlock"]:hover > div > select,
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus {
+    opacity: 1 !important;
+    pointer-events: auto;
+    transition-delay: 0s !important;
+  }
+
+  /* Hover & Focus state on the language select */
+  .bn-block-content[data-content-type="codeBlock"] > div > select:hover,
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    border-color: var(--sidebar-border) !important;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus-visible {
+    outline: 2px solid var(--sidebar-ring, #3b82f6) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Dropdown options list matching sidebar */
+  .bn-block-content[data-content-type="codeBlock"] > div > select > option {
+    background-color: var(--sidebar) !important;
+    color: var(--sidebar-foreground) !important;
+    font-family: inherit !important;
+    font-size: var(--editor-dropdown-item-font-size, 13px) !important;
   }
 }
 
