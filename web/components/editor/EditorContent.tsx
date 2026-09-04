@@ -28,11 +28,13 @@ import type { CommentsFilter, CommentsSort } from '@/components/comments/Comment
 import type { DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import type { WebsocketProvider } from 'y-websocket';
+import type { Awareness } from 'y-protocols/awareness';
 import {
   COMMENT_USER_CACHE_TTL_MS,
   COMMENT_USERS_MAP_KEY,
   mapAccessLevelToCommentRole,
   ReadOnlyThreadStoreAuth,
+  DynamicThreadStoreAuth,
   parseSharedCommentUserProfile,
   buildFallbackAvatar,
 } from './comment.utils';
@@ -72,6 +74,7 @@ const editorSchema = BlockNoteSchema.create().extend({
 export function EditorContent({
   documentId,
   ydoc,
+  awareness,
   meta,
   updateMeta,
   isReadOnly,
@@ -80,7 +83,6 @@ export function EditorContent({
   user,
   isAuthenticated,
   accessToken,
-  commentsFeatureEnabled,
   commentsUiEnabled,
   commentsSidebarOpen,
   commentsFilter,
@@ -92,6 +94,7 @@ export function EditorContent({
 }: {
   documentId: string;
   ydoc: Y.Doc;
+  awareness?: Awareness | null;
   meta: DocumentMeta;
   updateMeta: (updates: Partial<DocumentMeta>) => void;
   isReadOnly: boolean;
@@ -100,7 +103,6 @@ export function EditorContent({
   user: AuthUser | null;
   isAuthenticated: boolean;
   accessToken: string | null;
-  commentsFeatureEnabled: boolean;
   commentsUiEnabled: boolean;
   commentsSidebarOpen: boolean;
   commentsFilter: CommentsFilter;
@@ -145,6 +147,24 @@ export function EditorContent({
   const commentRole = useMemo(() => mapAccessLevelToCommentRole(accessLevel), [accessLevel]);
   const canComment = accessLevel === 'COMMENT' || accessLevel === 'EDIT' || accessLevel === 'OWNER';
   const isViewer = accessLevel === 'VIEW';
+
+  // Keep references to volatile auth and permission props so callbacks and
+  // dynamic adapters remain completely stable across renders without tearing down the editor.
+  const accessTokenRef = useRef(accessToken);
+  accessTokenRef.current = accessToken;
+
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  isAuthenticatedRef.current = isAuthenticated;
+
+  const activeCommentUserRef = useRef(activeCommentUser);
+  activeCommentUserRef.current = activeCommentUser;
+
+  const canCommentRef = useRef(canComment);
+  canCommentRef.current = canComment;
+
+  const commentRoleRef = useRef(commentRole);
+  commentRoleRef.current = commentRole;
+
   const sharedCommentUsers = useMemo(() => ydoc.getMap<string>(COMMENT_USERS_MAP_KEY), [ydoc]);
 
   useEffect(() => {
@@ -175,14 +195,16 @@ export function EditorContent({
       }
 
       const now = Date.now();
+      const isAuth = isAuthenticatedRef.current;
+      const token = accessTokenRef.current;
+      const activeUser = activeCommentUserRef.current;
+
       const shouldRefreshCollaborators =
-        isAuthenticated &&
-        !!accessToken &&
-        now - collaboratorCacheUpdatedAt.current > COMMENT_USER_CACHE_TTL_MS;
+        isAuth && !!token && now - collaboratorCacheUpdatedAt.current > COMMENT_USER_CACHE_TTL_MS;
 
       if (shouldRefreshCollaborators) {
         try {
-          const collaborators = await documentService.listCollaborators(documentId, accessToken);
+          const collaborators = await documentService.listCollaborators(documentId, token);
           const nextCollaborators = new Map<string, CommentUser>();
 
           for (const collaborator of collaborators) {
@@ -203,7 +225,7 @@ export function EditorContent({
       }
 
       const usersById = new Map<string, CommentUser>(collaboratorCache.current);
-      usersById.set(activeCommentUser.id, activeCommentUser);
+      usersById.set(activeUser.id, activeUser);
 
       return userIds.map((rawId) => {
         const id = rawId || 'anonymous';
@@ -222,8 +244,7 @@ export function EditorContent({
           };
         }
 
-        const fallbackName =
-          id === activeCommentUser.id ? activeCommentUser.username : `User ${id.slice(0, 6)}`;
+        const fallbackName = id === activeUser.id ? activeUser.username : `User ${id.slice(0, 6)}`;
         return {
           id,
           username: fallbackName,
@@ -231,30 +252,75 @@ export function EditorContent({
         };
       });
     },
-    [accessToken, activeCommentUser, documentId, isAuthenticated, sharedCommentUsers]
+    [documentId, sharedCommentUsers]
   );
 
   const threadStore = useMemo(() => {
-    if (!commentsFeatureEnabled) {
-      return undefined;
+    // Use DynamicThreadStoreAuth so permissions and user changes update dynamically
+    // without re-instantiating the threadStore or CommentsExtension.
+    const dynamicAuth = new DynamicThreadStoreAuth(() => {
+      const canCommentNow = canCommentRef.current;
+      const roleNow = commentRoleRef.current;
+      const userNow = activeCommentUserRef.current;
+      return canCommentNow
+        ? new DefaultThreadStoreAuth(userNow.id, roleNow)
+        : new ReadOnlyThreadStoreAuth();
+    });
+
+    return new YjsThreadStore(activeCommentUserRef.current.id, ydoc.getMap('threads'), dynamicAuth);
+  }, [ydoc]);
+
+  // YjsThreadStore captures userId at construction for authorship (createThread,
+  // addComment, resolveBy, reactions) while DynamicThreadStoreAuth only covers
+  // permission checks. Sync authorship when identity resolves (e.g. anonymous
+  // -> logged-in) without recreating the store/editor.
+  useEffect(() => {
+    if (threadStore) {
+      (threadStore as unknown as { userId: string }).userId = activeCommentUser.id;
     }
-
-    const auth = canComment
-      ? new DefaultThreadStoreAuth(activeCommentUser.id, commentRole)
-      : new ReadOnlyThreadStoreAuth();
-
-    return new YjsThreadStore(activeCommentUser.id, ydoc.getMap('threads'), auth);
-  }, [activeCommentUser.id, canComment, commentRole, commentsFeatureEnabled, ydoc]);
+  }, [threadStore, activeCommentUser.id]);
 
   const editorExtensions = useMemo(() => {
     // NOTE: @blocknote/code-block@0.51.4 only exports `codeBlockOptions` —
     // highlighting is embedded in the codeBlock spec via `createHighlighter`,
     // no separate `syntaxHighlighter` extension exists in this version.
-    if (commentsFeatureEnabled && threadStore) {
-      return [CommentsExtension({ threadStore, resolveUsers })];
+    return [CommentsExtension({ threadStore, resolveUsers })];
+  }, [resolveUsers, threadStore]);
+
+  // Use the continuous awareness instance tied to ydoc (or fallback to realtimeProvider)
+  // so the collaboration provider object remains stable across WebSocket connects/reconnects.
+  const collaborationProvider = useMemo(() => {
+    if (awareness) {
+      return { awareness };
     }
-    return [];
-  }, [commentsFeatureEnabled, resolveUsers, threadStore]);
+    return realtimeProvider || undefined;
+  }, [awareness, realtimeProvider]);
+
+  // Single writer for presence user info (useDocument must not also write to
+  // the same awareness field to avoid last-render-wins nondeterminism).
+  // Keeps awareness updated without recreating the editor.
+  useEffect(() => {
+    const awarenessInstance = awareness ?? realtimeProvider?.awareness;
+    if (awarenessInstance && activeCommentUser.username) {
+      // activeCommentUser.id falls back to 'anonymous', so derive a per-client
+      // seed for guests to avoid all guests sharing the same color.
+      const colorSeed =
+        activeCommentUser.id !== 'anonymous'
+          ? activeCommentUser.id
+          : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`;
+      awarenessInstance.setLocalStateField('user', {
+        name: activeCommentUser.username,
+        color: getPresenceColor(colorSeed),
+      });
+    }
+  }, [
+    awareness,
+    realtimeProvider,
+    activeCommentUser.username,
+    activeCommentUser.id,
+    documentId,
+    ydoc,
+  ]);
 
   const editor = useCreateBlockNote(
     {
@@ -266,25 +332,22 @@ export function EditorContent({
         headers: true,
       },
       collaboration: {
-        provider: realtimeProvider || undefined,
+        provider: collaborationProvider,
         fragment: ydoc.getXmlFragment('blocknote'),
         user: {
           name: activeCommentUser.username,
-          color: getPresenceColor(activeCommentUser.id || documentId),
+          color: getPresenceColor(
+            activeCommentUser.id !== 'anonymous'
+              ? activeCommentUser.id
+              : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`
+          ),
         },
       },
       dictionary: commentsDictionary,
       extensions: editorExtensions,
     },
-    [
-      activeCommentUser.id,
-      activeCommentUser.username,
-      commentsDictionary,
-      documentId,
-      editorExtensions,
-      realtimeProvider,
-      ydoc,
-    ]
+    // The editor is created strictly once per document mount. Keyed by documentId at parent.
+    [documentId, ydoc]
   );
 
   useCommentComposerPatch(commentsUiEnabled, sendIconTemplateRef);

@@ -1,31 +1,39 @@
 // Mock BlockNote BEFORE importing Editor
-jest.mock('@blocknote/react', () => ({
-  useCreateBlockNote: jest.fn(() => ({
-    document: [{ content: [] }],
-    focus: jest.fn(),
-  })),
-  getFormattingToolbarItems: jest.fn(() => []),
-  useBlockNoteEditor: jest.fn(() => ({
-    getExtension: jest.fn(() => undefined),
-  })),
-  useComponentsContext: jest.fn(() => ({
-    FormattingToolbar: {
-      Button: () => null,
-    },
-  })),
-  useDictionary: jest.fn(() => ({
-    formatting_toolbar: {
-      comment: {
-        tooltip: 'Comment',
+jest.mock('@blocknote/react', () => {
+  const actualReact = jest.requireActual<typeof import('react')>('react');
+  return {
+    useCreateBlockNote: jest.fn((options, deps) => {
+      return actualReact.useMemo(
+        () => ({
+          document: [{ content: [] }],
+          focus: jest.fn(),
+        }),
+        deps
+      );
+    }),
+    getFormattingToolbarItems: jest.fn(() => []),
+    useBlockNoteEditor: jest.fn(() => ({
+      getExtension: jest.fn(() => undefined),
+    })),
+    useComponentsContext: jest.fn(() => ({
+      FormattingToolbar: {
+        Button: () => null,
       },
-    },
-  })),
-  FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  FormattingToolbarController: () => null,
-  FloatingComposerController: () => null,
-  FloatingThreadController: () => null,
-  ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
-}));
+    })),
+    useDictionary: jest.fn(() => ({
+      formatting_toolbar: {
+        comment: {
+          tooltip: 'Comment',
+        },
+      },
+    })),
+    FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    FormattingToolbarController: () => null,
+    FloatingComposerController: () => null,
+    FloatingThreadController: () => null,
+    ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
+  };
+});
 
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
@@ -89,6 +97,8 @@ import { codeBlockOptions } from '@blocknote/code-block';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
+import type { WebsocketProvider } from 'y-websocket';
 
 const render = (
   ui: React.ReactElement,
@@ -717,5 +727,67 @@ describe('Editor Component', () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(mockFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('should maintain a stable BlockNote editor instance across realtimeProvider, accessLevel, and token updates', () => {
+    const mockUseDocument = useDocument as unknown as jest.Mock;
+    const mockUseAuth = useAuth as unknown as jest.Mock;
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-stable-1',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: { id: 'doc-stable-1', title: 'Stable Document', updatedAt: new Date().toISOString() },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const { rerender } = render(<Editor />);
+    const initialCallCount = useCreateBlockNoteMock.mock.calls.length;
+    expect(initialCallCount).toBeGreaterThan(0);
+
+    // Simulate accessLevel upgrade, token refresh, and realtime provider connection
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-stable-1',
+      ydoc: mockYdoc,
+      awareness: { setLocalStateField: jest.fn() } as unknown as Awareness,
+      meta: { id: 'doc-stable-1', title: 'Stable Document', updatedAt: new Date().toISOString() },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      realtimeProvider: { awareness: {} } as unknown as WebsocketProvider,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'new-token-123',
+      user: { id: 'user-1', email: 'test@example.com', displayName: 'Test User' },
+    });
+
+    rerender(<Editor />);
+
+    // Dependency array should be strictly [documentId, ydoc] and unchanged across renders
+    const firstCallDeps = useCreateBlockNoteMock.mock.calls[0][1];
+    const latestCallDeps =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][1];
+
+    expect(firstCallDeps).toEqual(['doc-stable-1', mockYdoc]);
+    expect(latestCallDeps).toEqual(['doc-stable-1', mockYdoc]);
+
+    // The editor instance memoized by useCreateBlockNote should be strictly the same reference
+    const firstCallEditor = useCreateBlockNoteMock.mock.results[0].value;
+    const latestCallEditor =
+      useCreateBlockNoteMock.mock.results[useCreateBlockNoteMock.mock.results.length - 1].value;
+
+    expect(latestCallEditor).toBe(firstCallEditor);
   });
 });
