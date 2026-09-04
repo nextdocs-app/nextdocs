@@ -54,6 +54,13 @@
   /* BlockNote Divider & Table Variables */
   --editor-divider-color: rgba(55, 53, 47, 0.14);
   --editor-table-header-bg: rgba(55, 53, 47, 0.035);
+
+  /* BlockNote Checklist & Toggle Variables */
+  --checkbox-hover-bg: rgba(55, 53, 47, 0.08);
+  --checkbox-checked-bg: #2563eb;
+  --checkbox-checked-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5L6.5 11.5L12.5 4.5'/%3E%3C/svg%3E");
+  --toggle-hover-bg: rgba(55, 53, 47, 0.08);
+  --toggle-active-bg: rgba(55, 53, 47, 0.14);
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
@@ -95,6 +102,12 @@
   /* BlockNote Divider & Table Dark Overrides */
   --editor-divider-color: rgba(255, 255, 255, 0.12);
   --editor-table-header-bg: rgba(255, 255, 255, 0.04);
+
+  /* BlockNote Checklist & Toggle Dark Overrides */
+  --checkbox-hover-bg: rgba(255, 255, 255, 0.08);
+  --checkbox-checked-bg: #3b82f6;
+  --toggle-hover-bg: rgba(255, 255, 255, 0.08);
+  --toggle-active-bg: rgba(255, 255, 255, 0.14);
 }
 
 @theme inline {
@@ -254,9 +267,9 @@ body.nd-is-dragging * {
     -moz-osx-font-smoothing: grayscale;
     font-family: var(--font-sans);
     font-size: 2.35em;
-    font-weight: 700;
+    font-weight: 650;
     line-height: 1.2;
-    color: #3f3f3f;
+    color: #121212;
     background: transparent;
     border: none;
     outline: none;
@@ -301,7 +314,7 @@ body.nd-is-dragging * {
 
   /* Explicit light override — beats any stale dark rules */
   html[data-theme="light"] .document-title-input {
-    color: #3f3f3f;
+    color: #121212;
   }
   html[data-theme="light"] .document-title-input::placeholder {
     color: rgba(63, 63, 63, 0.3);
@@ -361,6 +374,10 @@ body.nd-is-dragging * {
     --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
     --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
+    --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
+    --checkbox-checked-bg: #3b82f6 !important;
+    --toggle-hover-bg: rgba(255, 255, 255, 0.08) !important;
+    --toggle-active-bg: rgba(255, 255, 255, 0.14) !important;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -372,18 +389,26 @@ body.nd-is-dragging * {
       --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
       --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
       --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
+      --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
+      --checkbox-checked-bg: #3b82f6 !important;
+      --toggle-hover-bg: rgba(255, 255, 255, 0.08) !important;
+      --toggle-active-bg: rgba(255, 255, 255, 0.14) !important;
     }
   }
 
   /* Explicit light override — beats stale data-color-scheme="dark" */
   html[data-theme="light"] .bn-root,
   html[data-theme="light"] .bn-container {
-    --bn-colors-editor-text: #3f3f3f !important;
+    --bn-colors-editor-text: #121212 !important;
     --bn-colors-editor-background: var(--background) !important;
     --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
     --editor-divider-color: rgba(55, 53, 47, 0.14) !important;
     --editor-table-header-bg: rgba(55, 53, 47, 0.035) !important;
+    --checkbox-hover-bg: rgba(55, 53, 47, 0.08) !important;
+    --checkbox-checked-bg: #2563eb !important;
+    --toggle-hover-bg: rgba(55, 53, 47, 0.08) !important;
+    --toggle-active-bg: rgba(55, 53, 47, 0.14) !important;
   }
 
   /* Code Block Background & Text — Light Mode */
@@ -601,6 +626,109 @@ body.nd-is-dragging * {
     background-color: rgb(100 160 255 / 0.15) !important;
   }
 
+  /* BlockNote Checklist Item — Modern Style */
+  .bn-block-content[data-content-type="checkListItem"] {
+    align-items: flex-start !important;
+    padding-block: 3px !important;
+  }
+
+  /* Checkbox container alignment */
+  .bn-block-content[data-content-type="checkListItem"] > :is(div[contenteditable="false"], div:has(> input)) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    margin-right: 4px !important;
+    flex-shrink: 0 !important;
+    user-select: none !important;
+  }
+
+  /* Custom Modern Checkbox Input */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"] {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    width: 16px !important;
+    height: 16px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    cursor: pointer !important;
+    border-radius: 3px !important;
+    border: 1.5px solid currentColor !important;
+    background-color: transparent !important;
+    box-sizing: border-box !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease !important;
+  }
+
+  /* Hover state when unchecked */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:hover:not(:checked) {
+    background-color: var(--checkbox-hover-bg) !important;
+  }
+
+  /* Active press effect */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:active {
+    transform: scale(0.92) !important;
+  }
+
+  /* Focus visible outline */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:focus-visible {
+    outline: 2px solid rgb(100 160 255 / 0.5) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Checked state with custom SVG checkmark */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:checked {
+    background: var(--checkbox-checked-bg) var(--checkbox-checked-icon) no-repeat center / 11px 11px !important;
+    border-color: var(--checkbox-checked-bg) !important;
+  }
+
+  /* Disabled state */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:disabled {
+    cursor: default !important;
+    opacity: 0.75 !important;
+  }
+
+  /* Checked task text styling */
+  .bn-block-content[data-content-type="checkListItem"] .bn-inline-content {
+    transition: opacity 0.15s ease, color 0.15s ease !important;
+  }
+
+  .bn-block-content[data-content-type="checkListItem"][data-checked="true"] .bn-inline-content {
+    text-decoration: line-through !important;
+    color: var(--muted-foreground) !important;
+    opacity: 0.9 !important;
+  }
+
+  /* BlockNote Toggle Button
+     By default, BlockNote renders the button SVG at 24x24px with 3px of button padding.
+     This padding causes misalignment with adjacent blocks (e.g., bullet lists placed near it).
+     To fix the alignment, we remove the button padding (padding: 0).
+     We then scale the SVG down to 20x20px and compensate for the 4px difference by adding
+     margin-right: 4px. This maintains proper block alignment while allowing the hover
+     background to fit cleanly around the button without requiring an inset pseudo-element. */
+  .bn-toggle-button {
+    background-color: transparent !important;
+    border-radius: 4px !important;
+    padding: 0 !important;
+    margin-right: 4px !important;
+    transition: background-color 0.15s ease, transform 0.2s ease !important;
+  }
+
+  .bn-toggle-button > svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+
+  .bn-toggle-button:hover,
+  .bn-toggle-add-block-button:hover {
+    background-color: var(--toggle-hover-bg) !important;
+  }
+
+  .bn-toggle-button:active,
+  .bn-toggle-add-block-button:active {
+    background-color: var(--toggle-active-bg) !important;
+  }
+
   /* Print view */
   @media print {
     .bn-block-content[data-content-type="divider"] {
@@ -623,7 +751,26 @@ body.nd-is-dragging * {
     [data-content-type="table"] td {
       border-color: #d1d5db !important;
     }
+    .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"] {
+      border-color: #71717a !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
   }
+}
+
+/* BlockNote Quote */
+[data-content-type="quote"] blockquote {
+  color: #545252 !important;
+}
+
+:is(.dark, [data-color-scheme="dark"]) [data-content-type="quote"] blockquote {
+  color: #a09a9b !important;
+}
+
+/* Explicit light override — beats stale data-color-scheme="dark" */
+html[data-theme="light"] [data-content-type="quote"] blockquote {
+  color: #545252 !important;
 }
 
 /* BlockNote link — Dark mode */
