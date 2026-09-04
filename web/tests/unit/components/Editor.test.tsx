@@ -7,6 +7,9 @@ jest.mock('@blocknote/react', () => {
         () => ({
           document: [{ content: [] }],
           focus: jest.fn(),
+          mount: jest.fn(),
+          unmount: jest.fn(),
+          isEditable: true,
         }),
         deps
       );
@@ -789,5 +792,69 @@ describe('Editor Component', () => {
       useCreateBlockNoteMock.mock.results[useCreateBlockNoteMock.mock.results.length - 1].value;
 
     expect(latestCallEditor).toBe(firstCallEditor);
+  });
+
+  it('should keep BlockNoteView editable prop stable across permission updates to avoid remount', () => {
+    const mockUseDocument = useDocument as unknown as jest.Mock;
+    const editorInstance = {
+      document: [{ content: [] }],
+      focus: jest.fn(),
+      isEditable: false,
+    };
+    (useCreateBlockNote as jest.Mock).mockReturnValue(editorInstance);
+
+    mockUseDocument.mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: {
+        id: 'test-doc-id',
+        title: 'Permission Document',
+        updatedAt: new Date().toISOString(),
+      },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const { rerender } = render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const firstEditable =
+      blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0].editable;
+    expect(firstEditable).toBe(false);
+
+    // Simulate permission upgrade from VIEW to EDIT
+    mockUseDocument.mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: {
+        id: 'test-doc-id',
+        title: 'Permission Document',
+        updatedAt: new Date().toISOString(),
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    rerender(<Editor />);
+
+    // Frozen at first mount so BlockNoteViewEditor does not recreate its mount
+    // ref (which would tear down the ProseMirror view / UndoManager).
+    const latestEditable =
+      blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0].editable;
+    expect(latestEditable).toBe(false);
+    // Read-only is still driven via the editor instance.
+    expect(editorInstance.isEditable).toBe(true);
   });
 });

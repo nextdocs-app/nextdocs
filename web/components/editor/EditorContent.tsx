@@ -71,6 +71,8 @@ const editorSchema = BlockNoteSchema.create().extend({
   },
 });
 
+const EMPTY_SHADCN_COMPONENTS = {};
+
 export function EditorContent({
   documentId,
   ydoc,
@@ -352,6 +354,19 @@ export function EditorContent({
 
   useCommentComposerPatch(commentsUiEnabled, sendIconTemplateRef);
 
+  useEffect(() => {
+    editor.isEditable = !isReadOnly;
+  }, [editor, isReadOnly]);
+
+  // Freeze `editable` at first mount. BlockNoteViewEditor recreates its `mount`
+  // callback ref whenever `editable` changes, causing React to call
+  // `mount(null)` + `mount(element)` synchronously and tearing down the
+  // ProseMirror view / Yjs UndoManager (breaks undo/redo). Driving read-only
+  // solely via `editor.isEditable` above avoids the bounce without patching
+  // `editor.mount`/`editor.unmount`.
+  // Parent keys EditorContent by documentId, so the initial value is per-document.
+  const initialEditableRef = useRef(!isReadOnly);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const focusRequested = useRef(false);
 
@@ -480,9 +495,9 @@ export function EditorContent({
           <BlockNoteView
             editor={editor}
             theme={resolvedTheme}
-            editable={!isReadOnly}
+            editable={initialEditableRef.current}
             onPointerDownCapture={handleEditorPointerDownCapture}
-            shadCNComponents={{}}
+            shadCNComponents={EMPTY_SHADCN_COMPONENTS}
             formattingToolbar={!isViewer}
             linkToolbar={!isViewer}
             slashMenu={!isViewer}
