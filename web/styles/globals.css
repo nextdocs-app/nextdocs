@@ -51,8 +51,9 @@
   --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 
-  /* BlockNote Divider / Separator Line */
+  /* BlockNote Divider & Table Variables */
   --editor-divider-color: rgba(55, 53, 47, 0.14);
+  --editor-table-header-bg: rgba(55, 53, 47, 0.035);
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
@@ -91,8 +92,9 @@
   --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 
-  /* BlockNote Divider / Separator Line Dark Override */
+  /* BlockNote Divider & Table Dark Overrides */
   --editor-divider-color: rgba(255, 255, 255, 0.12);
+  --editor-table-header-bg: rgba(255, 255, 255, 0.04);
 }
 
 @theme inline {
@@ -358,6 +360,7 @@ body.nd-is-dragging * {
     --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+    --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -368,6 +371,7 @@ body.nd-is-dragging * {
       --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
       --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
       --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+      --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
     }
   }
 
@@ -379,6 +383,7 @@ body.nd-is-dragging * {
     --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
     --editor-divider-color: rgba(55, 53, 47, 0.14) !important;
+    --editor-table-header-bg: rgba(55, 53, 47, 0.035) !important;
   }
 
   /* Code Block Background & Text — Light Mode */
@@ -564,6 +569,38 @@ body.nd-is-dragging * {
     transition: border-color 0.15s ease !important;
   }
 
+  /* BlockNote Table */
+  .bn-editor [data-content-type="table"] table,
+  [data-content-type="table"] table {
+    border-collapse: collapse !important;
+    border: 1px solid var(--editor-divider-color) !important;
+  }
+
+  .bn-editor [data-content-type="table"] th,
+  .bn-editor [data-content-type="table"] td,
+  [data-content-type="table"] th,
+  [data-content-type="table"] td {
+    border: 1px solid var(--editor-divider-color) !important;
+    padding: 7px 12px !important;
+    transition: border-color 0.15s ease, background-color 0.15s ease !important;
+  }
+
+  .bn-editor [data-content-type="table"] th,
+  [data-content-type="table"] th {
+    background-color: var(--editor-table-header-bg) !important;
+    font-weight: 600 !important;
+  }
+
+  /* Table column resize handle & selection matching editor accents */
+  .ProseMirror .column-resize-handle {
+    background-color: #64a0ff !important;
+    width: 2px !important;
+  }
+
+  .ProseMirror .selectedCell:after {
+    background-color: rgb(100 160 255 / 0.15) !important;
+  }
+
   /* Print view */
   @media print {
     .bn-block-content[data-content-type="divider"] {
@@ -577,6 +614,14 @@ body.nd-is-dragging * {
     }
     .bn-block-group .bn-block:not(:has(.bn-toggle-wrapper)) .bn-block-group .bn-block-outer:not([data-prev-depth-changed]):before {
       border-left: 1px solid #d1d5db !important;
+    }
+    .bn-editor [data-content-type="table"] table,
+    .bn-editor [data-content-type="table"] th,
+    .bn-editor [data-content-type="table"] td,
+    [data-content-type="table"] table,
+    [data-content-type="table"] th,
+    [data-content-type="table"] td {
+      border-color: #d1d5db !important;
     }
   }
 }

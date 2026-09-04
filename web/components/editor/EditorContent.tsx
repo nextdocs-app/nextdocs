@@ -259,6 +259,12 @@ export function EditorContent({
   const editor = useCreateBlockNote(
     {
       schema: editorSchema,
+      tables: {
+        splitCells: true,
+        cellBackgroundColor: true,
+        cellTextColor: true,
+        headers: true,
+      },
       collaboration: {
         provider: realtimeProvider || undefined,
         fragment: ydoc.getXmlFragment('blocknote'),

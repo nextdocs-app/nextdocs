@@ -623,6 +623,21 @@ describe('Editor Component', () => {
     expect(lastConfig.schema).toEqual(expect.objectContaining({ isExtendedSchema: true }));
   });
 
+  it('should initialize BlockNote with advanced table configuration', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.tables).toEqual({
+      splitCells: true,
+      cellBackgroundColor: true,
+      cellTextColor: true,
+      headers: true,
+    });
+  });
+
   it('should strip single theme and force dual themes in code highlighter', async () => {
     const origCodeToTokens = jest.fn().mockReturnValue({ tokens: [] });
     const fakeHighlighter = { codeToTokens: origCodeToTokens };
