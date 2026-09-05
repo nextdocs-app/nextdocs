@@ -50,7 +50,7 @@ export function toSidebarTreeNode(node: TreeNode, isExpanded = false): SidebarTr
 
 export const fetchRootNodesThunk = createAsyncThunk<
   { nodes: TreeNode[]; hasMore: boolean; page: number },
-  { page?: number; size?: number; append?: boolean } | undefined,
+  { page?: number; size?: number; append?: boolean; background?: boolean } | undefined,
   { state: RootState }
 >('sidebarTree/fetchRootNodes', async (params, { getState }) => {
   const state = getState();
@@ -248,11 +248,26 @@ const sidebarTreeSlice = createSlice({
   extraReducers: (builder) => {
     // fetchRootNodesThunk
     builder
-      .addCase(fetchRootNodesThunk.pending, (state) => {
-        state.isRootLoading = true;
+      .addCase(fetchRootNodesThunk.pending, (state, action) => {
+        const arg = action.meta.arg;
+        if (arg?.background) {
+          return;
+        }
+        if (arg?.append) {
+          state.isRootLoading = true;
+          return;
+        }
+        if (state.rootIds.length === 0) {
+          state.isRootLoading = true;
+        }
       })
       .addCase(fetchRootNodesThunk.fulfilled, (state, action) => {
-        state.isRootLoading = false;
+        // Background syncs never touched isRootLoading, so they must not clear
+        // it either (a background success must not hide a foreground initial
+        // load's skeleton early).
+        if (!action.meta.arg?.background) {
+          state.isRootLoading = false;
+        }
         state.rootHasMore = action.payload.hasMore;
         state.rootPage = action.payload.page;
 
@@ -279,8 +294,10 @@ const sidebarTreeSlice = createSlice({
           state.rootIds = newRootIds;
         }
       })
-      .addCase(fetchRootNodesThunk.rejected, (state) => {
-        state.isRootLoading = false;
+      .addCase(fetchRootNodesThunk.rejected, (state, action) => {
+        if (!action.meta.arg?.background) {
+          state.isRootLoading = false;
+        }
       });
 
     // fetchChildrenThunk

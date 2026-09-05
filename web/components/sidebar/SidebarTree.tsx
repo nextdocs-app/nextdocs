@@ -68,13 +68,21 @@ export function SidebarTree({
   // tree: everything shared with the user, plus root-level documents the user
   // shared with others. Nested documents that were shared (real parentId set)
   // stay in the Private tree under their actual parent.
+  // Stabilized by content key so background documentList refreshes with
+  // unchanged ids don't churn the Set identity and re-render the tree.
+  const fallbackExcludedNodeIdsKey = useMemo(() => {
+    const ids = [...sharedWithMeDocumentIds, ...rootLevelOwnerSharedDocumentIds];
+    ids.sort();
+    return ids.join(',');
+  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
   const fallbackExcludedNodeIds = useMemo(() => {
     const excluded = new Set<string>(sharedWithMeDocumentIds);
     for (const id of rootLevelOwnerSharedDocumentIds) {
       excluded.add(id);
     }
     return excluded;
-  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fallbackExcludedNodeIdsKey]);
 
   const excludedNodeIds = propExcludedNodeIds ?? fallbackExcludedNodeIds;
 
@@ -110,7 +118,9 @@ export function SidebarTree({
     };
 
     const handleDocsChanged = () => {
-      void dispatch(fetchRootNodesThunk());
+      // Background sync (e.g. doc created/restored in another view): must not
+      // pulse isRootLoading.
+      void dispatch(fetchRootNodesThunk({ background: true }));
     };
 
     window.addEventListener('document-meta-updated', handleMetaUpdate);

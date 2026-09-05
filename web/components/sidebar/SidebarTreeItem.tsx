@@ -125,6 +125,8 @@ export function SidebarTreeItem({
   const showEmptyLine = lineInEmptyOf === node.id;
   const actionType = resolveActionType ? resolveActionType(node.id) : 'move-to-trash';
   const showChildren = forceShowChildren || node.isExpanded;
+  const isMenuOpen = docActionsAnchor?.documentId === node.id;
+  const hasTwoActions = canEdit && isActionsEnabled;
 
   return (
     <li
@@ -138,7 +140,7 @@ export function SidebarTreeItem({
         {...listeners}
         role="button"
         tabIndex={0}
-        className={`group/tree-item-row relative w-full flex items-center gap-1.5 py-1.5 pr-2 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+        className={`group/tree-item-row relative w-full flex items-center gap-1.5 py-1.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
           isDropTarget
             ? 'nd-tree-drop-highlight'
             : isActive
@@ -176,11 +178,23 @@ export function SidebarTreeItem({
         </div>
 
         {/* Title */}
-        <span className="text-[13px] truncate flex-1 min-w-0">{node.title || 'Untitled'}</span>
+        <span
+          className={`text-[13px] truncate flex-1 min-w-0 ${
+            isMenuOpen
+              ? hasTwoActions
+                ? 'pr-11'
+                : 'pr-6'
+              : hasTwoActions
+                ? 'group-hover/tree-item-row:pr-11'
+                : 'group-hover/tree-item-row:pr-6'
+          }`}
+        >
+          {node.title || 'Untitled'}
+        </span>
 
         {/* Action buttons on hover */}
         <div
-          className={`flex items-center gap-0.5 transition-opacity flex-shrink-0 ${
+          className={`absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-transparent transition-opacity ${
             docActionsAnchor?.documentId === node.id
               ? 'opacity-100'
               : 'opacity-0 group-hover/tree-item-row:opacity-100'
