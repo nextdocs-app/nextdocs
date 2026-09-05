@@ -712,8 +712,7 @@ describe('Editor Component', () => {
     const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
     const lastCall = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1];
     const pointerHandler = lastCall[0].onPointerDownCapture as
-      | ((event: ReactPointerEvent<HTMLDivElement>) => void)
-      | undefined;
+      ((event: ReactPointerEvent<HTMLDivElement>) => void) | undefined;
 
     expect(pointerHandler).toBeDefined();
 
