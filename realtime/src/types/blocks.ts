@@ -152,9 +152,10 @@ export interface TableCell {
 
 export interface TableContent {
   type: 'tableContent';
-  columnWidths: number[];
-  headerRows: number;
-  rows: { cells: TableCell[] }[];
+  columnWidths?: (number | undefined)[];
+  headerRows?: number;
+  headerCols?: number;
+  rows: { cells: TableCell[] | InlineContent[][] }[];
 }
 
 // Source: https://www.blocknotejs.org/docs/features/blocks/tables#block-shape

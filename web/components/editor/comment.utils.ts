@@ -51,6 +51,54 @@ export class ReadOnlyThreadStoreAuth extends ThreadStoreAuth {
   }
 }
 
+export class DynamicThreadStoreAuth extends ThreadStoreAuth {
+  constructor(private readonly getAuth: () => ThreadStoreAuth) {
+    super();
+  }
+
+  canCreateThread(): boolean {
+    return this.getAuth().canCreateThread();
+  }
+
+  canAddComment(thread: Parameters<ThreadStoreAuth['canAddComment']>[0]): boolean {
+    return this.getAuth().canAddComment(thread);
+  }
+
+  canUpdateComment(comment: Parameters<ThreadStoreAuth['canUpdateComment']>[0]): boolean {
+    return this.getAuth().canUpdateComment(comment);
+  }
+
+  canDeleteComment(comment: Parameters<ThreadStoreAuth['canDeleteComment']>[0]): boolean {
+    return this.getAuth().canDeleteComment(comment);
+  }
+
+  canDeleteThread(thread: Parameters<ThreadStoreAuth['canDeleteThread']>[0]): boolean {
+    return this.getAuth().canDeleteThread(thread);
+  }
+
+  canResolveThread(thread: Parameters<ThreadStoreAuth['canResolveThread']>[0]): boolean {
+    return this.getAuth().canResolveThread(thread);
+  }
+
+  canUnresolveThread(thread: Parameters<ThreadStoreAuth['canUnresolveThread']>[0]): boolean {
+    return this.getAuth().canUnresolveThread(thread);
+  }
+
+  canAddReaction(
+    comment: Parameters<ThreadStoreAuth['canAddReaction']>[0],
+    emoji?: string
+  ): boolean {
+    return this.getAuth().canAddReaction(comment, emoji);
+  }
+
+  canDeleteReaction(
+    comment: Parameters<ThreadStoreAuth['canDeleteReaction']>[0],
+    emoji?: string
+  ): boolean {
+    return this.getAuth().canDeleteReaction(comment, emoji);
+  }
+}
+
 export interface SharedCommentUserProfile {
   username: string;
   avatarUrl: string | null;

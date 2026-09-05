@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
@@ -19,12 +19,13 @@ import {
   readCachedDocumentAccessLevel,
   writeCachedDocumentAccessLevel,
 } from '@/lib/document-access.util';
-import { getPresenceColor, isReadOnlyAccessLevel } from '@/lib/realtime.util';
+import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
+import { Awareness } from 'y-protocols/awareness';
 
 const REALTIME_URL = process.env.NEXT_PUBLIC_REALTIME_URL ?? 'ws://localhost:1234';
 const MESSAGE_ACCESS_LEVEL = 2;
@@ -209,6 +210,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // the module-level singleton at render time, which may be stale)
   const [ydoc, setLocalYDoc] = useState<Y.Doc | null>(null);
   const ydocRef = useRef<Y.Doc | null>(null);
+  const awareness = useMemo(() => (ydoc ? new Awareness(ydoc) : null), [ydoc]);
 
   // When a document is moved to trash (e.g. from another tab/device), surface the
   // read-only trash view instead of a spurious "access restricted" error. Anyone who
@@ -599,6 +601,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
     const provider = new WebsocketProvider(REALTIME_URL, resolvedDocumentId, ydoc, {
       params: wsParams,
+      awareness: awareness ?? undefined,
     });
 
     const statusHandler = (event: { status: 'connected' | 'disconnected' | 'connecting' }) => {
@@ -711,12 +714,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     provider.on('connection-close', connectionCloseHandler);
     setRealtimeProvider(provider);
 
-    const userName = user?.displayName || user?.email || meta?.createdBy || 'NextDocs User';
-    const colorSeed = user?.id || user?.email || `${resolvedDocumentId}:${userName}`;
-    provider.awareness.setLocalStateField('user', {
-      name: userName,
-      color: getPresenceColor(colorSeed),
-    });
+    // NOTE: presence `user` field is written solely by EditorContent to avoid
+    // last-render-wins nondeterminism from two writers to the same awareness.
 
     return () => {
       closeHandlerCancelled = true;
@@ -729,22 +728,29 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     };
   }, [
     ydoc,
+    awareness,
     resolvedDocumentId,
     isOnline,
     isLoading,
     errorState,
     isAuthenticated,
-    meta?.createdBy,
     meta?.deletedAt,
-    user?.id,
-    user?.email,
-    user?.displayName,
     isCloudReadInBackoff,
     refresh,
     dispatch,
     applyTrashedDocumentView,
     enterRestrictedState,
   ]);
+
+  // Awareness starts an interval on construction and destroys itself on ydoc
+  // destroy. Explicitly destroy on ydoc swap/unmount to avoid leaking the
+  // interval when the holder retains the doc. Declared after the provider
+  // effect so provider teardown (unsubscribe) runs before awareness destroy.
+  useEffect(() => {
+    return () => {
+      awareness?.destroy();
+    };
+  }, [awareness]);
 
   // Listen for server-pushed access-level changes and apply them immediately.
   useEffect(() => {
@@ -1094,6 +1100,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   return {
     documentId: resolvedDocumentId,
     ydoc,
+    awareness,
     meta,
     accessLevel,
     isReadOnly:

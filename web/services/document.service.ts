@@ -347,7 +347,9 @@ class DocumentService {
       }
     );
 
-    this.emitCloudDocumentsChanged();
+    // We don't need to do emitCloudDocumentsChanged() here. Both tree slices
+    // apply the server-returned node + orderKey in moveDocumentThunk.fulfilled,
+    // so a global refetch is redundant.
     return {
       id: body.id,
       title: body.title,

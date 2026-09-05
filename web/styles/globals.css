@@ -30,7 +30,7 @@
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0% 0 0);
   --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.925 0 0);
+  --sidebar-accent: oklch(0.905 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
@@ -46,11 +46,32 @@
   --editor-dropdown-label-font-size: 11px;
   --editor-dropdown-icon-container-size: 28px;
   --editor-dropdown-icon-size: 16px;
+
+  /* Code Block Language Picker Caret */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  /* BlockNote Divider & Table Variables */
+  --editor-divider-color: rgba(55, 53, 47, 0.14);
+  --editor-table-header-bg: rgba(55, 53, 47, 0.035);
+
+  /* BlockNote Checklist & Toggle Variables */
+  --checkbox-hover-bg: rgba(55, 53, 47, 0.08);
+  --checkbox-checked-bg: #2563eb;
+  --checkbox-checked-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5L6.5 11.5L12.5 4.5'/%3E%3C/svg%3E");
+  --toggle-hover-bg: rgba(55, 53, 47, 0.08);
+  --toggle-active-bg: rgba(55, 53, 47, 0.14);
+
+  /* BlockNote Side Menu Handle Variables */
+  --side-menu-color: rgba(55, 53, 47, 0.65);
+  --side-menu-hover-color: #121212;
+  --side-menu-hover-bg: rgba(55, 53, 47, 0.08);
+  --side-menu-active-bg: rgba(55, 53, 47, 0.14);
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
 .dark {
-  --background: #1f1f1f;
+  --background: #1A1A18;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
   --card-foreground: oklch(0.985 0 0);
@@ -69,9 +90,9 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --sidebar: #181818;
+  --sidebar: #1F1F1D;
   --sidebar-foreground: oklch(91.279% 0.0001 271.152);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: #2f2f2a;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
@@ -79,6 +100,26 @@
   /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
   --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --editor-dropdown-divider: 1.5px solid rgba(255, 255, 255, 0.15);
+
+  /* Code Block Language Picker Dark Overrides */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+
+  /* BlockNote Divider & Table Dark Overrides */
+  --editor-divider-color: rgba(255, 255, 255, 0.12);
+  --editor-table-header-bg: rgba(255, 255, 255, 0.04);
+
+  /* BlockNote Checklist & Toggle Dark Overrides */
+  --checkbox-hover-bg: rgba(255, 255, 255, 0.08);
+  --checkbox-checked-bg: #3b82f6;
+  --toggle-hover-bg: rgba(255, 255, 255, 0.08);
+  --toggle-active-bg: rgba(255, 255, 255, 0.14);
+
+  /* BlockNote Side Menu Handle Dark Overrides */
+  --side-menu-color: rgba(255, 255, 255, 0.55);
+  --side-menu-hover-color: #f2f2f2;
+  --side-menu-hover-bg: rgba(255, 255, 255, 0.08);
+  --side-menu-active-bg: rgba(255, 255, 255, 0.14);
 }
 
 @theme inline {
@@ -113,7 +154,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: var(--font-inter), "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Open Sans", "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
 }
 
@@ -126,6 +167,16 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+  }
+
+  /* While sidebar is being resized, keep breadcrumbs/toolbar fixed to sidebar edge without lag */
+  body.nd-sidebar-resizing .nd-doc-toolbar-left,
+  html.nd-sidebar-resizing .nd-doc-toolbar-left {
+    transition: none !important;
+  }
+  body.nd-sidebar-resizing,
+  html.nd-sidebar-resizing {
+    cursor: col-resize !important;
   }
 }
 
@@ -211,14 +262,17 @@ body.nd-is-dragging * {
   cursor: grabbing !important;
 }
 
-/* Block editor drop cursor: same blue as the sidebar tree indicators.
-   BlockNote sets the background color inline, so !important is required. */
+/* Block editor & table drag drop cursor: same blue as the sidebar tree indicators and block DnD.
+   BlockNote sets the background color inline on blocks and defaults to #adf on tables, so !important is required. */
 .prosemirror-dropcursor-block,
 .prosemirror-dropcursor-block-horizontal,
 .prosemirror-dropcursor-block-vertical-left,
 .prosemirror-dropcursor-block-vertical-right,
 .prosemirror-dropcursor-inline,
-.prosemirror-dropcursor-vertical {
+.prosemirror-dropcursor-vertical,
+.bn-table-drop-cursor,
+.bn-shadcn .bn-table-drop-cursor,
+div.bn-table-drop-cursor {
   background-color: rgb(100 160 255 / 0.5) !important;
 }
 
@@ -226,27 +280,27 @@ body.nd-is-dragging * {
   .document-title-input {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-family: Inter, SF Pro Display, -apple-system, BlinkMacSystemFont, Open Sans, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
-    font-size: 3em; /* BlockNote H1 size */
-    font-weight: 700;
-    line-height: 1.5; /* Matches .bn-block-outer */
-    color: #3f3f3f; /* --bn-colors-editor-text light mode */
+    font-family: var(--font-sans);
+    font-size: 2.35em;
+    font-weight: 650;
+    line-height: 1.2;
+    color: #121212;
     background: transparent;
     border: none;
     outline: none;
     resize: none;
     width: 100%;
     margin: 0;
-    padding: 3px 0; /* Matches BlockNote heading internal padding */
-    display: block; /* Remove inline descender gap */
-    box-sizing: border-box; /* Include padding in height correctly */
+    padding: 3px 0;
+    display: block;
+    box-sizing: border-box;
   }
 
   /* BlockNote aligns its content 54px from the edges for handles */
   .document-title-container {
     padding-inline: 54px;
     padding-top: 0;
-    padding-bottom: 0;
+    padding-bottom: 12px;
     width: 100%;
     display: flex; /* Prevent wrapper from adding extra line height or gaps */
     flex-direction: column;
@@ -275,31 +329,697 @@ body.nd-is-dragging * {
 
   /* Explicit light override — beats any stale dark rules */
   html[data-theme="light"] .document-title-input {
-    color: #3f3f3f;
+    color: #121212;
   }
   html[data-theme="light"] .document-title-input::placeholder {
     color: rgba(63, 63, 63, 0.3);
   }
 
-  /* Override BlockNote default text color for dark mode */
+
+  .bn-root .bn-default-styles,
+  .bn-default-styles {
+    font-size: 15px !important;
+    line-height: 1.5;
+  }
+  .bn-editor [data-content-type="heading"],
+  [data-content-type="heading"] {
+    --level: 1.85em !important;
+    font-weight: 600 !important;
+    padding-block: 26px 6px !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="2"],
+  [data-content-type="heading"][data-level="2"] {
+    --level: 1.6em !important;
+    font-weight: 600 !important;
+    padding-block: 23px 6px !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="3"],
+  [data-content-type="heading"][data-level="3"] {
+    --level: 1.3em !important;
+    font-weight: 600 !important;
+    padding-block: 20px 6px !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="4"],
+  [data-content-type="heading"][data-level="4"] {
+    --level: 1.15em !important;
+    font-weight: 600 !important;
+    padding-block: 17px 6px !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="5"],
+  [data-content-type="heading"][data-level="5"] {
+    --level: 1.05em !important;
+    font-weight: 600 !important;
+    padding-block: 17px 6px !important;
+  }
+  .bn-editor [data-content-type="heading"][data-level="6"],
+  [data-content-type="heading"][data-level="6"] {
+    --level: 0.95em !important;
+    font-weight: 600 !important;
+    padding-block: 17px 6px !important;
+  }
+
+  /* Override BlockNote colors — keep defaults but force editor bg to --background (#1A1A18 in dark) */
+  .dark .bn-root,
   .dark .bn-container,
+  .bn-root[data-color-scheme="dark"],
   .bn-container[data-color-scheme="dark"] {
     --bn-colors-editor-text: #f2f2f2 !important;
+    --bn-colors-editor-background: var(--background) !important;
+    --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+    --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
+    --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
+    --checkbox-checked-bg: #3b82f6 !important;
+    --toggle-hover-bg: rgba(255, 255, 255, 0.08) !important;
+    --toggle-active-bg: rgba(255, 255, 255, 0.14) !important;
+    --side-menu-color: rgba(255, 255, 255, 0.55) !important;
+    --side-menu-hover-color: #f2f2f2 !important;
+    --side-menu-hover-bg: rgba(255, 255, 255, 0.08) !important;
+    --side-menu-active-bg: rgba(255, 255, 255, 0.14) !important;
   }
 
   @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]):not([data-theme="dark"]) .bn-root,
     html:not([data-theme="light"]):not([data-theme="dark"]) .bn-container {
       --bn-colors-editor-text: #f2f2f2 !important;
+      --bn-colors-editor-background: var(--background) !important;
+      --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+      --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
+      --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
+      --checkbox-checked-bg: #3b82f6 !important;
+      --toggle-hover-bg: rgba(255, 255, 255, 0.08) !important;
+      --toggle-active-bg: rgba(255, 255, 255, 0.14) !important;
+      --side-menu-color: rgba(255, 255, 255, 0.55) !important;
+      --side-menu-hover-color: #f2f2f2 !important;
+      --side-menu-hover-bg: rgba(255, 255, 255, 0.08) !important;
+      --side-menu-active-bg: rgba(255, 255, 255, 0.14) !important;
     }
   }
 
-  /* Explicit light override for BlockNote — beats stale data-color-scheme="dark" */
+  /* Explicit light override — beats stale data-color-scheme="dark" */
+  html[data-theme="light"] .bn-root,
   html[data-theme="light"] .bn-container {
-    --bn-colors-editor-text: #3f3f3f !important;
+    --bn-colors-editor-text: #121212 !important;
+    --bn-colors-editor-background: var(--background) !important;
+    --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --editor-divider-color: rgba(55, 53, 47, 0.14) !important;
+    --editor-table-header-bg: rgba(55, 53, 47, 0.035) !important;
+    --checkbox-hover-bg: rgba(55, 53, 47, 0.08) !important;
+    --checkbox-checked-bg: #2563eb !important;
+    --toggle-hover-bg: rgba(55, 53, 47, 0.08) !important;
+    --toggle-active-bg: rgba(55, 53, 47, 0.14) !important;
+    --side-menu-color: rgba(55, 53, 47, 0.55) !important;
+    --side-menu-hover-color: #121212 !important;
+    --side-menu-hover-bg: rgba(55, 53, 47, 0.08) !important;
+    --side-menu-active-bg: rgba(55, 53, 47, 0.14) !important;
+  }
+
+  /* Code Block Background & Text — Light Mode */
+  .bn-block-content[data-content-type="codeBlock"] {
+    background-color: #f7f7f6 !important;
+    color: #24292e !important;
+    /* By default, the code block has very less gap between it's neighboring blocks.
+    To make it look clean, we are adding some gap using margin. */
+    margin-block: 10px !important;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre {
+    background-color: transparent !important;
+    white-space: pre !important;
+    overflow-x: auto !important;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre {
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  }
+
+  /* WebKit / Chromium custom thin horizontal scrollbar (5px) */
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 9999px;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.35);
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .dark .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.4);
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > pre > code,
+  .bn-block-content[data-content-type="codeBlock"] .bn-inline-content {
+    white-space: pre !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  /* Shiki Syntax Highlighting — Light Mode */
+  .bn-block-content[data-content-type="codeBlock"] .shiki {
+    color: var(--shiki-light, inherit);
+  }
+
+  /* Code Block Background & Text — Dark Mode */
+  .dark .bn-block-content[data-content-type="codeBlock"],
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"],
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] {
+    background-color: #21211F !important;
+    color: #e1e4e8 !important;
+  }
+
+  /* Shiki Syntax Highlighting — Dark Mode */
+  .dark .bn-block-content[data-content-type="codeBlock"] .shiki,
+  .bn-root[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] .shiki,
+  .bn-container[data-color-scheme="dark"] .bn-block-content[data-content-type="codeBlock"] .shiki {
+    color: var(--shiki-dark, inherit);
+  }
+
+  /* Code Block Language Picker */
+  .bn-block-content[data-content-type="codeBlock"] > div > select {
+    position: absolute !important;
+    left: auto !important;
+    right: 12px !important;
+    field-sizing: content;
+    z-index: 2;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    box-sizing: border-box !important;
+    height: 24px !important;
+    line-height: 22px !important;
+    font-family: inherit !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.01em !important;
+    padding: 0 20px 0 8px !important;
+    cursor: pointer !important;
+    border-radius: 5px !important;
+    backdrop-filter: blur(8px) !important;
+    background-color: var(--sidebar) !important;
+    background-image: var(--code-language-caret) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 6px center !important;
+    background-size: 10px 10px !important;
+    color: var(--sidebar-foreground) !important;
+    border: 1px solid var(--sidebar-border) !important;
+    box-shadow: var(--code-language-shadow) !important;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.15s ease,
+      background-color 0.1s ease,
+      border-color 0.1s ease !important;
+  }
+
+  /* Reveal language picker on code block hover or when select is focused */
+  .bn-block-content[data-content-type="codeBlock"]:hover > div > select,
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus {
+    opacity: 1 !important;
+    pointer-events: auto;
+    transition-delay: 0s !important;
+  }
+
+  /* Hover & Focus state on the language select */
+  .bn-block-content[data-content-type="codeBlock"] > div > select:hover,
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    border-color: var(--sidebar-border) !important;
+  }
+
+  .bn-block-content[data-content-type="codeBlock"] > div > select:focus-visible {
+    outline: 2px solid var(--sidebar-ring, #3b82f6) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Dropdown options list matching sidebar */
+  .bn-block-content[data-content-type="codeBlock"] > div > select > option {
+    background-color: var(--sidebar) !important;
+    color: var(--sidebar-foreground) !important;
+    font-family: inherit !important;
+    font-size: var(--editor-dropdown-item-font-size, 13px) !important;
+  }
+
+  /* Paragraph Spacing */
+  .bn-block-content[data-content-type="paragraph"] {
+    /* Cleaner vertical spacing between paragraphs */
+    padding-block: 6px !important;
+  }
+
+  /* BlockNote Divider / Separator Line */
+  .bn-block-content[data-content-type="divider"] {
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+    padding-block: 8px !important;
+    min-height: 17px !important;
+    cursor: default !important;
+    user-select: none !important;
+  }
+
+  .bn-block-content[data-content-type="divider"] hr {
+    border: none !important;
+    height: 1px !important;
+    width: 100% !important;
+    flex: 1 1 auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: var(--editor-divider-color) !important;
+    border-radius: 9999px !important;
+    box-sizing: border-box !important;
+    transition: background-color 0.15s ease, opacity 0.15s ease !important;
+  }
+
+  /* BlockNote Nested Block Group — Indentation */
+  .bn-block-group .bn-block:not(:has(.bn-toggle-wrapper)) .bn-block-group .bn-block-outer:not([data-prev-depth-changed]):before {
+    border-left: 1px solid var(--editor-divider-color) !important;
+    transition: border-color 0.15s ease !important;
+  }
+
+  /* BlockNote Table */
+  .bn-editor [data-content-type="table"] table,
+  [data-content-type="table"] table {
+    border-collapse: collapse !important;
+    border: 1px solid var(--editor-divider-color) !important;
+  }
+
+  .bn-editor [data-content-type="table"] th,
+  .bn-editor [data-content-type="table"] td,
+  [data-content-type="table"] th,
+  [data-content-type="table"] td {
+    border: 1px solid var(--editor-divider-color) !important;
+    padding: 7px 12px !important;
+    transition: border-color 0.15s ease, background-color 0.15s ease !important;
+  }
+
+  .bn-editor [data-content-type="table"] th,
+  [data-content-type="table"] th {
+    background-color: var(--editor-table-header-bg) !important;
+    font-weight: 600 !important;
+  }
+
+  /* Table column resize handle & selection matching editor accents */
+  .ProseMirror .column-resize-handle {
+    background-color: #64a0ff !important;
+    width: 2px !important;
+  }
+
+  .ProseMirror .selectedCell:after {
+    background-color: rgb(100 160 255 / 0.15) !important;
+  }
+
+  /* BlockNote Checklist Item — Modern Style */
+  .bn-block-content[data-content-type="checkListItem"] {
+    align-items: flex-start !important;
+    padding-block: 3px !important;
+  }
+
+  /* Checkbox container alignment */
+  .bn-block-content[data-content-type="checkListItem"] > :is(div[contenteditable="false"], div:has(> input)) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    margin-right: 4px !important;
+    flex-shrink: 0 !important;
+    user-select: none !important;
+  }
+
+  /* Custom Modern Checkbox Input */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"] {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    width: 16px !important;
+    height: 16px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    cursor: pointer !important;
+    border-radius: 3px !important;
+    border: 1.5px solid currentColor !important;
+    background-color: transparent !important;
+    box-sizing: border-box !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease !important;
+  }
+
+  /* Hover state when unchecked */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:hover:not(:checked) {
+    background-color: var(--checkbox-hover-bg) !important;
+  }
+
+  /* Active press effect */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:active {
+    transform: scale(0.92) !important;
+  }
+
+  /* Focus visible outline */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:focus-visible {
+    outline: 2px solid rgb(100 160 255 / 0.5) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Checked state with custom SVG checkmark */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:checked {
+    background: var(--checkbox-checked-bg) var(--checkbox-checked-icon) no-repeat center / 11px 11px !important;
+    border-color: var(--checkbox-checked-bg) !important;
+  }
+
+  /* Disabled state */
+  .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"]:disabled {
+    cursor: default !important;
+    opacity: 0.75 !important;
+  }
+
+  /* Checked task text styling */
+  .bn-block-content[data-content-type="checkListItem"] .bn-inline-content {
+    transition: opacity 0.15s ease, color 0.15s ease !important;
+  }
+
+  .bn-block-content[data-content-type="checkListItem"][data-checked="true"] .bn-inline-content {
+    text-decoration: line-through !important;
+    color: var(--muted-foreground) !important;
+    opacity: 0.9 !important;
+  }
+
+  /* BlockNote Toggle Button
+     By default, BlockNote renders the button SVG at 24x24px with 3px of button padding.
+     This padding causes misalignment with adjacent blocks (e.g., bullet lists placed near it).
+     To fix the alignment, we remove the button padding (padding: 0).
+     We then scale the SVG down to 20x20px and compensate for the 4px difference by adding
+     margin-right: 4px. This maintains proper block alignment while allowing the hover
+     background to fit cleanly around the button without requiring an inset pseudo-element. */
+  .bn-toggle-button {
+    background-color: transparent !important;
+    border-radius: 4px !important;
+    padding: 0 !important;
+    margin-right: 4px !important;
+    transition: background-color 0.15s ease, transform 0.2s ease !important;
+  }
+
+  .bn-toggle-button > svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+
+  .bn-toggle-button:hover,
+  .bn-toggle-add-block-button:hover {
+    background-color: var(--toggle-hover-bg) !important;
+  }
+
+  .bn-toggle-button:active,
+  .bn-toggle-add-block-button:active {
+    background-color: var(--toggle-active-bg) !important;
+  }
+
+  /* BlockNote Side Menu & Table Drag Handles (24x24px, 4px radius, 18px icons) */
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) {
+    display: flex !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: 0 !important;
+    height: auto !important;
+    min-height: 24px !important;
+    padding-right: 8px !important;
+    padding-top: 2px !important;
+    user-select: none !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Side menu block-specific vertical alignment */
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="1"] {
+    padding-top: 35px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="2"] {
+    padding-top: 28px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="3"] {
+    padding-top: 23px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"]:is(
+    [data-level="4"],
+    [data-level="5"],
+    [data-level="6"]
+  ) {
+    padding-top: 17px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
+    [data-block-type="codeBlock"],
+    [data-block-type="file"],
+    [data-block-type="audio"],
+    [data-block-type="image"],
+    [data-block-type="video"]
+  ) {
+    padding-top: 6px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="paragraph"] {
+    padding-top: 5px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="table"] {
+    padding-top: 4px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="checkListItem"] {
+    padding-top: 3px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
+    [data-block-type="bulletListItem"],
+    [data-block-type="numberedListItem"],
+    [data-block-type="toggleListItem"],
+    [data-block-type="quote"]
+  ) {
+    padding-top: 2px !important;
+  }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="divider"] {
+    padding-top: 0 !important;
+    margin-top: -3.5px !important;
+  }
+
+  /* Side menu & table handle buttons */
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    min-height: 24px !important;
+    max-width: 24px !important;
+    max-height: 24px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 4px !important;
+    border: none !important;
+    background-color: transparent !important;
+    color: var(--side-menu-color) !important;
+    opacity: 0.85 !important;
+    user-select: none !important;
+    box-sizing: border-box !important;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.1s ease !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button:hover,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle):hover {
+    background-color: var(--side-menu-hover-bg) !important;
+    color: var(--side-menu-hover-color) !important;
+    opacity: 1 !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button:active,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle):active {
+    background-color: var(--side-menu-active-bg) !important;
+    transform: scale(0.92) !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button:is([data-state="open"], [aria-expanded="true"]),
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle):is([data-state="open"], [aria-expanded="true"]) {
+    background-color: var(--side-menu-active-bg) !important;
+    color: var(--side-menu-hover-color) !important;
+    opacity: 1 !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu):hover .bn-button:not(:hover) {
+    opacity: 0.95 !important;
+  }
+
+  /* Handle cursors & drag states */
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button:not([draggable="true"]) {
+    cursor: pointer !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button[draggable="true"],
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle) {
+    cursor: grab !important;
+  }
+
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button[draggable="true"]:active,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle):active,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle).bn-table-handle-dragging {
+    cursor: grabbing !important;
+  }
+
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle)[style*="rotate"]:active {
+    transform: rotate(0.25turn) scale(0.92) !important;
+  }
+
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle).bn-table-handle-not-draggable {
+    cursor: default !important;
+    opacity: 0.45 !important;
+  }
+
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle).bn-table-handle-dragging {
+    opacity: 0.5 !important;
+  }
+
+  /* SVG icon inside handle buttons */
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button > svg,
+  :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle) > svg {
+    box-sizing: content-box !important;
+    width: 18px !important;
+    height: 18px !important;
+    padding: 3px !important;
+    flex-shrink: 0 !important;
+    transition: transform 0.15s ease, color 0.15s ease !important;
+  }
+
+  /* Table cell handle (dropdown arrow) and extend (+) button */
+  :is(.bn-table-cell-handle, .bn-shadcn .bn-table-cell-handle) {
+    color: var(--side-menu-color) !important;
+    border-radius: 3px !important;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease !important;
+  }
+
+  :is(.bn-extend-button, .bn-shadcn .bn-extend-button, button.bn-extend-button) {
+    color: var(--side-menu-color) !important;
+    opacity: 0.85 !important;
+    border-radius: 4px !important;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease !important;
+  }
+
+  :is(.bn-table-cell-handle, .bn-shadcn .bn-table-cell-handle):hover,
+  :is(.bn-extend-button, .bn-shadcn .bn-extend-button, button.bn-extend-button):hover {
+    background-color: var(--side-menu-hover-bg) !important;
+    color: var(--side-menu-hover-color) !important;
+    opacity: 1 !important;
+  }
+
+  :is(.bn-extend-button, .bn-shadcn .bn-extend-button, button.bn-extend-button).bn-extend-button-editing {
+    background-color: var(--side-menu-active-bg) !important;
+    color: var(--side-menu-hover-color) !important;
+    opacity: 1 !important;
+  }
+
+  /* Print view */
+  @media print {
+    .bn-block-content[data-content-type="divider"] {
+      padding-block: 6px !important;
+    }
+    .bn-block-content[data-content-type="divider"] hr {
+      height: 0 !important;
+      border: none !important;
+      border-top: 1px solid #d1d5db !important;
+      background-color: transparent !important;
+    }
+    .bn-block-group .bn-block:not(:has(.bn-toggle-wrapper)) .bn-block-group .bn-block-outer:not([data-prev-depth-changed]):before {
+      border-left: 1px solid #d1d5db !important;
+    }
+    .bn-editor [data-content-type="table"] table,
+    .bn-editor [data-content-type="table"] th,
+    .bn-editor [data-content-type="table"] td,
+    [data-content-type="table"] table,
+    [data-content-type="table"] th,
+    [data-content-type="table"] td {
+      border-color: #d1d5db !important;
+    }
+    .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"] {
+      border-color: #71717a !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
   }
 }
 
-/* Comments Sidebar — fixed panel that escapes AppShell */
+/* BlockNote Quote */
+[data-content-type="quote"] blockquote {
+  color: #545252 !important;
+}
+
+:is(.dark, [data-color-scheme="dark"]) [data-content-type="quote"] blockquote {
+  color: #a09a9b !important;
+}
+
+/* Explicit light override — beats stale data-color-scheme="dark" */
+html[data-theme="light"] [data-content-type="quote"] blockquote {
+  color: #545252 !important;
+}
+
+/* BlockNote link — Dark mode */
+.bn-shadcn .bn-editor a,
+.bn-editor a {
+  color: #a1a1aa !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(161, 161, 170, 0.6);
+  cursor: pointer !important;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.bn-shadcn .bn-editor a:visited,
+.bn-editor a:visited {
+  color: #a1a1aa !important;
+}
+
+.bn-shadcn .bn-editor a:hover,
+.bn-editor a:hover,
+.bn-shadcn .bn-editor a:visited:hover,
+.bn-editor a:visited:hover {
+  color: #e4e4e7 !important;
+  text-decoration-color: #e4e4e7;
+}
+
+/* BlockNote link — Light mode */
+html:not(.dark) .bn-shadcn .bn-editor a,
+html:not(.dark) .bn-editor a {
+  color: #52525b !important;
+  text-decoration-color: rgba(82, 82, 91, 0.6);
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:visited,
+html:not(.dark) .bn-editor a:visited {
+  color: #52525b !important;
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:hover,
+html:not(.dark) .bn-editor a:hover,
+html:not(.dark) .bn-shadcn .bn-editor a:visited:hover,
+html:not(.dark) .bn-editor a:visited:hover {
+  color: #18181b !important;
+  text-decoration-color: #18181b;
+}
 
 /* Backdrop overlay (mobile + click-away) */
 .nd-comments-backdrop {

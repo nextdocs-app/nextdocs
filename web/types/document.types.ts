@@ -19,6 +19,8 @@ export type {
   VideoBlock,
   AudioBlock,
   TableBlock,
+  TableCell,
+  TableContent,
   InlineContent,
   StyledText,
   Link,

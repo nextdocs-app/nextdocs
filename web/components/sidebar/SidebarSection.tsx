@@ -48,7 +48,7 @@ export function SidebarSection({
   children,
 }: SidebarSectionProps) {
   const isEmpty = rootCount === 0;
-  const showMore = !isLoading && (rootCount > SIDEBAR_VISIBLE_COUNT || Boolean(hasMore));
+  const showMore = rootCount > SIDEBAR_VISIBLE_COUNT || Boolean(hasMore);
 
   return (
     <div className={`group flex flex-col ${className ?? ''}`.trim()}>

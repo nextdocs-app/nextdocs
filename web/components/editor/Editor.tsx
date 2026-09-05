@@ -35,6 +35,7 @@ export default function Editor() {
   const {
     documentId,
     ydoc,
+    awareness,
     meta,
     accessLevel,
     isReadOnly,
@@ -123,7 +124,6 @@ export default function Editor() {
     return () => clearTimeout(timer);
   }, [effectiveDocumentId, isLoading]);
 
-  const commentsFeatureEnabled = accessLevel !== null;
   const showCommentsButton = !!user?.id && accessLevel !== 'VIEW';
   const isCommentsSidebarOpen = showCommentsButton ? showCommentsSidebar : false;
   const activeCommentStats = commentStatsByDocument[documentId] ?? EMPTY_COMMENT_STATS;
@@ -153,6 +153,32 @@ export default function Editor() {
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [showCommentsButton]);
+
+  const handleCommentsClose = useCallback(() => {
+    setShowCommentsSidebar(false);
+  }, []);
+
+  const handleThreadStatsChange = useCallback(
+    (stats: CommentThreadStats) => {
+      setCommentStatsByDocument((prev) => {
+        const current = prev[documentId];
+        if (
+          current &&
+          current.open === stats.open &&
+          current.resolved === stats.resolved &&
+          current.all === stats.all
+        ) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          [documentId]: stats,
+        };
+      });
+    },
+    [documentId]
+  );
 
   if (errorState) {
     return (
@@ -212,6 +238,7 @@ export default function Editor() {
         key={documentId}
         documentId={documentId}
         ydoc={ydoc}
+        awareness={awareness}
         meta={meta}
         updateMeta={updateMeta}
         isReadOnly={isReadOnly || isGuestSharedView}
@@ -220,32 +247,14 @@ export default function Editor() {
         user={user}
         isAuthenticated={isAuthenticated}
         accessToken={accessToken}
-        commentsFeatureEnabled={commentsFeatureEnabled}
         commentsUiEnabled={showCommentsButton}
         commentsSidebarOpen={isCommentsSidebarOpen}
         commentsFilter={commentsFilter}
         commentsSort={commentsSort}
         onCommentsFilterChange={setCommentsFilter}
         onCommentsSortChange={setCommentsSort}
-        onCommentsClose={() => setShowCommentsSidebar(false)}
-        onCommentsThreadStatsChange={(stats) => {
-          setCommentStatsByDocument((prev) => {
-            const current = prev[documentId];
-            if (
-              current &&
-              current.open === stats.open &&
-              current.resolved === stats.resolved &&
-              current.all === stats.all
-            ) {
-              return prev;
-            }
-
-            return {
-              ...prev,
-              [documentId]: stats,
-            };
-          });
-        }}
+        onCommentsClose={handleCommentsClose}
+        onCommentsThreadStatsChange={handleThreadStatsChange}
       />
     </>
   );

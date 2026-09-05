@@ -949,6 +949,7 @@ it('moves a child document to trash in shared tree when user has edit access', a
     preloadedState: {
       sidebar: {
         isCollapsed: false,
+        sidebarWidth: 256,
         isPrivateOpen: true,
         isSharedOpen: true,
         panelMode: null,

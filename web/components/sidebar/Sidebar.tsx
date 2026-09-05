@@ -233,13 +233,23 @@ function Sidebar() {
   // documents shared by me) must not be listed in the Private section's tree or
   // "show more" panel. Nested documents that were shared stay under their
   // actual parent in the Private tree.
+  // Stabilized by content key: documentList refreshes replace the id arrays
+  // with new references even when the ids are unchanged; without this the
+  // unified DnD context (`sidebarTreeApi`) gets a new identity and re-renders
+  // both sections on every background refresh.
+  const excludedNodeIdsKey = useMemo(() => {
+    const ids = [...sharedWithMeDocumentIds, ...rootLevelOwnerSharedDocumentIds];
+    ids.sort();
+    return ids.join(',');
+  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
   const excludedNodeIds = useMemo(() => {
     const excluded = new Set<string>(sharedWithMeDocumentIds);
     for (const id of rootLevelOwnerSharedDocumentIds) {
       excluded.add(id);
     }
     return excluded;
-  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excludedNodeIdsKey]);
 
   const isPrivatePanel = !isTrashPanel && !isSharedPanel;
 
@@ -841,9 +851,9 @@ function Sidebar() {
 
   return (
     <aside
-      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-all duration-300'} relative`}
+      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: isSidebarCollapsed ? undefined : `${sidebarWidth}px`,
+        width: isSidebarCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
       }}
     >
       {/* Header */}
@@ -1137,8 +1147,12 @@ function Sidebar() {
 
       {!isSidebarCollapsed && (
         <div
-          onMouseDown={startResizing}
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors"
+          onPointerDown={startResizing}
+          onMouseDown={(e) => {
+            if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
+            startResizing(e);
+          }}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
         />
       )}
     </aside>

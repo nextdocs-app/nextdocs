@@ -1,41 +1,77 @@
 // Mock BlockNote BEFORE importing Editor
-jest.mock('@blocknote/react', () => ({
-  useCreateBlockNote: jest.fn(() => ({
-    document: [{ content: [] }],
-    focus: jest.fn(),
-  })),
-  getFormattingToolbarItems: jest.fn(() => []),
-  useBlockNoteEditor: jest.fn(() => ({
-    getExtension: jest.fn(() => undefined),
-  })),
-  useComponentsContext: jest.fn(() => ({
-    FormattingToolbar: {
-      Button: () => null,
-    },
-  })),
-  useDictionary: jest.fn(() => ({
-    formatting_toolbar: {
-      comment: {
-        tooltip: 'Comment',
+jest.mock('@blocknote/react', () => {
+  const actualReact = jest.requireActual<typeof import('react')>('react');
+  return {
+    useCreateBlockNote: jest.fn((options, deps) => {
+      return actualReact.useMemo(
+        () => ({
+          document: [{ content: [] }],
+          focus: jest.fn(),
+          mount: jest.fn(),
+          unmount: jest.fn(),
+          isEditable: true,
+        }),
+        deps
+      );
+    }),
+    getFormattingToolbarItems: jest.fn(() => []),
+    useBlockNoteEditor: jest.fn(() => ({
+      getExtension: jest.fn(() => undefined),
+    })),
+    useComponentsContext: jest.fn(() => ({
+      FormattingToolbar: {
+        Button: () => null,
       },
-    },
-  })),
-  FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  FormattingToolbarController: () => null,
-  FloatingComposerController: () => null,
-  FloatingThreadController: () => null,
-  ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
-}));
+    })),
+    useDictionary: jest.fn(() => ({
+      formatting_toolbar: {
+        comment: {
+          tooltip: 'Comment',
+        },
+      },
+    })),
+    FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    FormattingToolbarController: () => null,
+    FloatingComposerController: () => null,
+    FloatingThreadController: () => null,
+    ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
+  };
+});
 
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
 }));
+
+jest.mock('@blocknote/core', () => {
+  const fallback = {
+    BlockNoteSchema: {
+      create: jest.fn(() => ({
+        extend: jest.fn().mockReturnValue({ isExtendedSchema: true }),
+      })),
+    },
+    createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
+  };
+  try {
+    return {
+      ...jest.requireActual('@blocknote/core'),
+      ...fallback,
+    };
+  } catch {
+    // Jest cannot load the real @blocknote/core (ESM via prosemirror-highlight
+    // without extra transform), so fall back to the wholesale mock above.
+    return fallback;
+  }
+});
 
 jest.mock('@blocknote/core/comments', () => ({
   CommentsExtension: jest.fn(() => ({})),
   ThreadStoreAuth: class ThreadStoreAuth {},
   DefaultThreadStoreAuth: jest.fn(),
   YjsThreadStore: jest.fn(),
+}));
+
+jest.mock('@blocknote/code-block', () => ({
+  codeBlockOptions: { defaultLanguage: 'javascript', createHighlighter: jest.fn() },
 }));
 
 jest.mock('../../../services/document.service', () => ({
@@ -59,9 +95,13 @@ import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
+import { createCodeBlockSpec } from '@blocknote/core';
+import { codeBlockOptions } from '@blocknote/code-block';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
+import type { WebsocketProvider } from 'y-websocket';
 
 const render = (
   ui: React.ReactElement,
@@ -83,6 +123,12 @@ jest.mock('next/navigation');
 jest.mock('../../../hooks/useTheme.hook', () => ({
   useTheme: jest.fn(() => ({ theme: 'system', setTheme: jest.fn(), resolvedTheme: 'light' })),
 }));
+
+// createCodeBlockSpec is called once at EditorContent module load, before
+// beforeEach(jest.clearAllMocks()) wipes mock history. Capture the custom
+// options here so the highlighter wrapper test can invoke it later.
+const capturedCustomCodeBlockOptions = (createCodeBlockSpec as unknown as jest.Mock).mock
+  .calls[0]?.[0];
 
 describe('Editor Component', () => {
   const mockUpdateMeta = jest.fn();
@@ -579,6 +625,64 @@ describe('Editor Component', () => {
     expect(CommentsExtension).toHaveBeenCalled();
   });
 
+  it('should initialize BlockNote with custom codeBlock schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.schema).toEqual(expect.objectContaining({ isExtendedSchema: true }));
+  });
+
+  it('should initialize BlockNote with advanced table configuration', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.tables).toEqual({
+      splitCells: true,
+      cellBackgroundColor: true,
+      cellTextColor: true,
+      headers: true,
+    });
+  });
+
+  it('should strip single theme and force dual themes in code highlighter', async () => {
+    const origCodeToTokens = jest.fn().mockReturnValue({ tokens: [] });
+    const fakeHighlighter = { codeToTokens: origCodeToTokens };
+    (codeBlockOptions.createHighlighter as jest.Mock).mockResolvedValue(fakeHighlighter);
+
+    const createCodeBlockSpecMock = createCodeBlockSpec as unknown as jest.Mock;
+    const customOptions =
+      capturedCustomCodeBlockOptions ??
+      createCodeBlockSpecMock.mock.calls[createCodeBlockSpecMock.mock.calls.length - 1]?.[0];
+    expect(customOptions?.createHighlighter).toBeDefined();
+
+    const wrappedHighlighter = await customOptions.createHighlighter();
+    expect(wrappedHighlighter).toBe(fakeHighlighter);
+
+    wrappedHighlighter.codeToTokens('const x = 1', {
+      lang: 'javascript',
+      theme: 'github-dark',
+    });
+
+    expect(origCodeToTokens).toHaveBeenCalledTimes(1);
+    const [codeArg, optionsArg] = origCodeToTokens.mock.calls[0];
+    expect(codeArg).toBe('const x = 1');
+    expect(optionsArg).toEqual(
+      expect.objectContaining({
+        lang: 'javascript',
+        themes: { light: 'github-light', dark: 'github-dark' },
+        defaultColor: false,
+      })
+    );
+    expect(optionsArg).not.toHaveProperty('theme');
+  });
+
   it('should preserve selection for first comment click in comment-only mode', () => {
     const mockFocus = jest.fn();
     (useCreateBlockNote as jest.Mock).mockReturnValue({
@@ -626,5 +730,131 @@ describe('Editor Component', () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(mockFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('should maintain a stable BlockNote editor instance across realtimeProvider, accessLevel, and token updates', () => {
+    const mockUseDocument = useDocument as unknown as jest.Mock;
+    const mockUseAuth = useAuth as unknown as jest.Mock;
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-stable-1',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: { id: 'doc-stable-1', title: 'Stable Document', updatedAt: new Date().toISOString() },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const { rerender } = render(<Editor />);
+    const initialCallCount = useCreateBlockNoteMock.mock.calls.length;
+    expect(initialCallCount).toBeGreaterThan(0);
+
+    // Simulate accessLevel upgrade, token refresh, and realtime provider connection
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-stable-1',
+      ydoc: mockYdoc,
+      awareness: { setLocalStateField: jest.fn() } as unknown as Awareness,
+      meta: { id: 'doc-stable-1', title: 'Stable Document', updatedAt: new Date().toISOString() },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      realtimeProvider: { awareness: {} } as unknown as WebsocketProvider,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'new-token-123',
+      user: { id: 'user-1', email: 'test@example.com', displayName: 'Test User' },
+    });
+
+    rerender(<Editor />);
+
+    // Dependency array should be strictly [documentId, ydoc] and unchanged across renders
+    const firstCallDeps = useCreateBlockNoteMock.mock.calls[0][1];
+    const latestCallDeps =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][1];
+
+    expect(firstCallDeps).toEqual(['doc-stable-1', mockYdoc]);
+    expect(latestCallDeps).toEqual(['doc-stable-1', mockYdoc]);
+
+    // The editor instance memoized by useCreateBlockNote should be strictly the same reference
+    const firstCallEditor = useCreateBlockNoteMock.mock.results[0].value;
+    const latestCallEditor =
+      useCreateBlockNoteMock.mock.results[useCreateBlockNoteMock.mock.results.length - 1].value;
+
+    expect(latestCallEditor).toBe(firstCallEditor);
+  });
+
+  it('should keep BlockNoteView editable prop stable across permission updates to avoid remount', () => {
+    const mockUseDocument = useDocument as unknown as jest.Mock;
+    const editorInstance = {
+      document: [{ content: [] }],
+      focus: jest.fn(),
+      isEditable: false,
+    };
+    (useCreateBlockNote as jest.Mock).mockReturnValue(editorInstance);
+
+    mockUseDocument.mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: {
+        id: 'test-doc-id',
+        title: 'Permission Document',
+        updatedAt: new Date().toISOString(),
+      },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const { rerender } = render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const firstEditable =
+      blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0].editable;
+    expect(firstEditable).toBe(false);
+
+    // Simulate permission upgrade from VIEW to EDIT
+    mockUseDocument.mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      awareness: null,
+      meta: {
+        id: 'test-doc-id',
+        title: 'Permission Document',
+        updatedAt: new Date().toISOString(),
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    rerender(<Editor />);
+
+    // Frozen at first mount so BlockNoteViewEditor does not recreate its mount
+    // ref (which would tear down the ProseMirror view / UndoManager).
+    const latestEditable =
+      blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0].editable;
+    expect(latestEditable).toBe(false);
+    // Read-only is still driven via the editor instance.
+    expect(editorInstance.isEditable).toBe(true);
   });
 });
