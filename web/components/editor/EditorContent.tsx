@@ -1,17 +1,31 @@
 'use client';
 
-import { BlockNoteSchema, createCodeBlockSpec, type User as CommentUser } from '@blocknote/core';
+import {
+  BlockNoteSchema,
+  combineByGroup,
+  createCodeBlockSpec,
+  type User as CommentUser,
+} from '@blocknote/core';
 import { CommentsExtension, DefaultThreadStoreAuth } from '@blocknote/core/comments';
+import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { YjsThreadStore, withCollaboration } from '@blocknote/core/yjs';
 import { en } from '@blocknote/core/locales';
 import {
   FloatingComposerController,
   FloatingThreadController,
+  getDefaultReactSlashMenuItems,
   SideMenuController,
+  SuggestionMenuController,
   useCreateBlockNote,
 } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import '@blocknote/shadcn/style.css';
+import {
+  getMultiColumnSlashMenuItems,
+  locales as multiColumnLocales,
+  multiColumnDropCursor,
+  withMultiColumn,
+} from '@blocknote/xl-multi-column';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
@@ -121,13 +135,55 @@ const extendedCodeBlockOptions = {
   supportedLanguages: createTolerantSupportedLanguages(codeBlockOptions.supportedLanguages),
 };
 
-const editorSchema = BlockNoteSchema.create().extend({
-  blockSpecs: {
-    codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
-  },
-});
+const editorSchema = withMultiColumn(
+  BlockNoteSchema.create().extend({
+    blockSpecs: {
+      codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
+    },
+  })
+);
 
 const EMPTY_SHADCN_COMPONENTS = {};
+
+type MultiColumnDropContext = Parameters<
+  NonNullable<typeof multiColumnDropCursor.hooks.computeDropPosition>
+>[0];
+
+const multiColumnDropCursor = {
+  hooks: {
+    computeDropPosition: (context: MultiColumnDropContext) => {
+      try {
+        return (
+          multiColumnDropCursor.hooks.computeDropPosition?.(context) ?? context.defaultPosition
+        );
+      } catch {
+        // Stale drag position during concurrent collaborative edits: fall back to default position
+        return context.defaultPosition;
+      }
+    },
+  },
+};
+
+function hasMeaningfulContent(blocks: unknown, title: unknown): boolean {
+  if (typeof title === 'string' && title !== 'Untitled') {
+    return true;
+  }
+  if (!Array.isArray(blocks)) {
+    return false;
+  }
+  if (blocks.length > 1) {
+    return true;
+  }
+  if (blocks.length === 1) {
+    const first = blocks[0] as { content?: unknown[]; children?: unknown[] } | null | undefined;
+    if (first && typeof first === 'object') {
+      const hasContent = Array.isArray(first.content) && first.content.length > 0;
+      const hasChildren = Array.isArray(first.children) && first.children.length > 0;
+      return hasContent || hasChildren;
+    }
+  }
+  return false;
+}
 
 export function EditorContent({
   documentId,
@@ -179,6 +235,9 @@ export function EditorContent({
   const commentsDictionary = useMemo(
     () => ({
       ...en,
+      // Adds column / column list strings (Two Columns, Three Columns) to the
+      // slash menu dictionary.
+      multi_column: multiColumnLocales.en,
       placeholders: {
         ...en.placeholders,
         new_comment: 'Add comment...',
@@ -382,6 +441,11 @@ export function EditorContent({
   const editor = useCreateBlockNote(
     withCollaboration({
       schema: editorSchema,
+      // The default drop cursor only shows above/below blocks - the
+      // multi-column one also shows on the sides for column drops. Wrapped
+      // to fall back to the default cursor on stale positions instead of
+      // throwing "Position out of range" during concurrent remote edits.
+      dropCursor: multiColumnDropCursor,
       tables: {
         splitCells: true,
         cellBackgroundColor: true,
@@ -407,6 +471,15 @@ export function EditorContent({
     [documentId, ydoc]
   );
 
+  const getSlashMenuItems = useCallback(
+    async (query: string) => {
+      const defaultItems = getDefaultReactSlashMenuItems(editor);
+      const columnItems = getMultiColumnSlashMenuItems(editor);
+      return filterSuggestionItems(combineByGroup(defaultItems, columnItems), query);
+    },
+    [editor]
+  );
+
   useCommentComposerPatch(commentsUiEnabled, sendIconTemplateRef);
 
   useEffect(() => {
@@ -426,24 +499,24 @@ export function EditorContent({
   const focusRequested = useRef(false);
 
   const [isEditorVisible, setIsEditorVisible] = useState(() => {
-    const blocks = editor.document;
-    const hasTitle = meta.title !== 'Untitled';
-    const hasContent =
-      blocks.length > 1 ||
-      (blocks.length === 1 && Array.isArray(blocks[0].content) && blocks[0].content.length > 0);
-    return hasTitle || hasContent;
+    return hasMeaningfulContent(editor?.document, meta.title);
   });
 
   useEffect(() => {
-    const blocks = editor.document;
-    const hasContent =
-      blocks.length > 1 ||
-      (blocks.length === 1 && Array.isArray(blocks[0].content) && blocks[0].content.length > 0);
+    const revealIfHasContent = () => {
+      // Title is covered by the initializer above (fresh mount per document);
+      // this subscription only reacts to content arriving later (e.g. Yjs
+      // sync), so typing a title alone doesn't prematurely reveal the editor.
+      if (hasMeaningfulContent(editor?.document, undefined)) {
+        setIsEditorVisible(true);
+      }
+    };
 
-    if (hasContent) {
-      setIsEditorVisible(true);
+    revealIfHasContent();
+    if (typeof editor?.onChange === 'function') {
+      return editor.onChange(revealIfHasContent);
     }
-  }, [editor.document]);
+  }, [editor]);
 
   useEffect(() => {
     if (isEditorVisible && focusRequested.current) {
@@ -555,13 +628,16 @@ export function EditorContent({
             shadCNComponents={EMPTY_SHADCN_COMPONENTS}
             formattingToolbar={!isViewer}
             linkToolbar={!isViewer}
-            slashMenu={!isViewer}
+            slashMenu={false}
             sideMenu={false}
             filePanel={!isViewer}
             tableHandles={!isViewer}
             emojiPicker={!isViewer}
             comments={false}
           >
+            {!isViewer && (
+              <SuggestionMenuController triggerCharacter={'/'} getItems={getSlashMenuItems} />
+            )}
             <span ref={sendIconTemplateRef} className="sr-only" aria-hidden="true">
               <Send size={14} strokeWidth={1.75} />
             </span>

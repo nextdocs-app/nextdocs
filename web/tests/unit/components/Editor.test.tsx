@@ -10,6 +10,7 @@ jest.mock('@blocknote/react', () => {
           mount: jest.fn(),
           unmount: jest.fn(),
           isEditable: true,
+          onChange: jest.fn(() => jest.fn()),
         }),
         deps
       );
@@ -35,6 +36,8 @@ jest.mock('@blocknote/react', () => {
     FloatingComposerController: () => null,
     FloatingThreadController: () => null,
     SideMenuController: () => null,
+    SuggestionMenuController: jest.fn(() => null),
+    getDefaultReactSlashMenuItems: jest.fn(() => []),
     AddBlockButton: () => null,
     DragHandleButton: () => null,
     useExtensionState: jest.fn(),
@@ -54,6 +57,7 @@ jest.mock('@blocknote/core', () => {
       })),
     },
     createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
+    combineByGroup: jest.fn((base = [], ...others) => [...base, ...others.flat()]),
   };
   try {
     return {
@@ -75,6 +79,7 @@ jest.mock('@blocknote/core/comments', () => ({
 
 jest.mock('@blocknote/core/extensions', () => ({
   SideMenuExtension: {},
+  filterSuggestionItems: jest.fn((items) => items),
 }));
 
 jest.mock('@blocknote/core/yjs', () => ({
@@ -89,6 +94,13 @@ jest.mock('@blocknote/code-block', () => ({
       javascript: { name: 'JavaScript', aliases: ['javascript', 'js'] },
     },
   },
+}));
+
+jest.mock('@blocknote/xl-multi-column', () => ({
+  withMultiColumn: jest.fn((schema) => schema),
+  multiColumnDropCursor: { hooks: {} },
+  getMultiColumnSlashMenuItems: jest.fn(() => []),
+  locales: { en: { slash_menu: {} } },
 }));
 
 jest.mock('../../../components/editor/codeBlockHighlighter', () => ({
@@ -891,5 +903,178 @@ describe('Editor Component', () => {
     expect(latestEditable).toBe(false);
     // Read-only is still driven via the editor instance.
     expect(editorInstance.isEditable).toBe(true);
+  });
+
+  it('should enable multi-column blocks via withMultiColumn schema wrapper', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+    // Schema passes through the mocked withMultiColumn (module-level wrapper),
+    // preserving the extended-schema marker asserted above, and the editor is
+    // configured with the resilient multi-column drop cursor wrapper.
+    expect(lastConfig.schema).toEqual(expect.objectContaining({ isExtendedSchema: true }));
+    expect(lastConfig.dropCursor).toEqual(expect.objectContaining({ hooks: expect.anything() }));
+    expect(typeof lastConfig.dropCursor.hooks.computeDropPosition).toBe('function');
+  });
+
+  it('should configure multi-column drop cursor and dictionary', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.dropCursor).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({ multi_column: expect.anything() })
+    );
+  });
+
+  it('should disable built-in slash menu since multi-column items use SuggestionMenuController', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Editable doc',
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastCall = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1];
+    expect(lastCall[0]).toEqual(expect.objectContaining({ slashMenu: false }));
+  });
+
+  // BlockNoteView is mocked and never renders its children, so reach the
+  // SuggestionMenuController element through BlockNoteView's props.
+  async function getRenderedSlashMenuItems(query: string) {
+    const { SuggestionMenuController } = await import('@blocknote/react');
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const menuElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === SuggestionMenuController
+    );
+    if (
+      !React.isValidElement<{
+        getItems: (q: string) => Promise<Array<{ title?: string; onItemClick?: () => void }>>;
+      }>(menuElement)
+    ) {
+      throw new Error('SuggestionMenuController was not rendered');
+    }
+    return menuElement.props.getItems(query);
+  }
+
+  function renderEditableDocWithTitle(title: string) {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title,
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+  }
+
+  it('should fall back to the default drop position when multi-column cursor computation throws', async () => {
+    const xl = await import('@blocknote/xl-multi-column');
+    const dropCursorMock = xl.multiColumnDropCursor as unknown as {
+      hooks: Record<string, unknown>;
+    };
+    const upstream = jest.fn(() => {
+      throw new Error('Position 999 out of range');
+    });
+    dropCursorMock.hooks.computeDropPosition = upstream;
+    try {
+      render(<Editor />);
+
+      const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+      const lastConfig =
+        useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+      const fallback = { pos: 1 };
+
+      expect(() =>
+        lastConfig.dropCursor.hooks.computeDropPosition({ defaultPosition: fallback })
+      ).not.toThrow();
+      expect(lastConfig.dropCursor.hooks.computeDropPosition({ defaultPosition: fallback })).toBe(
+        fallback
+      );
+      expect(upstream).toHaveBeenCalled();
+    } finally {
+      delete dropCursorMock.hooks.computeDropPosition;
+    }
+  });
+
+  it('should include multi-column items merged into the slash menu', async () => {
+    const xl = await import('@blocknote/xl-multi-column');
+    (xl.getMultiColumnSlashMenuItems as jest.Mock).mockReturnValueOnce([
+      {
+        title: 'Two Columns',
+        group: 'Basic blocks',
+      },
+    ]);
+    renderEditableDocWithTitle('Multi-column doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: 'Two Columns' })])
+    );
+  });
+
+  it('should show editor when document contains column blocks with children in an untitled document', () => {
+    const editorWithColumnBlock = {
+      isEditable: true,
+      document: [
+        {
+          id: 'col-list-1',
+          type: 'columnList',
+          children: [{ id: 'col-1', type: 'column', children: [] }],
+        },
+      ],
+      onChange: jest.fn(() => jest.fn()),
+      focus: jest.fn(),
+    };
+    (useCreateBlockNote as jest.Mock).mockReturnValueOnce(editorWithColumnBlock);
+
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Untitled',
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+    expect(screen.getByTestId('blocknote-view')).toBeInTheDocument();
   });
 });

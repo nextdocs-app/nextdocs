@@ -653,6 +653,27 @@ div.bn-table-drop-cursor {
     background-color: rgb(100 160 255 / 0.15) !important;
   }
 
+  /* BlockNote Multi-Column Separator & Resize Handle */
+  .bn-editor[contenteditable="true"] .bn-column-list-hovered > .bn-block-column:not(:last-child),
+  .bn-editor[contenteditable="true"] .bn-column-list-hovered > .bn-block-column:not(:last-child):where(.dark, .dark *),
+  .bn-column-list-hovered > .bn-block-column:not(:last-child) {
+    box-shadow: 1px 0 0 var(--editor-divider-color) !important;
+    transition: box-shadow 0.2s ease 0.15s !important;
+  }
+
+  .bn-editor[contenteditable="true"] .bn-column-list-hovered > .bn-block-column.bn-column-resize-border,
+  .bn-editor[contenteditable="true"] .bn-column-list-hovered > .bn-block-column.bn-column-resize-border:where(.dark, .dark *),
+  .bn-column-list-hovered > .bn-block-column.bn-column-resize-border {
+    box-shadow: 2px 0 0 #64a0ff !important;
+    cursor: col-resize !important;
+    transition: box-shadow 0.15s ease !important;
+  }
+
+  .bn-editor[contenteditable="true"] .bn-block-column.bn-column-resize-border + .bn-block-column,
+  .bn-column-list-hovered > .bn-block-column.bn-column-resize-border + .bn-block-column {
+    cursor: col-resize !important;
+  }
+
   /* BlockNote Checklist Item — Modern Style */
   .bn-block-content[data-content-type="checkListItem"] {
     align-items: flex-start !important;
