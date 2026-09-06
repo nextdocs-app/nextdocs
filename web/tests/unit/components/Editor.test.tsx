@@ -34,6 +34,24 @@ jest.mock('@blocknote/react', () => {
     })),
     FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
     FormattingToolbarController: jest.fn(() => null),
+    BasicTextStyleButton: ({ basicTextStyle }: { basicTextStyle: string }) => (
+      <button data-test={basicTextStyle} />
+    ),
+    BlockTypeSelect: () => null,
+    TableCellMergeButton: () => null,
+    FileCaptionButton: () => null,
+    FileReplaceButton: () => null,
+    FileRenameButton: () => null,
+    FileDeleteButton: () => null,
+    FileDownloadButton: () => null,
+    FilePreviewButton: () => null,
+    TextAlignButton: () => null,
+    ColorStyleButton: () => null,
+    NestBlockButton: () => null,
+    UnnestBlockButton: () => null,
+    CreateLinkButton: () => null,
+    AddCommentButton: () => null,
+    AddTiptapCommentButton: () => null,
     FloatingComposerController: () => null,
     FloatingThreadController: () => null,
     SideMenuController: () => null,
@@ -1227,5 +1245,52 @@ describe('Editor Component', () => {
       (child) => React.isValidElement(child) && child.type === FormattingToolbarController
     );
     expect(toolbarElement).toBeUndefined();
+  });
+
+  it('should render FormattingToolbarController with inline code button when editable', async () => {
+    const { FormattingToolbarController, BasicTextStyleButton } = await import('@blocknote/react');
+    renderEditableDocWithTitle('Inline code toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ children?: React.ReactNode }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    const children = React.Children.toArray(renderedToolbar.props.children);
+    const codeButton = children.find(
+      (child) =>
+        React.isValidElement<{ basicTextStyle?: string }>(child) &&
+        child.type === BasicTextStyleButton &&
+        child.props.basicTextStyle === 'code'
+    );
+    expect(codeButton).toBeDefined();
+  });
+
+  it('should configure code tooltip and Mod+E shortcut in formatting toolbar dictionary', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        formatting_toolbar: expect.objectContaining({
+          code: {
+            tooltip: 'Code',
+            secondary_tooltip: 'Mod+E',
+          },
+        }),
+      })
+    );
   });
 });

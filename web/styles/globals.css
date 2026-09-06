@@ -585,6 +585,46 @@ div.bn-table-drop-cursor {
     font-size: var(--editor-dropdown-item-font-size, 13px) !important;
   }
 
+  /* Inline Code Highlighting */
+  :is(.bn-editor, .bn-default-styles) .bn-inline-content code,
+  .bn-inline-content code,
+  p.bn-inline-content code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+    font-size: 0.85em !important;
+    font-weight: 500 !important;
+    line-height: normal !important;
+    padding: 0.15em 0.35em !important;
+    margin: 0 0.15em !important;
+    border-radius: 4px !important;
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    color: #d20f39 !important;
+    vertical-align: baseline !important;
+    box-decoration-break: slice !important;
+    -webkit-box-decoration-break: slice !important;
+    tab-size: 2 !important;
+  }
+
+  .dark :is(.bn-editor, .bn-default-styles) .bn-inline-content code,
+  .dark .bn-inline-content code,
+  .dark p.bn-inline-content code,
+  .bn-root[data-color-scheme="dark"] .bn-inline-content code,
+  .bn-container[data-color-scheme="dark"] .bn-inline-content code {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #e06c75 !important;
+  }
+
+  /* When custom colors are applied via toolbar color picker, respect them */
+  .bn-inline-content code:has([style*="color"]) {
+    color: inherit !important;
+  }
+  .bn-inline-content [style*="color"] > code {
+    color: inherit !important;
+  }
+  .bn-inline-content [style*="background"] > code {
+    background-color: transparent !important;
+    border-color: transparent !important;
+  }
+
   /*
      BlockNote Source-With-Preview Blocks (Math, Diagram, etc.)
      Shared styling for blocks with live previews and edit popups.

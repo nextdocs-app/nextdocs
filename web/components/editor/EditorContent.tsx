@@ -11,14 +11,30 @@ import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { YjsThreadStore, withCollaboration } from '@blocknote/core/yjs';
 import { en } from '@blocknote/core/locales';
 import {
+  AddCommentButton,
+  AddTiptapCommentButton,
+  BasicTextStyleButton,
+  BlockTypeSelect,
   blockTypeSelectItems,
+  ColorStyleButton,
+  CreateLinkButton,
+  FileCaptionButton,
+  FileDeleteButton,
+  FileDownloadButton,
+  FilePreviewButton,
+  FileRenameButton,
+  FileReplaceButton,
   FloatingComposerController,
   FloatingThreadController,
   FormattingToolbar,
   FormattingToolbarController,
   getDefaultReactSlashMenuItems,
+  NestBlockButton,
   SideMenuController,
   SuggestionMenuController,
+  TableCellMergeButton,
+  TextAlignButton,
+  UnnestBlockButton,
   useCreateBlockNote,
 } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
@@ -271,6 +287,13 @@ export function EditorContent({
         ...en.comments,
         save_button_text: 'Send',
       },
+      formatting_toolbar: {
+        ...en.formatting_toolbar,
+        code: {
+          tooltip: 'Code',
+          secondary_tooltip: 'Mod+E',
+        },
+      },
     }),
     []
   );
@@ -509,6 +532,15 @@ export function EditorContent({
     [editor]
   );
 
+  const toolbarBlockTypeSelectItems = useMemo(
+    () => [
+      ...blockTypeSelectItems(editor.dictionary),
+      ...getMathBlockTypeSelectItems(editor),
+      ...getDiagramBlockTypeSelectItems(editor),
+    ],
+    [editor]
+  );
+
   // Stable component identity for the formatting toolbar. Passing an inline
   // `() => (...)` closure would create a new component type on every
   // EditorContent render (e.g. realtime reconnect, meta update), unmounting
@@ -516,15 +548,32 @@ export function EditorContent({
   // editor, block-type menu).
   const renderFormattingToolbar = useCallback(
     () => (
-      <FormattingToolbar
-        blockTypeSelectItems={[
-          ...blockTypeSelectItems(editor.dictionary),
-          ...getMathBlockTypeSelectItems(editor),
-          ...getDiagramBlockTypeSelectItems(editor),
-        ]}
-      />
+      <FormattingToolbar blockTypeSelectItems={toolbarBlockTypeSelectItems}>
+        <BlockTypeSelect key="blockTypeSelect" items={toolbarBlockTypeSelectItems} />
+        <TableCellMergeButton key="tableCellMergeButton" />
+        <FileCaptionButton key="fileCaptionButton" />
+        <FileReplaceButton key="replaceFileButton" />
+        <FileRenameButton key="fileRenameButton" />
+        <FileDeleteButton key="fileDeleteButton" />
+        <FileDownloadButton key="fileDownloadButton" />
+        <FilePreviewButton key="filePreviewButton" />
+        <BasicTextStyleButton basicTextStyle="bold" key="boldStyleButton" />
+        <BasicTextStyleButton basicTextStyle="italic" key="italicStyleButton" />
+        <BasicTextStyleButton basicTextStyle="underline" key="underlineStyleButton" />
+        <BasicTextStyleButton basicTextStyle="strike" key="strikeStyleButton" />
+        <BasicTextStyleButton basicTextStyle="code" key="codeStyleButton" />
+        <TextAlignButton textAlignment="left" key="textAlignLeftButton" />
+        <TextAlignButton textAlignment="center" key="textAlignCenterButton" />
+        <TextAlignButton textAlignment="right" key="textAlignRightButton" />
+        <ColorStyleButton key="colorStyleButton" />
+        <NestBlockButton key="nestBlockButton" />
+        <UnnestBlockButton key="unnestBlockButton" />
+        <CreateLinkButton key="createLinkButton" />
+        <AddCommentButton key="addCommentButton" />
+        <AddTiptapCommentButton key="addTiptapCommentButton" />
+      </FormattingToolbar>
     ),
-    [editor]
+    [toolbarBlockTypeSelectItems]
   );
 
   useCommentComposerPatch(commentsUiEnabled, sendIconTemplateRef);
