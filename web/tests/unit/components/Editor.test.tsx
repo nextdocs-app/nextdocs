@@ -59,6 +59,15 @@ jest.mock('@blocknote/math-block', () => ({
   locales: { en: { block_type_select: { name: 'Equation' } } },
 }));
 
+jest.mock('@blocknote/diagram-block', () => ({
+  createReactDiagramBlockSpec: jest.fn(() => ({ type: 'diagram' })),
+  getDiagramBlockTypeSelectItems: jest.fn(() => [
+    { name: 'Diagram', type: 'diagram', icon: () => null },
+  ]),
+  getDiagramSlashMenuItems: jest.fn(() => [{ title: 'Diagram', group: 'Advanced' }]),
+  locales: { en: { block_type_select: { name: 'Diagram' } } },
+}));
+
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
 }));
@@ -1141,6 +1150,53 @@ describe('Editor Component', () => {
     expect(getMathBlockTypeSelectItems).toHaveBeenCalled();
     expect(renderedToolbar.props.blockTypeSelectItems).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: 'Equation' })])
+    );
+  });
+
+  it('should initialize BlockNote with diagram dictionary and diagram in schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        diagram: expect.objectContaining({ block_type_select: { name: 'Diagram' } }),
+      })
+    );
+  });
+
+  it('should include diagram items merged into the slash menu', async () => {
+    renderEditableDocWithTitle('Diagram doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Diagram' })]));
+  });
+
+  it('should render FormattingToolbarController with diagram block type item when editable', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    const { getDiagramBlockTypeSelectItems } = await import('@blocknote/diagram-block');
+    renderEditableDocWithTitle('Diagram toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ blockTypeSelectItems: unknown }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    expect(getDiagramBlockTypeSelectItems).toHaveBeenCalled();
+    expect(renderedToolbar.props.blockTypeSelectItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Diagram' })])
     );
   });
 

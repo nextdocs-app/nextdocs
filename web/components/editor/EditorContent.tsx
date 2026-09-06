@@ -36,6 +36,12 @@ import {
   getMathSlashMenuItems,
   locales as mathLocales,
 } from '@blocknote/math-block';
+import {
+  createReactDiagramBlockSpec,
+  getDiagramBlockTypeSelectItems,
+  getDiagramSlashMenuItems,
+  locales as diagramLocales,
+} from '@blocknote/diagram-block';
 import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
@@ -151,6 +157,7 @@ const editorSchema = withMultiColumn(
     blockSpecs: {
       codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
       mathBlock: createReactMathBlockSpec(),
+      diagram: createReactDiagramBlockSpec(),
     },
     inlineContentSpecs: {
       math: createReactInlineMathSpec(),
@@ -254,6 +261,7 @@ export function EditorContent({
       // slash menu dictionary.
       multi_column: multiColumnLocales.en,
       math: mathLocales.en,
+      diagram: diagramLocales.en,
       placeholders: {
         ...en.placeholders,
         new_comment: 'Add comment...',
@@ -492,7 +500,11 @@ export function EditorContent({
       const defaultItems = getDefaultReactSlashMenuItems(editor);
       const columnItems = getMultiColumnSlashMenuItems(editor);
       const mathItems = getMathSlashMenuItems(editor);
-      return filterSuggestionItems(combineByGroup(defaultItems, columnItems, mathItems), query);
+      const diagramItems = getDiagramSlashMenuItems(editor);
+      return filterSuggestionItems(
+        combineByGroup(defaultItems, columnItems, mathItems, diagramItems),
+        query
+      );
     },
     [editor]
   );
@@ -508,6 +520,7 @@ export function EditorContent({
         blockTypeSelectItems={[
           ...blockTypeSelectItems(editor.dictionary),
           ...getMathBlockTypeSelectItems(editor),
+          ...getDiagramBlockTypeSelectItems(editor),
         ]}
       />
     ),
