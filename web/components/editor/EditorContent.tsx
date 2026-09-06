@@ -11,8 +11,11 @@ import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { YjsThreadStore, withCollaboration } from '@blocknote/core/yjs';
 import { en } from '@blocknote/core/locales';
 import {
+  blockTypeSelectItems,
   FloatingComposerController,
   FloatingThreadController,
+  FormattingToolbar,
+  FormattingToolbarController,
   getDefaultReactSlashMenuItems,
   SideMenuController,
   SuggestionMenuController,
@@ -23,9 +26,17 @@ import '@blocknote/shadcn/style.css';
 import {
   getMultiColumnSlashMenuItems,
   locales as multiColumnLocales,
-  multiColumnDropCursor,
+  multiColumnDropCursor as baseMultiColumnDropCursor,
   withMultiColumn,
 } from '@blocknote/xl-multi-column';
+import {
+  createReactInlineMathSpec,
+  createReactMathBlockSpec,
+  getMathBlockTypeSelectItems,
+  getMathSlashMenuItems,
+  locales as mathLocales,
+} from '@blocknote/math-block';
+import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
@@ -139,6 +150,10 @@ const editorSchema = withMultiColumn(
   BlockNoteSchema.create().extend({
     blockSpecs: {
       codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
+      mathBlock: createReactMathBlockSpec(),
+    },
+    inlineContentSpecs: {
+      math: createReactInlineMathSpec(),
     },
   })
 );
@@ -146,7 +161,7 @@ const editorSchema = withMultiColumn(
 const EMPTY_SHADCN_COMPONENTS = {};
 
 type MultiColumnDropContext = Parameters<
-  NonNullable<typeof multiColumnDropCursor.hooks.computeDropPosition>
+  NonNullable<typeof baseMultiColumnDropCursor.hooks.computeDropPosition>
 >[0];
 
 const multiColumnDropCursor = {
@@ -154,7 +169,7 @@ const multiColumnDropCursor = {
     computeDropPosition: (context: MultiColumnDropContext) => {
       try {
         return (
-          multiColumnDropCursor.hooks.computeDropPosition?.(context) ?? context.defaultPosition
+          baseMultiColumnDropCursor.hooks.computeDropPosition?.(context) ?? context.defaultPosition
         );
       } catch {
         // Stale drag position during concurrent collaborative edits: fall back to default position
@@ -238,6 +253,7 @@ export function EditorContent({
       // Adds column / column list strings (Two Columns, Three Columns) to the
       // slash menu dictionary.
       multi_column: multiColumnLocales.en,
+      math: mathLocales.en,
       placeholders: {
         ...en.placeholders,
         new_comment: 'Add comment...',
@@ -475,8 +491,26 @@ export function EditorContent({
     async (query: string) => {
       const defaultItems = getDefaultReactSlashMenuItems(editor);
       const columnItems = getMultiColumnSlashMenuItems(editor);
-      return filterSuggestionItems(combineByGroup(defaultItems, columnItems), query);
+      const mathItems = getMathSlashMenuItems(editor);
+      return filterSuggestionItems(combineByGroup(defaultItems, columnItems, mathItems), query);
     },
+    [editor]
+  );
+
+  // Stable component identity for the formatting toolbar. Passing an inline
+  // `() => (...)` closure would create a new component type on every
+  // EditorContent render (e.g. realtime reconnect, meta update), unmounting
+  // and remounting the toolbar and dropping transient state (open link
+  // editor, block-type menu).
+  const renderFormattingToolbar = useCallback(
+    () => (
+      <FormattingToolbar
+        blockTypeSelectItems={[
+          ...blockTypeSelectItems(editor.dictionary),
+          ...getMathBlockTypeSelectItems(editor),
+        ]}
+      />
+    ),
     [editor]
   );
 
@@ -626,7 +660,7 @@ export function EditorContent({
             editable={initialEditableRef.current}
             onPointerDownCapture={handleEditorPointerDownCapture}
             shadCNComponents={EMPTY_SHADCN_COMPONENTS}
-            formattingToolbar={!isViewer}
+            formattingToolbar={false}
             linkToolbar={!isViewer}
             slashMenu={false}
             sideMenu={false}
@@ -635,6 +669,9 @@ export function EditorContent({
             emojiPicker={!isViewer}
             comments={false}
           >
+            {!isViewer && (
+              <FormattingToolbarController formattingToolbar={renderFormattingToolbar} />
+            )}
             {!isViewer && (
               <SuggestionMenuController triggerCharacter={'/'} getItems={getSlashMenuItems} />
             )}

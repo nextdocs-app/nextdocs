@@ -585,6 +585,140 @@ div.bn-table-drop-cursor {
     font-size: var(--editor-dropdown-item-font-size, 13px) !important;
   }
 
+  /* BlockNote Math: outline-only hover/selected, no selection overlay, themed OK button.
+     Everything here is scoped to math so it cannot leak into code/file/other blocks. */
+  .bn-block-content[data-content-type="mathBlock"] {
+    margin-block: 8px !important;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-with-source-popup {
+    padding: 0 !important;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-container {
+    border-radius: var(--editor-dropdown-radius, 8px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    display: flex;
+    justify-content: center;
+    justify-content: safe center;
+    align-items: center;
+    min-height: 46px;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-placeholder {
+    border-radius: var(--editor-dropdown-radius, 8px) !important;
+    border: 1px dashed var(--border) !important;
+    background-color: transparent !important;
+    color: var(--muted-foreground) !important;
+    cursor: pointer !important;
+    font-size: var(--editor-dropdown-item-font-size, 13px) !important;
+    padding: 12px 18px !important;
+    gap: 10px !important;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-container:not(:has(.bn-preview-placeholder)) {
+    padding: 10px 16px;
+  }
+
+  /* Inline math: keep scoped to math so plain text is untouched */
+  .bn-inline-content-section[data-inline-content-type="math"],
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-with-source-popup {
+    display: inline-flex !important;
+    vertical-align: middle;
+    padding: 0 !important;
+    margin-inline: 2px;
+  }
+
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-container {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-placeholder {
+    display: inline-flex !important;
+    vertical-align: middle !important;
+    align-items: center !important;
+    padding: 1px 6px !important;
+    gap: 4px !important;
+    border-radius: 4px !important;
+    font-size: 11.5px !important;
+    line-height: 1.25 !important;
+    border: 1px dashed var(--border) !important;
+    background-color: transparent !important;
+    color: var(--muted-foreground) !important;
+    cursor: pointer !important;
+  }
+
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-container:not(:has(.bn-preview-placeholder)) {
+    padding: 1px 4px;
+  }
+
+  /* 1. No thick selection overlay on math */
+  .bn-block-content[data-content-type="mathBlock"].ProseMirror-selectednode > *::after,
+  .ProseMirror-selectednode > .bn-block-content[data-content-type="mathBlock"] > *::after,
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-with-source-popup.ProseMirror-selectednode::after,
+  .bn-inline-content-section[data-inline-content-type="math"] .ProseMirror-selectednode::after,
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-with-source-popup.ProseMirror-selectednode::after {
+    content: none !important;
+    display: none !important;
+  }
+
+  /* 2+4. Hover / selected: only the designed outline, never a background fill */
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-container:hover .bn-preview-placeholder,
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-container:hover .bn-preview-placeholder {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    outline: 1px solid var(--border) !important;
+    outline-offset: 1px !important;
+    color: var(--foreground) !important;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-container:not(:has(.bn-preview-placeholder)):hover,
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-container:not(:has(.bn-preview-placeholder)):hover {
+    outline: 1px solid var(--border) !important;
+    outline-offset: 1px !important;
+    background-color: transparent !important;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open="true"]) .bn-preview-placeholder,
+  :is(.bn-block-content[data-content-type="mathBlock"].ProseMirror-selectednode, .bn-block.ProseMirror-selectednode .bn-block-content[data-content-type="mathBlock"], .ProseMirror-selectednode > .bn-block-content[data-content-type="mathBlock"]) .bn-preview-placeholder,
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open="true"]) .bn-preview-placeholder {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    outline: 1.5px solid #64a0ff !important;
+    outline-offset: 1px !important;
+    color: var(--foreground) !important;
+  }
+
+  .bn-block-content[data-content-type="mathBlock"] .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open="true"]) .bn-preview-container:not(:has(.bn-preview-placeholder)),
+  :is(.bn-block-content[data-content-type="mathBlock"].ProseMirror-selectednode, .bn-block.ProseMirror-selectednode .bn-block-content[data-content-type="mathBlock"], .ProseMirror-selectednode > .bn-block-content[data-content-type="mathBlock"]) .bn-preview-container:not(:has(.bn-preview-placeholder)),
+  .bn-inline-content-section[data-inline-content-type="math"] .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open="true"]) .bn-preview-container:not(:has(.bn-preview-placeholder)) {
+    outline: 1.5px solid #64a0ff !important;
+    outline-offset: 1px !important;
+    background-color: transparent !important;
+  }
+
+  /* 3. OK button theming, scoped to the math popup only */
+  :is(.bn-block-content[data-content-type="mathBlock"], .bn-inline-content-section[data-inline-content-type="math"]) .bn-code-block-source-popup-ok-button {
+    background-color: var(--primary) !important;
+    color: var(--primary-foreground) !important;
+    border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    padding: 4px 10px !important;
+    gap: 5px !important;
+    cursor: pointer !important;
+  }
+
+  :is(.bn-block-content[data-content-type="mathBlock"], .bn-inline-content-section[data-inline-content-type="math"]) .bn-code-block-source-popup-ok-button:hover {
+    opacity: 0.9 !important;
+  }
+
   /* Paragraph Spacing */
   .bn-block-content[data-content-type="paragraph"] {
     /* Cleaner vertical spacing between paragraphs */
@@ -810,6 +944,7 @@ div.bn-table-drop-cursor {
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
     [data-block-type="codeBlock"],
+    [data-block-type="mathBlock"],
     [data-block-type="file"],
     [data-block-type="audio"],
     [data-block-type="image"],

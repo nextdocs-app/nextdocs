@@ -14,6 +14,7 @@
   "dependencies": {
     "@blocknote/code-block": "^0.54.0",
     "@blocknote/core": "^0.54.0",
+    "@blocknote/math-block": "^0.54.0",
     "@blocknote/react": "^0.54.0",
     "@blocknote/shadcn": "^0.54.0",
     "@blocknote/xl-multi-column": "^0.54.0",

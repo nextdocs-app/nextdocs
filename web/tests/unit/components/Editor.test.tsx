@@ -15,6 +15,7 @@ jest.mock('@blocknote/react', () => {
         deps
       );
     }),
+    blockTypeSelectItems: jest.fn(() => []),
     getFormattingToolbarItems: jest.fn(() => []),
     useBlockNoteEditor: jest.fn(() => ({
       getExtension: jest.fn(() => undefined),
@@ -32,7 +33,7 @@ jest.mock('@blocknote/react', () => {
       },
     })),
     FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-    FormattingToolbarController: () => null,
+    FormattingToolbarController: jest.fn(() => null),
     FloatingComposerController: () => null,
     FloatingThreadController: () => null,
     SideMenuController: () => null,
@@ -44,6 +45,19 @@ jest.mock('@blocknote/react', () => {
     ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
   };
 });
+
+jest.mock('@blocknote/math-block', () => ({
+  createReactMathBlockSpec: jest.fn(() => ({ type: 'mathBlock' })),
+  createReactInlineMathSpec: jest.fn(() => ({ type: 'math' })),
+  getMathBlockTypeSelectItems: jest.fn(() => [
+    { name: 'Equation', type: 'mathBlock', icon: () => null },
+  ]),
+  getMathSlashMenuItems: jest.fn(() => [
+    { title: 'Block Equation', group: 'Advanced' },
+    { title: 'Inline Equation', group: 'Advanced' },
+  ]),
+  locales: { en: { block_type_select: { name: 'Equation' } } },
+}));
 
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
@@ -1076,5 +1090,86 @@ describe('Editor Component', () => {
 
     render(<Editor />);
     expect(screen.getByTestId('blocknote-view')).toBeInTheDocument();
+  });
+
+  it('should initialize BlockNote with math dictionary and mathBlock in schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        math: expect.objectContaining({ block_type_select: { name: 'Equation' } }),
+      })
+    );
+  });
+
+  it('should include math items merged into the slash menu', async () => {
+    renderEditableDocWithTitle('Math doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Block Equation' }),
+        expect.objectContaining({ title: 'Inline Equation' }),
+      ])
+    );
+  });
+
+  it('should render FormattingToolbarController with math block type item when editable', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    const { getMathBlockTypeSelectItems } = await import('@blocknote/math-block');
+    renderEditableDocWithTitle('Math toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ blockTypeSelectItems: unknown }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    expect(getMathBlockTypeSelectItems).toHaveBeenCalled();
+    expect(renderedToolbar.props.blockTypeSelectItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Equation' })])
+    );
+  });
+
+  it('should not render FormattingToolbarController when view-only', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Math viewer doc',
+      },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeUndefined();
   });
 });
