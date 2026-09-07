@@ -1027,6 +1027,9 @@ div.bn-table-drop-cursor {
   ) {
     padding-top: 17px !important;
   }
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="alert"] {
+    padding-top: 14px !important;
+  }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
     [data-block-type="codeBlock"],
     [data-block-type="mathBlock"],

@@ -63,7 +63,7 @@ describe('CustomSideMenu', () => {
   });
 
   it('renders codeBlock, checkListItem, and table block types', () => {
-    const types = ['codeBlock', 'checkListItem', 'table', 'divider'];
+    const types = ['codeBlock', 'checkListItem', 'table', 'divider', 'alert'];
 
     for (const type of types) {
       mockUseExtensionState.mockImplementation((_ext, options) => {

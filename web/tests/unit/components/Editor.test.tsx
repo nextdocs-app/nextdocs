@@ -61,6 +61,11 @@ jest.mock('@blocknote/react', () => {
     DragHandleButton: () => null,
     useExtensionState: jest.fn(),
     ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
+    createReactBlockSpec: jest.fn((config, implementation) => () => ({
+      type: config?.type || 'alert',
+      config,
+      implementation,
+    })),
   };
 });
 
@@ -99,6 +104,10 @@ jest.mock('@blocknote/core', () => {
     },
     createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
     combineByGroup: jest.fn((base = [], ...others) => [...base, ...others.flat()]),
+    defaultProps: {
+      textAlignment: { default: 'left', values: ['left', 'center', 'right', 'justify'] },
+      textColor: { default: 'default' },
+    },
   };
   try {
     return {

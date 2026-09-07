@@ -62,6 +62,7 @@ import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
+import { createAlert, getAlertBlockTypeSelectItem, getAlertSlashMenuItem } from './alert';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
@@ -171,6 +172,7 @@ const extendedCodeBlockOptions = {
 const editorSchema = withMultiColumn(
   BlockNoteSchema.create().extend({
     blockSpecs: {
+      alert: createAlert(),
       codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
       mathBlock: createReactMathBlockSpec(),
       diagram: createReactDiagramBlockSpec(),
@@ -524,6 +526,17 @@ export function EditorContent({
       const columnItems = getMultiColumnSlashMenuItems(editor);
       const mathItems = getMathSlashMenuItems(editor);
       const diagramItems = getDiagramSlashMenuItems(editor);
+
+      const lastBasicBlockIndex = defaultItems.findLastIndex(
+        (item) => item.group === 'Basic blocks'
+      );
+      const alertItem = getAlertSlashMenuItem(editor);
+      if (lastBasicBlockIndex !== -1) {
+        defaultItems.splice(lastBasicBlockIndex + 1, 0, alertItem);
+      } else {
+        defaultItems.push(alertItem);
+      }
+
       return filterSuggestionItems(
         combineByGroup(defaultItems, columnItems, mathItems, diagramItems),
         query
@@ -537,6 +550,7 @@ export function EditorContent({
       ...blockTypeSelectItems(editor.dictionary),
       ...getMathBlockTypeSelectItems(editor),
       ...getDiagramBlockTypeSelectItems(editor),
+      getAlertBlockTypeSelectItem(),
     ],
     [editor]
   );
