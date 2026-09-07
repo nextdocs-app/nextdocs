@@ -47,6 +47,12 @@
   --editor-dropdown-icon-container-size: 28px;
   --editor-dropdown-icon-size: 16px;
 
+  /* BlockNote Formatting Toolbar Custom Variables (bg/border reuse --sidebar vars directly) */
+  --editor-toolbar-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+  --editor-toolbar-button-height: 28px;
+  --editor-toolbar-active-bg: rgba(215, 137, 127, 0.18);
+  --editor-toolbar-active-color: #c06d62;
+
   /* Code Block Language Picker Caret */
   --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -100,6 +106,11 @@
   /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
   --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --editor-dropdown-divider: 1.5px solid rgba(255, 255, 255, 0.15);
+
+  /* BlockNote Formatting Toolbar Dark Overrides */
+  --editor-toolbar-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.4);
+  --editor-toolbar-active-bg: rgba(215, 137, 127, 0.22);
+  --editor-toolbar-active-color: #e59a90;
 
   /* Code Block Language Picker Dark Overrides */
   --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -397,6 +408,9 @@ div.bn-table-drop-cursor {
     --side-menu-hover-color: #f2f2f2 !important;
     --side-menu-hover-bg: rgba(255, 255, 255, 0.08) !important;
     --side-menu-active-bg: rgba(255, 255, 255, 0.14) !important;
+    --editor-toolbar-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.4) !important;
+    --editor-toolbar-active-bg: rgba(215, 137, 127, 0.22) !important;
+    --editor-toolbar-active-color: #e59a90 !important;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -416,6 +430,9 @@ div.bn-table-drop-cursor {
       --side-menu-hover-color: #f2f2f2 !important;
       --side-menu-hover-bg: rgba(255, 255, 255, 0.08) !important;
       --side-menu-active-bg: rgba(255, 255, 255, 0.14) !important;
+      --editor-toolbar-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.4) !important;
+      --editor-toolbar-active-bg: rgba(215, 137, 127, 0.22) !important;
+      --editor-toolbar-active-color: #e59a90 !important;
     }
   }
 
@@ -436,6 +453,9 @@ div.bn-table-drop-cursor {
     --side-menu-hover-color: #121212 !important;
     --side-menu-hover-bg: rgba(55, 53, 47, 0.08) !important;
     --side-menu-active-bg: rgba(55, 53, 47, 0.14) !important;
+    --editor-toolbar-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.08) !important;
+    --editor-toolbar-active-bg: rgba(215, 137, 127, 0.18) !important;
+    --editor-toolbar-active-color: #c06d62 !important;
   }
 
   /* Code Block Background & Text — Light Mode */
@@ -2084,7 +2104,419 @@ html:not(.dark) .bn-editor a:visited:hover {
   }
 }
 
-/* Block menu options color picker scrollable fix and left sidebar theme styling */
+/* BlockNote Formatting Toolbar Redesign */
+
+.bn-toolbar {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-toolbar-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 3px 4px !important;
+  gap: 2px !important;
+  align-items: center !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 50 !important;
+}
+
+/* Mobile formatting toolbar positioning */
+.bn-mobile-formatting-toolbar {
+  background-color: var(--sidebar) !important;
+  border-top: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-toolbar-shadow) !important;
+}
+
+/* Formatting toolbar buttons: compact, rounded, matching editor buttons */
+.bn-toolbar .bn-button,
+.bn-toolbar [data-slot="button"],
+.bn-toolbar [data-slot="toggle"] {
+  height: var(--editor-toolbar-button-height, 28px) !important;
+  min-width: var(--editor-toolbar-button-height, 28px) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 0 6px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 500 !important;
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.8;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  outline: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease !important;
+}
+
+/* Hover state */
+.bn-toolbar .bn-button:hover,
+.bn-toolbar [data-slot="button"]:hover,
+.bn-toolbar [data-slot="toggle"]:hover {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+  opacity: 1 !important;
+}
+
+/* Active / Pressed / Selected toggle state (Bold, Italic, Underline, Strike, Code, Align, etc.) */
+.bn-toolbar [data-slot="toggle"][aria-pressed="true"],
+.bn-toolbar [data-slot="toggle"][data-pressed],
+.bn-toolbar [data-slot="toggle"][data-state="on"],
+.bn-toolbar .bn-button[aria-pressed="true"],
+.bn-toolbar .bn-button[data-state="on"] {
+  background-color: var(--editor-toolbar-active-bg, rgba(215, 137, 127, 0.18)) !important;
+  color: var(--editor-toolbar-active-color, #c06d62) !important;
+  opacity: 1 !important;
+}
+
+/* Subtle group dividers inside the formatting toolbar */
+.bn-toolbar [data-test="alignTextLeft"],
+.bn-toolbar [data-test="colors"],
+.bn-toolbar [data-test="createLink"],
+.bn-toolbar [data-test="nestBlock"],
+.bn-toolbar [aria-label="Comment"] {
+  margin-left: 4px !important;
+  position: relative !important;
+}
+
+.bn-toolbar [data-test="alignTextLeft"]::before,
+.bn-toolbar [data-test="colors"]::before,
+.bn-toolbar [data-test="createLink"]::before,
+.bn-toolbar [data-test="nestBlock"]::before,
+.bn-toolbar [aria-label="Comment"]::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 15%;
+  height: 70%;
+  width: 1px;
+  background-color: var(--sidebar-border) !important;
+  pointer-events: none;
+}
+
+/* Icons inside toolbar buttons */
+.bn-toolbar .bn-button svg,
+.bn-toolbar [data-slot="button"] svg,
+.bn-toolbar [data-slot="toggle"] svg {
+  width: 16px !important;
+  height: 16px !important;
+  color: inherit !important;
+}
+
+/* Disabled buttons */
+.bn-toolbar .bn-button:disabled,
+.bn-toolbar [data-slot="button"]:disabled,
+.bn-toolbar [data-slot="toggle"]:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
+/* Tooltip popups for toolbar buttons - preserve BlockNote's native tooltip design & arrow, retain theme coloring */
+[data-slot="tooltip-content"] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
+}
+
+.dark [data-slot="tooltip-content"] {
+  background-color: #262624 !important;
+  color: #f2f2f2 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Tooltip arrow coloring matching the tooltip body */
+[data-slot="tooltip-content"] .rotate-45 {
+  background-color: var(--sidebar) !important;
+  fill: var(--sidebar) !important;
+}
+
+.dark [data-slot="tooltip-content"] .rotate-45 {
+  background-color: #262624 !important;
+  fill: #262624 !important;
+}
+
+[data-slot="tooltip-content"][data-side="top"] .rotate-45 {
+  border-right: 1px solid var(--sidebar-border) !important;
+  border-bottom: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot="tooltip-content"][data-side="bottom"] .rotate-45 {
+  border-left: 1px solid var(--sidebar-border) !important;
+  border-top: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot="tooltip-content"][data-side="left"] .rotate-45 {
+  border-top: 1px solid var(--sidebar-border) !important;
+  border-right: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot="tooltip-content"][data-side="right"] .rotate-45 {
+  border-bottom: 1px solid var(--sidebar-border) !important;
+  border-left: 1px solid var(--sidebar-border) !important;
+}
+
+.dark [data-slot="tooltip-content"][data-side="top"] .rotate-45,
+.dark [data-slot="tooltip-content"][data-side="bottom"] .rotate-45,
+.dark [data-slot="tooltip-content"][data-side="left"] .rotate-45,
+.dark [data-slot="tooltip-content"][data-side="right"] .rotate-45 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/*  BlockNote Block Type Selection Box Redesign */
+
+/* Block type select trigger on formatting toolbar */
+.bn-toolbar [data-slot="select-trigger"] {
+  height: var(--editor-toolbar-button-height, 28px) !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 0 6px 0 8px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 550 !important;
+  color: var(--sidebar-foreground) !important;
+  gap: 4px !important;
+  cursor: pointer !important;
+  outline: none !important;
+  margin-right: 5px !important;
+  position: relative !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+}
+
+/* Divider separating block type select trigger from basic text styles */
+.bn-toolbar [data-slot="select-trigger"]::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  top: 15%;
+  height: 70%;
+  width: 1px;
+  background-color: var(--sidebar-border) !important;
+  pointer-events: none;
+}
+
+/* Hover and open states for select trigger */
+.bn-toolbar [data-slot="select-trigger"]:hover,
+.bn-toolbar [data-slot="select-trigger"][data-state="open"],
+.bn-toolbar [data-slot="select-trigger"][data-popup-open] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Trigger selected value content */
+.bn-toolbar [data-slot="select-value"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 550 !important;
+  color: inherit !important;
+}
+
+/* Chevron down icon in select trigger */
+.bn-toolbar [data-slot="select-trigger"] > svg {
+  width: 12px !important;
+  height: 12px !important;
+  opacity: 0.55 !important;
+  margin-left: 2px !important;
+  color: inherit !important;
+}
+
+/* Block type select popup dropdown content */
+[data-slot="select-content"] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 4px !important;
+  min-width: 200px !important;
+  max-height: min(400px, 75vh) !important;
+  overflow-y: auto !important;
+  z-index: 60 !important;
+}
+
+/* Select items */
+[data-slot="select-item"] {
+  color: var(--sidebar-foreground) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 5px 24px 5px 8px !important;
+  margin: 1px 0 !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  position: relative !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+}
+
+/* Select item hover / focused / highlighted */
+[data-slot="select-item"]:hover,
+[data-slot="select-item"]:focus,
+[data-slot="select-item"][data-highlighted] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Checkmark indicator for selected item */
+[data-slot="select-item"] svg.lucide-check,
+[data-slot="select-item"] [data-slot="item-indicator"] svg,
+[data-slot="dropdown-menu-checkbox-item"] svg.lucide-check,
+[data-slot="dropdown-menu-checkbox-item"] [data-slot="item-indicator"] svg {
+  color: var(--sidebar-foreground) !important;
+  width: 14px !important;
+  height: 14px !important;
+  stroke-width: 2.2 !important;
+}
+
+[data-slot="select-item"]:hover svg.lucide-check,
+[data-slot="select-item"]:focus svg.lucide-check,
+[data-slot="select-item"][data-highlighted] svg.lucide-check,
+[data-slot="select-item"]:hover [data-slot="item-indicator"] svg,
+[data-slot="select-item"]:focus [data-slot="item-indicator"] svg,
+[data-slot="select-item"][data-highlighted] [data-slot="item-indicator"] svg,
+[data-slot="dropdown-menu-checkbox-item"]:hover svg.lucide-check,
+[data-slot="dropdown-menu-checkbox-item"]:focus svg.lucide-check,
+[data-slot="dropdown-menu-checkbox-item"][data-highlighted] svg.lucide-check {
+  color: var(--sidebar-accent-foreground, var(--sidebar-foreground)) !important;
+}
+
+/* Block icon inside select items */
+[data-slot="select-item"] svg:not(.lucide-check) {
+  width: 16px !important;
+  height: 16px !important;
+  opacity: 0.8 !important;
+  flex-shrink: 0 !important;
+}
+
+/* BlockNote Dropdown Menus & Menu Items Redesign */
+
+/* Dropdown menu root container (bn-menu-dropdown class is merged onto the same
+   element as data-slot by BlockNote shadcn, so data-slot selectors suffice) */
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 4px !important;
+  min-width: 160px !important;
+  max-height: min(460px, 80vh) !important;
+  overflow-y: auto !important;
+  z-index: 60 !important;
+}
+
+/* Submenus offset positioning */
+[data-slot="dropdown-menu-sub-content"] {
+  margin-left: 2px !important;
+}
+
+/* Drag handle menu (opens on clicking ::) - compact width */
+[data-slot="dropdown-menu-content"].bn-drag-handle-menu {
+  min-width: 140px !important;
+  width: max-content !important;
+}
+
+/* Dropdown menu items: normal, sub-trigger, and checkbox items */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"],
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"],
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-checkbox-item"],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-item"],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-sub-trigger"],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-checkbox-item"] {
+  color: var(--sidebar-foreground) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 5px 8px !important;
+  margin: 1px 0 !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+}
+
+/* Hover / Focus / Highlighted states */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"]:hover,
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"]:focus,
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"][data-highlighted],
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"]:hover,
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"]:focus,
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"][data-highlighted],
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"][data-state="open"],
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"][data-popup-open],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-item"]:hover,
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-item"]:focus,
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-item"][data-highlighted] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Destructive items (e.g. Delete in drag handle menu) */
+[data-slot="dropdown-menu-content"] [data-variant="destructive"]:hover,
+[data-slot="dropdown-menu-content"] [data-variant="destructive"]:focus,
+[data-slot="dropdown-menu-content"].bn-drag-handle-menu [data-slot="dropdown-menu-item"]:first-child:hover,
+[data-slot="dropdown-menu-content"].bn-drag-handle-menu [data-slot="dropdown-menu-item"]:first-child:focus {
+  color: #dc2626 !important;
+  background-color: rgba(220, 38, 38, 0.08) !important;
+}
+
+.dark [data-slot="dropdown-menu-content"] [data-variant="destructive"]:hover,
+.dark [data-slot="dropdown-menu-content"] [data-variant="destructive"]:focus,
+.dark [data-slot="dropdown-menu-content"].bn-drag-handle-menu [data-slot="dropdown-menu-item"]:first-child:hover,
+.dark [data-slot="dropdown-menu-content"].bn-drag-handle-menu [data-slot="dropdown-menu-item"]:first-child:focus {
+  color: #f87171 !important;
+  background-color: rgba(239, 68, 68, 0.16) !important;
+}
+
+/* Submenu chevron right arrow */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"] > svg {
+  width: 14px !important;
+  height: 14px !important;
+  opacity: 0.55 !important;
+  margin-left: auto !important;
+}
+
+/* Category headers / Group labels inside dropdown menus */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-label"],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-label"] {
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.55 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-weight: 700 !important;
+  padding: 6px 8px 3px !important;
+}
+
+/* Dropdown divider separators */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-separator"],
+[data-slot="dropdown-menu-sub-content"] [data-slot="dropdown-menu-separator"] {
+  border-top: var(--editor-dropdown-divider) !important;
+  margin: 4px 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+/* Dropdown item icons */
+[data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"] svg:not(.lucide-chevron-right) {
+  width: 16px !important;
+  height: 16px !important;
+  opacity: 0.8 !important;
+  flex-shrink: 0 !important;
+}
+
+/* BlockNote Color Picker Dropdown Redesign */
+
 .bn-color-picker-dropdown {
   background-color: var(--sidebar) !important;
   color: var(--sidebar-foreground) !important;
@@ -2092,11 +2524,13 @@ html:not(.dark) .bn-editor a:visited:hover {
   box-shadow: var(--editor-dropdown-shadow) !important;
   padding: 6px !important;
   border-radius: var(--editor-dropdown-radius) !important;
-  max-height: min(500px, 85vh) !important; /* Increased container height */
+  max-height: min(500px, 85vh) !important;
   overflow-y: auto !important;
   min-width: 190px !important;
+}
 
-  /* Centering the sub-menu vertically relative to "Colors >" trigger using margin-top offset to avoid conflict with Radix absolute transform coordinates */
+/* Centering the sub-menu vertically relative to "Colors >" trigger using margin-top offset when in a submenu */
+[data-slot="dropdown-menu-sub-content"].bn-color-picker-dropdown {
   margin-top: calc(18px - min(500px, 85vh) / 2) !important;
 }
 
@@ -2130,7 +2564,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   cursor: pointer !important;
   outline: none !important;
   transition: background-color 0.12s ease, color 0.12s ease !important;
-  gap: 12px !important; /* Increased gap between icon and color name */
+  gap: 12px !important;
 }
 
 /* Move tick mark (indicator) to the right side of the item */
@@ -2164,6 +2598,46 @@ html:not(.dark) .bn-editor a:visited:hover {
 
 .dark .bn-color-picker-dropdown .bn-color-icon[data-background-color="default"] {
   background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* BlockNote Link Popover & Form Popovers Redesign
+   (bn-form-popover class is merged onto the same element as data-slot by
+   BlockNote shadcn, so the data-slot selector suffices) */
+[data-slot="popover-content"] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 6px !important;
+  z-index: 60 !important;
+}
+
+.bn-form-popover input {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 5px 8px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  outline: none !important;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease !important;
+}
+
+.dark .bn-form-popover input {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+
+.bn-form-popover input:focus {
+  border-color: #d7897f !important;
+  box-shadow: 0 0 0 2px rgba(215, 137, 127, 0.25) !important;
+}
+
+.dark .bn-form-popover input:focus {
+  border-color: #d7897f !important;
+  box-shadow: 0 0 0 2px rgba(215, 137, 127, 0.3) !important;
 }
 
 /* Slash / Suggestion Command Menu matching sidebar theme */
