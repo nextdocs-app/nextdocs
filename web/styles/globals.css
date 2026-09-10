@@ -1562,18 +1562,13 @@ html:not(.dark) .bn-editor a:visited:hover {
   scrollbar-color: var(--sidebar-border) transparent;
 }
 
-.nd-comments-sidebar__body::-webkit-scrollbar {
-  width: 5px;
+.nd-left-sidebar * {
+  scrollbar-width: thin;
+}
+.bn-root * {
+  scrollbar-width: thin;
 }
 
-.nd-comments-sidebar__body::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.nd-comments-sidebar__body::-webkit-scrollbar-thumb {
-  background-color: var(--sidebar-border);
-  border-radius: 9999px;
-}
 
 /* Empty state in sidebar */
 .nd-comments-empty {

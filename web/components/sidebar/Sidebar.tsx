@@ -846,12 +846,14 @@ function Sidebar() {
   ]);
 
   if (!isClient) {
-    return <aside className="w-64 border-r border-sidebar-border flex-shrink-0 bg-sidebar" />;
+    return (
+      <aside className="nd-left-sidebar w-64 border-r border-sidebar-border flex-shrink-0 bg-sidebar" />
+    );
   }
 
   return (
     <aside
-      className={`${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
+      className={`nd-left-sidebar ${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
         width: isSidebarCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
       }}
