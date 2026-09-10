@@ -30,12 +30,28 @@
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0% 0 0);
   --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.905 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  --nd-comments-rail-width: 20rem;
+  --nd-comments-rail-width: 22rem;
   --nd-sidebar-width: 256px;
+  --nd-workspace-left-sidebar-width: 16rem;
+
+  /* Comments Panel & Toolbar Tokens */
+  --nd-comments-panel-bg: #f4f4f6;
+  --nd-comments-panel-border: rgba(0, 0, 0, 0.08);
+  --nd-comments-surface: #ffffff;
+  --nd-toolbar-hover-bg: oklch(0.93 0 0);
+
+  /* Document Comment Highlight Marks */
+  --nd-comment-mark-bg: rgba(234, 179, 8, 0.2);
+  --nd-comment-mark-bg-hover: rgba(234, 179, 8, 0.35);
+  --nd-comment-mark-bg-selected: rgba(234, 179, 8, 0.4);
+  --nd-comment-mark-border: rgba(234, 179, 8, 0.6);
+  --nd-comment-mark-border-hover: rgba(234, 179, 8, 0.9);
+  --nd-comment-mark-border-selected: #ca8a04;
 
   /* Editor Dropdown / Suggestion Menu Custom Variables */
   --editor-dropdown-radius: 8px;
@@ -98,10 +114,26 @@
   --ring: oklch(0.556 0 0);
   --sidebar: #1F1F1D;
   --sidebar-foreground: oklch(91.279% 0.0001 271.152);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: #2f2f2a;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Comments Panel & Toolbar Dark Tokens */
+  --nd-comments-panel-bg: #181816;
+  --nd-comments-panel-border: rgba(255, 255, 255, 0.08);
+  --nd-comments-surface: #242422;
+  --nd-toolbar-hover-bg: oklch(0.32 0 0);
+
+  /* Document Comment Highlight Marks Dark Overrides */
+  --nd-comment-mark-bg: rgba(234, 179, 8, 0.22);
+  --nd-comment-mark-bg-hover: rgba(234, 179, 8, 0.38);
+  --nd-comment-mark-bg-selected: rgba(234, 179, 8, 0.45);
+  --nd-comment-mark-border: rgba(234, 179, 8, 0.65);
+  --nd-comment-mark-border-hover: rgba(234, 179, 8, 0.9);
+  --nd-comment-mark-border-selected: #facc15;
 
   /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
   --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -1317,8 +1349,8 @@ html:not(.dark) .bn-editor a:visited:hover {
   top: 0;
   right: 0;
   bottom: 0;
-  width: var(--nd-comments-rail-width, 20rem);
-  max-width: var(--nd-comments-rail-width, 20rem);
+  width: var(--nd-comments-rail-width, 22rem);
+  max-width: var(--nd-comments-rail-width, 22rem);
   z-index: 50;
   display: flex;
   flex-direction: column;
@@ -1350,176 +1382,169 @@ html:not(.dark) .bn-editor a:visited:hover {
 /* ─── Sidebar header ─── */
 
 .nd-comments-sidebar__header {
-  display: grid;
-  grid-auto-rows: max-content;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  padding: 14px;
-  border-bottom: 1px solid var(--nd-comments-panel-border);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--sidebar-border);
   flex-shrink: 0;
-  background: var(--nd-comments-panel-bg);
+  background: var(--sidebar);
 }
 
 .nd-comments-sidebar__top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .nd-comments-sidebar__title-wrap {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
   min-width: 0;
   flex: 1;
+}
+
+.nd-comments-sidebar__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: -0.01em;
+  margin: 0;
+  line-height: 1.2;
 }
 
 .nd-comments-sidebar__top-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
-.nd-comments-sidebar__title {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--foreground);
-  letter-spacing: -0.01em;
-  margin: 0;
-  line-height: 1.1;
-}
-
-.nd-comments-sidebar__subtitle {
-  margin: 0;
+/* Sort dropdown - styled cleanly matching editor controls */
+.nd-comments-sort {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 2px 22px 2px 8px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--editor-dropdown-item-radius, 6px);
   font-size: 12px;
-  line-height: 1.4;
-  color: var(--nd-comments-text-muted);
+  font-weight: 500;
+  color: var(--foreground);
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%23888' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  outline: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
-.nd-comments-sidebar__controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+.nd-comments-sort:hover {
+  background-color: var(--sidebar-accent);
+  border-color: var(--ring);
+}
+
+.nd-comments-sort:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Close button */
+.nd-comments-sidebar__close {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--editor-dropdown-item-radius, 6px);
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
-/* ─── Filter pill tabs ─── */
+.nd-comments-sidebar__close:hover {
+  background-color: var(--sidebar-accent);
+  color: var(--foreground);
+}
 
+/* Filter segmented control */
 .nd-comments-filter {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border: 1px solid var(--border);
-  background: var(--nd-comments-surface-muted);
-  border-radius: 7px;
-  padding: 2px;
-}
-
-.nd-comments-filter--full {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  width: 100%;
-}
-
-.nd-comments-filter--full .nd-comments-filter__tab {
-  width: 100%;
-  justify-content: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--editor-dropdown-radius, 8px);
+  background-color: var(--sidebar-accent);
 }
 
 .nd-comments-filter__tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 27px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11.5px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: calc(var(--editor-dropdown-radius, 8px) - 2px);
+  font-size: 12px;
   font-weight: 500;
   color: var(--muted-foreground);
   cursor: pointer;
   border: none;
   background: transparent;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
-  line-height: 1.4;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  line-height: 1;
   white-space: nowrap;
 }
 
 .nd-comments-filter__tab:hover:not(.nd-active) {
   color: var(--foreground);
-  background: var(--accent);
+}
+
+.nd-comments-filter__tab.nd-active {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .dark .nd-comments-filter__tab.nd-active {
-  box-shadow:
-    0 1px 4px rgba(0, 0, 0, 0.3),
-    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  background-color: #242422;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
-/* ─── Sort dropdown ─── */
-
-.nd-comments-sort {
-  min-width: 122px;
-  min-height: 28px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--foreground);
-  background-color: var(--nd-comments-surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 3px 6px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s, color 0.15s;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%23999' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 5px center;
-  padding-right: 18px;
-}
-
-.nd-comments-sort:hover {
-  border-color: var(--ring);
-  color: var(--foreground);
-}
-
-.nd-comments-sort:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.06);
-}
-
-.nd-comments-shortcut {
-  margin: 0;
-  font-size: 11px;
-  color: var(--nd-comments-text-muted);
-  letter-spacing: 0.01em;
-}
-
-/* ─── Close button ─── */
-
-.nd-comments-sidebar__close {
-  display: flex;
+.nd-comments-filter__count {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  border: none;
-  background: transparent;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
   color: var(--muted-foreground);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  flex-shrink: 0;
-  padding: 0;
+  background: rgba(0, 0, 0, 0.05);
 }
 
-.nd-comments-sidebar__close:hover {
-  background: var(--accent);
-  color: var(--foreground);
+.dark .nd-comments-filter__count {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nd-comments-filter__tab.nd-active .nd-comments-filter__count {
+  color: var(--primary-foreground);
+  background-color: var(--primary);
 }
 
 /* ─── Sidebar scrollable body ─── */
@@ -1532,538 +1557,987 @@ html:not(.dark) .bn-editor a:visited:hover {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 0 14px;
-  background: var(--nd-comments-panel-bg);
+  padding: 12px 14px 24px;
+  background: var(--sidebar);
+  scrollbar-width: thin;
+  scrollbar-color: var(--sidebar-border) transparent;
 }
 
-/* ─── ThreadsSidebar overrides inside our panel ─── */
+.nd-comments-sidebar__body::-webkit-scrollbar {
+  width: 5px;
+}
 
-.nd-comments-sidebar__body .bn-threads-sidebar {
-  flex: 1;
-  height: auto;
-  min-height: 0;
-  border-radius: 0;
-  box-shadow: none;
+.nd-comments-sidebar__body::-webkit-scrollbar-track {
   background: transparent;
-  padding: 4px 0;
-  gap: 6px;
 }
 
-/* Empty state */
-.nd-comments-sidebar__body .bn-threads-sidebar:empty::after {
-  content: "No comments yet";
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 20px;
-  font-size: 13px;
-  color: var(--muted-foreground);
-  font-style: italic;
+.nd-comments-sidebar__body::-webkit-scrollbar-thumb {
+  background-color: var(--sidebar-border);
+  border-radius: 9999px;
 }
 
-/* Thread cards in the sidebar */
-.nd-comments-sidebar__body .bn-thread {
-  margin: 0 10px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
+/* Empty state in sidebar */
+.nd-comments-empty {
+  margin: 16px 0;
+  border: 1px dashed var(--sidebar-border);
+  border-radius: var(--editor-dropdown-radius);
   background: var(--nd-comments-surface);
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
-  transition: transform 0.14s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-  overflow: visible !important;
-  max-height: none !important;
-  width: auto !important;
 }
 
-.nd-comments-sidebar__body .bn-thread:hover {
-  transform: translateY(-1px);
-  border-color: var(--nd-comments-focus);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
-}
-
-.nd-comments-sidebar__body .bn-thread.selected {
-  border-color: var(--nd-comments-focus);
-  background: var(--accent);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-}
-
-/* Dark mode sidebar thread overrides */
-.dark .nd-comments-sidebar__body .bn-thread:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-}
-
-
-/* Inline Comments — production styling for editor threads */
-
-/*
-  Floating thread (appears when clicking a comment highlight in the editor).
-  The ShadCN Card component renders with w-[300px] by default.
-  We increase width and polish the card.
-*/
-.bn-thread {
-  width: min(360px, calc(100vw - 28px)) !important;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.1);
-  overflow: hidden;
-  gap: 0 !important;
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
-}
-
-.dark .bn-thread {
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38), 0 3px 10px rgba(0, 0, 0, 0.22);
-  border-color: var(--border);
-  background: var(--card);
-}
-
-/* Thread header text (reference text from the editor) */
-.bn-thread .bn-header-text,
-.bn-thread .bn-resolved-text {
-  font-size: 12.5px;
-  color: var(--muted-foreground);
-  border-left: 2px solid var(--nd-comments-focus);
-  padding-left: 7px;
-  margin: 12px 14px 4px;
-}
-
-/* Comments section inside threads */
-.bn-thread .bn-thread-comments {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-/* Individual comment styling */
-.bn-thread .bn-thread-comments > div {
-  position: relative;
-}
-
-/* Comment avatar */
-.bn-thread [class*="Avatar"] {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-}
-
-/* Comment author name */
-.bn-thread .bn-thread-comments .text-sm.font-bold {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--foreground);
-}
-
-/* Comment timestamp */
-.bn-thread .bn-thread-comments .text-xs {
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
-
-/* Comment body text */
-.bn-thread .bn-editor {
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--foreground);
-}
-
-/* Composer (reply) section at bottom of thread */
-.dark .bn-thread .bn-thread-composer {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-/* Action toolbar (Save, Delete buttons) */
-.bn-thread .bn-action-toolbar {
-  background: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 2px;
-  gap: 2px;
-}
-
-.dark .bn-thread .bn-action-toolbar {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-/* Comment action buttons (reply, delete, resolve, etc.) */
-.bn-comment-actions-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  gap: 2px;
-}
-
-/* Floating composer (new comment popup) */
-.bn-floating-composer {
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.1),
-    0 2px 8px rgba(0, 0, 0, 0.05);
-  overflow: hidden;
-}
-
-.dark .bn-floating-composer {
-  box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.4),
-    0 2px 8px rgba(0, 0, 0, 0.25);
-  background: var(--card);
-}
-
-/* Expand/collapse prompt for long threads */
-.bn-thread-expand-prompt button {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  transition: color 0.15s;
-}
-
-.bn-thread-expand-prompt button:hover {
-  color: var(--foreground);
-}
-
-/* Selected thread styling in the sidebar */
-.bn-threads-sidebar .bn-thread.selected {
-  background-color: var(--accent) !important;
-  border-color: var(--ring) !important;
+.dark .nd-comments-empty {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 /* DocToolbar – comments button active state */
-
 #doc-comments-btn[aria-pressed="true"] {
   border-color: var(--ring);
-}
-
-
-/* Comments Theme Alignment */
-
-:root {
-  --nd-comments-panel-bg: var(--sidebar);
-  --nd-comments-panel-border: var(--sidebar-border);
-  --nd-comments-surface: var(--card);
-  --nd-comments-surface-muted: var(--muted);
-  --nd-comments-text-muted: var(--muted-foreground);
-  --nd-comments-focus: var(--ring);
-  --nd-comments-highlight-bg: rgba(234, 179, 8, 0.24);
-  --nd-comments-highlight-bg-hover: rgba(234, 179, 8, 0.34);
-  --nd-comments-highlight-border: rgba(180, 120, 12, 0.72);
-  --nd-toolbar-hover-bg: oklch(0.93 0 0);
-}
-
-.dark {
-  --nd-comments-highlight-bg: rgba(245, 198, 76, 0.2);
-  --nd-comments-highlight-bg-hover: rgba(245, 198, 76, 0.32);
-  --nd-comments-highlight-border: rgba(245, 198, 76, 0.8);
-  --nd-toolbar-hover-bg: oklch(0.32 0 0);
 }
 
 .nd-toolbar-comments-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  padding: 0 6px;
-  margin-left: 3px;
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--primary-foreground);
-  background: var(--primary);
-  border: 1px solid var(--border);
-}
-
-.nd-comments-filter__tab.nd-active {
-  background: var(--nd-comments-surface);
-  color: var(--foreground);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.nd-comments-filter__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 17px;
-  height: 17px;
+  min-width: 18px;
+  height: 18px;
   padding: 0 5px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
+  margin-left: 4px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
   line-height: 1;
-  color: var(--nd-comments-text-muted);
-  background: var(--background);
-  border: 1px solid var(--border);
-}
-
-.nd-comments-filter__tab.nd-active .nd-comments-filter__count {
   color: var(--primary-foreground);
   background: var(--primary);
-  border-color: transparent;
 }
 
-.nd-comments-empty {
-  margin: 16px 14px;
-  border: 1px dashed var(--border);
-  border-radius: 12px;
-  background: var(--nd-comments-surface);
-  padding: 20px 16px;
+/* ─── BlockNote Comments Floating Popups & Threads ─── */
+
+/* Container focus reset to prevent unwanted outline/rings without stripping accessible keyboard focus from children */
+.bn-threads-sidebar,
+.bn-thread {
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
 }
 
-.nd-comments-empty__title {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--foreground);
+.bn-threads-sidebar:focus:not(:focus-visible),
+.bn-thread:focus:not(:focus-visible) {
+  outline: none !important;
 }
 
-.nd-comments-empty__description {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--nd-comments-text-muted);
-}
-
-.dark .nd-comments-sidebar__body .bn-thread {
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-}
-
-.nd-floating-thread .bn-thread .bn-thread-comments .bn-comment-editor .bn-editor {
-  background: var(--nd-floating-thread-comments-bg) !important;
-}
-
-.bn-thread .bn-thread-comment {
-  gap: 6px;
-}
-
-.bn-thread .bn-thread-comment .text-sm.font-bold {
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.bn-thread .bn-thread-comment .text-xs {
-  font-size: 11.5px;
-}
-
-.bn-thread .bn-thread-comment .bn-editor {
-  font-size: 13.5px;
-  line-height: 1.5;
-}
-
-.bn-thread .bn-thread-composer {
-  display: block;
-  position: relative;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--nd-comments-surface-muted);
-}
-
-.bn-thread .bn-thread-composer .bn-comment-editor,
-.nd-floating-composer .bn-comment-editor {
-  position: relative;
-  flex: initial;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--background);
-  overflow: hidden;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-editor .bn-formatting-toolbar,
-.nd-floating-composer .bn-comment-editor .bn-formatting-toolbar {
-  display: none !important;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-editor .bn-editor,
-.nd-floating-composer .bn-comment-editor .bn-editor {
-  min-height: 42px;
-  max-height: 140px;
-  overflow-y: auto;
-  padding: 10px 52px 10px 12px !important;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-editor .bn-editor p,
-.nd-floating-composer .bn-comment-editor .bn-editor p {
-  margin: 0;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions-wrapper,
-.nd-floating-composer .bn-comment-actions-wrapper {
-  position: absolute;
-  right: 22px;
-  bottom: 20px;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  justify-content: flex-end;
-  z-index: 2;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions,
-.nd-floating-composer .bn-comment-actions {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-}
-
-/* Lock send button/icon color at the structural selector level to avoid
-   transient color flips before JS tagging runs during BlockNote re-renders. */
-.bn-thread .bn-thread-composer .bn-comment-actions button,
-.nd-floating-composer .bn-comment-actions button {
-  color: rgb(0 0 0 / 0.85) !important;
-  opacity: 1 !important;
-  transition: none !important;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button svg,
-.nd-floating-composer .bn-comment-actions button svg {
-  stroke: rgb(0 0 0 / 0.85) !important;
-  fill: none !important;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true'],
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true'] {
-  min-width: 0;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 0;
+/* ─── Sidebar Threads Container ─── */
+.bn-threads-sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
   padding: 0 !important;
-  color: rgb(0 0 0 / 0.85) !important;
-  background: transparent;
-  overflow: visible;
-  opacity: 1;
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  transition: none;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true']:hover:not(:disabled),
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true']:hover:not(:disabled) {
-  color: rgb(0 0 0 / 0.85) !important;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true']:disabled,
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true']:disabled {
-  color: rgb(0 0 0 / 0.85) !important;
-  opacity: 1;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true']:focus-visible,
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true']:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgb(215 137 127 / 0.24);
-}
-
-.nd-floating-composer .bn-thread {
-  display: block;
-  position: relative;
-  padding: 12px !important;
+  margin: 0 !important;
   width: 100% !important;
-  max-width: min(380px, calc(100vw - 24px));
-  border-radius: 12px;
-  background: var(--popover);
+  box-sizing: border-box !important;
+  overflow: visible !important;
 }
 
-.nd-floating-composer {
-  width: min(380px, calc(100vw - 24px));
+/* Base Thread Card (Floating popups) */
+.bn-thread {
+  width: 320px !important;
+  max-width: min(340px, calc(100vw - 24px)) !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  background-color: #ffffff !important;
+  color: var(--card-foreground) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 10px 30px -4px rgba(0, 0, 0, 0.12), 0 2px 8px -2px rgba(0, 0, 0, 0.06) !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  font-family: inherit !important;
+  outline: none !important;
 }
 
-/* Floating Add Comment: keep only the inner circular icon chip visible. */
-.nd-floating-composer .bn-comment-actions-wrapper,
-.nd-floating-composer .bn-comment-actions,
-.nd-floating-composer .bn-comment-actions button {
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
+.dark .bn-thread {
+  background-color: #242422 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 12px 36px -4px rgba(0, 0, 0, 0.55), 0 4px 12px -2px rgba(0, 0, 0, 0.35) !important;
 }
 
-.nd-floating-composer .bn-comment-actions button {
-  -webkit-appearance: none;
-  appearance: none;
+/* Sidebar Thread Card (Full width in sidebar rail - Google Docs / Linear style) */
+.bn-threads-sidebar .bn-thread {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03) !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease !important;
 }
 
-/* Do not render fallback pseudo-buttons; only real action buttons should appear. */
-.bn-thread .bn-thread-composer::after,
-.nd-floating-composer .bn-thread::after {
-  content: none !important;
+.bn-threads-sidebar .bn-thread:hover {
+  background-color: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.14) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
 }
 
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true'],
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true'] {
-  font-size: 0;
+.dark .bn-threads-sidebar .bn-thread {
+  background-color: #242422 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+  outline: none !important;
+  transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease !important;
 }
 
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true'] .nd-comment-send-icon,
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true'] .nd-comment-send-icon {
-  width: 32px;
-  height: 32px;
-  display: inline-grid;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  background: #d7897f;
-  line-height: 0;
-}
-
-.bn-thread .bn-thread-composer .bn-comment-actions button[data-nd-send-icon-only='true'] .nd-comment-send-icon svg,
-.nd-floating-composer .bn-comment-actions button[data-nd-send-icon-only='true'] .nd-comment-send-icon svg {
-  width: 13px;
-  height: 13px;
-  display: block;
-  fill: none;
-  stroke: rgb(0 0 0 / 0.85) !important;
-  stroke-width: 1.75;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.bn-editor [data-comment-mark] {
-  border-radius: 4px;
-  background:
-    linear-gradient(180deg, transparent 54%, var(--nd-comments-highlight-bg) 54%),
-    rgba(234, 179, 8, 0.04);
-  border-bottom: 2px solid var(--nd-comments-highlight-border);
-  box-decoration-break: clone;
-  transition: background 0.14s ease, border-color 0.14s ease;
-  cursor: pointer;
-}
-
-.bn-editor [data-comment-mark]:hover {
-  background:
-    linear-gradient(180deg, transparent 52%, var(--nd-comments-highlight-bg-hover) 52%),
-    rgba(234, 179, 8, 0.08);
-}
-
-/* Comments Sidebar Layout Behavior */
-
-:root {
-  --nd-workspace-left-sidebar-width: 16rem;
-}
-
-.nd-comments-sidebar {
-  width: var(--nd-comments-rail-width) !important;
-  max-width: var(--nd-comments-rail-width) !important;
-  box-shadow: none !important;
+.dark .bn-threads-sidebar .bn-thread:hover {
+  background-color: #282826 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
 }
 
 .nd-comments-sidebar .bn-thread,
 .nd-comments-sidebar .bn-thread:hover,
 .nd-comments-sidebar .bn-thread.selected {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+
+/* Selected state: elevated card */
+.bn-thread.bg-accent,
+.bn-thread[data-selected="true"],
+.bn-thread.selected,
+.bn-threads-sidebar .bn-thread.selected,
+.bn-threads-sidebar .bn-thread[data-selected="true"],
+.bn-threads-sidebar .bn-thread.bg-accent,
+.bn-threads-sidebar .bn-thread:has(.bn-thread-composer) {
+  background-color: #ffffff !important;
+  color: var(--card-foreground) !important;
+  border-color: rgba(0, 0, 0, 0.16) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+  outline: none !important;
+  cursor: default !important;
+}
+
+.dark .bn-thread.bg-accent,
+.dark .bn-thread[data-selected="true"],
+.dark .bn-thread.selected,
+.dark .bn-threads-sidebar .bn-thread.selected,
+.dark .bn-threads-sidebar .bn-thread[data-selected="true"],
+.dark .bn-threads-sidebar .bn-thread.bg-accent,
+.dark .bn-threads-sidebar .bn-thread:has(.bn-thread-composer) {
+  background-color: #242422 !important;
+  color: #f2f2f2 !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+  outline: none !important;
+  cursor: default !important;
+}
+
+/* Expanded thread in sidebar */
+.bn-threads-sidebar .bn-thread.selected:hover,
+.bn-threads-sidebar .bn-thread[data-selected="true"]:hover,
+.bn-threads-sidebar .bn-thread.bg-accent:hover,
+.bn-threads-sidebar .bn-thread:has(.bn-thread-composer):hover {
+  cursor: default !important;
+}
+
+/* Ensure interactive controls inside expanded thread retain pointer cursor */
+.bn-threads-sidebar .bn-thread button,
+.bn-threads-sidebar .bn-thread [role="button"],
+.bn-threads-sidebar .bn-thread a,
+.bn-threads-sidebar .bn-thread .bn-badge {
+  cursor: pointer !important;
+}
+
+.bn-threads-sidebar .bn-thread button:disabled,
+.bn-threads-sidebar .bn-thread button[disabled] {
+  cursor: not-allowed !important;
+}
+
+.bn-threads-sidebar .bn-thread .bn-editor {
+  cursor: text !important;
+}
+
+/* Header Reference Text */
+.bn-thread > .text-sm.italic,
+.bn-thread .bn-header-text {
+  max-height: 48px !important;
+  margin: 10px 12px 2px !important;
+  padding: 6px 10px !important;
+  border: none !important;
+  border-left: 3px solid #e59a90 !important;
+  border-radius: 0 4px 4px 0 !important;
+  font-size: 12px !important;
+  font-style: italic !important;
+  line-height: 1.4 !important;
+  color: var(--muted-foreground) !important;
+  background-color: var(--sidebar-accent) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  outline: none !important;
+}
+
+.dark .bn-thread > .text-sm.italic,
+.dark .bn-thread .bn-header-text {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border-left: 2.5px solid #e59a90 !important;
+}
+
+/* Orphaned thread reference text (text deleted in document) */
+.bn-thread.bn-thread-orphaned > .text-sm.italic,
+.bn-thread.bn-thread-orphaned .bn-header-text {
+  text-decoration: line-through !important;
+  opacity: 0.7 !important;
+  border: none !important;
+  border-left: none !important;
+}
+
+/* Comment Editor inside Composer & Floating Popup */
+
+.bn-thread > .bn-comment-editor {
+  padding: 12px 14px 4px !important;
+  width: 100% !important;
+}
+
+.bn-thread > .bn-comment-editor .bn-container,
+.bn-thread > .bn-comment-editor .bn-editor {
+  min-height: 40px !important;
+  max-height: 160px !important;
+  overflow-y: auto !important;
+}
+
+.bn-comment-editor .bn-container,
+.bn-comment-editor .bn-editor {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--card-foreground) !important;
+  padding: 0 !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+/* Collapse and hide BlockNote portal element inside comment editor so it takes zero space */
+.bn-comment-editor .bn-root:not(.bn-container) {
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  overflow: visible !important;
+  line-height: 0 !important;
+  font-size: 0 !important;
+  pointer-events: none !important;
+}
+
+.bn-comment-editor .bn-root:not(.bn-container) > * {
+  pointer-events: auto !important;
+}
+
+.bn-comment-editor .bn-root:not(.bn-container):empty {
+  display: none !important;
+}
+
+.dark .bn-comment-editor .bn-editor {
+  color: #f2f2f2 !important;
+}
+
+.bn-comment-editor .bn-editor p {
+  margin: 0 !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+/* Placeholder styling inside comment editor */
+.bn-comment-editor [data-content-type="paragraph"] .bn-inline-content:empty::before,
+.bn-comment-editor .ProseMirror p.is-editor-empty:first-child::before,
+.bn-comment-editor .bn-block-content:has(.ProseMirror-trailingBreak:only-child):after {
+  color: var(--muted-foreground) !important;
+  opacity: 0.65 !important;
+  font-style: normal !important;
+  font-size: 12.5px !important;
+}
+
+/* ─── Actions Wrapper & Save / Cancel Buttons ─── */
+
+.bn-comment-actions-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding: 4px 14px 10px !important;
+  border-top: none !important;
+}
+
+/* Neutralize the floating toolbar bubble container from @blocknote/shadcn */
+.bn-comment-actions-wrapper .bn-comment-actions,
+.bn-comment-actions-wrapper .bn-action-toolbar {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
   box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  margin-left: auto !important;
+  width: auto !important;
+  max-width: fit-content !important;
+}
+
+.dark .bn-comment-actions-wrapper .bn-comment-actions,
+.dark .bn-comment-actions-wrapper .bn-action-toolbar {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Base styling for all comment action buttons (Save / Cancel / Comment) */
+.bn-comment-actions-wrapper .bn-comment-actions button,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"],
+.bn-comment-actions-wrapper .bn-action-toolbar button,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"],
+.bn-comment-actions-wrapper button[data-slot="button"],
+.bn-comment-actions-wrapper .bn-button {
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  width: auto !important;
+  min-width: 54px !important;
+  max-width: none !important;
+  padding: 0 12px !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.01em !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  box-sizing: border-box !important;
+  outline: none !important;
+  transition: opacity 0.12s ease, background-color 0.12s ease, border-color 0.12s ease !important;
+}
+
+/* Primary Submit / Save button */
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"]:first-child,
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"]:first-child,
+.bn-comment-actions-wrapper > button,
+.bn-comment-actions-wrapper > [data-slot="button"] {
+  background-color: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"]:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"]:first-child:hover:not(:disabled) {
+  opacity: 0.9 !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child:disabled,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"]:first-child:disabled,
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child:disabled,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"]:first-child:disabled,
+.bn-comment-actions-wrapper button[data-slot="button"]:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+  background-color: var(--muted) !important;
+  color: var(--muted-foreground) !important;
+  box-shadow: none !important;
+}
+
+/* Secondary Cancel button (second child in edit mode) */
+.bn-comment-actions-wrapper .bn-comment-actions button:not(:first-child),
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"]:not(:first-child),
+.bn-comment-actions-wrapper .bn-action-toolbar button:not(:first-child),
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"]:not(:first-child) {
+  background-color: transparent !important;
+  color: var(--muted-foreground) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+  order: -1 !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot="button"]:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-action-toolbar button:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot="button"]:not(:first-child):hover {
+  background-color: var(--muted) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+
+/* ─── Comments Section in Thread ─── */
+
+.bn-thread-comments {
+  padding: 10px 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  border-bottom: none !important;
+}
+
+/* Floating thread popups keep max-height scroll */
+.bn-thread:not(.bn-threads-sidebar .bn-thread) .bn-thread-comments {
+  max-height: 360px !important;
+  overflow-y: auto !important;
+}
+
+/* Sidebar threads expand naturally with no internal scroll */
+.bn-threads-sidebar .bn-thread .bn-thread-comments {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.bn-thread-comment {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  width: 100% !important;
+}
+
+/* Subtle separator line between comments */
+.bn-thread-comment:not(:first-child),
+.bn-thread-comment + .bn-thread-comment {
+  padding-top: 10px !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.08) !important;
+}
+
+.dark .bn-thread-comment:not(:first-child),
+.dark .bn-thread-comment + .bn-thread-comment {
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Author header row: Avatar + Name + Time */
+.bn-thread-comment > div:not(.absolute):not(.bn-comment-editor):not(.bn-comment-actions-wrapper) {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-height: 24px !important;
+  width: 100% !important;
+  padding-right: 76px !important;
+}
+
+.bn-thread-comment [data-slot="avatar"] {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  border-radius: 9999px !important;
+  flex-shrink: 0 !important;
+  overflow: hidden !important;
+}
+
+.bn-thread-comment [data-slot="avatar"] img,
+.bn-thread-comment [data-slot="avatar-image"] {
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 9999px !important;
+  object-fit: cover !important;
+}
+
+.bn-thread-comment [data-slot="avatar-fallback"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  background-color: rgba(0, 0, 0, 0.08) !important;
+  color: var(--foreground) !important;
+  text-transform: uppercase !important;
+}
+
+.dark .bn-thread-comment [data-slot="avatar-fallback"] {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #f2f2f2 !important;
+}
+
+.bn-thread-comment > div:not(.absolute):not(.bn-comment-editor):not(.bn-comment-actions-wrapper) > div {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 6px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+.bn-thread-comment .text-sm.font-bold {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+  color: var(--foreground) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.bn-thread-comment .text-xs {
+  font-size: 11px !important;
+  color: var(--muted-foreground) !important;
+  opacity: 0.75 !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+
+/* Comment text naturally left-aligned under header */
+.bn-thread-comment .bn-comment-editor {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.bn-thread-comment .bn-comment-editor .bn-container,
+.bn-thread-comment .bn-comment-editor .bn-editor {
+  min-height: unset !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  color: var(--foreground) !important;
+}
+
+.dark .bn-thread-comment .bn-comment-editor .bn-editor {
+  color: #ededed !important;
+}
+
+.bn-thread-comment .bn-comment-editor .bn-editor p,
+.bn-thread-comment .bn-comment-editor .bn-block-outer,
+.bn-thread-comment .bn-comment-editor .bn-block,
+.bn-thread-comment .bn-comment-editor .bn-block-content {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: unset !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  word-break: break-word !important;
+}
+
+/* ─── Comment Hover Actions (Resolve, More, Reaction) ─── */
+
+.bn-thread-comment .absolute.top-0.right-0,
+.bn-thread-comment > .absolute {
+  position: absolute !important;
+  top: -2px !important;
+  right: 0 !important;
+  left: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  max-width: fit-content !important;
+  height: auto !important;
+  z-index: 20 !important;
+  display: block !important;
+  pointer-events: auto !important;
+}
+
+/* For replies (which have 10px padding-top from separator line), align toolbar straight with author row */
+.bn-thread-comment:not(:first-child) > .absolute,
+.bn-thread-comment:not(:first-child) .absolute.top-0.right-0,
+.bn-thread-comment + .bn-thread-comment > .absolute,
+.bn-thread-comment + .bn-thread-comment .absolute.top-0.right-0 {
+  top: 8px !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  width: auto !important;
+  max-width: fit-content !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  padding: 1px !important;
+  gap: 1px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+}
+
+.dark .bn-thread-comment > .absolute .bn-action-toolbar,
+.dark .bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar {
+  background-color: #282826 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45) !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar button,
+.bn-thread-comment > .absolute .bn-action-toolbar [data-slot="button"],
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar [data-slot="button"] {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  max-width: 22px !important;
+  padding: 0 !important;
+  border-radius: calc(var(--editor-dropdown-item-radius, 6px) - 2px) !important;
+  color: var(--muted-foreground) !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition: color 0.12s ease, background-color 0.12s ease !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar button:hover,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button:hover {
+  background-color: rgba(0, 0, 0, 0.06) !important;
+  color: var(--foreground) !important;
+}
+
+.dark .bn-thread-comment > .absolute .bn-action-toolbar button:hover,
+.dark .bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar svg,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar svg {
+  width: 13px !important;
+  height: 13px !important;
+  flex-shrink: 0 !important;
+}
+
+/* ─── Comment Reactions & Badges ─── */
+
+.bn-thread-comment .bn-comment-actions-wrapper {
+  padding: 0 !important;
+  margin: 0 !important;
+  border-top: none !important;
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+.bn-thread-comment .bn-comment-actions-wrapper:has(.bn-comment-actions) {
+  justify-content: flex-end !important;
+  padding-top: 8px !important;
+  padding-bottom: 2px !important;
+}
+
+.bn-thread-comment .bn-comment-reactions {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+  margin-top: 4px !important;
+  padding: 0 !important;
+}
+
+.bn-thread-comment .bn-comment-reactions > div,
+.bn-thread-comment .bn-comment-reactions [data-slot="popover-trigger"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  max-height: 22px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.bn-thread-comment .bn-badge {
+  height: 23px !important;
+  min-height: 23px !important;
+  max-height: 23px !important;
+  padding: 0 8px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  border-radius: 9999px !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  background-color: #f4f4f6 !important;
+  color: var(--foreground) !important;
+  gap: 4px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  box-shadow: none !important;
+  transition: background-color 0.12s ease !important;
+}
+
+.bn-thread-comment .bn-badge:hover {
+  background-color: #e5e7eb !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+.dark .bn-thread-comment .bn-badge {
+  background-color: rgba(255, 255, 255, 0.07) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  color: #ededed !important;
+}
+
+.dark .bn-thread-comment .bn-badge:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.bn-thread-comment .bn-badge span {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+}
+
+.bn-thread-comment .bn-badge svg {
+  width: 15px !important;
+  height: 15px !important;
+  flex-shrink: 0 !important;
+  display: block !important;
+}
+
+.bn-thread-comment .bn-badge.bn-comment-add-reaction {
+  padding: 0 8px !important;
+  color: var(--muted-foreground) !important;
+}
+
+/* Resolved thread indicator banner */
+.bn-thread-comment:has(.bn-resolved-text) {
+  padding: 6px 10px !important;
+  border-radius: 6px !important;
+  background-color: rgba(34, 197, 94, 0.08) !important;
+  border: none !important;
+}
+
+.bn-thread-comment .bn-resolved-text {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #16a34a !important;
+}
+
+.dark .bn-thread-comment:has(.bn-resolved-text) {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  border: none !important;
+}
+
+.dark .bn-thread-comment .bn-resolved-text {
+  color: #4ade80 !important;
+}
+
+/* Dim resolved threads slightly when unselected in sidebar for quick visual hierarchy */
+.bn-threads-sidebar .bn-thread:has(.bn-resolved-text):not(.selected):not(:hover) {
+  opacity: 0.85;
+}
+
+.bn-thread-expand-prompt {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 4px 8px !important;
+  border: none !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--muted-foreground) !important;
+  background-color: var(--sidebar-accent) !important;
+  box-shadow: none !important;
+  outline: none !important;
+  cursor: pointer !important;
+  text-decoration: none !important;
+  width: fit-content !important;
+  margin: 2px 0 !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+}
+
+.bn-thread-expand-prompt:hover {
+  background-color: #e5e7eb !important;
+  color: var(--foreground) !important;
+  text-decoration: none !important;
+  border: none !important;
+  outline: none !important;
+}
+
+.dark .bn-thread-expand-prompt {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  color: #a3a3a3 !important;
+}
+
+.dark .bn-thread-expand-prompt:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+/* ─── Reply Composer in Thread ─── */
+
+.bn-thread-composer {
+  padding: 10px 12px !important;
+  background-color: var(--nd-comments-surface) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.dark .bn-thread-composer {
+  background-color: var(--nd-comments-surface) !important;
+  border-top-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.bn-thread-composer .bn-comment-editor {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.dark .bn-thread-composer .bn-comment-editor {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.bn-thread-composer .bn-comment-editor:focus,
+.bn-thread-composer .bn-comment-editor:focus-within {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.bn-thread-composer .bn-comment-editor .bn-container,
+.bn-thread-composer .bn-comment-editor .bn-editor {
+  min-height: 24px !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-top: none !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper .bn-comment-actions,
+.bn-thread-composer .bn-comment-actions-wrapper .bn-action-toolbar {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper button,
+.bn-thread-composer .bn-comment-actions-wrapper button[data-slot="button"],
+.bn-thread-composer .bn-comment-actions-wrapper .bn-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 52px !important;
+  height: 26px !important;
+  padding: 0 10px !important;
+  border: none !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--primary-foreground) !important;
+  background-color: var(--primary) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+  cursor: pointer !important;
+  transition: opacity 0.12s ease !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper button:disabled,
+.bn-thread-composer .bn-comment-actions-wrapper button[disabled] {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+/* ─── Document Comment Highlight Marks ─── */
+
+.bn-thread-mark:not([data-orphan="true"]):not([data-resolved="true"]) {
+  border-bottom: 1.75px solid var(--nd-comment-mark-border) !important;
+  border-radius: 2px !important;
+  background-color: var(--nd-comment-mark-bg) !important;
+  cursor: pointer !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease !important;
+}
+
+.bn-thread-mark:not([data-orphan="true"]):not([data-resolved="true"]):hover {
+  border-bottom-color: var(--nd-comment-mark-border-hover) !important;
+  background-color: var(--nd-comment-mark-bg-hover) !important;
+}
+
+.bn-thread-mark[data-selected="true"]:not([data-orphan="true"]):not([data-resolved="true"]),
+.bn-thread-mark.selected:not([data-orphan="true"]):not([data-resolved="true"]) {
+  border-bottom: 2.25px solid var(--nd-comment-mark-border-selected) !important;
+  background-color: var(--nd-comment-mark-bg-selected) !important;
+}
+
+/* Resolved / orphaned comment marks: completely transparent with no hover background, border, or pointer */
+.bn-thread-mark[data-orphan="true"],
+.bn-thread-mark[data-orphan="true"]:hover,
+.bn-thread-mark[data-resolved="true"],
+.bn-thread-mark[data-resolved="true"]:hover,
+.dark .bn-thread-mark[data-orphan="true"],
+.dark .bn-thread-mark[data-orphan="true"]:hover,
+.dark .bn-thread-mark[data-resolved="true"],
+.dark .bn-thread-mark[data-resolved="true"]:hover {
+  background-color: transparent !important;
+  border-bottom: none !important;
+  cursor: inherit !important;
+}
+
+/* ─── Comment Dropdown Menus ─── */
+
+[data-slot="dropdown-menu-content"].bn-menu-dropdown {
+  background-color: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14) !important;
+  padding: 4px !important;
+  min-width: 140px !important;
+}
+
+.dark [data-slot="dropdown-menu-content"].bn-menu-dropdown {
+  background-color: var(--card) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
 }
 
 .nd-app-shell-main {
@@ -2212,8 +2686,19 @@ html:not(.dark) .bn-editor a:visited:hover {
   cursor: not-allowed !important;
 }
 
+/* Ensure tooltips, dropdowns, and popovers render above fixed sidebars (comments sidebar z-index: 50) */
+div:has(> [data-slot="tooltip-content"]),
+div[role="presentation"]:has([data-slot="tooltip-content"]),
+div:has(> [data-slot="dropdown-menu-content"]),
+div[role="presentation"]:has([data-slot="dropdown-menu-content"]),
+div:has(> [data-slot="popover-content"]),
+div[role="presentation"]:has([data-slot="popover-content"]) {
+  z-index: 70 !important;
+}
+
 /* Tooltip popups for toolbar buttons - preserve BlockNote's native tooltip design & arrow, retain theme coloring */
 [data-slot="tooltip-content"] {
+  z-index: 70 !important;
   background-color: var(--sidebar) !important;
   color: var(--sidebar-foreground) !important;
   border: 1px solid var(--sidebar-border) !important;

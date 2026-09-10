@@ -51,11 +51,10 @@ jest.mock('@blocknote/react', () => {
     UnnestBlockButton: () => null,
     CreateLinkButton: () => null,
     AddCommentButton: () => null,
-    AddTiptapCommentButton: () => null,
-    FloatingComposerController: () => null,
-    FloatingThreadController: () => null,
     SideMenuController: () => null,
     SuggestionMenuController: jest.fn(() => null),
+    FloatingComposerController: () => null,
+    FloatingThreadController: () => null,
     getDefaultReactSlashMenuItems: jest.fn(() => []),
     AddBlockButton: () => null,
     DragHandleButton: () => null,
@@ -93,6 +92,82 @@ jest.mock('@blocknote/diagram-block', () => ({
 
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
+  ShadCNDefaultComponents: {
+    DropdownMenu: {
+      DropdownMenuTrigger: ({
+        children,
+        nativeButton: _nativeButton,
+        render: _render,
+        ...props
+      }: React.ComponentPropsWithoutRef<'button'> & {
+        nativeButton?: boolean;
+        render?: React.ReactNode;
+      }) => {
+        void _nativeButton;
+        void _render;
+        return <button {...props}>{children}</button>;
+      },
+      DropdownMenuContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="dropdown-menu-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+    Popover: {
+      PopoverTrigger: ({
+        children,
+        nativeButton: _nativeButton,
+        render: _render,
+        ...props
+      }: React.ComponentPropsWithoutRef<'button'> & {
+        nativeButton?: boolean;
+        render?: React.ReactNode;
+      }) => {
+        void _nativeButton;
+        void _render;
+        return <button {...props}>{children}</button>;
+      },
+      PopoverContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="popover-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+    Tooltip: {
+      TooltipContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="tooltip-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+  },
 }));
 
 jest.mock('@blocknote/core', () => {
@@ -1301,5 +1376,138 @@ describe('Editor Component', () => {
         }),
       })
     );
+  });
+
+  describe('resolveNativeButton and customShadCNComponents', () => {
+    it('correctly resolves nativeButton based on target element type', async () => {
+      const { resolveNativeButton } = await import('@/components/editor/EditorContent');
+
+      expect(resolveNativeButton(<button type="button">Click</button>)).toBe(true);
+      expect(resolveNativeButton(<div>Non button</div>)).toBe(false);
+      expect(resolveNativeButton(<span>Non button</span>)).toBe(false);
+
+      const CustomComponent = () => null;
+      expect(resolveNativeButton(<CustomComponent />)).toBe(true);
+
+      expect(resolveNativeButton(<button>Click</button>, false)).toBe(false);
+      expect(resolveNativeButton(<div>Click</div>, true)).toBe(true);
+      expect(resolveNativeButton(null)).toBe(true);
+    });
+
+    it('passes nativeButton=true for button triggers and nativeButton=false for non-button triggers', async () => {
+      const { customShadCNComponents } = await import('@/components/editor/EditorContent');
+      const { ShadCNDefaultComponents } = await import('@blocknote/shadcn');
+
+      const mockDropdownTrigger = jest.spyOn(
+        ShadCNDefaultComponents.DropdownMenu,
+        'DropdownMenuTrigger'
+      );
+      const mockPopoverTrigger = jest.spyOn(ShadCNDefaultComponents.Popover, 'PopoverTrigger');
+
+      const DropdownMenuTrigger = customShadCNComponents.DropdownMenu
+        ?.DropdownMenuTrigger as React.ComponentType<{
+        render?: React.ReactNode;
+        children?: React.ReactNode;
+      }>;
+      const PopoverTrigger = customShadCNComponents.Popover?.PopoverTrigger as React.ComponentType<{
+        render?: React.ReactNode;
+        children?: React.ReactNode;
+      }>;
+
+      expect(DropdownMenuTrigger).toBeDefined();
+      expect(PopoverTrigger).toBeDefined();
+
+      mockDropdownTrigger.mockClear();
+      mockPopoverTrigger.mockClear();
+
+      // Render button through DropdownMenuTrigger (e.g. SideMenu DragHandleButton)
+      render(<DropdownMenuTrigger render={<button type="button">Drag</button>} />);
+
+      expect(mockDropdownTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: true,
+        })
+      );
+
+      // Render div through PopoverTrigger (e.g. EmojiPicker)
+      render(<PopoverTrigger render={<div>Emoji</div>} />);
+
+      expect(mockPopoverTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: false,
+        })
+      );
+
+      // When render is omitted and only children is passed, nativeButton defaults to true
+      mockDropdownTrigger.mockClear();
+      render(
+        <DropdownMenuTrigger>
+          <div>Child inside default native button</div>
+        </DropdownMenuTrigger>
+      );
+      expect(mockDropdownTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: true,
+        })
+      );
+    });
+
+    it('portals TooltipContent, DropdownMenuContent, and PopoverContent to document.body', async () => {
+      const { customShadCNComponents } = await import('@/components/editor/EditorContent');
+      const { ShadCNDefaultComponents } = await import('@blocknote/shadcn');
+
+      const mockTooltipContent = jest.spyOn(ShadCNDefaultComponents.Tooltip, 'TooltipContent');
+      const mockDropdownMenuContent = jest.spyOn(
+        ShadCNDefaultComponents.DropdownMenu,
+        'DropdownMenuContent'
+      );
+      const mockPopoverContent = jest.spyOn(ShadCNDefaultComponents.Popover, 'PopoverContent');
+
+      mockTooltipContent.mockClear();
+      mockDropdownMenuContent.mockClear();
+      mockPopoverContent.mockClear();
+
+      const TooltipContent = customShadCNComponents.Tooltip?.TooltipContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+      const DropdownMenuContent = customShadCNComponents.DropdownMenu
+        ?.DropdownMenuContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+      const PopoverContent = customShadCNComponents.Popover?.PopoverContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+
+      expect(TooltipContent).toBeDefined();
+      expect(DropdownMenuContent).toBeDefined();
+      expect(PopoverContent).toBeDefined();
+
+      const dummyElement = document.createElement('div');
+
+      // Even if BlockNote passes container={editor.portalElement}, it should be redirected to document.body
+      render(<TooltipContent container={dummyElement}>Tooltip text</TooltipContent>);
+      expect(mockTooltipContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+
+      render(<DropdownMenuContent container={dummyElement}>Menu text</DropdownMenuContent>);
+      expect(mockDropdownMenuContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+
+      render(<PopoverContent container={dummyElement}>Popover text</PopoverContent>);
+      expect(mockPopoverContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+    });
   });
 });
