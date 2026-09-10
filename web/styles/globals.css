@@ -37,7 +37,6 @@
   --sidebar-ring: oklch(0.708 0 0);
   --nd-comments-rail-width: 22rem;
   --nd-sidebar-width: 256px;
-  --nd-workspace-left-sidebar-width: 16rem;
 
   /* Comments Panel & Toolbar Tokens */
   --nd-comments-panel-bg: #f4f4f6;
@@ -2556,10 +2555,7 @@ html:not(.dark) .bn-editor a:visited:hover {
 
 @media (min-width: 768px) {
   body[data-comments-sidebar-open='true'] .nd-app-shell-main {
-    padding-left: max(
-      0px,
-      calc(var(--nd-comments-rail-width) - var(--nd-workspace-left-sidebar-width))
-    );
+    padding-left: 0;
     padding-right: var(--nd-comments-rail-width);
   }
 

@@ -173,3 +173,21 @@ describe('AppShell local guest document promotion', () => {
     });
   });
 });
+
+describe('AppShell layout', () => {
+  it('renders .nd-app-shell-main with a centered editor container', () => {
+    const { container } = render(
+      <AppShell>
+        <div data-testid="test-editor">Editor Content</div>
+      </AppShell>
+    );
+
+    const main = container.querySelector('main.nd-app-shell-main');
+    expect(main).toBeInTheDocument();
+    expect(main).toHaveClass('flex-1');
+
+    const centeredContainer = container.querySelector('.max-w-4xl.mx-auto');
+    expect(centeredContainer).toBeInTheDocument();
+    expect(centeredContainer).toContainElement(screen.getByTestId('test-editor'));
+  });
+});

@@ -125,6 +125,49 @@ describe('CommentsSidebar', () => {
       />
     );
     expect(container.firstChild).toBeNull();
+    expect(document.body.getAttribute('data-comments-sidebar-open')).toBeNull();
+  });
+
+  it('sets data-comments-sidebar-open on document.body when open, and cleans up on unmount', () => {
+    const { unmount, rerender } = render(
+      <CommentsSidebar
+        isOpen={true}
+        filter="open"
+        sort="position"
+        onFilterChange={jest.fn()}
+        onSortChange={jest.fn()}
+        onClose={jest.fn()}
+      />
+    );
+
+    expect(document.body.getAttribute('data-comments-sidebar-open')).toBe('true');
+
+    rerender(
+      <CommentsSidebar
+        isOpen={false}
+        filter="open"
+        sort="position"
+        onFilterChange={jest.fn()}
+        onSortChange={jest.fn()}
+        onClose={jest.fn()}
+      />
+    );
+    expect(document.body.getAttribute('data-comments-sidebar-open')).toBeNull();
+
+    rerender(
+      <CommentsSidebar
+        isOpen={true}
+        filter="open"
+        sort="position"
+        onFilterChange={jest.fn()}
+        onSortChange={jest.fn()}
+        onClose={jest.fn()}
+      />
+    );
+    expect(document.body.getAttribute('data-comments-sidebar-open')).toBe('true');
+
+    unmount();
+    expect(document.body.getAttribute('data-comments-sidebar-open')).toBeNull();
   });
 
   it('renders global empty state when there are no comment threads at all', () => {
