@@ -4,13 +4,14 @@ export type IconProps = {
   size?: number | string;
   className?: string;
   strokeWidth?: number | string;
-};
+} & Omit<React.SVGProps<SVGSVGElement>, 'width' | 'height' | 'children' | 'className'>;
 
 export const IconBase = ({
   size = 18,
   strokeWidth = 1,
   className,
   children,
+  ...rest
 }: React.PropsWithChildren<IconProps>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
@@ -23,6 +24,7 @@ export const IconBase = ({
     strokeLinecap="round"
     strokeLinejoin="round"
     className={className}
+    {...rest}
   >
     {children}
   </svg>

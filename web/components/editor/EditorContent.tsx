@@ -1,24 +1,69 @@
 'use client';
 
-import { BlockNoteSchema, createCodeBlockSpec, type User as CommentUser } from '@blocknote/core';
+import {
+  BlockNoteSchema,
+  combineByGroup,
+  createCodeBlockSpec,
+  type User as CommentUser,
+} from '@blocknote/core';
 import { CommentsExtension, DefaultThreadStoreAuth } from '@blocknote/core/comments';
+import { filterSuggestionItems } from '@blocknote/core/extensions';
 import { YjsThreadStore, withCollaboration } from '@blocknote/core/yjs';
 import { en } from '@blocknote/core/locales';
 import {
+  AddCommentButton,
+  BasicTextStyleButton,
+  BlockTypeSelect,
+  blockTypeSelectItems,
+  ColorStyleButton,
+  CreateLinkButton,
+  FileCaptionButton,
+  FileDeleteButton,
+  FileDownloadButton,
+  FilePreviewButton,
+  FileRenameButton,
+  FileReplaceButton,
   FloatingComposerController,
-  FloatingThreadController,
+  FormattingToolbar,
+  FormattingToolbarController,
+  getDefaultReactSlashMenuItems,
+  NestBlockButton,
   SideMenuController,
+  SuggestionMenuController,
+  TableCellMergeButton,
+  TextAlignButton,
+  UnnestBlockButton,
   useCreateBlockNote,
 } from '@blocknote/react';
-import { BlockNoteView } from '@blocknote/shadcn';
+import { BlockNoteView, ShadCNDefaultComponents, type ShadCNComponents } from '@blocknote/shadcn';
 import '@blocknote/shadcn/style.css';
+import {
+  getMultiColumnSlashMenuItems,
+  locales as multiColumnLocales,
+  multiColumnDropCursor as baseMultiColumnDropCursor,
+  withMultiColumn,
+} from '@blocknote/xl-multi-column';
+import {
+  createReactInlineMathSpec,
+  createReactMathBlockSpec,
+  getMathBlockTypeSelectItems,
+  getMathSlashMenuItems,
+  locales as mathLocales,
+} from '@blocknote/math-block';
+import {
+  createReactDiagramBlockSpec,
+  getDiagramBlockTypeSelectItems,
+  getDiagramSlashMenuItems,
+  locales as diagramLocales,
+} from '@blocknote/diagram-block';
+import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createAlert, getAlertBlockTypeSelectItem, getAlertSlashMenuItem } from './alert';
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
-import { Send } from '@/icons/Send';
 import { getPresenceColor } from '@/lib/realtime.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
@@ -38,7 +83,6 @@ import {
   buildFallbackAvatar,
 } from './comment.utils';
 import type { SharedCommentUserProfile } from './comment.utils';
-import { useCommentComposerPatch } from './useCommentComposerPatch';
 
 type CodeLanguageInfo = {
   name: string;
@@ -121,13 +165,140 @@ const extendedCodeBlockOptions = {
   supportedLanguages: createTolerantSupportedLanguages(codeBlockOptions.supportedLanguages),
 };
 
-const editorSchema = BlockNoteSchema.create().extend({
-  blockSpecs: {
-    codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
-  },
-});
+const editorSchema = withMultiColumn(
+  BlockNoteSchema.create().extend({
+    blockSpecs: {
+      alert: createAlert(),
+      codeBlock: createCodeBlockSpec(extendedCodeBlockOptions),
+      mathBlock: createReactMathBlockSpec(),
+      diagram: createReactDiagramBlockSpec(),
+    },
+    inlineContentSpecs: {
+      math: createReactInlineMathSpec(),
+    },
+  })
+);
 
-const EMPTY_SHADCN_COMPONENTS = {};
+export function resolveNativeButton(target: unknown, explicitNativeButton?: boolean): boolean {
+  if (explicitNativeButton !== undefined) {
+    return explicitNativeButton;
+  }
+  if (isValidElement(target)) {
+    if (typeof target.type === 'string') {
+      return target.type.toLowerCase() === 'button';
+    }
+  }
+  return true;
+}
+
+const DEFAULT_PORTAL_ELEMENTS = { default: null } as const;
+
+export const customShadCNComponents: Partial<ShadCNComponents> = {
+  DropdownMenu: {
+    ...ShadCNDefaultComponents.DropdownMenu,
+    DropdownMenuTrigger: ({
+      nativeButton: explicitNativeButton,
+      ...props
+    }: React.ComponentProps<typeof ShadCNDefaultComponents.DropdownMenu.DropdownMenuTrigger>) => {
+      const nativeButton = resolveNativeButton(props.render, explicitNativeButton);
+      return (
+        <ShadCNDefaultComponents.DropdownMenu.DropdownMenuTrigger
+          nativeButton={nativeButton}
+          {...props}
+        />
+      );
+    },
+    DropdownMenuContent: ({
+      container,
+      ...props
+    }: React.ComponentProps<typeof ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent>) => {
+      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      return (
+        <ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent
+          container={portalContainer}
+          {...props}
+        />
+      );
+    },
+  },
+  Popover: {
+    ...ShadCNDefaultComponents.Popover,
+    PopoverTrigger: ({
+      nativeButton: explicitNativeButton,
+      ...props
+    }: React.ComponentProps<typeof ShadCNDefaultComponents.Popover.PopoverTrigger>) => {
+      const nativeButton = resolveNativeButton(props.render, explicitNativeButton);
+      return (
+        <ShadCNDefaultComponents.Popover.PopoverTrigger nativeButton={nativeButton} {...props} />
+      );
+    },
+    PopoverContent: ({
+      container,
+      ...props
+    }: React.ComponentProps<typeof ShadCNDefaultComponents.Popover.PopoverContent>) => {
+      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      return (
+        <ShadCNDefaultComponents.Popover.PopoverContent container={portalContainer} {...props} />
+      );
+    },
+  },
+  Tooltip: {
+    ...ShadCNDefaultComponents.Tooltip,
+    TooltipContent: ({
+      container,
+      ...props
+    }: React.ComponentProps<typeof ShadCNDefaultComponents.Tooltip.TooltipContent>) => {
+      // By default, BlockNote's ToolbarButton passes container={editor.portalElement},
+      // which traps the tooltip inside the editor's stacking context (behind fixed panels
+      // like the comments sidebar). Portaling to document.body allows the tooltip to render
+      // above the comments sidebar (z-index: 50).
+      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      return (
+        <ShadCNDefaultComponents.Tooltip.TooltipContent container={portalContainer} {...props} />
+      );
+    },
+  },
+};
+
+type MultiColumnDropContext = Parameters<
+  NonNullable<typeof baseMultiColumnDropCursor.hooks.computeDropPosition>
+>[0];
+
+const multiColumnDropCursor = {
+  hooks: {
+    computeDropPosition: (context: MultiColumnDropContext) => {
+      try {
+        return (
+          baseMultiColumnDropCursor.hooks.computeDropPosition?.(context) ?? context.defaultPosition
+        );
+      } catch {
+        // Stale drag position during concurrent collaborative edits: fall back to default position
+        return context.defaultPosition;
+      }
+    },
+  },
+};
+
+function hasMeaningfulContent(blocks: unknown, title: unknown): boolean {
+  if (typeof title === 'string' && title !== 'Untitled') {
+    return true;
+  }
+  if (!Array.isArray(blocks)) {
+    return false;
+  }
+  if (blocks.length > 1) {
+    return true;
+  }
+  if (blocks.length === 1) {
+    const first = blocks[0] as { content?: unknown[]; children?: unknown[] } | null | undefined;
+    if (first && typeof first === 'object') {
+      const hasContent = Array.isArray(first.content) && first.content.length > 0;
+      const hasChildren = Array.isArray(first.children) && first.children.length > 0;
+      return hasContent || hasChildren;
+    }
+  }
+  return false;
+}
 
 export function EditorContent({
   documentId,
@@ -171,7 +342,6 @@ export function EditorContent({
   onCommentsThreadStatsChange: (stats: CommentThreadStats) => void;
 }) {
   const { resolvedTheme } = useTheme();
-  const sendIconTemplateRef = useRef<HTMLSpanElement>(null);
 
   const collaboratorCache = useRef<Map<string, CommentUser>>(new Map());
   const collaboratorCacheUpdatedAt = useRef(0);
@@ -179,14 +349,21 @@ export function EditorContent({
   const commentsDictionary = useMemo(
     () => ({
       ...en,
-      placeholders: {
-        ...en.placeholders,
-        new_comment: 'Add comment...',
-        comment_reply: 'Add comment...',
+      // Adds column / column list strings (Two Columns, Three Columns) to the
+      // slash menu dictionary.
+      multi_column: multiColumnLocales.en,
+      math: mathLocales.en,
+      diagram: diagramLocales.en,
+      formatting_toolbar: {
+        ...en.formatting_toolbar,
+        code: {
+          tooltip: 'Code',
+          secondary_tooltip: 'Mod+E',
+        },
       },
       comments: {
         ...en.comments,
-        save_button_text: 'Send',
+        save_button_text: 'Comment',
       },
     }),
     []
@@ -382,6 +559,11 @@ export function EditorContent({
   const editor = useCreateBlockNote(
     withCollaboration({
       schema: editorSchema,
+      // The default drop cursor only shows above/below blocks - the
+      // multi-column one also shows on the sides for column drops. Wrapped
+      // to fall back to the default cursor on stale positions instead of
+      // throwing "Position out of range" during concurrent remote edits.
+      dropCursor: multiColumnDropCursor,
       tables: {
         splitCells: true,
         cellBackgroundColor: true,
@@ -407,7 +589,74 @@ export function EditorContent({
     [documentId, ydoc]
   );
 
-  useCommentComposerPatch(commentsUiEnabled, sendIconTemplateRef);
+  const getSlashMenuItems = useCallback(
+    async (query: string) => {
+      const defaultItems = getDefaultReactSlashMenuItems(editor);
+      const columnItems = getMultiColumnSlashMenuItems(editor);
+      const mathItems = getMathSlashMenuItems(editor);
+      const diagramItems = getDiagramSlashMenuItems(editor);
+
+      const lastBasicBlockIndex = defaultItems.findLastIndex(
+        (item) => item.group === 'Basic blocks'
+      );
+      const alertItem = getAlertSlashMenuItem(editor);
+      if (lastBasicBlockIndex !== -1) {
+        defaultItems.splice(lastBasicBlockIndex + 1, 0, alertItem);
+      } else {
+        defaultItems.push(alertItem);
+      }
+
+      return filterSuggestionItems(
+        combineByGroup(defaultItems, columnItems, mathItems, diagramItems),
+        query
+      );
+    },
+    [editor]
+  );
+
+  const toolbarBlockTypeSelectItems = useMemo(
+    () => [
+      ...blockTypeSelectItems(editor.dictionary),
+      ...getMathBlockTypeSelectItems(editor),
+      ...getDiagramBlockTypeSelectItems(editor),
+      getAlertBlockTypeSelectItem(),
+    ],
+    [editor]
+  );
+
+  // Stable component identity for the formatting toolbar. Passing an inline
+  // `() => (...)` closure would create a new component type on every
+  // EditorContent render (e.g. realtime reconnect, meta update), unmounting
+  // and remounting the toolbar and dropping transient state (open link
+  // editor, block-type menu).
+  const renderFormattingToolbar = useCallback(
+    () => (
+      <FormattingToolbar blockTypeSelectItems={toolbarBlockTypeSelectItems}>
+        <BlockTypeSelect key="blockTypeSelect" items={toolbarBlockTypeSelectItems} />
+        <TableCellMergeButton key="tableCellMergeButton" />
+        <FileCaptionButton key="fileCaptionButton" />
+        <FileReplaceButton key="replaceFileButton" />
+        <FileRenameButton key="fileRenameButton" />
+        <FileDeleteButton key="fileDeleteButton" />
+        <FileDownloadButton key="fileDownloadButton" />
+        <FilePreviewButton key="filePreviewButton" />
+        <BasicTextStyleButton basicTextStyle="bold" key="boldStyleButton" />
+        <BasicTextStyleButton basicTextStyle="italic" key="italicStyleButton" />
+        <BasicTextStyleButton basicTextStyle="underline" key="underlineStyleButton" />
+        <BasicTextStyleButton basicTextStyle="strike" key="strikeStyleButton" />
+        <BasicTextStyleButton basicTextStyle="code" key="codeStyleButton" />
+        <TextAlignButton textAlignment="left" key="textAlignLeftButton" />
+        <TextAlignButton textAlignment="center" key="textAlignCenterButton" />
+        <TextAlignButton textAlignment="right" key="textAlignRightButton" />
+        <ColorStyleButton key="colorStyleButton" />
+        <NestBlockButton key="nestBlockButton" />
+        <UnnestBlockButton key="unnestBlockButton" />
+        <CreateLinkButton key="createLinkButton" />
+        <AddCommentButton key="addCommentButton" />
+      </FormattingToolbar>
+    ),
+    [toolbarBlockTypeSelectItems]
+  );
 
   useEffect(() => {
     editor.isEditable = !isReadOnly;
@@ -426,24 +675,24 @@ export function EditorContent({
   const focusRequested = useRef(false);
 
   const [isEditorVisible, setIsEditorVisible] = useState(() => {
-    const blocks = editor.document;
-    const hasTitle = meta.title !== 'Untitled';
-    const hasContent =
-      blocks.length > 1 ||
-      (blocks.length === 1 && Array.isArray(blocks[0].content) && blocks[0].content.length > 0);
-    return hasTitle || hasContent;
+    return hasMeaningfulContent(editor?.document, meta.title);
   });
 
   useEffect(() => {
-    const blocks = editor.document;
-    const hasContent =
-      blocks.length > 1 ||
-      (blocks.length === 1 && Array.isArray(blocks[0].content) && blocks[0].content.length > 0);
+    const revealIfHasContent = () => {
+      // Title is covered by the initializer above (fresh mount per document);
+      // this subscription only reacts to content arriving later (e.g. Yjs
+      // sync), so typing a title alone doesn't prematurely reveal the editor.
+      if (hasMeaningfulContent(editor?.document, undefined)) {
+        setIsEditorVisible(true);
+      }
+    };
 
-    if (hasContent) {
-      setIsEditorVisible(true);
+    revealIfHasContent();
+    if (typeof editor?.onChange === 'function') {
+      return editor.onChange(revealIfHasContent);
     }
-  }, [editor.document]);
+  }, [editor]);
 
   useEffect(() => {
     if (isEditorVisible && focusRequested.current) {
@@ -552,43 +801,40 @@ export function EditorContent({
             theme={resolvedTheme}
             editable={initialEditableRef.current}
             onPointerDownCapture={handleEditorPointerDownCapture}
-            shadCNComponents={EMPTY_SHADCN_COMPONENTS}
-            formattingToolbar={!isViewer}
+            shadCNComponents={customShadCNComponents}
+            portalElements={DEFAULT_PORTAL_ELEMENTS}
+            formattingToolbar={false}
             linkToolbar={!isViewer}
-            slashMenu={!isViewer}
+            slashMenu={false}
             sideMenu={false}
             filePanel={!isViewer}
             tableHandles={!isViewer}
             emojiPicker={!isViewer}
-            comments={false}
+            // When the comments sidebar is open, disable BlockNote's default
+            // floating comments UI (FloatingThreadController +
+            // FloatingComposerController). Otherwise selecting a thread in the
+            // sidebar would also open a second floating copy in the editor —
+            // BlockNote only supports a single expanded Thread instance.
+            // Sidebar clicks still call `selectThread(id)` (via ThreadsSidebar)
+            // so the editor scrolls to the mark, but only the sidebar copy
+            // stays open. New-comment drafts still need a composer, so one is
+            // rendered manually below while the sidebar is open.
+            comments={commentsUiEnabled && !commentsSidebarOpen}
           >
-            <span ref={sendIconTemplateRef} className="sr-only" aria-hidden="true">
-              <Send size={14} strokeWidth={1.75} />
-            </span>
+            {!isViewer && (
+              <FormattingToolbarController formattingToolbar={renderFormattingToolbar} />
+            )}
+            {!isViewer && (
+              <SuggestionMenuController triggerCharacter={'/'} getItems={getSlashMenuItems} />
+            )}
             {!isViewer && (
               <SideMenuController
                 floatingUIOptions={SIDE_MENU_FLOATING_OPTIONS}
                 sideMenu={CustomSideMenu}
               />
             )}
-            {commentsUiEnabled && (
-              <FloatingComposerController
-                floatingUIOptions={{
-                  elementProps: {
-                    className: 'nd-floating-composer',
-                  },
-                }}
-              />
-            )}
-            {commentsUiEnabled && !commentsSidebarOpen && (
-              <FloatingThreadController
-                floatingUIOptions={{
-                  elementProps: {
-                    className: 'nd-floating-thread',
-                  },
-                }}
-              />
-            )}
+            {/* Manual floating composer while the sidebar owns thread display. */}
+            {commentsUiEnabled && commentsSidebarOpen && <FloatingComposerController />}
             {commentsUiEnabled && (
               <CommentsSidebar
                 isOpen={commentsSidebarOpen}

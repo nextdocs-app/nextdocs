@@ -10,10 +10,12 @@ jest.mock('@blocknote/react', () => {
           mount: jest.fn(),
           unmount: jest.fn(),
           isEditable: true,
+          onChange: jest.fn(() => jest.fn()),
         }),
         deps
       );
     }),
+    blockTypeSelectItems: jest.fn(() => []),
     getFormattingToolbarItems: jest.fn(() => []),
     useBlockNoteEditor: jest.fn(() => ({
       getExtension: jest.fn(() => undefined),
@@ -31,19 +33,141 @@ jest.mock('@blocknote/react', () => {
       },
     })),
     FormattingToolbar: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-    FormattingToolbarController: () => null,
+    FormattingToolbarController: jest.fn(() => null),
+    BasicTextStyleButton: ({ basicTextStyle }: { basicTextStyle: string }) => (
+      <button data-test={basicTextStyle} />
+    ),
+    BlockTypeSelect: () => null,
+    TableCellMergeButton: () => null,
+    FileCaptionButton: () => null,
+    FileReplaceButton: () => null,
+    FileRenameButton: () => null,
+    FileDeleteButton: () => null,
+    FileDownloadButton: () => null,
+    FilePreviewButton: () => null,
+    TextAlignButton: () => null,
+    ColorStyleButton: () => null,
+    NestBlockButton: () => null,
+    UnnestBlockButton: () => null,
+    CreateLinkButton: () => null,
+    AddCommentButton: () => null,
+    SideMenuController: () => null,
+    SuggestionMenuController: jest.fn(() => null),
     FloatingComposerController: () => null,
     FloatingThreadController: () => null,
-    SideMenuController: () => null,
+    getDefaultReactSlashMenuItems: jest.fn(() => []),
     AddBlockButton: () => null,
     DragHandleButton: () => null,
     useExtensionState: jest.fn(),
     ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
+    createReactBlockSpec: jest.fn((config, implementation) => () => ({
+      type: config?.type || 'alert',
+      config,
+      implementation,
+    })),
   };
 });
 
+jest.mock('@blocknote/math-block', () => ({
+  createReactMathBlockSpec: jest.fn(() => ({ type: 'mathBlock' })),
+  createReactInlineMathSpec: jest.fn(() => ({ type: 'math' })),
+  getMathBlockTypeSelectItems: jest.fn(() => [
+    { name: 'Equation', type: 'mathBlock', icon: () => null },
+  ]),
+  getMathSlashMenuItems: jest.fn(() => [
+    { title: 'Block Equation', group: 'Advanced' },
+    { title: 'Inline Equation', group: 'Advanced' },
+  ]),
+  locales: { en: { block_type_select: { name: 'Equation' } } },
+}));
+
+jest.mock('@blocknote/diagram-block', () => ({
+  createReactDiagramBlockSpec: jest.fn(() => ({ type: 'diagram' })),
+  getDiagramBlockTypeSelectItems: jest.fn(() => [
+    { name: 'Diagram', type: 'diagram', icon: () => null },
+  ]),
+  getDiagramSlashMenuItems: jest.fn(() => [{ title: 'Diagram', group: 'Advanced' }]),
+  locales: { en: { block_type_select: { name: 'Diagram' } } },
+}));
+
 jest.mock('@blocknote/shadcn', () => ({
   BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
+  ShadCNDefaultComponents: {
+    DropdownMenu: {
+      DropdownMenuTrigger: ({
+        children,
+        nativeButton: _nativeButton,
+        render: _render,
+        ...props
+      }: React.ComponentPropsWithoutRef<'button'> & {
+        nativeButton?: boolean;
+        render?: React.ReactNode;
+      }) => {
+        void _nativeButton;
+        void _render;
+        return <button {...props}>{children}</button>;
+      },
+      DropdownMenuContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="dropdown-menu-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+    Popover: {
+      PopoverTrigger: ({
+        children,
+        nativeButton: _nativeButton,
+        render: _render,
+        ...props
+      }: React.ComponentPropsWithoutRef<'button'> & {
+        nativeButton?: boolean;
+        render?: React.ReactNode;
+      }) => {
+        void _nativeButton;
+        void _render;
+        return <button {...props}>{children}</button>;
+      },
+      PopoverContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="popover-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+    Tooltip: {
+      TooltipContent: ({
+        children,
+        container: _container,
+        ...props
+      }: React.ComponentPropsWithoutRef<'div'> & {
+        container?: HTMLElement | null;
+      }) => {
+        void _container;
+        return (
+          <div data-slot="tooltip-content" {...props}>
+            {children}
+          </div>
+        );
+      },
+    },
+  },
 }));
 
 jest.mock('@blocknote/core', () => {
@@ -54,6 +178,11 @@ jest.mock('@blocknote/core', () => {
       })),
     },
     createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
+    combineByGroup: jest.fn((base = [], ...others) => [...base, ...others.flat()]),
+    defaultProps: {
+      textAlignment: { default: 'left', values: ['left', 'center', 'right', 'justify'] },
+      textColor: { default: 'default' },
+    },
   };
   try {
     return {
@@ -75,6 +204,7 @@ jest.mock('@blocknote/core/comments', () => ({
 
 jest.mock('@blocknote/core/extensions', () => ({
   SideMenuExtension: {},
+  filterSuggestionItems: jest.fn((items) => items),
 }));
 
 jest.mock('@blocknote/core/yjs', () => ({
@@ -89,6 +219,13 @@ jest.mock('@blocknote/code-block', () => ({
       javascript: { name: 'JavaScript', aliases: ['javascript', 'js'] },
     },
   },
+}));
+
+jest.mock('@blocknote/xl-multi-column', () => ({
+  withMultiColumn: jest.fn((schema) => schema),
+  multiColumnDropCursor: { hooks: {} },
+  getMultiColumnSlashMenuItems: jest.fn(() => []),
+  locales: { en: { slash_menu: {} } },
 }));
 
 jest.mock('../../../components/editor/codeBlockHighlighter', () => ({
@@ -891,5 +1028,486 @@ describe('Editor Component', () => {
     expect(latestEditable).toBe(false);
     // Read-only is still driven via the editor instance.
     expect(editorInstance.isEditable).toBe(true);
+  });
+
+  it('should enable multi-column blocks via withMultiColumn schema wrapper', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+    // Schema passes through the mocked withMultiColumn (module-level wrapper),
+    // preserving the extended-schema marker asserted above, and the editor is
+    // configured with the resilient multi-column drop cursor wrapper.
+    expect(lastConfig.schema).toEqual(expect.objectContaining({ isExtendedSchema: true }));
+    expect(lastConfig.dropCursor).toEqual(expect.objectContaining({ hooks: expect.anything() }));
+    expect(typeof lastConfig.dropCursor.hooks.computeDropPosition).toBe('function');
+  });
+
+  it('should configure multi-column drop cursor and dictionary', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.dropCursor).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({ multi_column: expect.anything() })
+    );
+  });
+
+  it('should disable built-in slash menu since multi-column items use SuggestionMenuController', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Editable doc',
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastCall = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1];
+    expect(lastCall[0]).toEqual(expect.objectContaining({ slashMenu: false }));
+  });
+
+  // BlockNoteView is mocked and never renders its children, so reach the
+  // SuggestionMenuController element through BlockNoteView's props.
+  async function getRenderedSlashMenuItems(query: string) {
+    const { SuggestionMenuController } = await import('@blocknote/react');
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const menuElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === SuggestionMenuController
+    );
+    if (
+      !React.isValidElement<{
+        getItems: (q: string) => Promise<Array<{ title?: string; onItemClick?: () => void }>>;
+      }>(menuElement)
+    ) {
+      throw new Error('SuggestionMenuController was not rendered');
+    }
+    return menuElement.props.getItems(query);
+  }
+
+  function renderEditableDocWithTitle(title: string) {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title,
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+  }
+
+  it('should fall back to the default drop position when multi-column cursor computation throws', async () => {
+    const xl = await import('@blocknote/xl-multi-column');
+    const dropCursorMock = xl.multiColumnDropCursor as unknown as {
+      hooks: Record<string, unknown>;
+    };
+    const upstream = jest.fn(() => {
+      throw new Error('Position 999 out of range');
+    });
+    dropCursorMock.hooks.computeDropPosition = upstream;
+    try {
+      render(<Editor />);
+
+      const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+      const lastConfig =
+        useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+      const fallback = { pos: 1 };
+
+      expect(() =>
+        lastConfig.dropCursor.hooks.computeDropPosition({ defaultPosition: fallback })
+      ).not.toThrow();
+      expect(lastConfig.dropCursor.hooks.computeDropPosition({ defaultPosition: fallback })).toBe(
+        fallback
+      );
+      expect(upstream).toHaveBeenCalled();
+    } finally {
+      delete dropCursorMock.hooks.computeDropPosition;
+    }
+  });
+
+  it('should include multi-column items merged into the slash menu', async () => {
+    const xl = await import('@blocknote/xl-multi-column');
+    (xl.getMultiColumnSlashMenuItems as jest.Mock).mockReturnValueOnce([
+      {
+        title: 'Two Columns',
+        group: 'Basic blocks',
+      },
+    ]);
+    renderEditableDocWithTitle('Multi-column doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: 'Two Columns' })])
+    );
+  });
+
+  it('should show editor when document contains column blocks with children in an untitled document', () => {
+    const editorWithColumnBlock = {
+      isEditable: true,
+      document: [
+        {
+          id: 'col-list-1',
+          type: 'columnList',
+          children: [{ id: 'col-1', type: 'column', children: [] }],
+        },
+      ],
+      onChange: jest.fn(() => jest.fn()),
+      focus: jest.fn(),
+    };
+    (useCreateBlockNote as jest.Mock).mockReturnValueOnce(editorWithColumnBlock);
+
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Untitled',
+      },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+    expect(screen.getByTestId('blocknote-view')).toBeInTheDocument();
+  });
+
+  it('should initialize BlockNote with math dictionary and mathBlock in schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        math: expect.objectContaining({ block_type_select: { name: 'Equation' } }),
+      })
+    );
+  });
+
+  it('should include math items merged into the slash menu', async () => {
+    renderEditableDocWithTitle('Math doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Block Equation' }),
+        expect.objectContaining({ title: 'Inline Equation' }),
+      ])
+    );
+  });
+
+  it('should render FormattingToolbarController with math block type item when editable', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    const { getMathBlockTypeSelectItems } = await import('@blocknote/math-block');
+    renderEditableDocWithTitle('Math toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ blockTypeSelectItems: unknown }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    expect(getMathBlockTypeSelectItems).toHaveBeenCalled();
+    expect(renderedToolbar.props.blockTypeSelectItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Equation' })])
+    );
+  });
+
+  it('should initialize BlockNote with diagram dictionary and diagram in schema', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.schema).toBeDefined();
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        diagram: expect.objectContaining({ block_type_select: { name: 'Diagram' } }),
+      })
+    );
+  });
+
+  it('should include diagram items merged into the slash menu', async () => {
+    renderEditableDocWithTitle('Diagram doc');
+
+    const items = await getRenderedSlashMenuItems('');
+    expect(items).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Diagram' })]));
+  });
+
+  it('should render FormattingToolbarController with diagram block type item when editable', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    const { getDiagramBlockTypeSelectItems } = await import('@blocknote/diagram-block');
+    renderEditableDocWithTitle('Diagram toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ blockTypeSelectItems: unknown }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    expect(getDiagramBlockTypeSelectItems).toHaveBeenCalled();
+    expect(renderedToolbar.props.blockTypeSelectItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Diagram' })])
+    );
+  });
+
+  it('should not render FormattingToolbarController when view-only', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: {
+        ...mockMeta,
+        title: 'Math viewer doc',
+      },
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeUndefined();
+  });
+
+  it('should render FormattingToolbarController with inline code button when editable', async () => {
+    const { FormattingToolbarController, BasicTextStyleButton } = await import('@blocknote/react');
+    renderEditableDocWithTitle('Inline code toolbar doc');
+
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    const toolbarElement = React.Children.toArray(lastProps.children).find(
+      (child) => React.isValidElement(child) && child.type === FormattingToolbarController
+    );
+    expect(toolbarElement).toBeDefined();
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ children?: React.ReactNode }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('FormattingToolbarController was not rendered');
+    }
+    const renderedToolbar = toolbarElement.props.formattingToolbar();
+    const children = React.Children.toArray(renderedToolbar.props.children);
+    const codeButton = children.find(
+      (child) =>
+        React.isValidElement<{ basicTextStyle?: string }>(child) &&
+        child.type === BasicTextStyleButton &&
+        child.props.basicTextStyle === 'code'
+    );
+    expect(codeButton).toBeDefined();
+  });
+
+  it('should configure code tooltip and Mod+E shortcut in formatting toolbar dictionary', () => {
+    render(<Editor />);
+
+    const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
+    const lastConfig =
+      useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
+
+    expect(lastConfig.dictionary).toEqual(
+      expect.objectContaining({
+        formatting_toolbar: expect.objectContaining({
+          code: {
+            tooltip: 'Code',
+            secondary_tooltip: 'Mod+E',
+          },
+        }),
+      })
+    );
+  });
+
+  describe('resolveNativeButton and customShadCNComponents', () => {
+    it('correctly resolves nativeButton based on target element type', async () => {
+      const { resolveNativeButton } = await import('@/components/editor/EditorContent');
+
+      expect(resolveNativeButton(<button type="button">Click</button>)).toBe(true);
+      expect(resolveNativeButton(<div>Non button</div>)).toBe(false);
+      expect(resolveNativeButton(<span>Non button</span>)).toBe(false);
+
+      const CustomComponent = () => null;
+      expect(resolveNativeButton(<CustomComponent />)).toBe(true);
+
+      expect(resolveNativeButton(<button>Click</button>, false)).toBe(false);
+      expect(resolveNativeButton(<div>Click</div>, true)).toBe(true);
+      expect(resolveNativeButton(null)).toBe(true);
+    });
+
+    it('passes nativeButton=true for button triggers and nativeButton=false for non-button triggers', async () => {
+      const { customShadCNComponents } = await import('@/components/editor/EditorContent');
+      const { ShadCNDefaultComponents } = await import('@blocknote/shadcn');
+
+      const mockDropdownTrigger = jest.spyOn(
+        ShadCNDefaultComponents.DropdownMenu,
+        'DropdownMenuTrigger'
+      );
+      const mockPopoverTrigger = jest.spyOn(ShadCNDefaultComponents.Popover, 'PopoverTrigger');
+
+      const DropdownMenuTrigger = customShadCNComponents.DropdownMenu
+        ?.DropdownMenuTrigger as React.ComponentType<{
+        render?: React.ReactNode;
+        children?: React.ReactNode;
+      }>;
+      const PopoverTrigger = customShadCNComponents.Popover?.PopoverTrigger as React.ComponentType<{
+        render?: React.ReactNode;
+        children?: React.ReactNode;
+      }>;
+
+      expect(DropdownMenuTrigger).toBeDefined();
+      expect(PopoverTrigger).toBeDefined();
+
+      mockDropdownTrigger.mockClear();
+      mockPopoverTrigger.mockClear();
+
+      // Render button through DropdownMenuTrigger (e.g. SideMenu DragHandleButton)
+      render(<DropdownMenuTrigger render={<button type="button">Drag</button>} />);
+
+      expect(mockDropdownTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: true,
+        })
+      );
+
+      // Render div through PopoverTrigger (e.g. EmojiPicker)
+      render(<PopoverTrigger render={<div>Emoji</div>} />);
+
+      expect(mockPopoverTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: false,
+        })
+      );
+
+      // When render is omitted and only children is passed, nativeButton defaults to true
+      mockDropdownTrigger.mockClear();
+      render(
+        <DropdownMenuTrigger>
+          <div>Child inside default native button</div>
+        </DropdownMenuTrigger>
+      );
+      expect(mockDropdownTrigger.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          nativeButton: true,
+        })
+      );
+    });
+
+    it('portals TooltipContent, DropdownMenuContent, and PopoverContent to document.body', async () => {
+      const { customShadCNComponents } = await import('@/components/editor/EditorContent');
+      const { ShadCNDefaultComponents } = await import('@blocknote/shadcn');
+
+      const mockTooltipContent = jest.spyOn(ShadCNDefaultComponents.Tooltip, 'TooltipContent');
+      const mockDropdownMenuContent = jest.spyOn(
+        ShadCNDefaultComponents.DropdownMenu,
+        'DropdownMenuContent'
+      );
+      const mockPopoverContent = jest.spyOn(ShadCNDefaultComponents.Popover, 'PopoverContent');
+
+      mockTooltipContent.mockClear();
+      mockDropdownMenuContent.mockClear();
+      mockPopoverContent.mockClear();
+
+      const TooltipContent = customShadCNComponents.Tooltip?.TooltipContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+      const DropdownMenuContent = customShadCNComponents.DropdownMenu
+        ?.DropdownMenuContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+      const PopoverContent = customShadCNComponents.Popover?.PopoverContent as React.ComponentType<{
+        container?: HTMLElement | null;
+        children?: React.ReactNode;
+      }>;
+
+      expect(TooltipContent).toBeDefined();
+      expect(DropdownMenuContent).toBeDefined();
+      expect(PopoverContent).toBeDefined();
+
+      const dummyElement = document.createElement('div');
+
+      // Even if BlockNote passes container={editor.portalElement}, it should be redirected to document.body
+      render(<TooltipContent container={dummyElement}>Tooltip text</TooltipContent>);
+      expect(mockTooltipContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+
+      render(<DropdownMenuContent container={dummyElement}>Menu text</DropdownMenuContent>);
+      expect(mockDropdownMenuContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+
+      render(<PopoverContent container={dummyElement}>Popover text</PopoverContent>);
+      expect(mockPopoverContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: document.body,
+        })
+      );
+    });
   });
 });

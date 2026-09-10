@@ -24,4 +24,8 @@ export { Google } from './Google';
 export { Lock } from './Lock';
 export { UserCircle } from './UserCircle';
 export { Plus } from './Plus';
+export { TriangleAlert } from './TriangleAlert';
+export { CircleAlert } from './CircleAlert';
+export { Info } from './Info';
+export { CircleCheck } from './CircleCheck';
 export type { IconProps } from './IconBase';
