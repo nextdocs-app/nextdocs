@@ -12,12 +12,13 @@
   ],
   "scripts": {
     "check:lockfiles": "node scripts/check-workspace-lockfiles.js",
+    "verify": "node scripts/hooks.js verify",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
     "format": "turbo run format",
-    "prepare": "husky install"
+    "prepare": "husky"
   },
   "devDependencies": {
     "husky": "^9.0.0",
