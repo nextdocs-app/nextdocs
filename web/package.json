@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
-    "format": "prettier --check \"**/*.{ts,tsx,js,json,md}\"",
-    "format:fix": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+    "format": "prettier --check \"**/*.{ts,tsx,js,mjs,cjs,json,md}\"",
+    "format:fix": "prettier --write \"**/*.{ts,tsx,js,mjs,cjs,json,md}\""
   },
   "dependencies": {
     "@blocknote/code-block": "^0.54.2",

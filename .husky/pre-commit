@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Thin wrapper: added by `npm ci` / `npm install` via the root "prepare" script.
+# All logic lives in scripts/hooks.js so it stays cross-platform and testable.
+# GUI Git clients (VSCode, GitHub Desktop) often run without nvm-managed node on
+# PATH, so fail closed here with a hint instead of a bare "node: not found".
+if ! command -v node >/dev/null 2>&1; then
+  echo "nextdocs pre-commit: 'node' not found on PATH." >&2
+  echo "Commit from a terminal where node is available, or add node to your GUI client's PATH." >&2
+  exit 1
+fi
+
+exec node "$(dirname -- "$0")/../scripts/hooks.js" pre-commit

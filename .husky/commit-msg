@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Validates the commit subject convention. Logic lives in scripts/hooks.js.
+# GUI Git clients often run without nvm-managed node on PATH, so fail closed
+# here with a hint instead of a bare "node: not found".
+if ! command -v node >/dev/null 2>&1; then
+  echo "nextdocs commit-msg: 'node' not found on PATH." >&2
+  echo "Commit from a terminal where node is available, or add node to your GUI client's PATH." >&2
+  exit 1
+fi
+
+exec node "$(dirname -- "$0")/../scripts/hooks.js" commit-msg "$1"
