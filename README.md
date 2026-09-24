@@ -4,7 +4,6 @@
   </a>
 </p>
 
-
 <h3 align="center">
   <em>An open-source, block-based wiki and documentation platform for individuals and teams.</em>
 </h3>
@@ -20,7 +19,6 @@
   <a href="#getting-started">Getting Started</a> ·
   <a href="#roadmap">Roadmap</a>
 </p>
-
 
 ## Overview
 
@@ -65,11 +63,11 @@ The fastest way to get NextDocs running locally:
 
 That's it. The `./nd` CLI auto-starts a PostgreSQL container, generates ephemeral dev keys if needed, and launches all services with hot-reload.
 
-| Service | URL |
-|---------|-----|
-| Web app | http://localhost:3000 |
-| API | http://localhost:8080 |
-| Realtime WebSocket | ws://localhost:1234 |
+| Service            | URL                   |
+| ------------------ | --------------------- |
+| Web app            | http://localhost:3000 |
+| API                | http://localhost:8080 |
+| Realtime WebSocket | ws://localhost:1234   |
 
 ### Development Commands
 
