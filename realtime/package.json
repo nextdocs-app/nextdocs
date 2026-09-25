@@ -32,7 +32,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.0",
     "lib0": "^0.2.115",
     "ws": "^8.21.3",
     "y-protocols": "^1.0.7",
