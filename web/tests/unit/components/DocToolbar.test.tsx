@@ -22,7 +22,14 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('../../../components/SharePanel', () => ({
-  SharePanel: () => <div data-testid="share-panel" />,
+  SharePanel: (props: { canManageSharing?: boolean; isOpen?: boolean; documentId?: string }) => (
+    <div
+      data-testid="share-panel"
+      data-can-manage-sharing={String(props.canManageSharing)}
+      data-is-open={String(props.isOpen)}
+      data-document-id={props.documentId}
+    />
+  ),
 }));
 
 jest.mock('../../../services/document.service', () => ({
@@ -533,5 +540,42 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     const activeItem = screen.getByText('Active Page').closest('span[aria-current="page"]');
     expect(activeItem).toBeInTheDocument();
     expect(activeItem).not.toHaveAttribute('title');
+  });
+});
+
+describe('DocToolbar share panel integration', () => {
+  it('passes canManageSharing to SharePanel when isShareEnabled is true', async () => {
+    const user = userEvent.setup();
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-test-share"
+        isShareEnabled={true}
+        canManageSharing={true}
+        isOffline={false}
+      />
+    );
+
+    const sharePanel = screen.getByTestId('share-panel');
+    expect(sharePanel).toHaveAttribute('data-can-manage-sharing', 'true');
+    expect(sharePanel).toHaveAttribute('data-is-open', 'false');
+
+    const shareBtn = screen.getByRole('button', { name: /share/i });
+    await user.click(shareBtn);
+
+    expect(sharePanel).toHaveAttribute('data-is-open', 'true');
+  });
+
+  it('passes canManageSharing=false when not provided or false', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-test-share"
+        isShareEnabled={true}
+        canManageSharing={false}
+        isOffline={false}
+      />
+    );
+
+    const sharePanel = screen.getByTestId('share-panel');
+    expect(sharePanel).toHaveAttribute('data-can-manage-sharing', 'false');
   });
 });

@@ -66,6 +66,8 @@ interface DocToolbarProps {
   showTrashNotice?: boolean;
   /** Whether the viewer may restore/purge the trashed document (EDIT access or owner) */
   canManageTrash?: boolean;
+  /** Whether the viewer may manage sharing settings (OWNER access or full-access collaborator) */
+  canManageSharing?: boolean;
   /** Callback to restore the document from trash */
   onRestore?: () => void;
 }
@@ -87,6 +89,7 @@ export function DocToolbar({
   onGuestNoticeCtaClick,
   showTrashNotice = false,
   canManageTrash = false,
+  canManageSharing = false,
   onRestore,
 }: DocToolbarProps) {
   const router = useRouter();
@@ -588,6 +591,7 @@ export function DocToolbar({
           isOpen={isShareOpen}
           onClose={() => setIsShareOpen(false)}
           anchorRef={shareButtonRef}
+          canManageSharing={canManageSharing}
         />
       )}
     </>

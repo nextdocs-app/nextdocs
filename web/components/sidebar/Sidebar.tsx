@@ -256,13 +256,12 @@ function Sidebar() {
   /**
    * Cross-tree move router for the unified sidebar DnD context.
    *
-   * TODO(full-access): collaborators cannot re-share documents they do not own yet
-   * (sharing administration is owner-only; no FULL_ACCESS access level exists). Until
-   * that ships, moving a document between two shared documents is blocked in the UI -
-   * only sibling reordering inside the Shared section is offered. Dropping a private
-   * document into a shared document IS allowed: the backend transfers ownership of the
-   * moved subtree to the host tree's owner (location authority), and access then flows
-   * from the new parent chain.
+   * Moving a document between two shared documents remains blocked in the UI because
+   * a move only needs EDIT on the target parent (shared→shared reparenting requires
+   * separate move-authorization). Only sibling reordering inside the Shared section
+   * is offered. Dropping a private document into a shared document IS allowed: the
+   * backend transfers ownership of the moved subtree to the host tree's owner
+   * (location authority), and access then flows from the new parent chain.
    */
   const handleSidebarTreeMove = useCallback(
     (args: MoveDocumentArgs) => {
@@ -322,11 +321,10 @@ function Sidebar() {
         return;
       }
 
-      // Blocked until FULL_ACCESS exists.
+      // Shared→shared moves fall through here; only reorder/private/adopt route above.
       dispatch(
         addToast({
-          message:
-            'Moving documents between shared documents requires re-sharing permissions, which are not available yet.',
+          message: 'Nesting shared documents inside each other is not supported.',
           type: 'info',
         })
       );

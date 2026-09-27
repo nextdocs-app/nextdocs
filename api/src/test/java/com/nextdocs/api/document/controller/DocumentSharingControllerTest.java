@@ -77,20 +77,26 @@ class DocumentSharingControllerTest {
     @Test
     void listCollaborators_success_returns200() throws Exception {
         List<CollaboratorResponse> response = List.of(new CollaboratorResponse(
-                userId, "owner@example.com", "Owner", DocumentAccessLevel.OWNER, OffsetDateTime.now()));
+                userId, "owner@example.com", "Owner", DocumentAccessLevel.OWNER, OffsetDateTime.now(), true));
 
         when(sharingService.listCollaborators(userId, documentId)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/documents/{id}/collaborators", documentId).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"));
+                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
+                .andExpect(jsonPath("$.data[0].owner").value(true));
     }
 
     @Test
     void upsertCollaborator_success_returns201() throws Exception {
         CollaboratorResponse response = new CollaboratorResponse(
-                collaboratorUserId, "alice@example.com", "Alice", DocumentAccessLevel.EDIT, OffsetDateTime.now());
+                collaboratorUserId,
+                "alice@example.com",
+                "Alice",
+                DocumentAccessLevel.EDIT,
+                OffsetDateTime.now(),
+                false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
                 .thenReturn(response);
@@ -110,9 +116,38 @@ class DocumentSharingControllerTest {
     }
 
     @Test
+    void upsertCollaborator_ownerPayload_success_returns201() throws Exception {
+        CollaboratorResponse response = new CollaboratorResponse(
+                collaboratorUserId, "bob@example.com", "Bob", DocumentAccessLevel.OWNER, OffsetDateTime.now(), false);
+
+        when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
+                .thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/documents/{id}/collaborators", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "email": "bob@example.com",
+                          "accessLevel": "OWNER"
+                        }
+                        """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.email").value("bob@example.com"))
+                .andExpect(jsonPath("$.data.accessLevel").value("OWNER"))
+                .andExpect(jsonPath("$.data.owner").value(false));
+    }
+
+    @Test
     void updateCollaboratorAccess_success_returns200() throws Exception {
         CollaboratorResponse response = new CollaboratorResponse(
-                collaboratorUserId, "alice@example.com", "Alice", DocumentAccessLevel.VIEW, OffsetDateTime.now());
+                collaboratorUserId,
+                "alice@example.com",
+                "Alice",
+                DocumentAccessLevel.VIEW,
+                OffsetDateTime.now(),
+                false);
 
         when(sharingService.updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any()))
                 .thenReturn(response);

@@ -46,14 +46,15 @@ public class DocumentSharingService {
 
     @Transactional(readOnly = true)
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
-        Document doc = permissionService.requireReadAccessOrTrashOwner(requesterId, documentId);
+        Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
 
         CollaboratorResponse owner = new CollaboratorResponse(
                 doc.getUser().getId(),
                 doc.getUser().getEmail(),
                 doc.getUser().getDisplayName(),
                 DocumentAccessLevel.OWNER,
-                doc.getCreatedAt());
+                doc.getCreatedAt(),
+                true);
 
         List<CollaboratorResponse> collaborators = collaboratorRepository.findAllByDocument_Id(documentId).stream()
                 .map(c -> new CollaboratorResponse(
@@ -61,20 +62,21 @@ public class DocumentSharingService {
                         c.getUser().getEmail(),
                         c.getUser().getDisplayName(),
                         c.getAccessLevel(),
-                        c.getCreatedAt()))
+                        c.getCreatedAt(),
+                        false))
                 .toList();
 
         return java.util.stream.Stream.concat(java.util.stream.Stream.of(owner), collaborators.stream())
                 .toList();
     }
 
-    public CollaboratorResponse upsertCollaborator(UUID ownerId, UUID documentId, CollaboratorUpsertRequest request) {
+    public CollaboratorResponse upsertCollaborator(UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
         int attempt = 0;
         while (true) {
             try {
                 return selfProxy != null
-                        ? selfProxy.upsertCollaboratorAndPersist(ownerId, documentId, request)
-                        : upsertCollaboratorAndPersist(ownerId, documentId, request);
+                        ? selfProxy.upsertCollaboratorAndPersist(actorId, documentId, request)
+                        : upsertCollaboratorAndPersist(actorId, documentId, request);
             } catch (DataIntegrityViolationException ex) {
                 attempt++;
                 if (attempt >= MAX_ORDER_UPSERT_ATTEMPTS) {
@@ -86,24 +88,23 @@ public class DocumentSharingService {
 
     /**
      * Adds or updates a collaborator on a document.
-     *
-     * <p>TODO(full-access): sharing administration is direct-owner-only because no
-     * FULL_ACCESS access level exists yet - collaborators cannot re-share documents
-     * shared with them. Until that level is implemented, moving documents between two
-     * shared trees is intentionally blocked in the web UI for non-owners.
      */
     @Transactional
     public CollaboratorResponse upsertCollaboratorAndPersist(
-            UUID ownerId, UUID documentId, CollaboratorUpsertRequest request) {
-        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
+            UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
+        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
 
         User targetUser = userRepository
                 .findByEmail(request.email().strip().toLowerCase())
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "User not found for the provided email."));
 
-        if (targetUser.getId().equals(ownerId)) {
+        if (targetUser.getId().equals(doc.getUser().getId())) {
             throw new ApiException(ErrorCode.CONFLICT, "Document owner already has owner access.");
+        }
+
+        if (targetUser.getId().equals(actorId)) {
+            throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
         DocumentCollaborator collaborator = collaboratorRepository
@@ -114,7 +115,12 @@ public class DocumentSharingService {
                         .build());
 
         collaborator.setAccessLevel(requestedLevel);
-        collaborator.setGrantedBy(doc.getUser());
+        User actor = actorId.equals(doc.getUser().getId())
+                ? doc.getUser()
+                : userRepository
+                        .findById(actorId)
+                        .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found."));
+        collaborator.setGrantedBy(actor);
 
         DocumentCollaborator saved = collaboratorRepository.save(collaborator);
 
@@ -127,16 +133,21 @@ public class DocumentSharingService {
                 saved.getUser().getEmail(),
                 saved.getUser().getDisplayName(),
                 saved.getAccessLevel(),
-                saved.getCreatedAt());
+                saved.getCreatedAt(),
+                false);
     }
 
     @Transactional
     public CollaboratorResponse updateCollaboratorAccess(
-            UUID ownerId, UUID documentId, UUID collaboratorUserId, CollaboratorAccessUpdateRequest request) {
-        permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
+            UUID actorId, UUID documentId, UUID collaboratorUserId, CollaboratorAccessUpdateRequest request) {
+        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
-        if (ownerId.equals(collaboratorUserId)) {
+        if (doc.getUser().getId().equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be changed.");
+        }
+
+        if (actorId.equals(collaboratorUserId)) {
+            throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
         DocumentCollaborator collaborator = collaboratorRepository
@@ -151,15 +162,20 @@ public class DocumentSharingService {
                 saved.getUser().getEmail(),
                 saved.getUser().getDisplayName(),
                 saved.getAccessLevel(),
-                saved.getCreatedAt());
+                saved.getCreatedAt(),
+                false);
     }
 
     @Transactional
-    public void removeCollaborator(UUID ownerId, UUID documentId, UUID collaboratorUserId) {
-        permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
+    public void removeCollaborator(UUID actorId, UUID documentId, UUID collaboratorUserId) {
+        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
-        if (ownerId.equals(collaboratorUserId)) {
+        if (doc.getUser().getId().equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
+        }
+
+        if (actorId.equals(collaboratorUserId)) {
+            throw new ApiException(ErrorCode.CONFLICT, "Cannot remove yourself as collaborator. Use leave instead.");
         }
 
         boolean exists = collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId);
@@ -173,7 +189,7 @@ public class DocumentSharingService {
 
     @Transactional
     public void leaveSharedDocument(UUID userId, UUID documentId) {
-        Document doc = permissionService.requireReadAccess(userId, documentId);
+        Document doc = permissionService.requireReadAccessIncludingTrash(userId, documentId);
 
         if (doc.getUser().getId().equals(userId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owners cannot leave their own documents.");
@@ -189,8 +205,8 @@ public class DocumentSharingService {
     }
 
     @Transactional(readOnly = true)
-    public SharingSettingsResponse getSharingSettings(UUID ownerId, UUID documentId) {
-        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
+    public SharingSettingsResponse getSharingSettings(UUID actorId, UUID documentId) {
+        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         boolean hasActiveLink = doc.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK;
 
         return new SharingSettingsResponse(doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink);
@@ -198,8 +214,8 @@ public class DocumentSharingService {
 
     @Transactional
     public SharingSettingsResponse updateSharingSettings(
-            UUID ownerId, UUID documentId, SharingSettingsUpdateRequest request) {
-        Document doc = permissionService.requireOwnerAccessIncludingTrash(ownerId, documentId);
+            UUID actorId, UUID documentId, SharingSettingsUpdateRequest request) {
+        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
         DocumentGeneralAccessMode mode = request.generalAccessMode();
         if (mode == null) {
@@ -227,11 +243,16 @@ public class DocumentSharingService {
 
         // Trashed documents: report the caller's pre-trash access so the UI can offer a
         // read-only trash view (any level) versus manage actions (EDIT and above).
+        // `owner` means direct ownership only, matching the active path above — an
+        // OWNER-level collaborator reports accessLevel=OWNER with owner=false.
         DocumentAccessLevel trashAccess = permissionService.resolveTrashAccess(userId, documentId);
         if (trashAccess == null) {
             return new DocumentAccessResponse(documentId, false, null, false, true);
         }
-        boolean owner = trashAccess == DocumentAccessLevel.OWNER;
+        boolean owner = documentRepository
+                .findById(documentId)
+                .map(doc -> doc.getUser().getId().equals(userId))
+                .orElse(false);
         return new DocumentAccessResponse(documentId, true, trashAccess, owner, true);
     }
 
@@ -281,9 +302,6 @@ public class DocumentSharingService {
     private static DocumentAccessLevel normalizeCollaboratorAccess(DocumentAccessLevel accessLevel) {
         if (accessLevel == null) {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "accessLevel is required.");
-        }
-        if (accessLevel == DocumentAccessLevel.OWNER) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "OWNER is not allowed for collaborators.");
         }
         return accessLevel;
     }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   documentService,
   type Collaborator,
@@ -19,6 +19,7 @@ interface SharePanelProps {
   isOpen: boolean;
   onClose: () => void;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
+  canManageSharing?: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -37,7 +38,8 @@ const ACCESS_ACTION_LABELS: Record<string, string> = {
   OWNER: 'own',
 };
 
-const ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT'];
+const COLLABORATOR_ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
+const LINK_ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT'];
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 // Uses the same getPresenceColor as the realtime cursor so colours always match.
@@ -190,7 +192,13 @@ function AccessDropdown({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePanelProps) {
+export function SharePanel({
+  documentId,
+  isOpen,
+  onClose,
+  anchorRef,
+  canManageSharing = false,
+}: SharePanelProps) {
   const { isAuthenticated, accessToken, user } = useAuth();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -205,15 +213,6 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
   const [copied, setCopied] = useState(false);
 
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
-
-  const owner = useMemo(
-    () => collaborators.find((c) => c.accessLevel === 'OWNER') ?? null,
-    [collaborators]
-  );
-  const nonOwners = useMemo(
-    () => collaborators.filter((c) => c.accessLevel !== 'OWNER'),
-    [collaborators]
-  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -264,13 +263,22 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
       try {
         setIsLoading(true);
         setError(null);
-        const [cols, sett] = await Promise.all([
-          documentService.listCollaborators(documentId, accessToken),
-          documentService.getSharingSettings(documentId, accessToken),
-        ]);
-        if (!cancelled) {
-          setCollaborators(cols);
-          setSettings(sett);
+        if (!canManageSharing) {
+          setSettings(null);
+          const cols = await documentService.listCollaborators(documentId, accessToken);
+          if (!cancelled) {
+            setCollaborators(cols);
+            setSettings(null);
+          }
+        } else {
+          const [cols, sett] = await Promise.all([
+            documentService.listCollaborators(documentId, accessToken),
+            documentService.getSharingSettings(documentId, accessToken),
+          ]);
+          if (!cancelled) {
+            setCollaborators(cols);
+            setSettings(sett);
+          }
         }
       } catch (e) {
         if (!cancelled)
@@ -284,7 +292,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
     return () => {
       cancelled = true;
     };
-  }, [isOpen, isAuthenticated, accessToken, documentId]);
+  }, [isOpen, isAuthenticated, accessToken, documentId, canManageSharing]);
 
   // ── Outside click / Escape ───────────────────────────────────────────────
 
@@ -413,7 +421,14 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
   };
 
   const isAnyoneWithLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
-  const accessOpts = ACCESS_OPTIONS.map((o) => ({ value: o, label: ACCESS_LABELS[o] }));
+  const collaboratorAccessOpts = COLLABORATOR_ACCESS_OPTIONS.map((o) => ({
+    value: o,
+    label: ACCESS_LABELS[o],
+  }));
+  const linkAccessOpts = LINK_ACCESS_OPTIONS.map((o) => ({
+    value: o,
+    label: ACCESS_LABELS[o],
+  }));
   const generalModeOpts: DropdownOption[] = [
     { value: 'RESTRICTED', label: 'Restricted' },
     { value: 'ANYONE_WITH_LINK', label: 'Anyone with the link' },
@@ -451,6 +466,13 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
       <div className="px-5 pt-5 pb-4">
         {!isAuthenticated || !accessToken ? (
           <p className="py-2 text-sm text-muted-foreground">Sign in to manage sharing.</p>
+        ) : !canManageSharing ? (
+          <div>
+            <p className="text-[13px] text-muted-foreground">
+              You need owner access to manage sharing.
+            </p>
+            {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
+          </div>
         ) : (
           <>
             <div className="flex items-center gap-2">
@@ -475,7 +497,7 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
                 <>
                   <AccessDropdown
                     value={inviteAccess}
-                    options={accessOpts}
+                    options={collaboratorAccessOpts}
                     onChange={(v) => setInviteAccess(v as DocumentAccessLevel)}
                     align="right"
                   />
@@ -520,130 +542,123 @@ export function SharePanel({ documentId, isOpen, onClose, anchorRef }: SharePane
           ) : (
             <>
               {/* ── People with access ── */}
-              {(owner || nonOwners.length > 0) && (
+              {collaborators.length > 0 && (
                 <section className="px-5 pb-3">
                   <p className="mb-2 text-[13px] font-semibold text-foreground">
                     People with access
                   </p>
                   <ul className="space-y-0.5">
-                    {/* Owner */}
-                    {owner && (
-                      <li className="flex items-center gap-3 py-1.5">
-                        <Avatar seed={owner.userId} label={owner.displayName || owner.email} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[13.5px] font-medium text-foreground truncate leading-snug">
-                            {owner.displayName || owner.email}
-                            {owner.userId === user?.id && (
-                              <span className="font-normal text-muted-foreground"> (you)</span>
-                            )}
-                          </p>
-                          <p className="text-[12px] text-muted-foreground/65 truncate leading-snug">
-                            {owner.email}
-                          </p>
-                        </div>
-                        <span className="flex-shrink-0 pr-1 text-[13px] text-muted-foreground">
-                          Owner
-                        </span>
-                      </li>
-                    )}
+                    {collaborators.map((collab) => {
+                      const isSelf = collab.userId === user?.id;
+                      const canEditRow = canManageSharing && !isSelf && !collab.owner;
 
-                    {/* Non-owners */}
-                    {nonOwners.map((collab) => (
-                      <li
-                        key={collab.userId}
-                        className="flex items-center gap-3 py-1.5 group/collab"
-                      >
-                        <Avatar seed={collab.userId} label={collab.displayName || collab.email} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[13.5px] font-medium text-foreground truncate leading-snug">
-                            {collab.displayName || collab.email}
-                            {collab.userId === user?.id && (
-                              <span className="font-normal text-muted-foreground"> (you)</span>
-                            )}
-                          </p>
-                          <p className="text-[12px] text-muted-foreground/65 truncate leading-snug">
-                            {collab.email}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-0.5 flex-shrink-0">
-                          <AccessDropdown
-                            value={collab.accessLevel}
-                            options={accessOpts}
-                            onChange={(v) =>
-                              void handleAccessChange(collab.userId, v as DocumentAccessLevel)
-                            }
-                            align="right"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => void handleRemove(collab.userId)}
-                            aria-label="Remove collaborator"
-                            className="
-                              p-1 rounded-md opacity-0 group-hover/collab:opacity-100 focus-visible:opacity-100
-                              text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10
-                              focus-visible:text-destructive focus-visible:bg-destructive/10
-                              transition-all cursor-pointer
-                            "
-                          >
-                            <Close size={14} className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
+                      return (
+                        <li
+                          key={collab.userId}
+                          className="flex items-center gap-3 py-1.5 group/collab"
+                        >
+                          <Avatar seed={collab.userId} label={collab.displayName || collab.email} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13.5px] font-medium text-foreground truncate leading-snug">
+                              {collab.displayName || collab.email}
+                              {isSelf && (
+                                <span className="font-normal text-muted-foreground"> (you)</span>
+                              )}
+                            </p>
+                            <p className="text-[12px] text-muted-foreground/65 truncate leading-snug">
+                              {collab.email}
+                            </p>
+                          </div>
+                          {canEditRow ? (
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <AccessDropdown
+                                value={collab.accessLevel}
+                                options={collaboratorAccessOpts}
+                                onChange={(v) =>
+                                  void handleAccessChange(collab.userId, v as DocumentAccessLevel)
+                                }
+                                align="right"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleRemove(collab.userId)}
+                                aria-label="Remove collaborator"
+                                className="
+                                  p-1 rounded-md opacity-0 group-hover/collab:opacity-100 focus-visible:opacity-100
+                                  text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10
+                                  focus-visible:text-destructive focus-visible:bg-destructive/10
+                                  transition-all cursor-pointer
+                                "
+                              >
+                                <Close size={14} className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="flex-shrink-0 pr-1 text-[13px] text-muted-foreground">
+                              {ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </section>
               )}
 
               {/* ── General access ── */}
-              <section className="mt-1">
-                <p className="px-5 mb-2 text-[13px] font-semibold text-foreground">
-                  General access
-                </p>
+              {canManageSharing && settings && (
+                <section className="mt-1">
+                  <p className="px-5 mb-2 text-[13px] font-semibold text-foreground">
+                    General access
+                  </p>
 
-                <div className="mx-3 rounded-xl px-3 py-3 flex items-center gap-3 hover:bg-sidebar-accent/50 dark:hover:bg-sidebar-accent/35 transition-colors cursor-default">
-                  <span
-                    className={`
-                      inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full
-                      ${
-                        isAnyoneWithLink
-                          ? 'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
-                          : 'bg-sidebar-accent text-muted-foreground'
-                      }
-                    `}
-                  >
-                    {isAnyoneWithLink ? (
-                      <GlobeSolid className="h-5 w-5" />
-                    ) : (
-                      <Lock className="h-5 w-5" />
+                  <div className="mx-3 rounded-xl px-3 py-3 flex items-center gap-3 hover:bg-sidebar-accent/50 dark:hover:bg-sidebar-accent/35 transition-colors cursor-default">
+                    <span
+                      className={`
+                        inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full
+                        ${
+                          isAnyoneWithLink
+                            ? 'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
+                            : 'bg-sidebar-accent text-muted-foreground'
+                        }
+                      `}
+                    >
+                      {isAnyoneWithLink ? (
+                        <GlobeSolid className="h-5 w-5" />
+                      ) : (
+                        <Lock className="h-5 w-5" />
+                      )}
+                    </span>
+
+                    <div className="flex-1 min-w-0">
+                      <AccessDropdown
+                        value={settings?.generalAccessMode ?? 'RESTRICTED'}
+                        options={generalModeOpts}
+                        onChange={(v) =>
+                          void handleGeneralModeChange(v as DocumentGeneralAccessMode)
+                        }
+                        disabled={isSavingSettings}
+                        align="left"
+                      />
+                      <p className="text-[12px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
+                        {isAnyoneWithLink
+                          ? `Anyone on the internet with the link can ${ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view'}`
+                          : 'Only people with access can open with the link'}
+                      </p>
+                    </div>
+
+                    {isAnyoneWithLink && (
+                      <AccessDropdown
+                        value={settings?.linkAccessLevel ?? 'VIEW'}
+                        options={linkAccessOpts}
+                        onChange={(v) => void handleLinkAccessChange(v as DocumentAccessLevel)}
+                        disabled={isSavingSettings}
+                        align="right"
+                      />
                     )}
-                  </span>
-
-                  <div className="flex-1 min-w-0">
-                    <AccessDropdown
-                      value={settings?.generalAccessMode ?? 'RESTRICTED'}
-                      options={generalModeOpts}
-                      onChange={(v) => void handleGeneralModeChange(v as DocumentGeneralAccessMode)}
-                      disabled={isSavingSettings}
-                      align="left"
-                    />
-                    <p className="text-[12px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
-                      {isAnyoneWithLink
-                        ? `Anyone on the internet with the link can ${ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view'}`
-                        : 'Only people with access can open with the link'}
-                    </p>
                   </div>
-
-                  {isAnyoneWithLink && (
-                    <AccessDropdown
-                      value={settings?.linkAccessLevel ?? 'VIEW'}
-                      options={accessOpts}
-                      onChange={(v) => void handleLinkAccessChange(v as DocumentAccessLevel)}
-                      disabled={isSavingSettings}
-                      align="right"
-                    />
-                  )}
-                </div>
-              </section>
+                </section>
+              )}
             </>
           )}
         </div>

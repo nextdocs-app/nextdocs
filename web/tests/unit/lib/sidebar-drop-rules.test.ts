@@ -30,7 +30,7 @@ describe('isSidebarDropAllowed', () => {
     expect(isSidebarDropAllowed('top', sharedDrag())).toBe(true);
     expect(isSidebarDropAllowed('bottom', sharedDrag())).toBe(true);
 
-    // Nesting under another shared doc is blocked until FULL_ACCESS exists.
+    // Nesting under another shared doc is blocked.
     expect(isSidebarDropAllowed('mid', sharedDrag())).toBe(false);
     expect(isSidebarDropAllowed('empty', sharedDrag())).toBe(false);
 

@@ -234,37 +234,78 @@ class PermissionServiceTest {
     }
 
     @Test
-    void requireOwnerAccessIncludingTrash_trashedDocumentOwned_returnsDocument() {
+    void requireSharingAdminAccess_notFound_throwsNotFound() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(userId).build();
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireSharingAdminAccess_noTrashAccess_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn(null);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireSharingAdminAccess_notOwnerLevel_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("EDIT");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+    }
+
+    @Test
+    void requireSharingAdminAccess_hasOwnerAccess_returnsDocument() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("OWNER");
+
+        Document result = permissionService.requireSharingAdminAccess(userId, documentId);
+
+        assertEquals(doc, result);
+    }
+
+    @Test
+    void requireSharingAdminAccess_trashedDocumentWithTrashOwnerAccess_returnsDocument() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(owner)
                 .deletedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
 
-        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.of(trashed));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(trashed));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("OWNER");
 
-        Document result = permissionService.requireOwnerAccessIncludingTrash(userId, documentId);
+        Document result = permissionService.requireSharingAdminAccess(userId, documentId);
 
         assertEquals(trashed, result);
     }
 
     @Test
-    void requireOwnerAccessIncludingTrash_notOwner_throwsNotFound() {
-        UUID userId = UUID.randomUUID();
-        UUID documentId = UUID.randomUUID();
-
-        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.empty());
-
-        ApiException exception = assertThrows(
-                ApiException.class, () -> permissionService.requireOwnerAccessIncludingTrash(userId, documentId));
-        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
-    }
-
-    @Test
-    void requireReadAccessOrTrashOwner_activeWithAccess_returnsDocument() {
+    void requireReadAccessIncludingTrash_activeWithAccess_returnsDocument() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document active = Document.builder().id(documentId).build();
@@ -272,13 +313,13 @@ class PermissionServiceTest {
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(active));
         when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
 
-        Document result = permissionService.requireReadAccessOrTrashOwner(userId, documentId);
+        Document result = permissionService.requireReadAccessIncludingTrash(userId, documentId);
 
         assertEquals(active, result);
     }
 
     @Test
-    void requireReadAccessOrTrashOwner_activeWithoutAccess_throwsNotFound() {
+    void requireReadAccessIncludingTrash_activeWithoutAccess_throwsNotFound() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document active = Document.builder().id(documentId).build();
@@ -287,39 +328,56 @@ class PermissionServiceTest {
         when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
 
         ApiException exception = assertThrows(
-                ApiException.class, () -> permissionService.requireReadAccessOrTrashOwner(userId, documentId));
+                ApiException.class, () -> permissionService.requireReadAccessIncludingTrash(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
     }
 
     @Test
-    void requireReadAccessOrTrashOwner_trashedOwnedByCaller_returnsDocument() {
+    void requireReadAccessIncludingTrash_trashedWithReadAccess_returnsDocument() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(userId).build();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(owner)
                 .deletedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.empty());
-        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.of(trashed));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(trashed));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("VIEW");
 
-        Document result = permissionService.requireReadAccessOrTrashOwner(userId, documentId);
+        Document result = permissionService.requireReadAccessIncludingTrash(userId, documentId);
 
         assertEquals(trashed, result);
     }
 
     @Test
-    void requireReadAccessOrTrashOwner_trashedNotOwner_throwsNotFound() {
+    void requireReadAccessIncludingTrash_trashedWithoutAccess_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .deletedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.empty());
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(trashed));
+        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn(null);
+
+        ApiException exception = assertThrows(
+                ApiException.class, () -> permissionService.requireReadAccessIncludingTrash(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireReadAccessIncludingTrash_trashedNotFound_throwsNotFound() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.empty());
-        when(documentRepository.findByIdAndUser_Id(documentId, userId)).thenReturn(Optional.empty());
+        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
 
         ApiException exception = assertThrows(
-                ApiException.class, () -> permissionService.requireReadAccessOrTrashOwner(userId, documentId));
+                ApiException.class, () -> permissionService.requireReadAccessIncludingTrash(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
     }
 }

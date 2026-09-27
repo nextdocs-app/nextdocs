@@ -4,11 +4,10 @@
  * Kept pure and side-effect free so both the drag-over visual gating and the
  * drop handler enforce identical policy.
  *
- * TODO(full-access): collaborators currently cannot re-share documents they do not
- * own - there is no FULL_ACCESS access level yet (sharing administration is
- * owner-only). Until that exists:
- *   - moving a document between two shared documents is blocked in the UI;
- *   - only sibling reordering inside the Shared section is allowed.
+ * Note: moving a document between two shared documents remains blocked in the UI
+ * because a move only needs EDIT on the target parent, so shared→shared reparenting
+ * requires a dedicated move-authorization model.
+ * Sibling reordering inside the Shared section is allowed.
  * Owners can still reorganize their own trees; the backend enforces the same
  * ownership model server-side.
  */
@@ -43,7 +42,7 @@ export function isSidebarDropAllowed(zone: SidebarDropZone, ctx: SidebarDropRule
 
   if (ctx.draggedIsShared && ctx.targetIsShared) {
     if (nestingDrop) {
-      // TODO(full-access): reparenting inside Shared requires membership control.
+      // Shared→shared reparenting stays blocked because a move only needs EDIT on the target parent.
       return false;
     }
     // Pure sibling reorder within the same parent (root level included).
