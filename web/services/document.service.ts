@@ -64,6 +64,7 @@ interface ApiCollaborator {
   displayName: string;
   accessLevel: DocumentAccessLevel;
   addedAt: string;
+  owner?: boolean;
 }
 
 interface ApiSharingSettings {
@@ -104,6 +105,7 @@ export interface Collaborator {
   displayName: string;
   accessLevel: DocumentAccessLevel;
   addedAt: string;
+  owner: boolean;
 }
 
 export interface SharingSettings {
@@ -470,6 +472,7 @@ class DocumentService {
       displayName: item.displayName,
       accessLevel: item.accessLevel,
       addedAt: item.addedAt,
+      owner: item.owner ?? false,
     }));
   }
 
@@ -495,6 +498,7 @@ class DocumentService {
       displayName: body.displayName,
       accessLevel: body.accessLevel,
       addedAt: body.addedAt,
+      owner: body.owner ?? false,
     };
   }
 
@@ -521,6 +525,7 @@ class DocumentService {
       displayName: body.displayName,
       accessLevel: body.accessLevel,
       addedAt: body.addedAt,
+      owner: body.owner ?? false,
     };
   }
 

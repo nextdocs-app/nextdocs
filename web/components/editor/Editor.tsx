@@ -228,6 +228,7 @@ export default function Editor() {
         onGuestNoticeCtaClick={openAuthModal}
         showTrashNotice={isTrashedDocument}
         canManageTrash={canManageTrash}
+        canManageSharing={accessLevel === 'OWNER'}
         onRestore={handleRestore}
         showCommentsButton={showCommentsButton}
         isCommentsSidebarOpen={isCommentsSidebarOpen}
