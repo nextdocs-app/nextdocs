@@ -13,4 +13,7 @@ public record CollaboratorResponse(
         @Schema(description = "Access level") DocumentAccessLevel accessLevel,
 
         @Schema(description = "Collaborator grant timestamp")
-        OffsetDateTime addedAt) {}
+        OffsetDateTime addedAt,
+
+        @Schema(description = "Whether this is the direct document owner")
+        boolean owner) {}

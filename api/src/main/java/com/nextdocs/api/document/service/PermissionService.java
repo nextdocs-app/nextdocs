@@ -90,26 +90,35 @@ public class PermissionService {
     }
 
     /**
-     * Enforces direct ownership regardless of trash state. Sharing administration stays
-     * available while a document is in trash so owners can still manage collaborator access.
+     * Enforces that the user has administrative sharing access (OWNER level) to the document.
+     * Applicable across active and trashed documents so owners and full-access collaborators
+     * can manage sharing regardless of trash state.
      *
-     * @return the Document if owned, whether trashed or not
+     * @return the Document if the user has OWNER access in trash scope
      */
     @Transactional(readOnly = true)
-    public Document requireOwnerAccessIncludingTrash(UUID userId, UUID documentId) {
-        return documentRepository
-                .findByIdAndUser_Id(documentId, userId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+    public Document requireSharingAdminAccess(UUID userId, UUID documentId) {
+        Document doc = documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessLevel access = resolveTrashAccess(userId, documentId);
+        if (access == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        if (access != DocumentAccessLevel.OWNER) {
+            throw new ApiException(ErrorCode.FORBIDDEN);
+        }
+        return doc;
     }
 
     /**
-     * Read access for active documents via the normal access chain; ownership-only fallback
-     * for trashed documents (e.g. viewing the collaborator list of a trashed document).
+     * Read access for documents including those in trash. Active documents resolve
+     * through the standard ancestor access chain; trashed documents resolve through
+     * the trash access chain. Any valid access level allows reading collaborators.
      *
-     * @return the Document if readable under either rule
+     * @return the Document if accessible
      */
     @Transactional(readOnly = true)
-    public Document requireReadAccessOrTrashOwner(UUID userId, UUID documentId) {
+    public Document requireReadAccessIncludingTrash(UUID userId, UUID documentId) {
         Document active =
                 documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
         if (active != null) {
@@ -119,9 +128,13 @@ public class PermissionService {
             }
             return active;
         }
-        return documentRepository
-                .findByIdAndUser_Id(documentId, userId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        Document trashed =
+                documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        DocumentAccessLevel access = resolveTrashAccess(userId, documentId);
+        if (access == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        return trashed;
     }
 
     /**
