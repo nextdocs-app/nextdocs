@@ -321,11 +321,10 @@ function Sidebar() {
         return;
       }
 
-      // Blocked until FULL_ACCESS exists.
+      // Shared→shared moves fall through here; only reorder/private/adopt route above.
       dispatch(
         addToast({
-          message:
-            'Moving documents between shared documents requires re-sharing permissions, which are not available yet.',
+          message: 'Nesting shared documents inside each other is not supported.',
           type: 'info',
         })
       );
