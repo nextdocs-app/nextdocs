@@ -3,7 +3,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SharePanel } from '@/components/SharePanel';
-import { Comments, Globe, MoreHorizontal } from '@/icons/index';
+import { Comments, MoreHorizontal, Share } from '@/icons/index';
 import { useAppSelector } from '@/stores/hooks';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
@@ -578,7 +578,7 @@ export function DocToolbar({
               cursor-pointer h-[30px]
             "
           >
-            <Globe />
+            <Share />
             Share
           </button>
         )}

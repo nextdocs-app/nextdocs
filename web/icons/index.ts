@@ -14,6 +14,7 @@ export { CloseSidebar } from './CloseSidebar';
 export { OpenSidebar } from './OpenSidebar';
 export { Comments } from './Comments';
 export { Globe } from './Globe';
+export { Share } from './Share';
 export { ChainLink } from './ChainLink';
 export { Check } from './Check';
 export { ChevronDown } from './ChevronDown';
