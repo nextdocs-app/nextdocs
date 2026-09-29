@@ -1,6 +1,6 @@
 import type { IconProps } from './IconBase';
 
-export const GitHub = ({ className, size = 16 }: IconProps) => (
+export const GitHub = ({ className, size = 17 }: IconProps) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     width={size}

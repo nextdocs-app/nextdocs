@@ -7,7 +7,7 @@ export type IconProps = {
 } & Omit<React.SVGProps<SVGSVGElement>, 'width' | 'height' | 'children' | 'className'>;
 
 export const IconBase = ({
-  size = 18,
+  size = 19,
   strokeWidth = 1,
   className,
   children,

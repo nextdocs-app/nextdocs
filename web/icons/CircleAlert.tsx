@@ -1,6 +1,6 @@
 import { IconBase, type IconProps } from './IconBase';
 
-export const CircleAlert = ({ className, size = 24, strokeWidth = 2, ...rest }: IconProps) => (
+export const CircleAlert = ({ className, size = 25, strokeWidth = 2, ...rest }: IconProps) => (
   <IconBase size={size} strokeWidth={strokeWidth} className={className} {...rest}>
     <circle cx="12" cy="12" r="10" />
     <line x1="12" x2="12" y1="8" y2="12" />

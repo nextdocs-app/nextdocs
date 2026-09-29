@@ -33,7 +33,7 @@ export function DocumentActionsMenu({
           anchor.actionType === 'leave-shared' ? (
             <Logout className="opacity-90" />
           ) : (
-            <Trash size={15} className="opacity-90" />
+            <Trash size={16} className="opacity-90" />
           )
         }
         onClick={(event) => {

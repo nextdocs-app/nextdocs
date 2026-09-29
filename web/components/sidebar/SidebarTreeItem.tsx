@@ -140,7 +140,7 @@ export function SidebarTreeItem({
         {...listeners}
         role="button"
         tabIndex={0}
-        className={`group/tree-item-row relative w-full flex items-center gap-1.5 py-1.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+        className={`group/tree-item-row relative w-full flex items-center gap-2 py-1.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
           isDropTarget
             ? 'nd-tree-drop-highlight'
             : isActive
@@ -157,9 +157,9 @@ export function SidebarTreeItem({
         }}
       >
         {/* Icon - document icon by default, chevron on hover for expandable items */}
-        <div className="relative h-4 w-4 flex-shrink-0">
+        <div className="relative h-[17px] w-[17px] flex-shrink-0">
           <DocumentText
-            size={16}
+            size={17}
             className="absolute inset-0 opacity-80 group-hover/tree-item-row:opacity-0 transition-opacity"
           />
           <button
@@ -169,7 +169,7 @@ export function SidebarTreeItem({
             aria-label={node.isExpanded ? 'Collapse' : 'Expand'}
           >
             <ChevronRight
-              size={16}
+              size={17}
               className={`transition-transform duration-150 ${
                 node.isExpanded ? 'rotate-90' : 'rotate-0'
               }`}
@@ -179,7 +179,7 @@ export function SidebarTreeItem({
 
         {/* Title */}
         <span
-          className={`text-[13px] truncate flex-1 min-w-0 ${
+          className={`text-[14px] truncate flex-1 min-w-0 ${
             isMenuOpen
               ? hasTwoActions
                 ? 'pr-11'
@@ -208,7 +208,7 @@ export function SidebarTreeItem({
               aria-label="Add a document inside"
               className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer"
             >
-              <Plus size={14} />
+              <Plus size={15} />
             </button>
           )}
 
@@ -219,7 +219,7 @@ export function SidebarTreeItem({
               onClick={(e) => onToggleDocumentActions(e, node.id, actionType)}
               className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer"
             >
-              <MoreHorizontal size={16} />
+              <MoreHorizontal size={17} />
             </button>
           )}
         </div>
@@ -252,14 +252,14 @@ export function SidebarTreeItem({
               className="flex items-center gap-2 py-1"
               style={{ paddingLeft: `${indentPx + 20}px` }}
             >
-              <div className="h-3.5 w-3.5 rounded bg-sidebar-foreground/10 animate-pulse" />
+              <div className="h-[17px] w-[17px] rounded bg-sidebar-foreground/10 animate-pulse" />
               <div className="h-3 w-28 rounded bg-sidebar-foreground/10 animate-pulse" />
             </div>
           ) : node.childrenLoaded && visibleChildren.length === 0 ? (
             !forceShowChildren && (
               <div
                 ref={setEmptyZoneRef}
-                className="relative min-h-[26px] py-1 text-[12px] text-muted-foreground/50 italic select-none"
+                className="relative min-h-[26px] py-1 text-[13px] text-muted-foreground/50 italic select-none"
                 style={{ paddingLeft: `${indentPx + 24}px` }}
               >
                 No documents inside

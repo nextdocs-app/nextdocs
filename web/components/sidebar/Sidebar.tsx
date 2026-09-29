@@ -874,15 +874,15 @@ function Sidebar() {
                 : 'hover:bg-sidebar-accent hover:text-sidebar-foreground'
             }`}
           >
-            <OpenSidebar size={20} className="flex-shrink-0 opacity-80" />
+            <OpenSidebar size={21} className="flex-shrink-0 opacity-80" />
           </button>
         </div>
       ) : (
         <div className="flex items-center justify-between p-2">
           <div className="flex items-center gap-2 py-1 px-1.5 rounded-sm cursor-pointer overflow-hidden">
-            <NextDocs className="w-[25px] h-[25px] flex-shrink-0" />
+            <NextDocs className="w-[26px] h-[26px] flex-shrink-0" />
             <span
-              className="text-[21px] mt-[2px] font-[600] leading-none whitespace-nowrap"
+              className="text-[22px] mt-[2px] font-[600] leading-none whitespace-nowrap"
               style={{
                 fontFamily: 'var(--font-serif)',
                 letterSpacing: '0.025em',
@@ -904,7 +904,7 @@ function Sidebar() {
             title="Collapse sidebar"
             className="inline-flex px-2 py-2 items-center justify-center rounded-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
           >
-            <CloseSidebar size={20} className="flex-shrink-0 opacity-80" />
+            <CloseSidebar size={21} className="flex-shrink-0 opacity-80" />
           </button>
         </div>
       )}
@@ -915,9 +915,9 @@ function Sidebar() {
           onClick={() => void handleCreateFile()}
           className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
         >
-          <NewDocument size={20} className="flex-shrink-0 opacity-80" />
+          <NewDocument size={21} className="flex-shrink-0 opacity-80" />
           <span
-            className="text-[13.5px] whitespace-nowrap"
+            className="text-[14.5px] whitespace-nowrap"
             style={{
               opacity: isSidebarCollapsed ? 0 : 1,
               width: isSidebarCollapsed ? 0 : 'auto',
@@ -931,9 +931,9 @@ function Sidebar() {
           onClick={openAllDocumentsPanel}
           className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
         >
-          <Search size={20} className="flex-shrink-0 opacity-80" />
+          <Search size={21} className="flex-shrink-0 opacity-80" />
           <span
-            className="text-[13.5px] whitespace-nowrap"
+            className="text-[14.5px] whitespace-nowrap"
             style={{
               opacity: isSidebarCollapsed ? 0 : 1,
               width: isSidebarCollapsed ? 0 : 'auto',
@@ -1008,11 +1008,11 @@ function Sidebar() {
               className="inline-flex h-[23px] w-[23px] flex-shrink-0 items-center justify-center rounded-full bg-[#7d7a75]"
             >
               {isAuthenticated && user ? (
-                <span className="text-[11px] text-white font-semibold leading-none select-none">
+                <span className="text-[12px] text-white font-semibold leading-none select-none">
                   {userInitial}
                 </span>
               ) : (
-                <UserCircle className="h-[15px] w-[15px]" />
+                <UserCircle className="h-[16px] w-[16px]" />
               )}
             </span>
             <span
@@ -1023,7 +1023,7 @@ function Sidebar() {
                 paddingLeft: isSidebarCollapsed ? 0 : '12px',
               }}
             >
-              <span className="truncate text-[14px] whitespace-nowrap flex-1">{accountLabel}</span>
+              <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
               <ChevronRight
                 className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
                   isAccountMenuOpen ? '-rotate-90' : 'rotate-90'

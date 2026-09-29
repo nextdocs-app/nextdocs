@@ -220,7 +220,7 @@ export function DocToolbar({
                 aria-label={`Open "${rootItem.title || 'Untitled'}"`}
                 className="
                   group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
-                  text-[13px] font-normal leading-normal text-muted-foreground
+                  text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
                   cursor-pointer shrink-0
@@ -232,7 +232,7 @@ export function DocToolbar({
             )}
 
             <span
-              className="text-muted-foreground/35 select-none text-[12px] font-light px-0.5 shrink-0"
+              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
@@ -254,7 +254,7 @@ export function DocToolbar({
                   focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
                 "
               >
-                <MoreHorizontal size={15} className="opacity-80" />
+                <MoreHorizontal size={16} className="opacity-80" />
               </button>
 
               {isOverflowMenuOpen && (
@@ -275,7 +275,7 @@ export function DocToolbar({
                       title={`Open "${item.title || 'Untitled'}"`}
                       aria-label={`Open "${item.title || 'Untitled'}"`}
                       className="
-                        w-full rounded-sm px-2 py-1.5 text-left text-[12.5px] leading-normal
+                        w-full rounded-sm px-2 py-1.5 text-left text-[13.5px] leading-normal
                         text-popover-foreground hover:bg-accent hover:text-accent-foreground
                         transition-colors flex items-center gap-1.5 cursor-pointer
                       "
@@ -288,7 +288,7 @@ export function DocToolbar({
             </div>
 
             <span
-              className="text-muted-foreground/35 select-none text-[12px] font-light px-0.5 shrink-0"
+              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
@@ -303,7 +303,7 @@ export function DocToolbar({
                 aria-label={`Open "${parentItem.title || 'Untitled'}"`}
                 className="
                   group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
-                  text-[13px] font-normal leading-normal text-muted-foreground
+                  text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
                   cursor-pointer shrink-0
@@ -315,7 +315,7 @@ export function DocToolbar({
             )}
 
             <span
-              className="text-muted-foreground/35 select-none text-[12px] font-light px-0.5 shrink-0"
+              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
@@ -326,7 +326,7 @@ export function DocToolbar({
               aria-current="page"
               className="
                 inline-flex items-center rounded-sm px-1.5 py-0.5
-                text-[13px] font-medium leading-normal text-foreground
+                text-[14px] font-medium leading-normal text-foreground
                 max-w-[160px] sm:max-w-[220px] md:max-w-[280px]
                 shrink-0 select-none
               "
@@ -344,7 +344,7 @@ export function DocToolbar({
                     aria-current="page"
                     className="
                       inline-flex items-center rounded-sm px-1.5 py-0.5
-                      text-[13px] font-medium leading-normal text-foreground
+                      text-[14px] font-medium leading-normal text-foreground
                       max-w-[160px] sm:max-w-[220px] md:max-w-[280px]
                       shrink-0 select-none
                     "
@@ -360,7 +360,7 @@ export function DocToolbar({
                       aria-label={`Open "${item.title || 'Untitled'}"`}
                       className="
                         group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
-                        text-[13px] font-normal leading-normal text-muted-foreground
+                        text-[14px] font-normal leading-normal text-muted-foreground
                         hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                         transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
                         cursor-pointer shrink-0
@@ -370,7 +370,7 @@ export function DocToolbar({
                       <span className="truncate leading-normal">{item.title || 'Untitled'}</span>
                     </button>
                     <span
-                      className="text-muted-foreground/35 select-none text-[12px] font-light px-0.5 shrink-0"
+                      className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
                       aria-hidden="true"
                     >
                       /
@@ -411,7 +411,7 @@ export function DocToolbar({
                 inline-flex items-center gap-1.5 rounded-full
                 border border-border/60 bg-background/80 backdrop-blur-sm
                 px-2 py-0.5
-                text-[11px] text-muted-foreground
+                text-[12px] text-muted-foreground
                 select-none cursor-default
                 transition-colors duration-150
                 hover:bg-[var(--nd-toolbar-hover-bg)]
@@ -439,8 +439,8 @@ export function DocToolbar({
                   z-50
                 "
               >
-                <div className="text-[11px] font-medium text-foreground">Offline changes</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">{offlineTooltipText}</div>
+                <div className="text-[12px] font-medium text-foreground">Offline changes</div>
+                <div className="mt-0.5 text-[12px] text-muted-foreground">{offlineTooltipText}</div>
               </div>
             )}
           </div>
@@ -455,7 +455,7 @@ export function DocToolbar({
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
               px-3 py-1
-              text-[12px] text-muted-foreground
+              text-[13px] text-muted-foreground
               shadow-sm
               whitespace-nowrap
             "
@@ -489,7 +489,7 @@ export function DocToolbar({
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
               px-3 py-1
-              text-[12px] text-muted-foreground
+              text-[13px] text-muted-foreground
               shadow-sm
               whitespace-nowrap
             "
@@ -507,7 +507,7 @@ export function DocToolbar({
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
               px-3 py-1
-              text-[12px] text-muted-foreground
+              text-[13px] text-muted-foreground
               shadow-sm
               whitespace-nowrap
             "
@@ -533,7 +533,7 @@ export function DocToolbar({
 
         {/* Last edited */}
         {lastEditedLabel && (
-          <span className="text-[12.5px] text-muted-foreground/80 select-none hidden sm:block">
+          <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block">
             {lastEditedLabel}
           </span>
         )}
@@ -547,7 +547,7 @@ export function DocToolbar({
             aria-pressed={isCommentsSidebarOpen}
             aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
             className={[
-              'inline-flex items-center justify-center rounded-sm py-[5px] px-2 transition-colors duration-150 h-7',
+              'inline-flex items-center justify-center rounded-sm py-[5px] px-2 transition-colors duration-150 h-[30px]',
               isCommentsButtonDisabled
                 ? 'text-muted-foreground opacity-60 cursor-not-allowed'
                 : isCommentsSidebarOpen
@@ -572,10 +572,10 @@ export function DocToolbar({
               inline-flex items-center gap-1.5 rounded-sm
               border border-border bg-background
               px-2.5 py-[5px]
-              text-[12.5px] font-medium leading-none text-foreground
+              text-[13.5px] font-medium leading-none text-foreground
               transition-colors duration-150
               hover:bg-[var(--nd-toolbar-hover-bg)]
-              cursor-pointer h-7
+              cursor-pointer h-[30px]
             "
           >
             <Globe />

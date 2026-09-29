@@ -162,13 +162,13 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         {/* Left nav */}
         <nav className="w-48 flex-shrink-0 border-r border-border bg-sidebar flex flex-col">
           <div className="px-3 pt-4 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-2 pb-1">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground px-2 pb-1">
               Settings
             </p>
           </div>
           <div className="px-2 flex flex-col gap-0.5">
             <button
-              className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left text-[13px]
+              className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left text-[14px]
                          bg-sidebar-accent text-sidebar-foreground font-medium cursor-default"
             >
               General
@@ -180,7 +180,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
-            <h2 className="text-[15px] font-semibold text-foreground">General</h2>
+            <h2 className="text-[16px] font-semibold text-foreground">General</h2>
             <button
               ref={closeButtonRef}
               onClick={onClose}
@@ -188,14 +188,14 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                          hover:bg-sidebar-accent hover:text-foreground transition-colors cursor-pointer"
               aria-label="Close settings"
             >
-              <Close size={14} />
+              <Close size={15} />
             </button>
           </div>
 
           {/* Body */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <section>
-              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-4">
+              <h3 className="text-[12px] font-semibold uppercase tracking-widest text-muted-foreground mb-4">
                 Appearance
               </h3>
               <div className="flex gap-3">
@@ -224,7 +224,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                           )}
                         </span>
                         <span
-                          className={`text-[13px] font-medium ${
+                          className={`text-[14px] font-medium ${
                             isSelected ? 'text-foreground' : 'text-muted-foreground'
                           }`}
                         >

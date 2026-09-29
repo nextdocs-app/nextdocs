@@ -189,10 +189,10 @@ export function ConfirmationModal({
         tabIndex={-1}
         className="w-full max-w-sm rounded-xl border border-sidebar-border bg-popover text-popover-foreground p-4 shadow-2xl"
       >
-        <h3 id={titleId} className="text-[15px] font-semibold leading-tight">
+        <h3 id={titleId} className="text-[16px] font-semibold leading-tight">
           {title}
         </h3>
-        <p id={descriptionId} className="mt-2 text-[13px] text-muted-foreground leading-relaxed">
+        <p id={descriptionId} className="mt-2 text-[14px] text-muted-foreground leading-relaxed">
           {description}
         </p>
 
@@ -202,7 +202,7 @@ export function ConfirmationModal({
             type="button"
             onClick={handleCancel}
             disabled={isConfirming}
-            className="rounded-md px-3 py-1.5 text-[13px] border border-sidebar-border bg-transparent hover:bg-foreground/[0.07] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            className="rounded-md px-3 py-1.5 text-[14px] border border-sidebar-border bg-transparent hover:bg-foreground/[0.07] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {cancelLabel}
           </button>
@@ -210,7 +210,7 @@ export function ConfirmationModal({
             type="button"
             onClick={handleConfirm}
             disabled={isConfirming}
-            className={`rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors cursor-pointer ${confirmButtonClassName}`}
+            className={`rounded-md px-3 py-1.5 text-[14px] font-medium transition-colors cursor-pointer ${confirmButtonClassName}`}
           >
             {isConfirming ? 'Working...' : confirmLabel}
           </button>

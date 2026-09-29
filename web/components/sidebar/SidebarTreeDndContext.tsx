@@ -354,9 +354,9 @@ export function SidebarTreeDndContext({
 
         <DragOverlay dropAnimation={null}>
           {activeNode ? (
-            <div className="flex items-center gap-1.5 select-none">
-              <DocumentText size={16} className="opacity-80 flex-shrink-0" aria-hidden="true" />
-              <span className="text-[13px] font-medium text-sidebar-foreground whitespace-nowrap">
+            <div className="flex items-center gap-2 select-none">
+              <DocumentText size={17} className="opacity-80 flex-shrink-0" aria-hidden="true" />
+              <span className="text-[14px] font-medium text-sidebar-foreground whitespace-nowrap">
                 {activeNode.title || 'Untitled'}
               </span>
             </div>

@@ -57,10 +57,10 @@
   --editor-dropdown-item-radius: 6px;
   --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
   --editor-dropdown-divider: 1.5px solid rgba(0, 0, 0, 0.15);
-  --editor-dropdown-item-font-size: 13px;
-  --editor-dropdown-label-font-size: 11px;
-  --editor-dropdown-icon-container-size: 28px;
-  --editor-dropdown-icon-size: 16px;
+  --editor-dropdown-item-font-size: 14px;
+  --editor-dropdown-label-font-size: 12px;
+  --editor-dropdown-icon-container-size: 29px;
+  --editor-dropdown-icon-size: 17px;
 
   /* BlockNote Formatting Toolbar Custom Variables (bg/border reuse --sidebar vars directly) */
   --editor-toolbar-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
@@ -323,7 +323,7 @@ div.bn-table-drop-cursor {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-family: var(--font-sans);
-    font-size: 2.35em;
+    font-size: 2.4em;
     font-weight: 650;
     line-height: 1.2;
     color: #121212;
@@ -380,7 +380,7 @@ div.bn-table-drop-cursor {
 
   .bn-root .bn-default-styles,
   .bn-default-styles {
-    font-size: 15px !important;
+    font-size: 16px !important;
     line-height: 1.5;
   }
   .bn-editor [data-content-type="heading"],
@@ -495,7 +495,7 @@ div.bn-table-drop-cursor {
     color: #24292e !important;
     /* By default, the code block has very less gap between it's neighboring blocks.
     To make it look clean, we are adding some gap using margin. */
-    margin-block: 10px !important;
+    margin-block: 12px !important;
   }
 
   .bn-block-content[data-content-type="codeBlock"] > pre {
@@ -584,7 +584,7 @@ div.bn-table-drop-cursor {
     height: 24px !important;
     line-height: 22px !important;
     font-family: inherit !important;
-    font-size: 11.5px !important;
+    font-size: 12.5px !important;
     font-weight: 500 !important;
     letter-spacing: 0.01em !important;
     padding: 0 20px 0 8px !important;
@@ -633,7 +633,7 @@ div.bn-table-drop-cursor {
     background-color: var(--sidebar) !important;
     color: var(--sidebar-foreground) !important;
     font-family: inherit !important;
-    font-size: var(--editor-dropdown-item-font-size, 13px) !important;
+    font-size: var(--editor-dropdown-item-font-size, 14px) !important;
   }
 
   /* Inline Code Highlighting */
@@ -714,7 +714,7 @@ div.bn-table-drop-cursor {
     background-color: transparent !important;
     color: var(--muted-foreground) !important;
     cursor: pointer !important;
-    font-size: var(--editor-dropdown-item-font-size, 13px) !important;
+    font-size: var(--editor-dropdown-item-font-size, 14px) !important;
     padding: 12px 18px !important;
     gap: 10px !important;
     width: 100%;
@@ -798,7 +798,7 @@ div.bn-table-drop-cursor {
     background-color: var(--primary) !important;
     color: var(--primary-foreground) !important;
     border-radius: var(--editor-dropdown-item-radius, 6px) !important;
-    font-size: 12px !important;
+    font-size: 13px !important;
     font-weight: 600 !important;
     padding: 4px 10px !important;
     gap: 5px !important;
@@ -843,7 +843,7 @@ div.bn-table-drop-cursor {
     padding: 1px 6px !important;
     gap: 4px !important;
     border-radius: 4px !important;
-    font-size: 11.5px !important;
+    font-size: 12.5px !important;
     line-height: 1.25 !important;
     border: 1px dashed var(--border) !important;
     background-color: transparent !important;
@@ -856,9 +856,17 @@ div.bn-table-drop-cursor {
   }
 
   /* Paragraph Spacing */
-  .bn-block-content[data-content-type="paragraph"] {
-    /* Cleaner vertical spacing between paragraphs */
-    padding-block: 6px !important;
+  .bn-block-content[data-content-type="paragraph"],
+  .bn-block-content[data-content-type="quote"],
+  .bn-block-content[data-content-type="alert"] {
+    padding-block: 8px !important;
+  }
+
+  /* List items stay a little tighter than paragraphs: the marker/checkbox
+     column already adds air, so BlockNote's 3px default only needs a nudge. */
+  .bn-block-content[data-content-type="bulletListItem"],
+  .bn-block-content[data-content-type="numberedListItem"] {
+    padding-block: 4px !important;
   }
 
   /* BlockNote Divider / Separator Line */
@@ -866,7 +874,7 @@ div.bn-table-drop-cursor {
     display: flex !important;
     align-items: center !important;
     width: 100% !important;
-    padding-block: 8px !important;
+    padding-block: 12px !important;
     min-height: 17px !important;
     cursor: default !important;
     user-select: none !important;
@@ -947,7 +955,7 @@ div.bn-table-drop-cursor {
   /* BlockNote Checklist Item — Modern Style */
   .bn-block-content[data-content-type="checkListItem"] {
     align-items: flex-start !important;
-    padding-block: 3px !important;
+    padding-block: 4px !important;
   }
 
   /* Checkbox container alignment */
@@ -1033,8 +1041,8 @@ div.bn-table-drop-cursor {
   }
 
   .bn-toggle-button > svg {
-    width: 20px !important;
-    height: 20px !important;
+    width: 21px !important;
+    height: 21px !important;
   }
 
   .bn-toggle-button:hover,
@@ -1063,10 +1071,10 @@ div.bn-table-drop-cursor {
 
   /* Side menu block-specific vertical alignment */
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="1"] {
-    padding-top: 35px !important;
+    padding-top: 37px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="2"] {
-    padding-top: 28px !important;
+    padding-top: 30px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="heading"][data-level="3"] {
     padding-top: 23px !important;
@@ -1076,10 +1084,10 @@ div.bn-table-drop-cursor {
     [data-level="5"],
     [data-level="6"]
   ) {
-    padding-top: 17px !important;
+    padding-top: 18px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="alert"] {
-    padding-top: 14px !important;
+    padding-top: 23px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
     [data-block-type="codeBlock"],
@@ -1090,10 +1098,13 @@ div.bn-table-drop-cursor {
     [data-block-type="image"],
     [data-block-type="video"]
   ) {
-    padding-top: 6px !important;
+    padding-top: 8px !important;
   }
-  :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="paragraph"] {
-    padding-top: 5px !important;
+  :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
+    [data-block-type="paragraph"],
+    [data-block-type="quote"]
+  ) {
+    padding-top: 7px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="table"] {
     padding-top: 4px !important;
@@ -1104,14 +1115,12 @@ div.bn-table-drop-cursor {
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu):is(
     [data-block-type="bulletListItem"],
     [data-block-type="numberedListItem"],
-    [data-block-type="toggleListItem"],
-    [data-block-type="quote"]
+    [data-block-type="toggleListItem"]
   ) {
-    padding-top: 2px !important;
+    padding-top: 4px !important;
   }
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu)[data-block-type="divider"] {
     padding-top: 0 !important;
-    margin-top: -3.5px !important;
   }
 
   /* Side menu & table handle buttons */
@@ -1195,8 +1204,8 @@ div.bn-table-drop-cursor {
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button > svg,
   :is(.bn-table-handle, .bn-shadcn .bn-table-handle, button.bn-table-handle) > svg {
     box-sizing: content-box !important;
-    width: 18px !important;
-    height: 18px !important;
+    width: 19px !important;
+    height: 19px !important;
     padding: 3px !important;
     flex-shrink: 0 !important;
     transition: transform 0.15s ease, color 0.15s ease !important;
@@ -1406,7 +1415,7 @@ html:not(.dark) .bn-editor a:visited:hover {
 }
 
 .nd-comments-sidebar__title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--foreground);
   letter-spacing: -0.01em;
@@ -1429,7 +1438,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   padding: 2px 22px 2px 8px;
   border: 1px solid var(--sidebar-border);
   border-radius: var(--editor-dropdown-item-radius, 6px);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--foreground);
   background-color: transparent;
@@ -1495,7 +1504,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   height: 26px;
   padding: 0 6px;
   border-radius: calc(var(--editor-dropdown-radius, 8px) - 2px);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--muted-foreground);
   cursor: pointer;
@@ -1530,7 +1539,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   height: 16px;
   padding: 0 4px;
   border-radius: 9999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
   color: var(--muted-foreground);
@@ -1597,7 +1606,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   padding: 0 5px;
   margin-left: 4px;
   border-radius: 9999px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1;
   color: var(--primary-foreground);
@@ -1759,7 +1768,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   border: none !important;
   border-left: 3px solid #e59a90 !important;
   border-radius: 0 4px 4px 0 !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-style: italic !important;
   line-height: 1.4 !important;
   color: var(--muted-foreground) !important;
@@ -1805,7 +1814,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   background-color: transparent !important;
   color: var(--card-foreground) !important;
   padding: 0 !important;
-  font-size: 13px !important;
+  font-size: 14px !important;
   line-height: 1.45 !important;
 }
 
@@ -1848,7 +1857,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   color: var(--muted-foreground) !important;
   opacity: 0.65 !important;
   font-style: normal !important;
-  font-size: 12.5px !important;
+  font-size: 13.5px !important;
 }
 
 /* ─── Actions Wrapper & Save / Cancel Buttons ─── */
@@ -1902,7 +1911,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   max-width: none !important;
   padding: 0 12px !important;
   border-radius: var(--editor-dropdown-item-radius, 6px) !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 500 !important;
   letter-spacing: -0.01em !important;
   display: inline-flex !important;
@@ -2044,7 +2053,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   justify-content: center !important;
   width: 100% !important;
   height: 100% !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
   font-weight: 600 !important;
   line-height: 1 !important;
   background-color: rgba(0, 0, 0, 0.08) !important;
@@ -2067,7 +2076,7 @@ html:not(.dark) .bn-editor a:visited:hover {
 }
 
 .bn-thread-comment .text-sm.font-bold {
-  font-size: 13px !important;
+  font-size: 14px !important;
   font-weight: 600 !important;
   line-height: 1.2 !important;
   color: var(--foreground) !important;
@@ -2077,7 +2086,7 @@ html:not(.dark) .bn-editor a:visited:hover {
 }
 
 .bn-thread-comment .text-xs {
-  font-size: 11px !important;
+  font-size: 12px !important;
   color: var(--muted-foreground) !important;
   opacity: 0.75 !important;
   white-space: nowrap !important;
@@ -2102,7 +2111,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   overflow: visible !important;
   padding: 0 !important;
   margin: 0 !important;
-  font-size: 12.5px !important;
+  font-size: 13.5px !important;
   line-height: 1.45 !important;
   color: var(--foreground) !important;
 }
@@ -2118,7 +2127,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   margin: 0 !important;
   padding: 0 !important;
   min-height: unset !important;
-  font-size: 13px !important;
+  font-size: 14px !important;
   line-height: 1.45 !important;
   word-break: break-word !important;
 }
@@ -2208,8 +2217,8 @@ html:not(.dark) .bn-editor a:visited:hover {
 
 .bn-thread-comment > .absolute .bn-action-toolbar svg,
 .bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar svg {
-  width: 13px !important;
-  height: 13px !important;
+  width: 14px !important;
+  height: 14px !important;
   flex-shrink: 0 !important;
 }
 
@@ -2300,8 +2309,8 @@ html:not(.dark) .bn-editor a:visited:hover {
 }
 
 .bn-thread-comment .bn-badge svg {
-  width: 15px !important;
-  height: 15px !important;
+  width: 16px !important;
+  height: 16px !important;
   flex-shrink: 0 !important;
   display: block !important;
 }
@@ -2323,7 +2332,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   display: inline-flex !important;
   align-items: center !important;
   gap: 4px !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 500 !important;
   color: #16a34a !important;
 }
@@ -2349,7 +2358,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   padding: 4px 8px !important;
   border: none !important;
   border-radius: 6px !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 500 !important;
   color: var(--muted-foreground) !important;
   background-color: var(--sidebar-accent) !important;
@@ -2429,7 +2438,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   min-height: 24px !important;
   max-height: 120px !important;
   overflow-y: auto !important;
-  font-size: 12.5px !important;
+  font-size: 13.5px !important;
   line-height: 1.45 !important;
   padding: 0 !important;
   margin: 0 !important;
@@ -2467,7 +2476,7 @@ html:not(.dark) .bn-editor a:visited:hover {
   padding: 0 10px !important;
   border: none !important;
   border-radius: var(--editor-dropdown-item-radius, 6px) !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 500 !important;
   color: var(--primary-foreground) !important;
   background-color: var(--primary) !important;
@@ -2664,8 +2673,8 @@ html:not(.dark) .bn-editor a:visited:hover {
 .bn-toolbar .bn-button svg,
 .bn-toolbar [data-slot="button"] svg,
 .bn-toolbar [data-slot="toggle"] svg {
-  width: 16px !important;
-  height: 16px !important;
+  width: 17px !important;
+  height: 17px !important;
   color: inherit !important;
 }
 
@@ -2794,8 +2803,8 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 
 /* Chevron down icon in select trigger */
 .bn-toolbar [data-slot="select-trigger"] > svg {
-  width: 12px !important;
-  height: 12px !important;
+  width: 13px !important;
+  height: 13px !important;
   opacity: 0.55 !important;
   margin-left: 2px !important;
   color: inherit !important;
@@ -2846,8 +2855,8 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 [data-slot="dropdown-menu-checkbox-item"] svg.lucide-check,
 [data-slot="dropdown-menu-checkbox-item"] [data-slot="item-indicator"] svg {
   color: var(--sidebar-foreground) !important;
-  width: 14px !important;
-  height: 14px !important;
+  width: 15px !important;
+  height: 15px !important;
   stroke-width: 2.2 !important;
 }
 
@@ -2865,8 +2874,8 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 
 /* Block icon inside select items */
 [data-slot="select-item"] svg:not(.lucide-check) {
-  width: 16px !important;
-  height: 16px !important;
+  width: 17px !important;
+  height: 17px !important;
   opacity: 0.8 !important;
   flex-shrink: 0 !important;
 }
@@ -2956,8 +2965,8 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 
 /* Submenu chevron right arrow */
 [data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-sub-trigger"] > svg {
-  width: 14px !important;
-  height: 14px !important;
+  width: 15px !important;
+  height: 15px !important;
   opacity: 0.55 !important;
   margin-left: auto !important;
 }
@@ -2985,8 +2994,8 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 
 /* Dropdown item icons */
 [data-slot="dropdown-menu-content"] [data-slot="dropdown-menu-item"] svg:not(.lucide-chevron-right) {
-  width: 16px !important;
-  height: 16px !important;
+  width: 17px !important;
+  height: 17px !important;
   opacity: 0.8 !important;
   flex-shrink: 0 !important;
 }
@@ -3223,7 +3232,7 @@ div[role="presentation"]:has([data-slot="popover-content"]) {
 }
 
 .bn-suggestion-menu-item [data-position="right"] * {
-  font-size: 10px !important;
+  font-size: 11px !important;
   font-weight: 600 !important;
   padding: 1px 4px !important;
   height: auto !important;

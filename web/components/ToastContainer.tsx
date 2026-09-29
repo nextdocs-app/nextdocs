@@ -18,7 +18,13 @@ function ToastItem({ toast }: { toast: Toast }) {
   // Color mapping based on toast type
   let accentColor = '#3b82f6'; // info (blue)
   let icon = (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg
+      className="w-[21px] h-[21px]"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -31,7 +37,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     accentColor = '#10b981'; // green
     icon = (
       <svg
-        className="w-5 h-5"
+        className="w-[21px] h-[21px]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -48,7 +54,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     accentColor = '#f59e0b'; // amber/yellow
     icon = (
       <svg
-        className="w-5 h-5"
+        className="w-[21px] h-[21px]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -65,7 +71,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     accentColor = '#ef4444'; // red
     icon = (
       <svg
-        className="w-5 h-5"
+        className="w-[21px] h-[21px]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -96,7 +102,7 @@ function ToastItem({ toast }: { toast: Toast }) {
         WebkitBackdropFilter: 'blur(12px)',
         boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
         color: 'var(--foreground)',
-        fontSize: '14px',
+        fontSize: '15px',
         fontWeight: 500,
         width: '320px',
         transition: 'all 0.2s ease-in-out',
@@ -124,7 +130,7 @@ function ToastItem({ toast }: { toast: Toast }) {
         onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.5')}
       >
         <svg
-          className="w-4 h-4"
+          className="w-[17px] h-[17px]"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
