@@ -10,6 +10,7 @@ import { insertOrUpdateBlockForSlashMenu } from '@blocknote/core/extensions';
 import {
   createReactBlockSpec,
   useComponentsContext,
+  usePortalElement,
   type BlockTypeSelectItem,
   type DefaultReactSuggestionItem,
   type IconType,
@@ -74,6 +75,7 @@ function AlertBlockContent({
   const alertType = alertTypes.find((a) => a.value === currentType) ?? alertTypes[0];
   const Icon = alertType.icon;
   const Components = useComponentsContext();
+  const portalElement = usePortalElement();
   const isEditable = editor.isEditable;
 
   const renderIconTrigger = () => (
@@ -97,7 +99,7 @@ function AlertBlockContent({
   return (
     <div className="alert" data-alert-type={currentType}>
       {isEditable && Components?.Generic?.Menu ? (
-        <Components.Generic.Menu.Root>
+        <Components.Generic.Menu.Root portalElement={portalElement}>
           <Components.Generic.Menu.Trigger>{renderIconTrigger()}</Components.Generic.Menu.Trigger>
           <Components.Generic.Menu.Dropdown className="bn-alert-menu-dropdown">
             <Components.Generic.Menu.Label>Alert Type</Components.Generic.Menu.Label>

@@ -30,6 +30,7 @@ jest.mock('@blocknote/core/extensions', () => ({
 
 jest.mock('@blocknote/react', () => ({
   useComponentsContext: jest.fn(),
+  usePortalElement: jest.fn(() => null),
   createReactBlockSpec: jest.fn((config, implementation) => () => ({
     type: config.type,
     config,
