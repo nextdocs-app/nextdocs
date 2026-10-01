@@ -3,7 +3,11 @@ package com.nextdocs.api.auth.security;
 import com.nextdocs.api.common.response.ApiResponse;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,11 +80,39 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
         List<String> allowedOriginPatterns = List.of(allowedOrigins.split(",")).stream()
                 .map(String::trim)
                 .filter(origin -> !origin.isEmpty())
                 .collect(Collectors.toList());
+
+        Set<String> exactOrigins = new HashSet<>();
+        List<Pattern> wildcardPatterns = new ArrayList<>();
+
+        for (String pattern : allowedOriginPatterns) {
+            if (!pattern.contains("*") || pattern.equals("*")) {
+                exactOrigins.add(pattern);
+            } else {
+                wildcardPatterns.add(compileOriginPattern(pattern));
+            }
+        }
+
+        CorsConfiguration config = new CorsConfiguration() {
+            @Override
+            public String checkOrigin(String requestOrigin) {
+                if (requestOrigin == null) {
+                    return null;
+                }
+                if (exactOrigins.contains(requestOrigin)) {
+                    return requestOrigin;
+                }
+                for (Pattern pattern : wildcardPatterns) {
+                    if (pattern.matcher(requestOrigin).matches()) {
+                        return requestOrigin;
+                    }
+                }
+                return null;
+            }
+        };
         config.setAllowedOriginPatterns(allowedOriginPatterns);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
@@ -91,6 +123,34 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;
+    }
+
+    private static Pattern compileOriginPattern(String pattern) {
+        boolean isIpPattern = pattern.matches(
+                "^https?://(?:\\d{1,3}|\\*)\\.(?:\\d{1,3}|\\*)\\.(?:\\d{1,3}|\\*)\\.(?:\\d{1,3}|\\*)(?::\\d+)?$");
+        if (isIpPattern) {
+            String octetRegex = "(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
+            String[] parts = pattern.split("\\*", -1);
+            StringBuilder sb = new StringBuilder("^");
+            for (int i = 0; i < parts.length; i++) {
+                sb.append(Pattern.quote(parts[i]));
+                if (i < parts.length - 1) {
+                    sb.append(octetRegex);
+                }
+            }
+            sb.append("$");
+            return Pattern.compile(sb.toString());
+        }
+        String[] parts = pattern.split("\\*", -1);
+        StringBuilder sb = new StringBuilder("^");
+        for (int i = 0; i < parts.length; i++) {
+            sb.append(Pattern.quote(parts[i]));
+            if (i < parts.length - 1) {
+                sb.append("[^.:/]+");
+            }
+        }
+        sb.append("$");
+        return Pattern.compile(sb.toString());
     }
 
     private void writeError(HttpServletResponse response, int status, String message) throws IOException {

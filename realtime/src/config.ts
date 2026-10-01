@@ -63,7 +63,17 @@ const config: Config = {
     ? process.env.CORS_ORIGINS.split(',')
         .map((origin) => origin.trim())
         .filter(Boolean)
-    : ['http://localhost:3000'],
+    : process.env.NODE_ENV === 'production'
+      ? ['http://localhost:3000']
+      : [
+          'http://localhost:3000',
+          'http://127.0.0.1:3000',
+          // Allow phone/tablet testing over LAN without per-network env edits in development.
+          // Private IPv4 ranges (RFC 1918): 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+          'http://192.168.*.*:3000',
+          'http://10.*.*.*:3000',
+          ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
+        ],
 
   logLevel: parseLogLevel(process.env.LOG_LEVEL),
 

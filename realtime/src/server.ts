@@ -16,6 +16,43 @@ interface RoomData {
 
 const rooms = new Map<string, RoomData>();
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const patternRegexCache = new Map<string, RegExp>();
+
+function getPatternRegex(pattern: string): RegExp {
+  let cached = patternRegexCache.get(pattern);
+  if (!cached) {
+    const isIpPattern =
+      /^https?:\/\/(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)(?::\d+)?$/.test(
+        pattern
+      );
+
+    if (isIpPattern) {
+      const octetRegex = '(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])';
+      const regexStr = pattern.split('*').map(escapeRegExp).join(octetRegex);
+      cached = new RegExp(`^${regexStr}$`);
+    } else {
+      const regexStr = pattern.split('*').map(escapeRegExp).join('[^.:/]+');
+      cached = new RegExp(`^${regexStr}$`);
+    }
+    patternRegexCache.set(pattern, cached);
+  }
+  return cached;
+}
+
+export function isOriginAllowed(origin: string, patterns: readonly string[]): boolean {
+  if (!origin) return false;
+  return patterns.some((pattern) => {
+    if (pattern === origin) return true;
+    if (!pattern.includes('*') || pattern === '*') return false;
+
+    return getPatternRegex(pattern).test(origin);
+  });
+}
+
 function getCorsHeaders(req: http.IncomingMessage): Record<string, string> {
   const origin = req.headers.origin;
   const headers: Record<string, string> = {
@@ -24,7 +61,7 @@ function getCorsHeaders(req: http.IncomingMessage): Record<string, string> {
     'Access-Control-Max-Age': '86400', // 24 hours
   };
 
-  if (origin && config.corsOrigins.includes(origin)) {
+  if (origin && isOriginAllowed(origin, config.corsOrigins)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Credentials'] = 'true';
   } else if (config.corsOrigins.includes('*')) {

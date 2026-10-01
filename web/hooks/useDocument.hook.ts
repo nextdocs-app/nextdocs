@@ -22,12 +22,11 @@ import {
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
+import { getRealtimeUrl } from '@/lib/api-url.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
-
-const REALTIME_URL = process.env.NEXT_PUBLIC_REALTIME_URL ?? 'ws://localhost:1234';
 const MESSAGE_ACCESS_LEVEL = 2;
 const VALID_DOCUMENT_ACCESS_LEVELS: readonly DocumentAccessLevel[] = [
   'VIEW',
@@ -571,8 +570,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   ]);
 
   useEffect(() => {
+    const realtimeUrl = getRealtimeUrl();
     if (
-      !REALTIME_URL ||
+      !realtimeUrl ||
       !ydoc ||
       !resolvedDocumentId ||
       !isRealtimeEligibleDocumentId(resolvedDocumentId) ||
@@ -599,7 +599,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       },
     };
 
-    const provider = new WebsocketProvider(REALTIME_URL, resolvedDocumentId, ydoc, {
+    const provider = new WebsocketProvider(realtimeUrl, resolvedDocumentId, ydoc, {
       params: wsParams,
       awareness: awareness ?? undefined,
     });
