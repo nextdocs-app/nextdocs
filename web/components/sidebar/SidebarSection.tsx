@@ -64,7 +64,7 @@ export function SidebarSection({
             onToggle();
           }
         }}
-        className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] text-[13.5px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
+        className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] pointer-coarse:py-2 text-[13.5px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
       >
         <span className="flex items-center gap-1 min-w-0">
           <span className="font-medium text-muted-foreground/80 group-hover/header:text-muted-foreground transition-colors duration-100">
@@ -72,7 +72,7 @@ export function SidebarSection({
           </span>
           <ChevronRight
             size={14}
-            className={`flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-150 ${
+            className={`flex-shrink-0 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-all duration-150 ${
               isOpen ? 'rotate-90' : 'rotate-0'
             }`}
           />
@@ -113,7 +113,7 @@ export function SidebarSection({
                   type="button"
                   onClick={onShowAll}
                   aria-label={showAllAriaLabel}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
+                  className="w-full flex items-center gap-2 px-2 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
                 >
                   <MoreHorizontal className="flex-shrink-0" />
                   <span className="text-[14px] truncate">Show More</span>

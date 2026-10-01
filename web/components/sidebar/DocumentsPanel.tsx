@@ -370,7 +370,7 @@ export function DocumentsPanel({
                           setDocActionsAnchor(null);
                           onSelectDocument(doc.id);
                         }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                        className={`w-full flex items-center gap-2.5 px-2 pr-16 pointer-coarse:pr-20 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
                             ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
@@ -382,7 +382,7 @@ export function DocumentsPanel({
 
                       {isAuthenticated && accessToken && !isChildOfTrashedParent && (
                         <div
-                          className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity ${
+                          className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity pointer-coarse:opacity-100 ${
                             trashActionLoadingDocId === doc.id
                               ? 'opacity-100'
                               : 'opacity-0 group-hover/doc:opacity-100'
@@ -398,7 +398,7 @@ export function DocumentsPanel({
                               event.stopPropagation();
                               void onRestoreFromTrash(doc.id);
                             }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            className="inline-flex h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
                             <Restore className="opacity-90" />
                           </button>
@@ -412,7 +412,7 @@ export function DocumentsPanel({
                               event.stopPropagation();
                               onRequestPermanentDelete(doc.id, doc.meta.title || 'Untitled');
                             }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            className="inline-flex h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
                             <Trash className="opacity-90" />
                           </button>
@@ -426,7 +426,7 @@ export function DocumentsPanel({
                           setDocActionsAnchor(null);
                           onSelectDocument(doc.id);
                         }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                        className={`w-full flex items-center gap-2.5 px-2 pr-9 pointer-coarse:pr-12 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
                             ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'

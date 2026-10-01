@@ -4,7 +4,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   pointerWithin,
@@ -99,10 +100,21 @@ export function SidebarTreeDndContext({
   const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
   const [lineInEmptyOf, setLineInEmptyOf] = useState<string | null>(null);
 
+  // Split by input device rather than using PointerSensor for both: a pointer
+  // sensor's 5px distance constraint activates on the first finger movement of
+  // a scroll gesture, which makes the tree undraggable-but-unscrollable inside
+  // the mobile navigation drawer. Touch instead needs a long press, so a swipe
+  // scrolls the list and an intentional press starts a drag.
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: {
         distance: 5,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 220,
+        tolerance: 8,
       },
     })
   );

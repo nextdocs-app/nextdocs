@@ -127,6 +127,15 @@ export function SidebarTreeItem({
   const showChildren = forceShowChildren || node.isExpanded;
   const isMenuOpen = docActionsAnchor?.documentId === node.id;
   const hasTwoActions = canEdit && isActionsEnabled;
+  // Mobile always shows the row actions (no hover), so the title must
+  // permanently reserve room for them or long titles run underneath the (+).
+  // pr accounts for the row's 10px right padding + 8px action offset, so keep
+  // just a few px of breathing room between the ellipsis and the buttons.
+  const mobileTitlePr = hasTwoActions
+    ? 'pointer-coarse:pr-[60px]'
+    : canEdit || isActionsEnabled
+      ? 'pointer-coarse:pr-8'
+      : 'pointer-coarse:pr-0';
 
   return (
     <li
@@ -140,7 +149,7 @@ export function SidebarTreeItem({
         {...listeners}
         role="button"
         tabIndex={0}
-        className={`group/tree-item-row relative w-full flex items-center gap-2 py-1.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+        className={`group/tree-item-row relative w-full flex items-center gap-2 py-1.5 pointer-coarse:py-2.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
           isDropTarget
             ? 'nd-tree-drop-highlight'
             : isActive
@@ -156,7 +165,32 @@ export function SidebarTreeItem({
           }
         }}
       >
-        {/* Icon - document icon by default, chevron on hover for expandable items */}
+        {/*
+          Touch devices have no hover, so the chevron that swaps in over the
+          document icon above can never be reached. Give coarse pointers their
+          own always-visible slot; the wrapper is rendered for every row so
+          siblings keep a consistent indent.
+        */}
+        <span className="hidden pointer-coarse:inline-flex h-[17px] w-[17px] flex-shrink-0 items-center justify-center">
+          <button
+            type="button"
+            onClick={handleToggleExpand}
+            className="flex h-[22px] w-[22px] items-center justify-center rounded-sm text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 cursor-pointer"
+            aria-label={node.isExpanded ? 'Collapse' : 'Expand'}
+          >
+            <ChevronRight
+              size={17}
+              className={`transition-transform duration-150 ${
+                node.isExpanded ? 'rotate-90' : 'rotate-0'
+              }`}
+            />
+          </button>
+        </span>
+
+        {/* Icon - document icon by default, chevron on hover for expandable items.
+            The doc icon stays visible on touch (left of the title); only the
+            hover-swap chevron is desktop-only since coarse pointers have their
+            own always-visible chevron slot above. */}
         <div className="relative h-[17px] w-[17px] flex-shrink-0">
           <DocumentText
             size={17}
@@ -165,7 +199,7 @@ export function SidebarTreeItem({
           <button
             type="button"
             onClick={handleToggleExpand}
-            className="absolute -inset-0.5 flex items-center justify-center rounded-sm text-sidebar-foreground/60 opacity-0 group-hover/tree-item-row:opacity-100 transition-opacity hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 cursor-pointer"
+            className="absolute -inset-0.5 flex items-center justify-center rounded-sm text-sidebar-foreground/60 opacity-0 group-hover/tree-item-row:opacity-100 transition-opacity hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 cursor-pointer pointer-coarse:hidden"
             aria-label={node.isExpanded ? 'Collapse' : 'Expand'}
           >
             <ChevronRight
@@ -179,7 +213,7 @@ export function SidebarTreeItem({
 
         {/* Title */}
         <span
-          className={`text-[14px] truncate flex-1 min-w-0 ${
+          className={`text-[14px] truncate flex-1 min-w-0 ${mobileTitlePr} ${
             isMenuOpen
               ? hasTwoActions
                 ? 'pr-11'
@@ -192,9 +226,9 @@ export function SidebarTreeItem({
           {node.title || 'Untitled'}
         </span>
 
-        {/* Action buttons on hover */}
+        {/* Action buttons on hover, always visible on touch. */}
         <div
-          className={`absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-transparent transition-opacity ${
+          className={`absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pointer-coarse:gap-0 bg-transparent transition-opacity pointer-coarse:opacity-100 ${
             docActionsAnchor?.documentId === node.id
               ? 'opacity-100'
               : 'opacity-0 group-hover/tree-item-row:opacity-100'
@@ -206,7 +240,7 @@ export function SidebarTreeItem({
               onClick={handleCreateChild}
               title="Add a document inside"
               aria-label="Add a document inside"
-              className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer"
+              className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer pointer-coarse:p-1.5 pointer-coarse:m-0"
             >
               <Plus size={15} />
             </button>
@@ -217,7 +251,7 @@ export function SidebarTreeItem({
               type="button"
               aria-label={`Document actions for ${node.title || 'Untitled'}`}
               onClick={(e) => onToggleDocumentActions(e, node.id, actionType)}
-              className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer"
+              className="p-1 -m-0.5 rounded-sm hover:bg-sidebar-foreground/15 text-sidebar-foreground/70 hover:text-sidebar-foreground transition-colors cursor-pointer pointer-coarse:p-1.5 pointer-coarse:m-0"
             >
               <MoreHorizontal size={17} />
             </button>

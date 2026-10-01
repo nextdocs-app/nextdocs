@@ -12,6 +12,7 @@ import {
 } from '@/stores/documentList/documentList.selectors';
 import {
   setCollapsed,
+  setMobileNavOpen,
   setPanelMode,
   setSearchQuery,
   togglePrivateOpen,
@@ -31,6 +32,7 @@ import {
   Search,
   ChevronRight,
   NextDocs,
+  Close,
   CloseSidebar,
   OpenSidebar,
   UserCircle,
@@ -40,6 +42,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
+import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { generateDocumentId } from '@/lib/document-id.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
@@ -125,6 +128,7 @@ function Sidebar() {
 
   const dispatch = useAppDispatch();
   const isSidebarCollapsed = useAppSelector((state) => state.sidebar.isCollapsed);
+  const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isPrivateOpen = useAppSelector((state) => state.sidebar.isPrivateOpen);
   const isSharedOpen = useAppSelector((state) => state.sidebar.isSharedOpen);
   const documentsPanelMode = useAppSelector((state) => state.sidebar.panelMode);
@@ -142,6 +146,12 @@ function Sidebar() {
 
   const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
 
+  // Mobile renders the same rail as an off-canvas drawer, which has no collapsed
+  // state: it is either covering the page or hidden off-screen.
+  const isMobileLayout = useIsMobileLayout();
+  const isRailCollapsed = isMobileLayout ? false : isSidebarCollapsed;
+  const closeMobileNav = useCallback(() => dispatch(setMobileNavOpen(false)), [dispatch]);
+
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const isAccountMenuOpen = useAppSelector((state) => state.ui.isAccountMenuOpen);
   const isSettingsOpen = useAppSelector((state) => state.ui.isSettingsModalOpen);
@@ -153,6 +163,7 @@ function Sidebar() {
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
   const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const accountMenuPopupRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   const isDocumentsPanelOpen = documentsPanelMode !== null;
   const isTrashPanel = documentsPanelMode === 'trash';
@@ -441,6 +452,7 @@ function Sidebar() {
 
   const handleCreateFile = useCallback(
     async (parentId?: string) => {
+      closeMobileNav();
       try {
         const newId = generateDocumentId();
         const created = await documentService.createDocument();
@@ -474,11 +486,14 @@ function Sidebar() {
         );
       }
     },
-    [router, refresh, isAuthenticated, accessToken, dispatch, sharedTreeNodes]
+    [router, refresh, isAuthenticated, accessToken, dispatch, sharedTreeNodes, closeMobileNav]
   );
 
   const handleSelectDocument = useCallback(
     (id: string) => {
+      // Navigating away leaves the drawer covering the page it just opened.
+      closeMobileNav();
+
       if (typeof window !== 'undefined' && navigator.onLine === false) {
         window.dispatchEvent(
           new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
@@ -490,7 +505,7 @@ function Sidebar() {
 
       router.push(`/doc/${id}`);
     },
-    [router]
+    [router, closeMobileNav]
   );
 
   const navigateToResolvedRootDocument = useCallback(
@@ -556,6 +571,22 @@ function Sidebar() {
     };
   }, [isAccountMenuOpen, dispatch]);
 
+  // Escape dismisses the mobile drawer, matching every other overlay in the app.
+  useEffect(() => {
+    if (!isMobileNavOpen) {
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMobileNav();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isMobileNavOpen, closeMobileNav]);
+
   useEffect(() => {
     if (!isSidebarCollapseHoverGuard) {
       return;
@@ -585,7 +616,7 @@ function Sidebar() {
       return;
     }
 
-    const handleOutsideClick = (event: MouseEvent) => {
+    const handleOutsideClick = (event: Event) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(`[data-doc-actions-root='${docActionsAnchor.documentId}']`)) {
         dispatch(setDocActionsAnchor(null));
@@ -598,12 +629,24 @@ function Sidebar() {
       }
     };
 
+    const handleScroll = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(`[data-doc-actions-root='${docActionsAnchor.documentId}']`)) {
+        return;
+      }
+      dispatch(setDocActionsAnchor(null));
+    };
+
+    document.addEventListener('pointerdown', handleOutsideClick);
     document.addEventListener('mousedown', handleOutsideClick);
     document.addEventListener('keydown', handleEscape);
+    window.addEventListener('scroll', handleScroll, { capture: true, passive: true });
 
     return () => {
+      document.removeEventListener('pointerdown', handleOutsideClick);
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('scroll', handleScroll, { capture: true });
     };
   }, [docActionsAnchor, dispatch]);
 
@@ -699,8 +742,19 @@ function Sidebar() {
           : {
               documentId,
               actionType,
-              x: rect.right + 8,
-              y: rect.top + rect.height / 2,
+              // Captured as plain numbers: a DOMRect's geometry lives on its
+              // prototype, so spreading it would yield an empty object.
+              trigger: {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+                width: rect.width,
+                height: rect.height,
+              },
+              // Measured instead of derived from `sidebarWidth` so the straddle
+              // line also matches the documents panel, which is wider than the rail.
+              panelEdgeX: sidebarRef.current?.getBoundingClientRect().right ?? null,
             };
       dispatch(setDocActionsAnchor(newAnchor));
     },
@@ -851,13 +905,18 @@ function Sidebar() {
 
   return (
     <aside
-      className={`nd-left-sidebar ${isSidebarCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
+      ref={sidebarRef}
+      data-mobile-nav={isMobileNavOpen ? 'open' : 'closed'}
+      // Off-screen drawers are still keyboard-reachable, so hide the whole rail
+      // from assistive tech and tab order while it is closed on mobile.
+      inert={isMobileLayout && !isMobileNavOpen ? true : undefined}
+      className={`nd-left-sidebar ${isRailCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: isSidebarCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
+        width: isRailCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
       }}
     >
       {/* Header */}
-      {isSidebarCollapsed ? (
+      {isRailCollapsed ? (
         <div className="flex flex-col p-2">
           <button
             type="button"
@@ -878,7 +937,7 @@ function Sidebar() {
           </button>
         </div>
       ) : (
-        <div className="flex items-center justify-between p-2">
+        <div className="flex items-center justify-between gap-2 p-2 pr-3">
           <div className="flex items-center gap-2 py-1 px-1.5 rounded-sm cursor-pointer overflow-hidden">
             <NextDocs className="w-[26px] h-[26px] flex-shrink-0" />
             <span
@@ -892,19 +951,31 @@ function Sidebar() {
             </span>
           </div>
 
+          {/*
+            One control, two meanings: on desktop it docks the rail, on mobile it
+            dismisses the drawer (which has nowhere to dock to).
+          */}
           <button
             type="button"
             onClick={() => {
+              if (isMobileLayout) {
+                closeMobileNav();
+                return;
+              }
               dispatch(setAccountMenuOpen(false));
               dispatch(setCollapsed(true));
               setIsSidebarCollapseHoverGuard(true);
             }}
-            aria-label="Collapse sidebar"
+            aria-label={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
             aria-expanded={true}
-            title="Collapse sidebar"
-            className="inline-flex px-2 py-2 items-center justify-center rounded-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
+            title={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
           >
-            <CloseSidebar size={21} className="flex-shrink-0 opacity-80" />
+            {isMobileLayout ? (
+              <Close size={20} className="flex-shrink-0 opacity-80" />
+            ) : (
+              <CloseSidebar size={21} className="flex-shrink-0 opacity-80" />
+            )}
           </button>
         </div>
       )}
@@ -919,8 +990,8 @@ function Sidebar() {
           <span
             className="text-[14.5px] whitespace-nowrap"
             style={{
-              opacity: isSidebarCollapsed ? 0 : 1,
-              width: isSidebarCollapsed ? 0 : 'auto',
+              opacity: isRailCollapsed ? 0 : 1,
+              width: isRailCollapsed ? 0 : 'auto',
             }}
           >
             New Document
@@ -935,8 +1006,8 @@ function Sidebar() {
           <span
             className="text-[14.5px] whitespace-nowrap"
             style={{
-              opacity: isSidebarCollapsed ? 0 : 1,
-              width: isSidebarCollapsed ? 0 : 'auto',
+              opacity: isRailCollapsed ? 0 : 1,
+              width: isRailCollapsed ? 0 : 'auto',
             }}
           >
             Search Documents
@@ -946,7 +1017,7 @@ function Sidebar() {
 
       {/* Document sections and account menu */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
-        {!isSidebarCollapsed && (
+        {!isRailCollapsed && (
           <div className="ml-1">
             <SidebarTreeDndContext treeApi={sidebarTreeApi}>
               <SidebarTree
@@ -994,7 +1065,7 @@ function Sidebar() {
         )}
 
         <div
-          className={`relative mt-auto sticky bottom-0 ${isSidebarCollapsed ? '' : 'border-t border-border'} bg-sidebar p-2`}
+          className={`relative mt-auto sticky bottom-0 ${isRailCollapsed ? '' : 'border-t border-border'} bg-sidebar p-2`}
         >
           <button
             ref={accountMenuTriggerRef}
@@ -1018,9 +1089,9 @@ function Sidebar() {
             <span
               className="flex items-center min-w-0 overflow-hidden transition-all duration-300"
               style={{
-                opacity: isSidebarCollapsed ? 0 : 1,
-                width: isSidebarCollapsed ? 0 : 'calc(100% - 23px)',
-                paddingLeft: isSidebarCollapsed ? 0 : '12px',
+                opacity: isRailCollapsed ? 0 : 1,
+                width: isRailCollapsed ? 0 : 'calc(100% - 23px)',
+                paddingLeft: isRailCollapsed ? 0 : '12px',
               }}
             >
               <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
@@ -1079,8 +1150,8 @@ function Sidebar() {
       {isDocumentsPanelOpen && (
         <DocumentsPanel
           mode={documentsPanelMode}
-          isSidebarCollapsed={isSidebarCollapsed}
           sidebarWidth={sidebarWidth}
+          isSidebarCollapsed={isRailCollapsed}
           searchQuery={searchQuery}
           setSearchQuery={handleSetSearchQuery}
           onClose={closeDocumentsPanel}
@@ -1145,14 +1216,14 @@ function Sidebar() {
         }}
       />
 
-      {!isSidebarCollapsed && (
+      {!isRailCollapsed && (
         <div
           onPointerDown={startResizing}
           onMouseDown={(e) => {
             if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
             startResizing(e);
           }}
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
+          className="nd-sidebar-resize-handle absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
         />
       )}
     </aside>

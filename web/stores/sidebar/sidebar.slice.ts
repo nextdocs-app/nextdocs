@@ -9,6 +9,12 @@ export interface SidebarState {
   isPrivateOpen: boolean;
   isSharedOpen: boolean;
   docActionsAnchor: DocActionsAnchor | null;
+  /**
+   * Mobile only: whether the off-canvas navigation drawer is showing. Kept
+   * separate from `isCollapsed` so collapsing the rail on desktop does not
+   * decide whether the drawer is open on a phone, and vice versa.
+   */
+  isMobileNavOpen: boolean;
 }
 
 const initialState: SidebarState = {
@@ -19,6 +25,7 @@ const initialState: SidebarState = {
   isPrivateOpen: true,
   isSharedOpen: true,
   docActionsAnchor: null,
+  isMobileNavOpen: false,
 };
 
 const sidebarSlice = createSlice({
@@ -30,6 +37,12 @@ const sidebarSlice = createSlice({
     },
     setCollapsed(state, action: PayloadAction<boolean>) {
       state.isCollapsed = action.payload;
+    },
+    setMobileNavOpen(state, action: PayloadAction<boolean>) {
+      state.isMobileNavOpen = action.payload;
+    },
+    toggleMobileNav(state) {
+      state.isMobileNavOpen = !state.isMobileNavOpen;
     },
     setSidebarWidth(state, action: PayloadAction<number>) {
       state.sidebarWidth = action.payload;
@@ -53,6 +66,7 @@ const sidebarSlice = createSlice({
       state.panelMode = null;
       state.searchQuery = '';
       state.docActionsAnchor = null;
+      state.isMobileNavOpen = false;
     },
   },
 });
@@ -60,6 +74,8 @@ const sidebarSlice = createSlice({
 export const {
   toggleCollapsed,
   setCollapsed,
+  setMobileNavOpen,
+  toggleMobileNav,
   setSidebarWidth,
   setPanelMode,
   setSearchQuery,
