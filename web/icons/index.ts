@@ -19,6 +19,7 @@ export { ChainLink } from './ChainLink';
 export { Check } from './Check';
 export { ChevronDown } from './ChevronDown';
 export { Close } from './Close';
+export { EditOff } from './EditOff';
 export { GitHub } from './GitHub';
 export { GlobeSolid } from './GlobeSolid';
 export { Google } from './Google';
