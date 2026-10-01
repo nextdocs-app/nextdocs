@@ -198,7 +198,11 @@ export function resolveNativeButton(target: unknown, explicitNativeButton?: bool
   return true;
 }
 
-const DEFAULT_PORTAL_ELEMENTS = { default: null } as const;
+// BlockNote 0.55 dropped `null` as a portal target (it used to mean
+// `document.body`), so the CSS selector keeps floating UI portalled to the
+// body, clear of the editor's stacking context and fixed panels like the
+// comments sidebar.
+const DEFAULT_PORTAL_ELEMENTS = { default: 'body' } as const;
 
 export const customShadCNComponents: Partial<ShadCNComponents> = {
   DropdownMenu: {
