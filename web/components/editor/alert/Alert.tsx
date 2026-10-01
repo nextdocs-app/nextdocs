@@ -88,7 +88,7 @@ function AlertBlockContent({
       <Icon
         className="alert-icon"
         data-alert-icon-type={currentType}
-        size={20}
+        size={21}
         aria-hidden="true"
       />
     </button>
@@ -111,7 +111,7 @@ function AlertBlockContent({
                     <ItemIcon
                       className="alert-icon"
                       data-alert-icon-type={type.value}
-                      size={16}
+                      size={17}
                       aria-hidden="true"
                     />
                   }
@@ -134,7 +134,7 @@ function AlertBlockContent({
           <Icon
             className="alert-icon"
             data-alert-icon-type={currentType}
-            size={20}
+            size={21}
             aria-hidden="true"
           />
         </div>
@@ -181,7 +181,7 @@ export function getAlertSlashMenuItem<
       'callout',
     ],
     group: 'Basic blocks',
-    icon: <TriangleAlert size={18} />,
+    icon: <TriangleAlert size={19} />,
   };
 }
 

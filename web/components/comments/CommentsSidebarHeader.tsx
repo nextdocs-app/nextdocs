@@ -82,7 +82,7 @@ export function CommentsSidebarHeader({
             className="nd-comments-sidebar__close"
             aria-label="Close comments sidebar"
           >
-            <Close size={13} strokeWidth={2} />
+            <Close size={14} strokeWidth={2} />
           </button>
         </div>
       </div>
@@ -109,11 +109,11 @@ export function CommentsSidebarHeader({
         ))}
       </div>
 
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground/75 px-0.5 pt-0.5">
+      <div className="flex items-center justify-between text-[12px] text-muted-foreground/75 px-0.5 pt-0.5">
         <span className="font-normal">Keyboard shortcut</span>
         <kbd
           suppressHydrationWarning
-          className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-border/70 bg-muted/60 text-muted-foreground font-medium select-none"
+          className="font-mono text-[11px] px-1.5 py-0.5 rounded border border-border/70 bg-muted/60 text-muted-foreground font-medium select-none"
         >
           {isMac ? '⌘⌥⇧A' : 'Ctrl+Alt+Shift+A'}
         </kbd>

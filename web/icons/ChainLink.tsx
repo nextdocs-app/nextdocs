@@ -1,6 +1,6 @@
 import type { IconProps } from './IconBase';
 
-export const ChainLink = ({ className, size = 20 }: IconProps) => (
+export const ChainLink = ({ className, size = 21 }: IconProps) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     width={size}

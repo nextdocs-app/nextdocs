@@ -246,7 +246,7 @@ export function DocumentsPanel({
 
   const renderEmptyState = () => (
     <div className="rounded-xl border border-dashed border-sidebar-border px-4 py-8 text-center bg-sidebar-accent/20">
-      <p className="text-[13px] text-muted-foreground">
+      <p className="text-[14px] text-muted-foreground">
         {searchQuery
           ? 'No documents match your search.'
           : isTrashPanel
@@ -277,7 +277,7 @@ export function DocumentsPanel({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center gap-1 rounded-md pr-2 py-1 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 rounded-md pr-2 py-1 text-[13px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
           >
             <ChevronRight className="rotate-180 opacity-80" />
             Back
@@ -294,14 +294,14 @@ export function DocumentsPanel({
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder={isTrashPanel ? 'Search trash' : 'Search documents'}
-            className="w-full rounded-sm border border-sidebar-border bg-sidebar-accent/50 pl-9 pr-9 py-2 text-[13px] text-sidebar-foreground outline-none ring-0 focus:border-sidebar-ring focus:bg-sidebar"
+            className="w-full rounded-sm border border-sidebar-border bg-sidebar-accent/50 pl-9 pr-9 py-2 text-[14px] text-sidebar-foreground outline-none ring-0 focus:border-sidebar-ring focus:bg-sidebar"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery('')}
               aria-label="Clear search"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-[13px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
             >
               Clear
             </button>
@@ -370,19 +370,19 @@ export function DocumentsPanel({
                           setDocActionsAnchor(null);
                           onSelectDocument(doc.id);
                         }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-16 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                        className={`w-full flex items-center gap-2.5 px-2 pr-16 pointer-coarse:pr-20 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
                             ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
-                        <DocumentText size={16} className="flex-shrink-0 opacity-80" />
-                        <span className="text-[13px] truncate">{doc.meta.title || 'Untitled'}</span>
+                        <DocumentText size={17} className="flex-shrink-0 opacity-80" />
+                        <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
                       </button>
 
                       {isAuthenticated && accessToken && !isChildOfTrashedParent && (
                         <div
-                          className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity ${
+                          className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity pointer-coarse:opacity-100 ${
                             trashActionLoadingDocId === doc.id
                               ? 'opacity-100'
                               : 'opacity-0 group-hover/doc:opacity-100'
@@ -398,7 +398,7 @@ export function DocumentsPanel({
                               event.stopPropagation();
                               void onRestoreFromTrash(doc.id);
                             }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            className="inline-flex h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
                             <Restore className="opacity-90" />
                           </button>
@@ -412,7 +412,7 @@ export function DocumentsPanel({
                               event.stopPropagation();
                               onRequestPermanentDelete(doc.id, doc.meta.title || 'Untitled');
                             }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            className="inline-flex h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8 items-center justify-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
                             <Trash className="opacity-90" />
                           </button>
@@ -426,14 +426,14 @@ export function DocumentsPanel({
                           setDocActionsAnchor(null);
                           onSelectDocument(doc.id);
                         }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-9 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+                        className={`w-full flex items-center gap-2.5 px-2 pr-9 pointer-coarse:pr-12 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
                           isActive
                             ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
-                        <DocumentText size={16} className="flex-shrink-0 opacity-80" />
-                        <span className="text-[13px] truncate">{doc.meta.title || 'Untitled'}</span>
+                        <DocumentText size={17} className="flex-shrink-0 opacity-80" />
+                        <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
                       </button>
 
                       {isAuthenticated && accessToken && (

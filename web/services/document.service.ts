@@ -8,9 +8,9 @@ import {
 } from '@/lib/yjs.util';
 import type { DocumentMeta, DocumentLoadResult, StoredDocument } from '@/types/document.types';
 import type { TreeNode, TreeNodePage, MoveDocumentRequest } from '@/types/tree.types';
+import { getApiBaseUrl } from '@/lib/api-url.util';
 
 const CURRENT_SCHEMA_VERSION = 1;
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -868,7 +868,7 @@ class DocumentService {
       headers.Authorization = `Bearer ${options.accessToken}`;
     }
 
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, {
       method: options.method,
       credentials: 'include',
       headers,

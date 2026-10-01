@@ -25,11 +25,25 @@ describe('Config', () => {
 
     expect(config.port).toBe(1234);
     expect(config.host).toBe('0.0.0.0');
-    expect(config.corsOrigins).toEqual(['http://localhost:3000']);
+    expect(config.corsOrigins).toEqual([
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://192.168.*.*:3000',
+      'http://10.*.*.*:3000',
+      ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
+    ]);
     expect(config.logLevel).toBe('info');
     expect(config.roomCleanupInterval).toBe(300000);
     expect(config.roomInactiveTimeout).toBe(3600000);
     expect(config.accessRevalidationIntervalMs).toBe(5000);
+  });
+
+  it('should restrict default CORS origins to localhost:3000 in production', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.CORS_ORIGINS;
+
+    const config = (await import('../../src/config.js')).default;
+    expect(config.corsOrigins).toEqual(['http://localhost:3000']);
   });
 
   it('should parse environment variables correctly', async () => {

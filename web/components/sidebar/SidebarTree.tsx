@@ -182,7 +182,7 @@ export function SidebarTree({
           aria-label="New Document"
           className="p-1 -my-1 rounded-sm opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 hover:bg-sidebar-foreground/15 text-muted-foreground transition-all duration-100 cursor-pointer"
         >
-          <Plus size={16} />
+          <Plus size={17} />
         </button>
       }
       isLoading={isRootLoading}

@@ -3,8 +3,7 @@ import type {
   LoginCredentials,
   RegisterCredentials,
 } from '@/stores/auth/auth.types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
+import { getApiBaseUrl } from '@/lib/api-url.util';
 
 export class ApiError extends Error {
   constructor(
@@ -32,7 +31,7 @@ async function request<T>(
   init: RequestInit,
   options: RequestOptions = {}
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     credentials: 'include', // required to send/receive the HTTP-only refresh token cookie
     headers: {

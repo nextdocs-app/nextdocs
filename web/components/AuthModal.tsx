@@ -106,7 +106,7 @@ export function AuthModal({ onClose }: Props) {
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4 will-change-transform"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-3 sm:px-4 will-change-transform"
       onClick={(e) => {
         if (e.target === overlayRef.current) onClose();
       }}
@@ -117,7 +117,7 @@ export function AuthModal({ onClose }: Props) {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="w-full max-w-sm border border-border rounded-lg bg-card px-8 py-7 shadow-xl"
+        className="w-full max-w-sm max-h-[calc(100dvh-1.5rem)] overflow-y-auto border border-border rounded-lg bg-card px-5 py-6 sm:px-8 sm:py-7 shadow-xl"
       >
         <h1 id={titleId} className="text-lg font-semibold text-foreground mb-1">
           {mode === 'login' ? 'Sign in' : 'Create an account'}
@@ -274,9 +274,9 @@ function OAuthButton({ provider }: { provider: 'google' | 'github' }) {
       type="button"
       title="Coming soon"
       disabled
-      className="w-full flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm text-foreground/50 cursor-not-allowed opacity-60"
+      className="w-full flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 sm:py-2 text-sm text-foreground/50 cursor-not-allowed opacity-60"
     >
-      <span className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center">
+      <span className="inline-flex h-[17px] w-[17px] flex-shrink-0 items-center justify-center">
         {provider === 'google' ? <Google /> : <GitHub className="text-foreground/70" />}
       </span>
       Continue with {provider === 'google' ? 'Google' : 'GitHub'}

@@ -312,7 +312,7 @@ export function CommentsSidebar({
             <div className="nd-comments-empty" role="status" aria-live="polite">
               <div className="flex flex-col items-center justify-center text-center py-10 px-4 gap-2">
                 <div className="size-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-1 border border-emerald-500/20">
-                  <CircleCheck size={20} strokeWidth={1.75} />
+                  <CircleCheck size={21} strokeWidth={1.75} />
                 </div>
                 <h3 className="nd-comments-empty__title text-sm font-medium text-foreground">
                   All caught up!
@@ -326,7 +326,7 @@ export function CommentsSidebar({
             <div className="nd-comments-empty" role="status" aria-live="polite">
               <div className="flex flex-col items-center justify-center text-center py-10 px-4 gap-2">
                 <div className="size-10 rounded-full bg-muted/60 flex items-center justify-center text-muted-foreground/70 mb-1 border border-border/50">
-                  <CircleCheck size={20} strokeWidth={1.5} />
+                  <CircleCheck size={21} strokeWidth={1.5} />
                 </div>
                 <h3 className="nd-comments-empty__title text-sm font-medium text-foreground">
                   No resolved threads
@@ -340,7 +340,7 @@ export function CommentsSidebar({
             <div className="nd-comments-empty" role="status" aria-live="polite">
               <div className="flex flex-col items-center justify-center text-center py-10 px-4 gap-2">
                 <div className="size-10 rounded-full bg-muted/60 flex items-center justify-center text-muted-foreground/70 mb-1 border border-border/50">
-                  <CommentsIcon size={20} strokeWidth={1.5} />
+                  <CommentsIcon size={21} strokeWidth={1.5} />
                 </div>
                 <h3 className="nd-comments-empty__title text-sm font-medium text-foreground">
                   No comment threads yet

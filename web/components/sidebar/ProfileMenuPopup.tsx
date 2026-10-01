@@ -26,7 +26,7 @@ export function ProfileMenuPopup({
     <div
       ref={popupRef}
       style={style}
-      className={`fixed w-[14.9rem] text-[14px] z-30 rounded-lg border border-sidebar-border p-1.5 ${
+      className={`fixed w-[14.9rem] text-[15px] z-30 rounded-lg border border-sidebar-border p-1.5 ${
         theme === 'dark' ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
       }`}
       role="menu"
@@ -34,7 +34,7 @@ export function ProfileMenuPopup({
     >
       <PopupMenuItem
         theme={theme}
-        icon={<Settings size={15} className="opacity-90" />}
+        icon={<Settings size={16} className="opacity-90" />}
         onClick={onOpenSettings}
       >
         Settings
@@ -42,7 +42,7 @@ export function ProfileMenuPopup({
       {isAuthenticated && (
         <PopupMenuItem
           theme={theme}
-          icon={<Trash size={15} className="opacity-90" />}
+          icon={<Trash size={16} className="opacity-90" />}
           onClick={onOpenTrash}
         >
           Trash Documents
@@ -51,7 +51,7 @@ export function ProfileMenuPopup({
       {isAuthenticated ? (
         <PopupMenuItem
           theme={theme}
-          icon={<Logout size={15} className="opacity-90" />}
+          icon={<Logout size={16} className="opacity-90" />}
           onClick={onLogout}
         >
           Log out

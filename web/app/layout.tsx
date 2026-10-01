@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import '@/styles/globals.css';
 import { StoreProvider } from '@/stores/StoreProvider';
@@ -9,6 +9,24 @@ const inter = Inter({
   subsets: ['latin'],
   display: 'swap',
 });
+
+// The editor is a touch surface, so the viewport must not be locked to the
+// initial scale (`maximumScale`/`userScalable` stay open for pinch-zoom).
+//
+// `interactiveWidget: 'resizes-content'` shrinks the layout viewport when the
+// on-screen keyboard opens, so the shell's `h-dvh` follows the keyboard and the
+// caret is never left underneath it. It also makes BlockNote's keyboard-offset
+// calculation self-cancelling: layout and visual viewport shrink by the same
+// amount, so its docked formatting bar lands exactly on the keyboard's top edge
+// with no gap. Browsers that ignore `interactive-widget` (and Chrome, where
+// BlockNote opts into the VirtualKeyboard API's `overlaysContent`) keep working
+// off BlockNote's own measurement.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  interactiveWidget: 'resizes-content',
+};
 
 export const metadata: Metadata = {
   title: 'NextDocs',

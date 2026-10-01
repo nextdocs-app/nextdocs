@@ -8,6 +8,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { Portal } from '@/components/Portal';
 import { useTheme, type Theme } from '@/hooks/useTheme.hook';
 import { Close } from '@/icons';
 
@@ -140,105 +141,110 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 will-change-transform"
-      aria-modal="true"
-      role="dialog"
-      aria-label="Settings"
-    >
-      {/* Backdrop */}
+    <Portal>
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm will-change-transform"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        className="relative z-10 flex w-full max-w-[660px] h-[440px] max-h-[calc(100vh-2rem)]
-                   rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
+        className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 will-change-transform"
+        aria-modal="true"
+        role="dialog"
+        aria-label="Settings"
       >
-        {/* Left nav */}
-        <nav className="w-48 flex-shrink-0 border-r border-border bg-sidebar flex flex-col">
-          <div className="px-3 pt-4 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-2 pb-1">
-              Settings
-            </p>
-          </div>
-          <div className="px-2 flex flex-col gap-0.5">
-            <button
-              className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left text-[13px]
+        {/* Backdrop */}
+        <div
+          className="absolute inset-0 bg-black/50 backdrop-blur-sm will-change-transform"
+          onClick={onClose}
+        />
+
+        {/* Modal — the nav rail stacks above the content on mobile. */}
+        <div
+          ref={modalRef}
+          tabIndex={-1}
+          className="relative z-10 flex flex-col sm:flex-row w-full max-w-[660px] h-[440px] max-h-[calc(100dvh-1rem)]
+                   rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
+        >
+          {/* Left nav */}
+          <nav className="w-full sm:w-48 flex-shrink-0 border-b sm:border-b-0 sm:border-r border-border bg-sidebar flex flex-col">
+            <div className="hidden sm:block px-3 pt-4 pb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground px-2 pb-1">
+                Settings
+              </p>
+            </div>
+            <div className="px-2 py-2 sm:py-0 flex flex-row items-center gap-2 sm:flex-col sm:items-stretch sm:gap-0.5">
+              <p className="sm:hidden px-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Settings
+              </p>
+              <button
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-left text-[14px]
                          bg-sidebar-accent text-sidebar-foreground font-medium cursor-default"
-            >
-              General
-            </button>
-          </div>
-        </nav>
+              >
+                General
+              </button>
+            </div>
+          </nav>
 
-        {/* Content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
-            <h2 className="text-[15px] font-semibold text-foreground">General</h2>
-            <button
-              ref={closeButtonRef}
-              onClick={onClose}
-              className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground
+          {/* Content */}
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 sm:px-6 pt-4 sm:pt-5 pb-4 border-b border-border flex-shrink-0">
+              <h2 className="text-[16px] font-semibold text-foreground">General</h2>
+              <button
+                ref={closeButtonRef}
+                onClick={onClose}
+                className="flex items-center justify-center h-9 w-9 sm:h-7 sm:w-7 rounded-md text-muted-foreground
                          hover:bg-sidebar-accent hover:text-foreground transition-colors cursor-pointer"
-              aria-label="Close settings"
-            >
-              <Close size={14} />
-            </button>
-          </div>
+                aria-label="Close settings"
+              >
+                <Close size={15} />
+              </button>
+            </div>
 
-          {/* Body */}
-          <div className="flex-1 overflow-y-auto px-6 py-5">
-            <section>
-              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-4">
-                Appearance
-              </h3>
-              <div className="flex gap-3">
-                {themeOptions.map((option) => {
-                  const isSelected = theme === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      onClick={() => setTheme(option.value)}
-                      className={`flex-1 flex flex-col gap-2.5 p-2.5 rounded-xl border-2 cursor-pointer
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+              <section>
+                <h3 className="text-[12px] font-semibold uppercase tracking-widest text-muted-foreground mb-4">
+                  Appearance
+                </h3>
+                <div className="flex gap-3">
+                  {themeOptions.map((option) => {
+                    const isSelected = theme === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        onClick={() => setTheme(option.value)}
+                        className={`flex-1 flex flex-col gap-2.5 p-2.5 rounded-xl border-2 cursor-pointer
                                   transition-all duration-150 text-left
                                   ${
                                     isSelected
                                       ? 'border-foreground/40 bg-sidebar-accent'
                                       : 'border-border hover:border-muted-foreground/40 hover:bg-sidebar-accent/40'
                                   }`}
-                    >
-                      <ThemePreview variant={option.value} />
-                      <div className="flex items-center gap-1.5 px-0.5">
-                        <span
-                          className={`inline-flex h-4 w-4 flex-shrink-0 rounded-full border-2 items-center justify-center
+                      >
+                        <ThemePreview variant={option.value} />
+                        <div className="flex items-center gap-1.5 px-0.5">
+                          <span
+                            className={`inline-flex h-4 w-4 flex-shrink-0 rounded-full border-2 items-center justify-center
                                       ${isSelected ? 'border-foreground/60' : 'border-muted-foreground/40'}`}
-                        >
-                          {isSelected && (
-                            <span className="h-2 w-2 rounded-full bg-foreground/70 block" />
-                          )}
-                        </span>
-                        <span
-                          className={`text-[13px] font-medium ${
-                            isSelected ? 'text-foreground' : 'text-muted-foreground'
-                          }`}
-                        >
-                          {option.label}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+                          >
+                            {isSelected && (
+                              <span className="h-2 w-2 rounded-full bg-foreground/70 block" />
+                            )}
+                          </span>
+                          <span
+                            className={`text-[14px] font-medium ${
+                              isSelected ? 'text-foreground' : 'text-muted-foreground'
+                            }`}
+                          >
+                            {option.label}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </Portal>
   );
 }

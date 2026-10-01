@@ -693,6 +693,64 @@ it('moves a document to trash from row actions menu', async () => {
   expect(mockRefreshTrash).toHaveBeenCalled();
 });
 
+it('anchors the row actions menu on the sidebar edge, below the (...)', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+
+  const domRect = (left: number, top: number, width: number, height: number): DOMRect =>
+    ({
+      x: left,
+      y: top,
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+
+  // jsdom reports zero geometry for every element, so the three rects the menu
+  // placement depends on are stubbed here; anything else keeps jsdom's defaults.
+  const rectSpy = jest
+    .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('nd-left-sidebar')) {
+        return domRect(0, 0, 256, 800);
+      }
+      if (this.getAttribute('role') === 'menu') {
+        return domRect(0, 0, 184, 46);
+      }
+      if (this.getAttribute('aria-label')?.startsWith('Document actions for')) {
+        return domRect(220, 300, 24, 24);
+      }
+      return domRect(0, 0, 0, 0);
+    });
+
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /Document actions for Doc 1/i }));
+
+  const menu = screen.getByRole('menu');
+  // Half of the 184px menu covers the 256px sidebar, the rest the page beside it.
+  expect(menu.style.left).toBe('164px');
+  // Opens just under the row instead of covering it.
+  expect(menu.style.top).toBe('330px');
+
+  rectSpy.mockRestore();
+});
+
 it('moves a document to trash from show all documents panel row actions menu', async () => {
   (useAuth as jest.Mock).mockReturnValue({
     user: {
@@ -955,6 +1013,7 @@ it('moves a child document to trash in shared tree when user has edit access', a
         panelMode: null,
         searchQuery: '',
         docActionsAnchor: null,
+        isMobileNavOpen: false,
       },
       sharedTree: {
         nodes: {

@@ -51,7 +51,7 @@ function Avatar({ seed, label }: { seed: string; label: string }) {
   return (
     <span
       aria-hidden="true"
-      className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[14px] font-semibold text-white select-none"
+      className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[15px] font-semibold text-white select-none"
       style={{ backgroundColor: bg }}
     >
       {initial}
@@ -124,7 +124,7 @@ function AccessDropdown({
         onClick={handleOpen}
         className="
           inline-flex items-center gap-1 rounded-md px-1.5 py-1
-          text-[13px] font-medium text-foreground
+          text-[14px] font-medium text-foreground
           hover:bg-sidebar-accent
           disabled:opacity-50 disabled:cursor-not-allowed
           transition-colors cursor-pointer select-none
@@ -135,8 +135,8 @@ function AccessDropdown({
       >
         <span>{selected?.label ?? value}</span>
         <ChevronDown
-          size={14}
-          className={`h-3.5 w-3.5 flex-shrink-0 text-foreground/50 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+          size={15}
+          className={`h-[15px] w-[15px] flex-shrink-0 text-foreground/50 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -172,13 +172,13 @@ function AccessDropdown({
                 }}
                 className={`
                   w-full flex items-center gap-2.5 px-3 py-2 text-left
-                  text-[13px] text-foreground cursor-pointer
+                  text-[14px] text-foreground cursor-pointer
                   hover:bg-sidebar-accent transition-colors
                   ${isSelected ? 'font-semibold' : 'font-normal'}
                 `}
               >
                 <span className="flex-shrink-0 w-3.5">
-                  {isSelected && <Check size={14} className="h-3.5 w-3.5 text-foreground" />}
+                  {isSelected && <Check size={15} className="h-[15px] w-[15px] text-foreground" />}
                 </span>
                 <span>{opt.label}</span>
               </button>
@@ -226,8 +226,11 @@ export function SharePanel({
       if (rect) {
         let right = window.innerWidth - rect.right;
 
-        // Ensure it doesn't go off screen
-        const panelWidth = 448; // 28rem
+        // Ensure it doesn't go off screen. The panel is a 28rem dropdown on
+        // desktop but must shrink to the viewport on a phone (28rem is wider
+        // than most phones in portrait), so measure against the same bound the
+        // stylesheet applies via `max-w-[calc(100vw-2rem)]`.
+        const panelWidth = Math.min(448, window.innerWidth - 32);
         const minMargin = 16;
 
         // maxRightValue ensures panel's left edge doesn't go off screen left
@@ -452,7 +455,9 @@ export function SharePanel({
       }
       className="
         fixed z-50
-        w-[28rem]
+        w-[28rem] max-w-[calc(100vw-2rem)]
+        flex flex-col
+        max-h-[calc(100dvh-4.5rem)]
         rounded-2xl
         bg-background
         shadow-[0_8px_40px_-4px_rgba(0,0,0,0.18),0_2px_8px_-2px_rgba(0,0,0,0.1)]
@@ -486,7 +491,7 @@ export function SharePanel({
                 placeholder="Add people by email"
                 className="
                   flex-1 min-w-0 rounded-lg border border-border bg-background
-                  px-3.5 py-2 text-[13.5px] text-foreground
+                  px-3.5 py-2 text-[14.5px] text-foreground
                   placeholder:text-muted-foreground/55
                   outline-none focus:border-foreground/35
                   transition-colors
@@ -509,7 +514,7 @@ export function SharePanel({
                       flex-shrink-0 rounded-full bg-[#d7897f] hover:bg-[#C97B71]
                       focus-visible:ring-2 focus-visible:ring-[#C06D5B]/50 focus:bg-[#F2BEB6]
                       px-5 py-2 text-black/85 font-medium tracking-wide
-                      text-[13px]
+                      text-[14px]
                       active:bg-[#B86D63] active:scale-95 transition-all cursor-pointer
                     "
                   >
@@ -519,14 +524,14 @@ export function SharePanel({
               )}
             </div>
 
-            {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
+            {error && <p className="mt-2 text-[13px] text-destructive">{error}</p>}
           </>
         )}
       </div>
 
       {/* ── Body ─────────────────────────────────────── */}
       {isAuthenticated && accessToken && (
-        <div className="max-h-[58vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 max-h-[58vh] overflow-y-auto">
           {isLoading ? (
             <div className="space-y-4 px-5 pb-4">
               {[1, 2].map((i) => (
@@ -544,7 +549,7 @@ export function SharePanel({
               {/* ── People with access ── */}
               {collaborators.length > 0 && (
                 <section className="px-5 pb-3">
-                  <p className="mb-2 text-[13px] font-semibold text-foreground">
+                  <p className="mb-2 text-[14px] font-semibold text-foreground">
                     People with access
                   </p>
                   <ul className="space-y-0.5">
@@ -559,13 +564,13 @@ export function SharePanel({
                         >
                           <Avatar seed={collab.userId} label={collab.displayName || collab.email} />
                           <div className="flex-1 min-w-0">
-                            <p className="text-[13.5px] font-medium text-foreground truncate leading-snug">
+                            <p className="text-[14.5px] font-medium text-foreground truncate leading-snug">
                               {collab.displayName || collab.email}
                               {isSelf && (
                                 <span className="font-normal text-muted-foreground"> (you)</span>
                               )}
                             </p>
-                            <p className="text-[12px] text-muted-foreground/65 truncate leading-snug">
+                            <p className="text-[13px] text-muted-foreground/65 truncate leading-snug">
                               {collab.email}
                             </p>
                           </div>
@@ -590,11 +595,11 @@ export function SharePanel({
                                   transition-all cursor-pointer
                                 "
                               >
-                                <Close size={14} className="h-3.5 w-3.5" />
+                                <Close size={15} className="h-[15px] w-[15px]" />
                               </button>
                             </div>
                           ) : (
-                            <span className="flex-shrink-0 pr-1 text-[13px] text-muted-foreground">
+                            <span className="flex-shrink-0 pr-1 text-[14px] text-muted-foreground">
                               {ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}
                             </span>
                           )}
@@ -608,7 +613,7 @@ export function SharePanel({
               {/* ── General access ── */}
               {canManageSharing && settings && (
                 <section className="mt-1">
-                  <p className="px-5 mb-2 text-[13px] font-semibold text-foreground">
+                  <p className="px-5 mb-2 text-[14px] font-semibold text-foreground">
                     General access
                   </p>
 
@@ -624,9 +629,9 @@ export function SharePanel({
                       `}
                     >
                       {isAnyoneWithLink ? (
-                        <GlobeSolid className="h-5 w-5" />
+                        <GlobeSolid className="h-[21px] w-[21px]" />
                       ) : (
-                        <Lock className="h-5 w-5" />
+                        <Lock className="h-[21px] w-[21px]" />
                       )}
                     </span>
 
@@ -640,7 +645,7 @@ export function SharePanel({
                         disabled={isSavingSettings}
                         align="left"
                       />
-                      <p className="text-[12px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
+                      <p className="text-[13px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
                         {isAnyoneWithLink
                           ? `Anyone on the internet with the link can ${ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view'}`
                           : 'Only people with access can open with the link'}
@@ -672,12 +677,12 @@ export function SharePanel({
           className="
             inline-flex items-center gap-2 rounded-full
             border border-border px-4 py-2
-            text-[13px] font-medium text-foreground
+            text-[14px] font-medium text-foreground
             hover:bg-sidebar-accent
             active:scale-95 transition-all cursor-pointer
           "
         >
-          <ChainLink className="h-4 w-4" />
+          <ChainLink className="h-[17px] w-[17px]" />
           {copied ? 'Copied!' : 'Copy link'}
         </button>
 
@@ -688,7 +693,7 @@ export function SharePanel({
             rounded-full bg-[#d7897f] hover:bg-[#C97B71]
             focus-visible:ring-2 focus-visible:ring-[#C06D5B]/50 focus:bg-[#F2BEB6]
             px-6 py-2 text-black/85 font-semibold tracking-wide
-            text-[13px]
+            text-[14px]
             active:bg-[#B86D63] active:scale-95 transition-all cursor-pointer
           "
         >

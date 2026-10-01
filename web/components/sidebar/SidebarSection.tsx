@@ -64,7 +64,7 @@ export function SidebarSection({
             onToggle();
           }
         }}
-        className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] text-[13px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
+        className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] pointer-coarse:py-2 text-[13.5px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
       >
         <span className="flex items-center gap-1 min-w-0">
           <span className="font-medium text-muted-foreground/80 group-hover/header:text-muted-foreground transition-colors duration-100">
@@ -72,7 +72,7 @@ export function SidebarSection({
           </span>
           <ChevronRight
             size={14}
-            className={`flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-150 ${
+            className={`flex-shrink-0 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-all duration-150 ${
               isOpen ? 'rotate-90' : 'rotate-0'
             }`}
           />
@@ -89,7 +89,7 @@ export function SidebarSection({
                   key={`${skeletonKeyPrefix}-${i}`}
                   className="flex items-center gap-2 px-2 py-1.5 rounded-sm"
                 >
-                  <div className="h-4 w-4 flex-shrink-0 rounded-sm bg-sidebar-foreground/10 animate-pulse" />
+                  <div className="h-[17px] w-[17px] flex-shrink-0 rounded-sm bg-sidebar-foreground/10 animate-pulse" />
                   <div
                     className={`h-3 rounded-sm bg-sidebar-foreground/10 animate-pulse ${
                       i === 1 ? 'w-[70%]' : i === 2 ? 'w-[55%]' : 'w-[65%]'
@@ -100,7 +100,7 @@ export function SidebarSection({
             </div>
           ) : isEmpty ? (
             <div className="px-2 pt-1">
-              <p className="text-[13px] text-muted-foreground/50">{emptyText}</p>
+              <p className="text-[14px] text-muted-foreground/50">{emptyText}</p>
             </div>
           ) : (
             children
@@ -113,10 +113,10 @@ export function SidebarSection({
                   type="button"
                   onClick={onShowAll}
                   aria-label={showAllAriaLabel}
-                  className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
+                  className="w-full flex items-center gap-2 px-2 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground/90"
                 >
                   <MoreHorizontal className="flex-shrink-0" />
-                  <span className="text-[13px] truncate">Show More</span>
+                  <span className="text-[14px] truncate">Show More</span>
                 </button>
               </li>
             </ul>

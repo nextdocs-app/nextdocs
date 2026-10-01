@@ -18,6 +18,8 @@ import {
   setRegistrationSyncOverlayOpen,
   resetPromotionFlow,
 } from '@/stores/ui/ui.slice';
+import { setMobileNavOpen } from '@/stores/sidebar/sidebar.slice';
+import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { documentService } from '@/services/document.service';
 import { isUntitledTitle, isEmptyLocalDocument } from '@/lib/document-content.util';
@@ -75,6 +77,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isRegistrationSyncOverlayOpen = useAppSelector(
     (state) => state.ui.isRegistrationSyncOverlayOpen
   );
+  const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
+  const isMobileLayout = useIsMobileLayout();
 
   const { user, isTokenExpiringSoon, isAuthenticated, accessToken, lastAuthAction } = useAuth();
   const didPromptImportRef = useRef(false);
@@ -158,6 +162,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     dispatch(resetPromotionFlow());
     releasePromotionLockIfOwned();
   }, [dispatch, releasePromotionLockIfOwned]);
+
+  // Lock the page behind the drawer so the document cannot scroll under it.
+  useEffect(() => {
+    const shouldLock = isMobileLayout && isMobileNavOpen;
+    document.body.classList.toggle('nd-mobile-nav-open', shouldLock);
+
+    return () => document.body.classList.remove('nd-mobile-nav-open');
+  }, [isMobileLayout, isMobileNavOpen]);
 
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {
@@ -374,14 +386,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex h-screen">
+    // `h-dvh` rather than `h-screen`: mobile browsers shrink the visual viewport
+    // as the address bar and the on-screen keyboard appear.
+    <div className="flex h-dvh overflow-hidden">
       <Sidebar />
+      {isMobileLayout && isMobileNavOpen && (
+        <button
+          type="button"
+          className="nd-mobile-nav-backdrop"
+          aria-label="Close navigation"
+          onClick={() => dispatch(setMobileNavOpen(false))}
+        />
+      )}
       <main className="nd-app-shell-main flex-1 flex flex-col min-w-0 bg-background text-foreground relative overflow-hidden">
         {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling
         the browser that the scrollable region starts below the toolbar's height.*/}
         <div className="h-14 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />
-        <div className="flex-1 overflow-y-auto overflow-x-clip w-full">
-          <div className="max-w-4xl mx-auto px-4">
+        <div className="flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full">
+          <div className="max-w-4xl mx-auto px-2 sm:px-4">
             <Suspense>{children}</Suspense>
           </div>
         </div>

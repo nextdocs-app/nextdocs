@@ -3,6 +3,7 @@ import React from 'react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import uiReducer from '../../../stores/ui/ui.slice';
+import sidebarReducer from '../../../stores/sidebar/sidebar.slice';
 import toastsReducer from '../../../stores/toasts/toasts.slice';
 import * as Y from 'yjs';
 import { AppShell, getDocsEligibleForAccountMove } from '../../../components/AppShell';
@@ -43,6 +44,7 @@ const render = (ui: React.ReactElement) => {
   const store = configureStore({
     reducer: {
       ui: uiReducer,
+      sidebar: sidebarReducer,
       toasts: toastsReducer,
     },
     middleware: (getDefaultMiddleware) =>

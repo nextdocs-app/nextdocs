@@ -83,6 +83,17 @@ function buildApiDevEnv(overrides = {}) {
       + '  Set JWT_SECRET for stable token validation across restarts.\x1b[0m');
   }
 
+  if (isKeyEmptyOrPlaceholder(env.CORS_ALLOWED_ORIGINS)) {
+    // Enable LAN wildcard origins for phone/tablet testing on private networks in dev
+    env.CORS_ALLOWED_ORIGINS = [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://192.168.*.*:3000',
+      'http://10.*.*.*:3000',
+      ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
+    ].join(',');
+  }
+
   return env;
 }
 

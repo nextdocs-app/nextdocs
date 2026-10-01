@@ -15,6 +15,7 @@ describe('Server', () => {
   let server: any;
   let wss: any;
   let cleanupInactiveRooms: any;
+  let isOriginAllowed: any;
   let setupWSConnectionMock: any;
   let memoryUsageSpy: any;
   let fetchMock: jest.MockedFunction<typeof fetch>;
@@ -58,7 +59,7 @@ describe('Server', () => {
         port: 1234,
         host: '0.0.0.0',
         apiBaseUrl: 'http://localhost:8080',
-        corsOrigins: ['*'],
+        corsOrigins: ['http://localhost:3000', 'http://192.168.*.*:3000'],
         logLevel: 'info',
         roomCleanupInterval: 300000,
         roomInactiveTimeout: 3600000,
@@ -105,6 +106,7 @@ describe('Server', () => {
     server = serverModule.server;
     wss = serverModule.wss;
     cleanupInactiveRooms = serverModule.cleanupInactiveRooms;
+    isOriginAllowed = serverModule.isOriginAllowed;
 
     const yjsUtilsModule = await import('../../src/yjs-utils.js');
     setupWSConnectionMock = yjsUtilsModule.setupWSConnection;
@@ -130,11 +132,63 @@ describe('Server', () => {
       expect(response.status).toBe(200);
     });
 
-    it('OPTIONS should handle CORS', async () => {
+    it('OPTIONS should handle CORS for allowed origin', async () => {
       const response = await request(server)
         .options('/any-route')
         .set('Origin', 'http://localhost:3000');
       expect(response.status).toBe(204);
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+    });
+
+    it('OPTIONS should not allow credentialed CORS for unauthorized origin', async () => {
+      const response = await request(server)
+        .options('/any-route')
+        .set('Origin', 'http://192.168.evil.com:3000');
+      expect(response.status).toBe(204);
+      expect(response.headers['access-control-allow-origin']).toBeUndefined();
+      expect(response.headers['access-control-allow-credentials']).toBeUndefined();
+    });
+  });
+
+  describe('isOriginAllowed', () => {
+    const patterns = [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://192.168.*.*:3000',
+      'http://10.*.*.*:3000',
+      'http://172.16.*.*:3000',
+    ];
+
+    it('allows exact origin matches', () => {
+      expect(isOriginAllowed('http://localhost:3000', patterns)).toBe(true);
+      expect(isOriginAllowed('http://127.0.0.1:3000', patterns)).toBe(true);
+    });
+
+    it('allows valid IPv4 private LAN origins within patterns', () => {
+      expect(isOriginAllowed('http://192.168.1.1:3000', patterns)).toBe(true);
+      expect(isOriginAllowed('http://192.168.0.254:3000', patterns)).toBe(true);
+      expect(isOriginAllowed('http://10.0.0.1:3000', patterns)).toBe(true);
+      expect(isOriginAllowed('http://10.255.255.255:3000', patterns)).toBe(true);
+      expect(isOriginAllowed('http://172.16.1.10:3000', patterns)).toBe(true);
+    });
+
+    it('rejects domain origins crossing dots or pretending to match IP prefixes', () => {
+      expect(isOriginAllowed('http://192.168.evil.com:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('http://10.evil.com:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('http://172.16.evil.com:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('http://192.168.1.1.evil.com:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('http://evil192.168.1.1:3000', patterns)).toBe(false);
+    });
+
+    it('rejects numbers exceeding valid IPv4 octet bounds', () => {
+      expect(isOriginAllowed('http://192.168.999.1:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('http://192.168.1.300:3000', patterns)).toBe(false);
+    });
+
+    it('rejects unlisted or invalid origins', () => {
+      expect(isOriginAllowed('http://example.com:3000', patterns)).toBe(false);
+      expect(isOriginAllowed('', patterns)).toBe(false);
     });
   });
 

@@ -54,11 +54,21 @@ jest.mock('@blocknote/react', () => {
     SideMenuController: () => null,
     SuggestionMenuController: jest.fn(() => null),
     FloatingComposerController: () => null,
-    FloatingThreadController: () => null,
+    FloatingThreadController: jest.fn(() => null),
     getDefaultReactSlashMenuItems: jest.fn(() => []),
     AddBlockButton: () => null,
     DragHandleButton: () => null,
     useExtensionState: jest.fn(),
+    // CommentsSidebar runs its hooks even while closed (it renders nothing
+    // until it is opened), so it needs the extension and thread stores to exist.
+    useExtension: jest.fn(() => ({
+      userStore: {
+        store: { subscribe: jest.fn(() => () => {}) },
+        getUser: jest.fn(),
+        loadUsers: jest.fn(async () => {}),
+      },
+    })),
+    useThreads: jest.fn(() => new Map()),
     ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
     createReactBlockSpec: jest.fn((config, implementation) => () => ({
       type: config?.type || 'alert',
@@ -241,7 +251,14 @@ jest.mock('../../../services/document.service', () => ({
 
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import React from 'react';
-import { render as baseRender, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import {
+  render as baseRender,
+  screen,
+  fireEvent,
+  act,
+  cleanup,
+  waitFor,
+} from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import uiReducer from '../../../stores/ui/ui.slice';
@@ -255,6 +272,10 @@ import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { createCodeBlockSpec } from '@blocknote/core';
 import { syntaxHighlighter } from '../../../components/editor/codeBlockHighlighter';
+import { MobileFormattingToolbarController } from '../../../components/editor/MobileFormattingToolbar';
+import { MobileAddBlockButton } from '../../../components/editor/MobileAddBlockButton';
+import { MobileDeleteBlockButton } from '../../../components/editor/MobileDeleteBlockButton';
+import { MOBILE_LAYOUT_QUERY, TOUCH_INPUT_QUERY } from '../../../hooks/useMediaQuery.hook';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from 'yjs';
@@ -282,9 +303,43 @@ jest.mock('../../../hooks/useTheme.hook', () => ({
   useTheme: jest.fn(() => ({ theme: 'system', setTheme: jest.fn(), resolvedTheme: 'light' })),
 }));
 
+type EditorViewHandlers = {
+  onPointerDownCapture?: (event: {
+    target: EventTarget | null;
+    preventDefault: () => void;
+  }) => void;
+  onClick?: (event: { target: EventTarget | null }) => void;
+  comments?: boolean;
+};
+
+/** The props the last render handed to BlockNoteView (whose DOM is mocked). */
+function lastBlockNoteViewHandlers(): EditorViewHandlers {
+  const mock = BlockNoteView as unknown as jest.Mock;
+  return mock.mock.calls[mock.mock.calls.length - 1][0] as EditorViewHandlers;
+}
+
 // createCodeBlockSpec is called once at EditorContent module load, before
 // beforeEach(jest.clearAllMocks()) wipes mock history. Capture it here.
 const capturedCodeBlockOptions = (createCodeBlockSpec as unknown as jest.Mock).mock.calls[0]?.[0];
+
+// jsdom ships no `matchMedia`, which is why the rest of this suite sees a mouse
+// and a wide viewport; the touch test defines it for itself only.
+function stubTouchInput() {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches: query === TOUCH_INPUT_QUERY,
+      media: query,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+    })),
+  });
+}
+
+function clearTouchInputStub() {
+  delete (window as { matchMedia?: unknown }).matchMedia;
+}
 
 describe('Editor Component', () => {
   const mockUpdateMeta = jest.fn();
@@ -338,6 +393,7 @@ describe('Editor Component', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+    clearTouchInputStub();
   });
 
   it('should show loading state after delay', async () => {
@@ -861,6 +917,7 @@ describe('Editor Component', () => {
     (useCreateBlockNote as jest.Mock).mockReturnValue({
       document: [{ content: [] }],
       focus: mockFocus,
+      getExtension: jest.fn(() => undefined),
     });
 
     (useDocument as jest.Mock).mockReturnValue({
@@ -902,6 +959,97 @@ describe('Editor Component', () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(mockFocus).toHaveBeenCalledTimes(1);
+  });
+
+  describe('clicking a comment mark', () => {
+    const mockBlur = jest.fn();
+    const commentsState = { selectedThreadId: undefined as string | undefined };
+
+    function setup() {
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token',
+        user: {
+          id: 'user-1',
+          displayName: 'Jane Doe',
+          email: 'jane@example.com',
+          avatarUrl: null,
+        },
+      });
+      (useCreateBlockNote as jest.Mock).mockReturnValue({
+        // Content, so the editor (and with it BlockNoteView) actually renders.
+        document: [{ content: [{ type: 'text', text: 'hello' }] }],
+        focus: jest.fn(),
+        blur: mockBlur,
+        getExtension: jest.fn(() => ({ store: { state: commentsState } })),
+      });
+
+      render(<Editor />);
+
+      const commentMark = document.createElement('span');
+      commentMark.className = 'bn-thread-mark';
+
+      return { handlers: lastBlockNoteViewHandlers(), commentMark };
+    }
+
+    it('drops the editor focus when the click opens a thread', () => {
+      const { handlers, commentMark } = setup();
+
+      // Nothing is selected when the finger goes down...
+      handlers.onPointerDownCapture?.({ target: commentMark, preventDefault: jest.fn() });
+      // ...the comments extension selects its thread on mouseup, which is where
+      // its own click handling runs, and the click reaches the container after
+      // that. Focus would otherwise stay on the contenteditable with the
+      // on-screen keyboard over the thread that was just opened.
+      commentsState.selectedThreadId = 'thread-1';
+      handlers.onClick?.({ target: commentMark });
+
+      expect(mockBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the editor focus when the click opens nothing', () => {
+      const { handlers, commentMark } = setup();
+      const plainText = document.createElement('span');
+
+      // A thread that was already open when the press started: this click is the
+      // one that puts the cursor back into the commented text, so the caret it
+      // places has to survive.
+      commentsState.selectedThreadId = 'thread-1';
+      handlers.onPointerDownCapture?.({ target: commentMark, preventDefault: jest.fn() });
+      handlers.onClick?.({ target: commentMark });
+
+      // Text that is not commented at all.
+      commentsState.selectedThreadId = 'thread-1';
+      handlers.onPointerDownCapture?.({ target: plainText, preventDefault: jest.fn() });
+      handlers.onClick?.({ target: plainText });
+
+      expect(mockBlur).not.toHaveBeenCalled();
+    });
+  });
+
+  it('renders the floating thread itself so it can be bounded to the screen', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token',
+      user: {
+        id: 'user-1',
+        displayName: 'Jane Doe',
+        email: 'jane@example.com',
+        avatarUrl: null,
+      },
+    });
+    (useCreateBlockNote as jest.Mock).mockReturnValue({
+      document: [{ content: [{ type: 'text', text: 'hello' }] }],
+      focus: jest.fn(),
+      getExtension: jest.fn(() => undefined),
+    });
+
+    render(<Editor />);
+
+    // BlockNote's default comments UI would render its own thread card with its
+    // own placement rules, which let a tall thread run off the screen; the card
+    // is rendered from EditorContent instead (see comment.utils.ts).
+    expect(lastBlockNoteViewHandlers().comments).toBe(false);
   });
 
   it('should maintain a stable BlockNote editor instance across realtimeProvider, accessLevel, and token updates', () => {
@@ -1329,6 +1477,156 @@ describe('Editor Component', () => {
       (child) => React.isValidElement(child) && child.type === FormattingToolbarController
     );
     expect(toolbarElement).toBeUndefined();
+  });
+
+  function getBlockNoteViewChildren() {
+    const blockNoteViewMock = BlockNoteView as unknown as jest.Mock;
+    const lastProps = blockNoteViewMock.mock.calls[blockNoteViewMock.mock.calls.length - 1][0];
+    return React.Children.toArray(lastProps.children);
+  }
+
+  function findChild(children: React.ReactNode[], type: unknown) {
+    return children.find((child) => React.isValidElement(child) && child.type === type);
+  }
+
+  /** The buttons a toolbar controller would render, without mounting them. */
+  function toolbarChildren(toolbarElement: React.ReactNode) {
+    if (
+      !React.isValidElement<{
+        formattingToolbar: () => React.ReactElement<{ children?: React.ReactNode }>;
+      }>(toolbarElement)
+    ) {
+      throw new Error('Toolbar controller was not rendered');
+    }
+
+    return React.Children.toArray(toolbarElement.props.formattingToolbar().props.children);
+  }
+
+  it('should render the docked toolbar instead of the floating one on a touch device', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    stubTouchInput();
+    renderEditableDocWithTitle('Touch toolbar doc');
+
+    const children = getBlockNoteViewChildren();
+
+    expect(findChild(children, MobileFormattingToolbarController)).toBeDefined();
+    // The floating toolbar would sit under the on-screen keyboard here.
+    expect(findChild(children, FormattingToolbarController)).toBeUndefined();
+  });
+
+  it('should put the add-block button in the docked toolbar only', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+
+    renderEditableDocWithTitle('Mouse add block doc');
+    expect(
+      findChild(
+        toolbarChildren(findChild(getBlockNoteViewChildren(), FormattingToolbarController)),
+        MobileAddBlockButton
+      )
+    ).toBeUndefined();
+
+    cleanup();
+    stubTouchInput();
+    renderEditableDocWithTitle('Touch add block doc');
+
+    // Touch devices have no side menu, so the docked bar carries its "+".
+    expect(
+      findChild(
+        toolbarChildren(findChild(getBlockNoteViewChildren(), MobileFormattingToolbarController)),
+        MobileAddBlockButton
+      )
+    ).toBeDefined();
+  });
+
+  it('should put the delete-block button beside the add-block one in the docked toolbar only', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+
+    renderEditableDocWithTitle('Mouse delete block doc');
+    expect(
+      findChild(
+        toolbarChildren(findChild(getBlockNoteViewChildren(), FormattingToolbarController)),
+        MobileDeleteBlockButton
+      )
+    ).toBeUndefined();
+
+    cleanup();
+    stubTouchInput();
+    renderEditableDocWithTitle('Touch delete block doc');
+
+    // Touch devices have no side menu, so its drag-handle menu is gone too: the
+    // docked bar is the only place a block can be deleted from.
+    const buttons = toolbarChildren(
+      findChild(getBlockNoteViewChildren(), MobileFormattingToolbarController)
+    );
+    const addBlockIndex = buttons.findIndex(
+      (child) => React.isValidElement(child) && child.type === MobileAddBlockButton
+    );
+    const deleteBlockIndex = buttons.findIndex(
+      (child) => React.isValidElement(child) && child.type === MobileDeleteBlockButton
+    );
+
+    // Both are block actions the side menu owns on desktop, so they sit together
+    // at the head of the bar, ahead of the inline-formatting buttons.
+    expect(addBlockIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteBlockIndex).toBe(addBlockIndex + 1);
+  });
+
+  it('should ask the docked bar for a dismiss-keyboard button only on touch', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+
+    renderEditableDocWithTitle('Mouse dismiss keyboard doc');
+    const mouseController = findChild(getBlockNoteViewChildren(), FormattingToolbarController) as
+      React.ReactElement<{ dismissButton?: boolean }> | undefined;
+    expect(mouseController).toBeDefined();
+    expect(mouseController!.props.dismissButton).toBeFalsy();
+
+    cleanup();
+    stubTouchInput();
+    renderEditableDocWithTitle('Touch dismiss keyboard doc');
+
+    // Dropping the caret is touch chrome, like the docked bar it lives in.
+    const touchController = findChild(
+      getBlockNoteViewChildren(),
+      MobileFormattingToolbarController
+    ) as React.ReactElement<{ dismissButton?: boolean }> | undefined;
+    expect(touchController).toBeDefined();
+    expect(touchController!.props.dismissButton).toBe(true);
+  });
+
+  it('should keep the floating toolbar on a narrow viewport driven by a mouse', async () => {
+    const { FormattingToolbarController } = await import('@blocknote/react');
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: jest.fn().mockImplementation((query: string) => ({
+        // A resized desktop window: narrow, but still a mouse.
+        matches: query === MOBILE_LAYOUT_QUERY,
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+      })),
+    });
+    renderEditableDocWithTitle('Narrow desktop doc');
+
+    const children = getBlockNoteViewChildren();
+
+    expect(findChild(children, FormattingToolbarController)).toBeDefined();
+    expect(findChild(children, MobileFormattingToolbarController)).toBeUndefined();
+  });
+
+  it('should render the block side menu for a mouse and drop it for touch input', async () => {
+    const { SideMenuController } = await import('@blocknote/react');
+
+    renderEditableDocWithTitle('Mouse side menu doc');
+    expect(findChild(getBlockNoteViewChildren(), SideMenuController)).toBeDefined();
+
+    cleanup();
+    stubTouchInput();
+    renderEditableDocWithTitle('Touch side menu doc');
+
+    // Touch devices lose the handles entirely — the gutter they would have
+    // reserved goes back to the text (see the `(pointer: coarse)` CSS block).
+    expect(findChild(getBlockNoteViewChildren(), SideMenuController)).toBeUndefined();
   });
 
   it('should render FormattingToolbarController with inline code button when editable', async () => {

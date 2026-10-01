@@ -24,6 +24,7 @@ import {
   FileRenameButton,
   FileReplaceButton,
   FloatingComposerController,
+  FloatingThreadController,
   FormattingToolbar,
   FormattingToolbarController,
   getDefaultReactSlashMenuItems,
@@ -60,10 +61,15 @@ import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
+import { MobileFormattingToolbarController } from './MobileFormattingToolbar';
+import { MobileAddBlockButton } from './MobileAddBlockButton';
+import { MobileDeleteBlockButton } from './MobileDeleteBlockButton';
 import { createAlert, getAlertBlockTypeSelectItem, getAlertSlashMenuItem } from './alert';
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
+import { useIsTouchInput } from '@/hooks/useMediaQuery.hook';
+import { useDocumentToolbarInset } from '@/hooks/useDocumentToolbarInset.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
@@ -76,6 +82,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import {
   COMMENT_USER_CACHE_TTL_MS,
   COMMENT_USERS_MAP_KEY,
+  createCommentThreadFloatingOptions,
   mapAccessLevelToCommentRole,
   ReadOnlyThreadStoreAuth,
   DynamicThreadStoreAuth,
@@ -342,6 +349,16 @@ export function EditorContent({
   onCommentsThreadStatsChange: (stats: CommentThreadStats) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const isTouchInput = useIsTouchInput();
+  const documentToolbarInset = useDocumentToolbarInset();
+
+  // Bounds the floating thread card; see `createCommentThreadFloatingOptions`.
+  // Rebuilt when the toolbar's height changes, which is also the signal that a
+  // breakpoint or a wrapped notice moved it.
+  const commentThreadFloatingOptions = useMemo(
+    () => createCommentThreadFloatingOptions(documentToolbarInset),
+    [documentToolbarInset]
+  );
 
   const collaboratorCache = useRef<Map<string, CommentUser>>(new Map());
   const collaboratorCacheUpdatedAt = useRef(0);
@@ -624,6 +641,33 @@ export function EditorContent({
     [editor]
   );
 
+  const toolbarButtons = useMemo(
+    () => [
+      <BlockTypeSelect key="blockTypeSelect" items={toolbarBlockTypeSelectItems} />,
+      <TableCellMergeButton key="tableCellMergeButton" />,
+      <FileCaptionButton key="fileCaptionButton" />,
+      <FileReplaceButton key="replaceFileButton" />,
+      <FileRenameButton key="fileRenameButton" />,
+      <FileDeleteButton key="fileDeleteButton" />,
+      <FileDownloadButton key="fileDownloadButton" />,
+      <FilePreviewButton key="filePreviewButton" />,
+      <BasicTextStyleButton basicTextStyle="bold" key="boldStyleButton" />,
+      <BasicTextStyleButton basicTextStyle="italic" key="italicStyleButton" />,
+      <BasicTextStyleButton basicTextStyle="underline" key="underlineStyleButton" />,
+      <BasicTextStyleButton basicTextStyle="strike" key="strikeStyleButton" />,
+      <BasicTextStyleButton basicTextStyle="code" key="codeStyleButton" />,
+      <TextAlignButton textAlignment="left" key="textAlignLeftButton" />,
+      <TextAlignButton textAlignment="center" key="textAlignCenterButton" />,
+      <TextAlignButton textAlignment="right" key="textAlignRightButton" />,
+      <ColorStyleButton key="colorStyleButton" />,
+      <NestBlockButton key="nestBlockButton" />,
+      <UnnestBlockButton key="unnestBlockButton" />,
+      <CreateLinkButton key="createLinkButton" />,
+      <AddCommentButton key="addCommentButton" />,
+    ],
+    [toolbarBlockTypeSelectItems]
+  );
+
   // Stable component identity for the formatting toolbar. Passing an inline
   // `() => (...)` closure would create a new component type on every
   // EditorContent render (e.g. realtime reconnect, meta update), unmounting
@@ -632,30 +676,27 @@ export function EditorContent({
   const renderFormattingToolbar = useCallback(
     () => (
       <FormattingToolbar blockTypeSelectItems={toolbarBlockTypeSelectItems}>
-        <BlockTypeSelect key="blockTypeSelect" items={toolbarBlockTypeSelectItems} />
-        <TableCellMergeButton key="tableCellMergeButton" />
-        <FileCaptionButton key="fileCaptionButton" />
-        <FileReplaceButton key="replaceFileButton" />
-        <FileRenameButton key="fileRenameButton" />
-        <FileDeleteButton key="fileDeleteButton" />
-        <FileDownloadButton key="fileDownloadButton" />
-        <FilePreviewButton key="filePreviewButton" />
-        <BasicTextStyleButton basicTextStyle="bold" key="boldStyleButton" />
-        <BasicTextStyleButton basicTextStyle="italic" key="italicStyleButton" />
-        <BasicTextStyleButton basicTextStyle="underline" key="underlineStyleButton" />
-        <BasicTextStyleButton basicTextStyle="strike" key="strikeStyleButton" />
-        <BasicTextStyleButton basicTextStyle="code" key="codeStyleButton" />
-        <TextAlignButton textAlignment="left" key="textAlignLeftButton" />
-        <TextAlignButton textAlignment="center" key="textAlignCenterButton" />
-        <TextAlignButton textAlignment="right" key="textAlignRightButton" />
-        <ColorStyleButton key="colorStyleButton" />
-        <NestBlockButton key="nestBlockButton" />
-        <UnnestBlockButton key="unnestBlockButton" />
-        <CreateLinkButton key="createLinkButton" />
-        <AddCommentButton key="addCommentButton" />
+        {toolbarButtons}
       </FormattingToolbar>
     ),
-    [toolbarBlockTypeSelectItems]
+    [toolbarBlockTypeSelectItems, toolbarButtons]
+  );
+
+  // The docked bar carries the floating toolbar's buttons plus the two block
+  // actions touch has no other way to reach: the add-block "+" and the
+  // delete-block trash, which on desktop live in the side menu's "+" and
+  // drag-handle menu (see MobileAddBlockButton / MobileDeleteBlockButton). The
+  // dismiss-editing button is not a toolbar item — it is rendered beside the
+  // scrolling row by the controller (dismissButton).
+  const renderMobileFormattingToolbar = useCallback(
+    () => (
+      <FormattingToolbar blockTypeSelectItems={toolbarBlockTypeSelectItems}>
+        <MobileAddBlockButton key="mobileAddBlockButton" />
+        <MobileDeleteBlockButton key="mobileDeleteBlockButton" />
+        {toolbarButtons}
+      </FormattingToolbar>
+    ),
+    [toolbarBlockTypeSelectItems, toolbarButtons]
   );
 
   useEffect(() => {
@@ -758,8 +799,17 @@ export function EditorContent({
     }
   };
 
+  // What the comments extension had selected when the press started. Its own
+  // click handling runs on mouseup — after this snapshot and before our click
+  // handler — so the pair is what tells an opened thread from one that was
+  // already open before the click.
+  const threadSelectedBeforePress = useRef<string | undefined>(undefined);
+
   const handleEditorPointerDownCapture = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      threadSelectedBeforePress.current =
+        editor.getExtension(CommentsExtension)?.store.state.selectedThreadId;
+
       if (accessLevel !== 'COMMENT') {
         return;
       }
@@ -777,6 +827,40 @@ export function EditorContent({
       editor.focus();
     },
     [accessLevel, editor]
+  );
+
+  // Clicking comment text opens that thread, and the click also focuses the
+  // contenteditable — the browser does that on the way down, before the comments
+  // extension selects the thread on the way up. Focus was never the point of the
+  // click: it brings the on-screen keyboard and the docked formatting bar up
+  // over a thread that was opened to be read. Blur once a thread is actually
+  // open, and only then — clicking a thread that is already open is how the
+  // cursor gets back into the commented text, and that click has to keep the
+  // editor focused so the caret it places survives.
+  const handleEditorClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!commentsUiEnabled) {
+        return;
+      }
+
+      const target = event.target;
+
+      if (!(target instanceof HTMLElement) || !target.closest('.bn-thread-mark')) {
+        return;
+      }
+
+      const selectedThreadId = editor.getExtension(CommentsExtension)?.store.state.selectedThreadId;
+
+      if (
+        selectedThreadId === undefined ||
+        selectedThreadId === threadSelectedBeforePress.current
+      ) {
+        return;
+      }
+
+      editor.blur();
+    },
+    [commentsUiEnabled, editor]
   );
 
   return (
@@ -801,6 +885,7 @@ export function EditorContent({
             theme={resolvedTheme}
             editable={initialEditableRef.current}
             onPointerDownCapture={handleEditorPointerDownCapture}
+            onClick={handleEditorClick}
             shadCNComponents={customShadCNComponents}
             portalElements={DEFAULT_PORTAL_ELEMENTS}
             formattingToolbar={false}
@@ -810,28 +895,60 @@ export function EditorContent({
             filePanel={!isViewer}
             tableHandles={!isViewer}
             emojiPicker={!isViewer}
-            // When the comments sidebar is open, disable BlockNote's default
-            // floating comments UI (FloatingThreadController +
-            // FloatingComposerController). Otherwise selecting a thread in the
-            // sidebar would also open a second floating copy in the editor —
-            // BlockNote only supports a single expanded Thread instance.
-            // Sidebar clicks still call `selectThread(id)` (via ThreadsSidebar)
-            // so the editor scrolls to the mark, but only the sidebar copy
-            // stays open. New-comment drafts still need a composer, so one is
-            // rendered manually below while the sidebar is open.
-            comments={commentsUiEnabled && !commentsSidebarOpen}
+            // BlockNote's default comments UI is off so that the thread card can
+            // be given its own floating options (see below); the two controllers
+            // it would have rendered are rendered here instead. When the comments
+            // sidebar is open, disable the floating thread as well. Otherwise
+            // selecting a thread in the sidebar would also open a second floating
+            // copy in the editor — BlockNote only supports a single expanded
+            // Thread instance. Sidebar clicks still call `selectThread(id)` (via
+            // ThreadsSidebar) so the editor scrolls to the mark, but only the
+            // sidebar copy stays open. New-comment drafts still need a composer,
+            // so one is rendered manually below while the sidebar is open.
+            comments={false}
           >
-            {!isViewer && (
-              <FormattingToolbarController formattingToolbar={renderFormattingToolbar} />
-            )}
+            {/*
+              Touch devices get a bar docked to the bottom of the viewport
+              instead of the floating toolbar, which is routinely buried under
+              the on-screen keyboard. Both take the same `formattingToolbar`, so
+              the button set is identical on either layout.
+            */}
+            {!isViewer &&
+              (isTouchInput ? (
+                <MobileFormattingToolbarController
+                  editor={editor}
+                  formattingToolbar={renderMobileFormattingToolbar}
+                  dismissButton
+                />
+              ) : (
+                <FormattingToolbarController formattingToolbar={renderFormattingToolbar} />
+              ))}
             {!isViewer && (
               <SuggestionMenuController triggerCharacter={'/'} getItems={getSlashMenuItems} />
             )}
-            {!isViewer && (
+            {/*
+              The block side menu is a mouse affordance: hover-driven handles
+              smaller than a fingertip. Touch devices get no handles at all, and
+              the gutter they would have reserved goes back to the text (see
+              the `(pointer: coarse)` rules in `styles/globals.css`).
+            */}
+            {!isViewer && !isTouchInput && (
               <SideMenuController
                 floatingUIOptions={SIDE_MENU_FLOATING_OPTIONS}
                 sideMenu={CustomSideMenu}
               />
+            )}
+            {/*
+              The thread card is the one piece of floating comments UI that
+              needs placement rules of its own: it is the tallest thing anchored
+              inside the document, so it has to stay clear of the document
+              toolbar above the editor and of the bottom of the screen.
+            */}
+            {commentsUiEnabled && !commentsSidebarOpen && (
+              <>
+                <FloatingComposerController />
+                <FloatingThreadController floatingUIOptions={commentThreadFloatingOptions} />
+              </>
             )}
             {/* Manual floating composer while the sidebar owns thread display. */}
             {commentsUiEnabled && commentsSidebarOpen && <FloatingComposerController />}

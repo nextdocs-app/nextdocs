@@ -33,13 +33,13 @@ export function LocalDocsPromotionModal({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm px-3 sm:px-4"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="local-docs-modal-title"
-        className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl"
+        className="w-full max-w-md max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 sm:p-6 shadow-2xl"
       >
         <h2 id="local-docs-modal-title" className="text-lg font-semibold text-foreground">
           Local documents found
