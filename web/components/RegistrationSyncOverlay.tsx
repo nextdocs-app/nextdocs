@@ -32,8 +32,8 @@ export function RegistrationSyncOverlay({ count, isLoading, error, onRetry }: Pr
         }
       `}</style>
 
-      <div className="mx-auto flex h-full w-full max-w-md flex-col items-center justify-center px-6">
-        <div className="rounded-2xl border border-border bg-card p-8 shadow-xl">
+      <div className="mx-auto flex h-full w-full max-w-md flex-col items-center justify-center px-4 sm:px-6">
+        <div className="w-full rounded-2xl border border-border bg-card p-6 sm:p-8 shadow-xl">
           {/* Spinner */}
           {isLoading && (
             <div className="mb-6 flex justify-center">

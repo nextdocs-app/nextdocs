@@ -105,6 +105,9 @@ function ToastItem({ toast }: { toast: Toast }) {
         fontSize: '15px',
         fontWeight: 500,
         width: '320px',
+        // Toasts are right-anchored 24px from the edge; on a 320px-wide phone a
+        // fixed 320px card would hang off the left of the screen.
+        maxWidth: 'calc(100vw - 48px)',
         transition: 'all 0.2s ease-in-out',
         pointerEvents: 'auto',
       }}

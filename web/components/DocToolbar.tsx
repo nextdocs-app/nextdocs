@@ -3,8 +3,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SharePanel } from '@/components/SharePanel';
-import { Comments, MoreHorizontal, Share } from '@/icons/index';
-import { useAppSelector } from '@/stores/hooks';
+import { Comments, Hamburger, MoreHorizontal, Share } from '@/icons/index';
+import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
+import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import type { DocumentBreadcrumbItem } from '@/services/document.service';
@@ -93,6 +95,8 @@ export function DocToolbar({
   onRestore,
 }: DocToolbarProps) {
   const router = useRouter();
+  const dispatch = useAppDispatch();
+  const isMobileLayout = useIsMobileLayout();
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [showOfflineTooltip, setShowOfflineTooltip] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
@@ -182,11 +186,14 @@ export function DocToolbar({
       ? breadcrumbs[breadcrumbs.length - 1]
       : { id: documentId, title: documentTitle || 'Untitled' };
 
-  // Left offset tracking: aligns pixel-perfectly with left sidebar edge
+  // Left offset tracking: aligns pixel-perfectly with the left sidebar edge.
+  // On mobile the rail is off-canvas, so only the drawer toggle sits up here.
   const leftPositionStyle = {
-    left: isSidebarCollapsed
-      ? 'calc(3.25rem + 12px)'
-      : 'calc(var(--nd-sidebar-width, 256px) + 12px)',
+    left: isMobileLayout
+      ? 'calc(0.5rem + env(safe-area-inset-left, 0px))'
+      : isSidebarCollapsed
+        ? 'calc(3.25rem + 12px)'
+        : 'calc(var(--nd-sidebar-width, 256px) + 12px)',
   };
 
   return (
@@ -196,14 +203,32 @@ export function DocToolbar({
         className="
           nd-doc-toolbar-left fixed top-2 z-40
           flex items-center gap-0.5 min-w-0
-          max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]
-          h-7 select-none pointer-events-auto
+          max-w-[calc(100vw-6.5rem)]
+          md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]
+          h-9 md:h-7 select-none pointer-events-auto
           transition-[left] duration-300
         "
         style={leftPositionStyle}
         role="navigation"
         aria-label="Document hierarchy"
       >
+        {/* Mobile only: the rail is off-canvas, so this is the only way in. */}
+        <button
+          type="button"
+          onClick={() => dispatch(toggleMobileNav())}
+          aria-label="Open navigation"
+          aria-haspopup="dialog"
+          title="Open navigation"
+          className="
+            md:hidden inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm
+            text-muted-foreground hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
+            transition-colors duration-150 cursor-pointer
+            focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
+          "
+        >
+          <Hamburger size={19} />
+        </button>
+
         {/*
           Note: Document icon and cover image are not yet introduced into the entity model.
           For now, we display document titles only in the hierarchy breadcrumbs.
@@ -219,7 +244,8 @@ export function DocToolbar({
                 title={`Open "${rootItem.title || 'Untitled'}"`}
                 aria-label={`Open "${rootItem.title || 'Untitled'}"`}
                 className="
-                  group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
+                  hidden md:inline-flex
+                  group/crumb items-center rounded-sm px-1.5 py-0.5
                   text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
@@ -232,14 +258,17 @@ export function DocToolbar({
             )}
 
             <span
-              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
+              className="hidden md:inline text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
             </span>
 
             {/* Collapsed Ellipsis with Dropdown */}
-            <div className="relative inline-flex items-center shrink-0" ref={overflowMenuRef}>
+            <div
+              className="relative hidden md:inline-flex items-center shrink-0"
+              ref={overflowMenuRef}
+            >
               <button
                 type="button"
                 onClick={() => setIsOverflowMenuOpen((prev) => !prev)}
@@ -288,7 +317,7 @@ export function DocToolbar({
             </div>
 
             <span
-              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
+              className="hidden md:inline text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
@@ -302,7 +331,8 @@ export function DocToolbar({
                 title={`Open "${parentItem.title || 'Untitled'}"`}
                 aria-label={`Open "${parentItem.title || 'Untitled'}"`}
                 className="
-                  group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
+                  hidden md:inline-flex
+                  group/crumb items-center rounded-sm px-1.5 py-0.5
                   text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
@@ -315,7 +345,7 @@ export function DocToolbar({
             )}
 
             <span
-              className="text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
+              className="hidden md:inline text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
               aria-hidden="true"
             >
               /
@@ -327,8 +357,8 @@ export function DocToolbar({
               className="
                 inline-flex items-center rounded-sm px-1.5 py-0.5
                 text-[14px] font-medium leading-normal text-foreground
-                max-w-[160px] sm:max-w-[220px] md:max-w-[280px]
-                shrink-0 select-none
+                min-w-0 sm:max-w-[220px] md:max-w-[280px]
+                md:shrink-0 select-none
               "
             >
               <span className="truncate leading-normal">{currentItem.title || 'Untitled'}</span>
@@ -338,15 +368,22 @@ export function DocToolbar({
           breadcrumbs.map((item, index) => {
             const isCurrent = index === breadcrumbs.length - 1;
             return (
-              <span key={item.id} className="inline-flex items-center min-w-0 shrink-0">
+              // Only the active document survives on mobile; the trail is
+              // readable in the navigation drawer.
+              <span
+                key={item.id}
+                className={`min-w-0 md:shrink-0 items-center ${
+                  isCurrent ? 'inline-flex' : 'hidden md:inline-flex'
+                }`}
+              >
                 {isCurrent ? (
                   <span
                     aria-current="page"
                     className="
                       inline-flex items-center rounded-sm px-1.5 py-0.5
                       text-[14px] font-medium leading-normal text-foreground
-                      max-w-[160px] sm:max-w-[220px] md:max-w-[280px]
-                      shrink-0 select-none
+                      min-w-0 sm:max-w-[220px] md:max-w-[280px]
+                      md:shrink-0 select-none
                     "
                   >
                     <span className="truncate leading-normal">{item.title || 'Untitled'}</span>
@@ -421,7 +458,7 @@ export function DocToolbar({
                 className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50"
                 aria-hidden="true"
               />
-              Offline
+              <span className="hidden sm:inline">Offline</span>
             </div>
 
             {isOfflineTooltipOpen && (
@@ -447,17 +484,24 @@ export function DocToolbar({
         )}
       </div>
 
-      {/* ── Top-right toolbar ── */}
+      {/*
+        ── Top-right toolbar ──
+        `order` swaps the notices and the controls below `md`: mobile gets a
+        single row of controls with the notices wrapped underneath, instead of a
+        notice pushing the controls off the screen edge.
+      */}
       <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5 h-7">
         {showTrashNotice && canManageTrash && (
           <div
             className="
+              order-2 md:order-1
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
-              px-3 py-1
-              text-[13px] text-muted-foreground
-              shadow-sm
-              whitespace-nowrap
+              px-2.5 py-1 sm:px-3
+              text-[12.5px] sm:text-[13px] text-muted-foreground
+              shadow-sm text-left leading-snug
+              max-w-[calc(100vw-1rem)] sm:max-w-none
+              sm:whitespace-nowrap
             "
           >
             <span>This document is in the trash.</span>
@@ -486,15 +530,20 @@ export function DocToolbar({
         {showTrashNotice && !canManageTrash && (
           <div
             className="
+              order-2 md:order-1
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
-              px-3 py-1
-              text-[13px] text-muted-foreground
-              shadow-sm
-              whitespace-nowrap
+              px-2.5 py-1 sm:px-3
+              text-[12.5px] sm:text-[13px] text-muted-foreground
+              shadow-sm text-left leading-snug
+              max-w-[calc(100vw-1rem)] sm:max-w-none
+              sm:whitespace-nowrap
             "
           >
-            <span>
+            <span className="sm:hidden">
+              This document is in the owner&apos;s trash. You have read-only access.
+            </span>
+            <span className="hidden sm:inline">
               This document is in the owner&apos;s trash. You have read-only access and can view it,
               but only people with edit access can restore or delete it.
             </span>
@@ -504,12 +553,14 @@ export function DocToolbar({
         {shouldShowGuestNotice && (
           <div
             className="
+              order-2 md:order-1
               inline-flex items-center gap-1.5 rounded-lg
               border border-border/70 bg-background/85 backdrop-blur-sm
-              px-3 py-1
-              text-[13px] text-muted-foreground
-              shadow-sm
-              whitespace-nowrap
+              px-2.5 py-1 sm:px-3
+              text-[12.5px] sm:text-[13px] text-muted-foreground
+              shadow-sm text-left leading-snug
+              max-w-[calc(100vw-1rem)] sm:max-w-none
+              sm:whitespace-nowrap
             "
           >
             <span>You are viewing this shared document as a guest.</span>
@@ -531,57 +582,63 @@ export function DocToolbar({
           </div>
         )}
 
-        {/* Last edited */}
-        {lastEditedLabel && (
-          <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block">
-            {lastEditedLabel}
-          </span>
-        )}
+        <div className="order-1 md:order-2 flex items-center gap-0.5 md:gap-1.5 shrink-0">
+          {/* Last edited */}
+          {lastEditedLabel && (
+            <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block">
+              {lastEditedLabel}
+            </span>
+          )}
 
-        {showCommentsButton && (
-          <button
-            id="doc-comments-btn"
-            type="button"
-            onClick={onCommentsToggle}
-            disabled={isCommentsButtonDisabled}
-            aria-pressed={isCommentsSidebarOpen}
-            aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
-            className={[
-              'inline-flex items-center justify-center rounded-sm py-[5px] px-2 transition-colors duration-150 h-[30px]',
-              isCommentsButtonDisabled
-                ? 'text-muted-foreground opacity-60 cursor-not-allowed'
-                : isCommentsSidebarOpen
-                  ? 'text-primary bg-[var(--nd-toolbar-hover-bg)] cursor-pointer'
-                  : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)] cursor-pointer',
-            ].join(' ')}
-          >
-            <Comments />
-          </button>
-        )}
+          {showCommentsButton && (
+            <button
+              id="doc-comments-btn"
+              type="button"
+              onClick={onCommentsToggle}
+              disabled={isCommentsButtonDisabled}
+              aria-pressed={isCommentsSidebarOpen}
+              aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
+              className={[
+                // 36px on touch, 30px under a mouse.
+                'inline-flex items-center justify-center rounded-sm transition-colors duration-150 h-9 w-9 md:h-[30px] md:w-auto md:px-2 md:py-[5px]',
+                isCommentsButtonDisabled
+                  ? 'text-muted-foreground opacity-60 cursor-not-allowed'
+                  : isCommentsSidebarOpen
+                    ? 'text-primary bg-[var(--nd-toolbar-hover-bg)] cursor-pointer'
+                    : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)] cursor-pointer',
+              ].join(' ')}
+            >
+              <Comments />
+            </button>
+          )}
 
-        {/* Share button */}
-        {isShareEnabled && (
-          <button
-            ref={shareButtonRef}
-            id="doc-share-btn"
-            type="button"
-            onClick={handleShareToggle}
-            aria-haspopup="dialog"
-            aria-expanded={isShareOpen}
-            className="
-              inline-flex items-center gap-1.5 rounded-sm
-              border border-border bg-background
-              px-2.5 py-[5px]
-              text-[13.5px] font-medium leading-none text-foreground
-              transition-colors duration-150
-              hover:bg-[var(--nd-toolbar-hover-bg)]
-              cursor-pointer h-[30px]
-            "
-          >
-            <Share />
-            Share
-          </button>
-        )}
+          {/* Share button */}
+          {isShareEnabled && (
+            <button
+              ref={shareButtonRef}
+              id="doc-share-btn"
+              type="button"
+              onClick={handleShareToggle}
+              aria-haspopup="dialog"
+              aria-expanded={isShareOpen}
+              aria-label="Share document"
+              className="
+                inline-flex items-center justify-center rounded-sm
+                h-9 w-9
+                md:w-auto md:gap-1.5
+                md:border md:border-border md:bg-background
+                md:px-2.5 md:h-[30px] md:py-[5px]
+                text-[13.5px] font-medium leading-none text-foreground
+                transition-colors duration-150
+                hover:bg-[var(--nd-toolbar-hover-bg)]
+                cursor-pointer
+              "
+            >
+              <Share />
+              <span className="hidden md:inline">Share</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Share panel (dropdown) ── */}

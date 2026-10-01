@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef } from 'react';
+import { Portal } from '@/components/Portal';
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -171,51 +172,54 @@ export function ConfirmationModal({
       : 'bg-foreground text-background hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed';
 
   return (
-    <div
-      ref={overlayRef}
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 backdrop-blur-[1px] px-4"
-      onMouseDown={(event) => {
-        if (event.target === overlayRef.current) {
-          handleCancel();
-        }
-      }}
-    >
+    <Portal>
       <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descriptionId}
-        tabIndex={-1}
-        className="w-full max-w-sm rounded-xl border border-sidebar-border bg-popover text-popover-foreground p-4 shadow-2xl"
+        ref={overlayRef}
+        className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 backdrop-blur-[1px] px-4"
+        onMouseDown={(event) => {
+          if (event.target === overlayRef.current) {
+            handleCancel();
+          }
+        }}
       >
-        <h3 id={titleId} className="text-[16px] font-semibold leading-tight">
-          {title}
-        </h3>
-        <p id={descriptionId} className="mt-2 text-[14px] text-muted-foreground leading-relaxed">
-          {description}
-        </p>
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+          tabIndex={-1}
+          className="w-full max-w-sm max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-xl border border-sidebar-border bg-popover text-popover-foreground p-4 shadow-2xl"
+        >
+          <h3 id={titleId} className="text-[16px] font-semibold leading-tight">
+            {title}
+          </h3>
+          <p id={descriptionId} className="mt-2 text-[14px] text-muted-foreground leading-relaxed">
+            {description}
+          </p>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            ref={cancelButtonRef}
-            type="button"
-            onClick={handleCancel}
-            disabled={isConfirming}
-            className="rounded-md px-3 py-1.5 text-[14px] border border-sidebar-border bg-transparent hover:bg-foreground/[0.07] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={isConfirming}
-            className={`rounded-md px-3 py-1.5 text-[14px] font-medium transition-colors cursor-pointer ${confirmButtonClassName}`}
-          >
-            {isConfirming ? 'Working...' : confirmLabel}
-          </button>
+          {/* Stacked full-width actions on phones, right-aligned inline on wider screens. */}
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <button
+              ref={cancelButtonRef}
+              type="button"
+              onClick={handleCancel}
+              disabled={isConfirming}
+              className="w-full sm:w-auto rounded-md px-3 py-2 sm:py-1.5 text-[14px] border border-sidebar-border bg-transparent hover:bg-foreground/[0.07] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {cancelLabel}
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={isConfirming}
+              className={`w-full sm:w-auto rounded-md px-3 py-2 sm:py-1.5 text-[14px] font-medium transition-colors cursor-pointer ${confirmButtonClassName}`}
+            >
+              {isConfirming ? 'Working...' : confirmLabel}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   );
 }

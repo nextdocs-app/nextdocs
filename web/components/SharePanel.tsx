@@ -226,8 +226,11 @@ export function SharePanel({
       if (rect) {
         let right = window.innerWidth - rect.right;
 
-        // Ensure it doesn't go off screen
-        const panelWidth = 448; // 28rem
+        // Ensure it doesn't go off screen. The panel is a 28rem dropdown on
+        // desktop but must shrink to the viewport on a phone (28rem is wider
+        // than most phones in portrait), so measure against the same bound the
+        // stylesheet applies via `max-w-[calc(100vw-2rem)]`.
+        const panelWidth = Math.min(448, window.innerWidth - 32);
         const minMargin = 16;
 
         // maxRightValue ensures panel's left edge doesn't go off screen left
@@ -452,7 +455,9 @@ export function SharePanel({
       }
       className="
         fixed z-50
-        w-[28rem]
+        w-[28rem] max-w-[calc(100vw-2rem)]
+        flex flex-col
+        max-h-[calc(100dvh-4.5rem)]
         rounded-2xl
         bg-background
         shadow-[0_8px_40px_-4px_rgba(0,0,0,0.18),0_2px_8px_-2px_rgba(0,0,0,0.1)]
@@ -526,7 +531,7 @@ export function SharePanel({
 
       {/* ── Body ─────────────────────────────────────── */}
       {isAuthenticated && accessToken && (
-        <div className="max-h-[58vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 max-h-[58vh] overflow-y-auto">
           {isLoading ? (
             <div className="space-y-4 px-5 pb-4">
               {[1, 2].map((i) => (

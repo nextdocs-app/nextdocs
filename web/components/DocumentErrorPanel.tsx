@@ -27,8 +27,8 @@ export function DocumentErrorPanel({
       : 'border-destructive/40 bg-destructive/5';
 
   return (
-    <div className="flex h-full items-center justify-center px-6 py-10">
-      <div className={`w-full max-w-xl rounded-2xl border p-6 ${borderToneClassName}`}>
+    <div className="flex h-full items-center justify-center px-4 py-8 sm:px-6 sm:py-10">
+      <div className={`w-full max-w-xl rounded-2xl border p-5 sm:p-6 ${borderToneClassName}`}>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Document status
         </p>
