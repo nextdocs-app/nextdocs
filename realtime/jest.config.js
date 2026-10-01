@@ -9,6 +9,9 @@ export default {
       {
         useESM: true,
         tsconfig: 'tsconfig.test.json',
+        // TypeScript 7 ships only the native compiler and dropped the JS
+        // compiler API ts-jest transforms with, so point it at the TS 6 build.
+        compiler: '@typescript/typescript6',
       },
     ],
   },

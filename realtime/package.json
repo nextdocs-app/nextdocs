@@ -48,6 +48,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.71.0",
     "@typescript-eslint/parser": "^8.51.0",
+    "@typescript/typescript6": "^6.0.2",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.5.2",
@@ -55,7 +56,7 @@
     "supertest": "^7.3.0",
     "ts-jest": "^29.4.14",
     "tsx": "^4.23.15",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.71.0"
   }
 }
