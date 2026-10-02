@@ -92,7 +92,7 @@
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
 .dark {
-  --background: #1a1a18;
+  --background: #171615;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
   --card-foreground: oklch(0.985 0 0);
