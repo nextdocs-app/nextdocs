@@ -92,7 +92,7 @@
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
 .dark {
-  --background: #1a1a18;
+  --background: #171615;
   --foreground: oklch(0.985 0 0);
   --card: #1e1e1e;
   --card-foreground: oklch(0.985 0 0);
@@ -1375,16 +1375,23 @@ div.bn-table-drop-cursor {
 }
 
 /* BlockNote Quote */
-[data-content-type='quote'] blockquote {
+:is(.bn-block-content[data-content-type='quote'], [data-content-type='quote']) blockquote {
+  border-left: 3.5px solid #71717a !important;
   color: #545252 !important;
 }
 
-:is(.dark, [data-color-scheme='dark']) [data-content-type='quote'] blockquote {
-  color: #a09a9b !important;
+:is(.dark, [data-color-scheme='dark'])
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #d4d4d8 !important;
+  color: #d4d4d8 !important;
 }
 
 /* Explicit light override — beats stale data-color-scheme="dark" */
-html[data-theme='light'] [data-content-type='quote'] blockquote {
+html[data-theme='light']
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #71717a !important;
   color: #545252 !important;
 }
 
@@ -2845,6 +2852,17 @@ html:not(.dark) .bn-editor a:visited:hover {
     display: none !important;
   }
 
+  /* ── Mobile long-press block drag-and-drop ──
+     When the editor is unfocused on touch, blocks become draggable.
+     Prevent iOS text callout / magnifier so long-press cleanly initiates dragging. */
+  .bn-block-outer[draggable='true'],
+  .bn-block-outer[draggable='true'] * {
+    -webkit-user-drag: element;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
   /* ── Editor gutters ── */
   /* `.bn-editor` reserves 54px per side for the block handles; on a phone that
      is more than half the screen once the title container adds it too. Kept to
@@ -3212,6 +3230,25 @@ div[role='presentation']:has([data-slot='popover-content']) {
   max-height: min(400px, 75vh) !important;
   overflow-y: auto !important;
   z-index: 60 !important;
+}
+
+/* Toolbar popups that open upward (the mobile docked bar's block-type select
+   and colour menu, or a flipped desktop dropdown) grow from the trigger toward
+   the top of the screen and would otherwise slide under the floating document
+   toolbar. Base UI reports the trigger-to-viewport-edge room as
+   `--available-height` on the popup (inherited from its Positioner), so
+   subtracting the measured toolbar strip (`--nd-doc-toolbar-inset`, published
+   by `useDocumentToolbarInset`; the `44px` fallback mirrors its
+   `DOCUMENT_TOOLBAR_INSET_FALLBACK_PX`) plus the shared viewport margin caps
+   the popup to the room below the toolbar — the same bound the comment thread
+   gets from `createViewportBounds`, which keeps both consumers in sync.
+   Scoped to `data-side='top'` because downward-opening popups start below
+   their trigger and never reach the toolbar. */
+[data-slot='select-content'][data-side='top'],
+[data-slot='dropdown-menu-content'][data-side='top'] {
+  max-height: calc(
+    var(--available-height, 400px) - var(--nd-doc-toolbar-inset, 44px) - 12px
+  ) !important;
 }
 
 /* Select items */

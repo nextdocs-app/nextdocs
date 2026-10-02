@@ -1,9 +1,13 @@
 'use client';
 
-import { FormattingToolbar, type FormattingToolbarProps } from '@blocknote/react';
+import {
+  FormattingToolbar,
+  UIModeContext,
+  useVirtualKeyboard,
+  type FormattingToolbarProps,
+} from '@blocknote/react';
 import type { BlockNoteEditor } from '@blocknote/core';
 import { useCallback, useEffect, useRef, useState, type FC } from 'react';
-import { useMobileKeyboardOffset } from '@/hooks/useMobileKeyboardOffset.hook';
 import { MobileBlurEditorButton } from './MobileBlurEditorButton';
 
 /**
@@ -11,8 +15,8 @@ import { MobileBlurEditorButton } from './MobileBlurEditorButton';
  * desktop toolbar, docked to the bottom of the viewport and lifted clear of the
  * on-screen keyboard.
  *
- * BlockNote's `ExperimentalMobileFormattingToolbarController` does that docking,
- * but it drops the real toolbar on any render where the formatting-toolbar
+ * BlockNote's `MobileFormattingToolbarController` does that docking, but it
+ * drops the real toolbar on any render where the formatting-toolbar
  * extension reports no non-empty selection to format: it re-renders the bar as a
  * `dangerouslySetInnerHTML` copy of its own markup, which keeps the buttons on
  * screen and takes their React handlers with it. Since the extension clears its
@@ -22,9 +26,19 @@ import { MobileBlurEditorButton } from './MobileBlurEditorButton';
  * open.
  *
  * Rendering the toolbar unconditionally is the fix; the bar only ever needs to
- * *look* the same. Keyboard tracking comes from the app's own
- * `useMobileKeyboardOffset` hook, because `--bn-mobile-keyboard-offset` is
- * written by the controller this replaces.
+ * *look* the same. Positioning comes from BlockNote's `useVirtualKeyboard`
+ * hook, which publishes the visual-viewport rectangle as `--bn-vv-*` custom
+ * properties that `.bn-mobile-formatting-toolbar` positions itself from (see
+ * BlockNote 0.55's `editor/styles.css`): without a mounted publisher the
+ * variables fall back to `0px`, the transform resolves to `translate(0, 0)
+ * translateY(-100%)`, and the bar sits off-screen above the viewport with only
+ * its shadow bleeding in from the top edge. The hook is called for that side
+ * effect alone — visibility stays driven by focus below, not by whether the
+ * keyboard is currently measured as open.
+ *
+ * The bar renders inside a `"mobile"` UI mode so its buttons keep the editor
+ * focused (and the keyboard up) when their dropdowns open, matching BlockNote's
+ * own mobile controller.
  *
  * Visibility: a cursor is what makes the bar useful, so it is hidden as soon as
  * focus leaves the editor. Focus on the bar itself counts as editing, because
@@ -68,7 +82,11 @@ export function MobileFormattingToolbarController({
    */
   dismissButton?: boolean;
 }) {
-  const keyboardOffset = useMobileKeyboardOffset(true);
+  // Publishes `--bn-vv-*` so `.bn-mobile-formatting-toolbar` can pin itself to
+  // the visual viewport. Return value (keyboard open) is intentionally unused:
+  // the bar shows whenever the editor holds the cursor, even before the
+  // keyboard measurement settles.
+  useVirtualKeyboard();
   const barRef = useRef<HTMLDivElement>(null);
   const [hasCursor, setHasCursor] = useState(false);
 
@@ -175,25 +193,29 @@ export function MobileFormattingToolbarController({
 
   return (
     // `bn-mobile-formatting-toolbar` keeps BlockNote's contract for the bar:
-    // fixed to the viewport, full width, horizontally scrollable, and themed by
-    // the mobile rules in `styles/globals.css`.
-    <div
-      ref={barRef}
-      className="bn-mobile-formatting-toolbar"
-      style={{
-        bottom: keyboardOffset,
-        visibility: hasCursor ? undefined : 'hidden',
-        pointerEvents: hasCursor ? undefined : 'none',
-      }}
-      aria-hidden={!hasCursor}
-      onPointerDown={handleBarPointerDown}
-      onClick={endBarGesture}
-      onPointerUp={scheduleEndBarGesture}
-      onPointerCancel={endBarGesture}
-      onLostPointerCapture={endBarGesture}
-    >
-      <Toolbar />
-      {dismissButton && <MobileBlurEditorButton />}
-    </div>
+    // fixed to the visual viewport via `--bn-vv-*`, full width, horizontally
+    // scrollable, and themed by the mobile rules in `styles/globals.css`. No
+    // `bottom` offset is set here: BlockNote 0.55 positions the bar purely from
+    // the transform in its stylesheet, and an inline `bottom` would lose to its
+    // `top: 0` while leaving the off-screen transform in place.
+    <UIModeContext.Provider value="mobile">
+      <div
+        ref={barRef}
+        className="bn-mobile-formatting-toolbar"
+        style={{
+          visibility: hasCursor ? undefined : 'hidden',
+          pointerEvents: hasCursor ? undefined : 'none',
+        }}
+        aria-hidden={!hasCursor}
+        onPointerDown={handleBarPointerDown}
+        onClick={endBarGesture}
+        onPointerUp={scheduleEndBarGesture}
+        onPointerCancel={endBarGesture}
+        onLostPointerCapture={endBarGesture}
+      >
+        <Toolbar />
+        {dismissButton && <MobileBlurEditorButton />}
+      </div>
+    </UIModeContext.Provider>
   );
 }

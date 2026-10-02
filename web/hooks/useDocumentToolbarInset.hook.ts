@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { DOC_TOOLBAR_INSET_CSS_VAR } from '@/lib/viewport-bounds.util';
 
 /**
  * The document toolbar's `fixed` strips (see `DocToolbar.tsx`): the breadcrumbs
@@ -51,12 +52,26 @@ export function measureDocumentToolbarInset(root: ParentNode): number {
  * ones, and a notice wraps the right-hand toolbar onto a second row. Observing
  * the strips themselves reports both, and the inset only ever feeds floating UI,
  * so it is applied after paint rather than blocking it.
+ *
+ * The inset is also published as `DOC_TOOLBAR_INSET_CSS_VAR` on the document
+ * element for CSS-positioned popups that no JS middleware reaches: Base UI's
+ * `Positioner` (block-type select, colour menu) sizes its popups from
+ * `--available-height`, and `styles/globals.css` subtracts the toolbar strip
+ * from it so upward-opening popups stop below the toolbar. Removed on unmount
+ * so a stale measurement never caps popups on a page without a toolbar.
  */
 export function useDocumentToolbarInset(): number {
   const [inset, setInset] = useState(DOCUMENT_TOOLBAR_INSET_FALLBACK_PX);
 
   useEffect(() => {
-    const measure = () => setInset(measureDocumentToolbarInset(document));
+    const publish = (value: number) =>
+      document.documentElement.style.setProperty(DOC_TOOLBAR_INSET_CSS_VAR, `${value}px`);
+
+    const measure = () => {
+      const next = measureDocumentToolbarInset(document);
+      setInset(next);
+      publish(next);
+    };
 
     const resizeObserver =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
@@ -143,6 +158,7 @@ export function useDocumentToolbarInset(): number {
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       window.removeEventListener('resize', measure);
+      document.documentElement.style.removeProperty(DOC_TOOLBAR_INSET_CSS_VAR);
     };
   }, []);
 

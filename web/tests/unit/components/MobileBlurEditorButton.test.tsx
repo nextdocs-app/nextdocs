@@ -50,4 +50,16 @@ describe('MobileBlurEditorButton', () => {
     // hides it, which is the point of the button.
     expect(document.activeElement).not.toBe(button);
   });
+
+  it('clears DOM selection ranges so no phantom caret lingers in the document', () => {
+    const removeAllRanges = jest.fn();
+    jest.spyOn(window, 'getSelection').mockReturnValue({
+      removeAllRanges,
+    } as unknown as Selection);
+
+    render(<MobileBlurEditorButton />);
+    clickDismiss();
+
+    expect(removeAllRanges).toHaveBeenCalled();
+  });
 });

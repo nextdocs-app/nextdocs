@@ -32,6 +32,9 @@ export function MobileBlurEditorButton() {
       // button exists to leave behind.
       (event.currentTarget as HTMLElement).blur();
       editor.blur();
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
     },
     [editor]
   );

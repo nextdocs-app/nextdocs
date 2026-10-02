@@ -1,6 +1,7 @@
 import { ThreadStoreAuth } from '@blocknote/core/comments';
 import type { FloatingUIOptions } from '@blocknote/react';
 import { flip, offset, shift, size } from '@floating-ui/react';
+import { createViewportBounds } from '@/lib/viewport-bounds.util';
 import { getPresenceColor } from '@/lib/realtime.util';
 import type { DocumentAccessLevel } from '@/services/document.service';
 import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
@@ -9,9 +10,6 @@ export const EMPTY_COMMENT_STATS: CommentThreadStats = { open: 0, resolved: 0, a
 
 /** Gap between the commented text and the thread card, as BlockNote places it. */
 const COMMENT_THREAD_OFFSET_PX = 10;
-
-/** Distance kept from the viewport's side and bottom edges. */
-const COMMENT_THREAD_VIEWPORT_MARGIN_PX = 12;
 
 /**
  * Where the thread card may sit while it is open.
@@ -22,7 +20,8 @@ const COMMENT_THREAD_VIEWPORT_MARGIN_PX = 12;
  * pixels — overflows the edge, and near the top it also slides under the
  * document toolbar, which floats above the editor rather than pushing it down.
  *
- * So the boundary here is the viewport *minus the toolbar*, and the card is
+ * So the boundary here is the viewport *minus the toolbar* (shared with the
+ * formatting toolbar's popups, see `createViewportBounds`), and the card is
  * capped to the room left on the side it was placed on. A thread that does not
  * fit scrolls inside its own card (`overflow-y` in `styles/globals.css`) instead
  * of spilling past the edges.
@@ -31,12 +30,7 @@ const COMMENT_THREAD_VIEWPORT_MARGIN_PX = 12;
  * height changes with the breakpoint and with a wrapped notice row.
  */
 export function createCommentThreadFloatingOptions(toolbarInset: number): FloatingUIOptions {
-  const bounds = {
-    top: toolbarInset,
-    right: COMMENT_THREAD_VIEWPORT_MARGIN_PX,
-    bottom: COMMENT_THREAD_VIEWPORT_MARGIN_PX,
-    left: COMMENT_THREAD_VIEWPORT_MARGIN_PX,
-  };
+  const bounds = createViewportBounds(toolbarInset);
 
   return {
     useFloatingOptions: {
