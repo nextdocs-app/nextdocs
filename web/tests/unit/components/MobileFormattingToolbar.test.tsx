@@ -1,13 +1,21 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { MobileFormattingToolbarController } from '../../../components/editor/MobileFormattingToolbar';
 
 // The controller only reaches for `FormattingToolbar` as the default, so a stub
 // is enough: what matters is that whatever it renders stays mounted and live.
 // The toolbar hooks are stubbed for the dismiss button, which renders beside
-// the bar when `dismissButton` is set.
+// the bar when `dismissButton` is set. `useVirtualKeyboard` is stubbed as a
+// call recorder: the real hook publishes `--bn-vv-*` as a layout effect, which
+// is what pins `.bn-mobile-formatting-toolbar` to the visual viewport in
+// BlockNote 0.55+ — the test only needs to prove the controller mounts it.
 jest.mock('@blocknote/react', () => ({
   FormattingToolbar: () => <div data-testid="default-formatting-toolbar" />,
   useBlockNoteEditor: jest.fn(() => ({ blur: jest.fn() })),
+  useVirtualKeyboard: jest.fn(() => false),
+  UIModeContext: {
+    Provider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  },
   useComponentsContext: jest.fn(() => ({
     Generic: {
       Toolbar: {
@@ -140,7 +148,8 @@ afterEach(() => {
 });
 
 describe('MobileFormattingToolbarController', () => {
-  it('docks the toolbar to the bottom edge while no keyboard is up', () => {
+  it('lets BlockNote position the bar from the visual viewport instead of an inline bottom', async () => {
+    const { useVirtualKeyboard } = await import('@blocknote/react');
     stubLayout();
     const { editor } = stubEditor();
 
@@ -152,7 +161,12 @@ describe('MobileFormattingToolbarController', () => {
     );
 
     expect(getBar().contains(getBoldButton())).toBe(true);
-    expect(getBar().style.bottom).toBe('0px');
+    // BlockNote 0.55 pins `.bn-mobile-formatting-toolbar` with
+    // `translate(var(--bn-vv-*)...)`; an inline `bottom` loses to its `top: 0`
+    // while leaving that off-screen transform in place, which is what hid the
+    // bar above the viewport after the upgrade.
+    expect(getBar().style.bottom).toBe('');
+    expect(useVirtualKeyboard).toHaveBeenCalled();
   });
 
   it('falls back to BlockNote’s toolbar when no custom one is given', () => {
@@ -221,7 +235,8 @@ describe('MobileFormattingToolbarController', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  it('lifts the bar by the measured keyboard height while the editor has focus', () => {
+  it('keeps the bar positioned by the viewport while the keyboard opens and closes', async () => {
+    const { useVirtualKeyboard } = await import('@blocknote/react');
     const viewport = stubLayout();
     const editor = focusEditable();
     const { editor: editorStub } = stubEditor();
@@ -233,20 +248,20 @@ describe('MobileFormattingToolbarController', () => {
       />
     );
 
+    // Keyboard tracking lives in BlockNote's visual-viewport vars now, not in
+    // an inline offset: viewport changes must never write one back.
     viewport.height = LAYOUT_HEIGHT - KEYBOARD_HEIGHT;
     emitViewportChange(viewport);
+    expect(getBar().style.bottom).toBe('');
 
-    expect(getBar().style.bottom).toBe(`${KEYBOARD_HEIGHT}px`);
-
-    // Keyboard dismissed: the bar returns to the bottom edge.
     viewport.height = LAYOUT_HEIGHT;
     emitViewportChange(viewport);
-
-    expect(getBar().style.bottom).toBe('0px');
+    expect(getBar().style.bottom).toBe('');
+    expect(useVirtualKeyboard).toHaveBeenCalled();
     editor.remove();
   });
 
-  it('ignores a keyboard-sized gap that is not caused by editing', () => {
+  it('never writes an inline bottom for a viewport gap without editing', () => {
     // Focus survives between tests in jsdom's single document.
     (document.activeElement as HTMLElement | null)?.blur?.();
     const viewport = stubLayout();
@@ -262,7 +277,7 @@ describe('MobileFormattingToolbarController', () => {
     viewport.height = LAYOUT_HEIGHT - KEYBOARD_HEIGHT;
     emitViewportChange(viewport);
 
-    expect(getBar().style.bottom).toBe('0px');
+    expect(getBar().style.bottom).toBe('');
   });
 
   it('stays hidden until the editor takes the cursor', async () => {

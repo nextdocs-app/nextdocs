@@ -7,6 +7,7 @@ import {
   measureDocumentToolbarInset,
   useDocumentToolbarInset,
 } from '../../../hooks/useDocumentToolbarInset.hook';
+import { DOC_TOOLBAR_INSET_CSS_VAR } from '../../../lib/viewport-bounds.util';
 
 /**
  * jsdom lays nothing out, so the strips report their own rects here. Only
@@ -22,6 +23,7 @@ function stubToolbar(className: string, bottom: number) {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  document.documentElement.style.removeProperty(DOC_TOOLBAR_INSET_CSS_VAR);
   delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
 });
 
@@ -138,5 +140,20 @@ describe('useDocumentToolbarInset', () => {
     });
 
     expect(result.current).toBe(DOCUMENT_TOOLBAR_INSET_FALLBACK_PX);
+  });
+
+  it('publishes the inset for CSS-positioned popups and clears it on unmount', () => {
+    stubResizeObserver();
+    stubToolbar('nd-doc-toolbar', 36);
+
+    const { unmount } = renderHook(() => useDocumentToolbarInset());
+
+    // Read by `styles/globals.css` to cap upward-opening toolbar popups
+    // (block-type select, colour menu) below the toolbar.
+    expect(document.documentElement.style.getPropertyValue(DOC_TOOLBAR_INSET_CSS_VAR)).toBe('44px');
+
+    unmount();
+
+    expect(document.documentElement.style.getPropertyValue(DOC_TOOLBAR_INSET_CSS_VAR)).toBe('');
   });
 });

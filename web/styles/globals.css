@@ -3214,6 +3214,25 @@ div[role='presentation']:has([data-slot='popover-content']) {
   z-index: 60 !important;
 }
 
+/* Toolbar popups that open upward (the mobile docked bar's block-type select
+   and colour menu, or a flipped desktop dropdown) grow from the trigger toward
+   the top of the screen and would otherwise slide under the floating document
+   toolbar. Base UI reports the trigger-to-viewport-edge room as
+   `--available-height` on the popup (inherited from its Positioner), so
+   subtracting the measured toolbar strip (`--nd-doc-toolbar-inset`, published
+   by `useDocumentToolbarInset`; the `44px` fallback mirrors its
+   `DOCUMENT_TOOLBAR_INSET_FALLBACK_PX`) plus the shared viewport margin caps
+   the popup to the room below the toolbar — the same bound the comment thread
+   gets from `createViewportBounds`, which keeps both consumers in sync.
+   Scoped to `data-side='top'` because downward-opening popups start below
+   their trigger and never reach the toolbar. */
+[data-slot='select-content'][data-side='top'],
+[data-slot='dropdown-menu-content'][data-side='top'] {
+  max-height: calc(
+    var(--available-height, 400px) - var(--nd-doc-toolbar-inset, 44px) - 12px
+  ) !important;
+}
+
 /* Select items */
 [data-slot='select-item'] {
   color: var(--sidebar-foreground) !important;
