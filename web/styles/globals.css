@@ -2845,6 +2845,17 @@ html:not(.dark) .bn-editor a:visited:hover {
     display: none !important;
   }
 
+  /* ── Mobile long-press block drag-and-drop ──
+     When the editor is unfocused on touch, blocks become draggable.
+     Prevent iOS text callout / magnifier so long-press cleanly initiates dragging. */
+  .bn-block-outer[draggable='true'],
+  .bn-block-outer[draggable='true'] * {
+    -webkit-user-drag: element;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
   /* ── Editor gutters ── */
   /* `.bn-editor` reserves 54px per side for the block handles; on a phone that
      is more than half the screen once the title container adds it too. Kept to

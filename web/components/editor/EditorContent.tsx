@@ -60,6 +60,7 @@ import {
 import 'katex/dist/katex.min.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
+import { MobileDraggableBlocksExtension } from './mobileDraggableBlocks';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
 import { MobileFormattingToolbarController } from './MobileFormattingToolbar';
 import { MobileAddBlockButton } from './MobileAddBlockButton';
@@ -536,10 +537,19 @@ export function EditorContent({
     }
   }, [threadStore, activeCommentUser.id]);
 
+  const isTouchInputRef = useRef(isTouchInput);
+  isTouchInputRef.current = isTouchInput;
+
   const editorExtensions = useMemo(() => {
     // Custom Shiki highlighter (github-dark/light, extended language set from
-    // codeBlockHighlighter.ts) alongside the comments extension.
-    return [CommentsExtension({ threadStore, resolveUsers }), syntaxHighlighter];
+    // codeBlockHighlighter.ts) alongside the comments extension and mobile draggable blocks.
+    return [
+      CommentsExtension({ threadStore, resolveUsers }),
+      syntaxHighlighter,
+      MobileDraggableBlocksExtension({
+        isTouchInput: () => isTouchInputRef.current,
+      }),
+    ];
   }, [resolveUsers, threadStore]);
 
   // Use the continuous awareness instance tied to ydoc (or fallback to realtimeProvider)

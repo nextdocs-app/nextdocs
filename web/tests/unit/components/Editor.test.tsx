@@ -833,7 +833,7 @@ describe('Editor Component', () => {
     const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
     const lastConfig =
       useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
-    expect(lastConfig.extensions).toHaveLength(2);
+    expect(lastConfig.extensions).toHaveLength(3);
     expect(CommentsExtension).toHaveBeenCalled();
   });
 
