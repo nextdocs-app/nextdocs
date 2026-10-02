@@ -1375,16 +1375,23 @@ div.bn-table-drop-cursor {
 }
 
 /* BlockNote Quote */
-[data-content-type='quote'] blockquote {
+:is(.bn-block-content[data-content-type='quote'], [data-content-type='quote']) blockquote {
+  border-left: 3.5px solid #71717a !important;
   color: #545252 !important;
 }
 
-:is(.dark, [data-color-scheme='dark']) [data-content-type='quote'] blockquote {
-  color: #a09a9b !important;
+:is(.dark, [data-color-scheme='dark'])
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #d4d4d8 !important;
+  color: #d4d4d8 !important;
 }
 
 /* Explicit light override — beats stale data-color-scheme="dark" */
-html[data-theme='light'] [data-content-type='quote'] blockquote {
+html[data-theme='light']
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #71717a !important;
   color: #545252 !important;
 }
 
