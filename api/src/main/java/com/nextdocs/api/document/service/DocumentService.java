@@ -476,7 +476,7 @@ public class DocumentService {
     private static String normalizeTitle(String title) {
         String value = title == null ? "" : title.strip();
         if (value.isBlank()) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "Title must not be blank.");
+            return "Untitled";
         }
         return value;
     }

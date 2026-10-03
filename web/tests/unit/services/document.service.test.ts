@@ -319,6 +319,60 @@ describe('document.service', () => {
     });
   });
 
+  describe('updateCloudMetadata', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    function mockOkFetch() {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'id-1',
+            title: 'Untitled',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+      return fetchMock;
+    }
+
+    it('should send Untitled instead of a blank title', async () => {
+      const fetchMock = mockOkFetch();
+
+      await documentService.updateCloudMetadata('id-1', { title: '' }, 'token');
+
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"title":"Untitled"');
+    });
+
+    it('should send Untitled instead of a whitespace-only title', async () => {
+      const fetchMock = mockOkFetch();
+
+      await documentService.updateCloudMetadata('id-1', { title: '   ' }, 'token');
+
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"title":"Untitled"');
+    });
+
+    it('should pass through a non-blank title unchanged', async () => {
+      const fetchMock = mockOkFetch();
+
+      await documentService.updateCloudMetadata('id-1', { title: 'Hello' }, 'token');
+
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"title":"Hello"');
+    });
+  });
+
   describe('promoteGuestDocumentsToAccount', () => {
     it('should cache promoted guest documents in the active user database', async () => {
       const cloudYDoc = new Y.Doc();

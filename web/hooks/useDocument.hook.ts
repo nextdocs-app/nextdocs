@@ -193,6 +193,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
   const lastLoadContextKeyRef = useRef<string | null>(null);
+  const updateMetaSeqRef = useRef(0);
   const {
     isInBackoff: isCloudReadInBackoff,
     trigger: triggerCloudReadBackoff,
@@ -933,11 +934,24 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         return;
       }
 
+      // Never persist a blank title: blank titles fall back to Untitled on
+      // the API, and a failed write's rollback would resurrect the last
+      // non-blank value (e.g. a stuck "t" after clearing "th"). The title
+      // input renders 'Untitled' as empty, so normalizing here keeps the UI
+      // empty with no flicker.
+      const normalizedUpdates =
+        updates.title !== undefined && updates.title.trim() === ''
+          ? { ...updates, title: 'Untitled' }
+          : updates;
+
+      const seq = updateMetaSeqRef.current + 1;
+      updateMetaSeqRef.current = seq;
+
       const previousMeta = { ...meta };
       const updatedAt = new Date().toISOString();
-      const updatedMeta = { ...meta, ...updates, updatedAt };
+      const updatedMeta = { ...meta, ...normalizedUpdates, updatedAt };
 
-      dispatch(updateMetaAction({ ...updates, updatedAt }));
+      dispatch(updateMetaAction({ ...normalizedUpdates, updatedAt }));
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
@@ -948,7 +962,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       }
 
       const persistLocalMetadata = async () => {
-        await documentService.updateMetadata(resolvedDocumentId, updates);
+        await documentService.updateMetadata(resolvedDocumentId, normalizedUpdates);
         documentService.emitLocalDocumentsChanged();
       };
 
@@ -965,13 +979,23 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         dispatch(updateMetaAction({ ...previousMeta, updatedAt: previousMeta.updatedAt }));
       };
 
+      // Only roll back if no newer updateMeta has dispatched since. Without
+      // this, a slow failure from an older keystroke can clobber a newer
+      // successfully-persisted title.
+      const guardedRollback = () => {
+        if (updateMetaSeqRef.current !== seq) {
+          return;
+        }
+        rollback();
+      };
+
       const persistPromise = canAttemptCloudMetadataWrite
         ? documentService
-            .updateCloudMetadata(resolvedDocumentId, updates, accessToken)
+            .updateCloudMetadata(resolvedDocumentId, normalizedUpdates, accessToken)
             .then(async () => {
               try {
                 await documentService.updateMetadata(resolvedDocumentId, {
-                  ...updates,
+                  ...normalizedUpdates,
                   updatedAt: updatedMeta.updatedAt,
                 });
               } catch (cacheErr) {
@@ -998,13 +1022,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               return;
             } catch (localErr) {
               console.error('Failed to persist metadata update:', localErr);
-              rollback();
+              guardedRollback();
               return;
             }
           }
 
           console.error('Failed to persist metadata update:', err);
-          rollback();
+          guardedRollback();
         });
     },
     [
