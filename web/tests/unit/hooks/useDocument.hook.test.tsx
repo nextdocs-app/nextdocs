@@ -304,6 +304,151 @@ describe('useDocument', () => {
     );
   });
 
+  it('should emit document-meta-updated on load so a stale sidebar reconciles', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Fresh Title From Elsewhere',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Fresh Title From Elsewhere' }),
+        }),
+      })
+    );
+  });
+
+  it('should mirror local title edits into the shared Yjs meta map', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Updated Title' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Updated Title');
+    });
+
+    expect(ydoc.getMap('meta').get('title')).toBe('Updated Title');
+  });
+
+  it('should apply remote Yjs title updates to the editor without re-persisting REST', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+    updateCloudMetadataSpy.mockClear();
+    updateMetadataSpy.mockClear();
+
+    await act(async () => {
+      ydoc.getMap('meta').set('title', 'Remote Title');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Remote Title');
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Remote Title' }),
+        }),
+      })
+    );
+    expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should normalize a blank remote Yjs title to Untitled', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      ydoc.getMap('meta').set('title', '   ');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Untitled' }),
+        }),
+      })
+    );
+  });
+
   it('should load cloud document when authenticated', async () => {
     const ydoc = new Y.Doc();
     const meta = {

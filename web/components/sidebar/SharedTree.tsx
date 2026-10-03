@@ -7,11 +7,13 @@ import {
   fetchChildrenThunk,
   toggleExpanded,
   moveDocumentThunk,
+  updateNodeMeta,
 } from '@/stores/sharedTree/sharedTree.slice';
 import type { SharedDocumentEntry } from '@/stores/documentList/documentList.types';
 import { SidebarSection } from './SidebarSection';
 import { SidebarTreeItem } from './SidebarTreeItem';
 import { SidebarTreeDndContext, useTreeDndOptional, type TreeApi } from './SidebarTreeDndContext';
+import { subscribeDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import type { DocActionsAnchor, DocActionType } from './types';
 import { SIDEBAR_VISIBLE_COUNT } from './types';
 
@@ -71,6 +73,21 @@ export function SharedTree({
     lastSyncRef.current = signature;
     dispatch(syncSharedRoots(documents));
   }, [documents, dispatch]);
+
+  // Apply live title edits (own + collaborator via Yjs) instantly, including
+  // nested children that syncSharedRoots never touches (they are loaded via
+  // fetchChildrenThunk, not from the shared-documents list). Mirrors
+  // SidebarTree's document-meta-updated handler for the private tree.
+  useEffect(() => {
+    return subscribeDocumentMetaUpdated((detail) => {
+      dispatch(
+        updateNodeMeta({
+          id: detail.id,
+          title: detail.meta?.title,
+        })
+      );
+    });
+  }, [dispatch]);
 
   const treeApi = useMemo<TreeApi>(
     () => ({

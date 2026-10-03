@@ -4,6 +4,7 @@ import type { RootState } from '../store';
 import type { SidebarTreeNode, TreeNode, MoveDocumentRequest } from '@/types/tree.types';
 import type { SharedDocumentEntry } from '../documentList/documentList.types';
 import { compareOrderKeys, toSidebarTreeNode } from '../sidebarTree/sidebarTree.slice';
+import { normalizeDocumentTitle } from '@/lib/document-content.util';
 
 export interface SharedTreeState {
   nodes: Record<string, SidebarTreeNode>;
@@ -114,6 +115,16 @@ const sharedTreeSlice = createSlice({
       state.rootIds = [];
     },
 
+    updateNodeMeta(state, action: PayloadAction<{ id: string; title?: string }>) {
+      const { id, title } = action.payload;
+      const node = state.nodes[id];
+      if (node) {
+        if (title !== undefined) {
+          node.title = normalizeDocumentTitle(title);
+        }
+      }
+    },
+
     /**
      * Rebuilds the root list from the shared-documents list.
      * A document appears in the Shared section only when it is BOTH truly
@@ -150,7 +161,7 @@ const sharedTreeSlice = createSlice({
 
         entryNodes[entry.id] = {
           id: entry.id,
-          title: entry.meta.title || 'Untitled',
+          title: normalizeDocumentTitle(entry.meta.title),
           parentId: isChild ? entry.parentId : null,
           orderKey: entry.orderKey ?? `shared:${entry.id}`,
           hasChildren: false,
@@ -372,6 +383,7 @@ const sharedTreeSlice = createSlice({
   },
 });
 
-export const { toggleExpanded, syncSharedRoots, removeNode, resetTree } = sharedTreeSlice.actions;
+export const { toggleExpanded, syncSharedRoots, removeNode, resetTree, updateNodeMeta } =
+  sharedTreeSlice.actions;
 
 export default sharedTreeSlice.reducer;

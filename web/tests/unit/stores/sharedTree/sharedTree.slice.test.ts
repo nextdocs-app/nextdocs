@@ -1,6 +1,7 @@
 import type { DocumentAccessLevel } from '@/services/document.service';
 import sharedTreeReducer, {
   syncSharedRoots,
+  updateNodeMeta,
   type SharedTreeState,
 } from '@/stores/sharedTree/sharedTree.slice';
 import type { SharedDocumentEntry } from '@/stores/documentList/documentList.types';
@@ -244,6 +245,79 @@ describe('sharedTree.slice syncSharedRoots', () => {
     expect(state.rootIds).toEqual(['doc-b', 'doc-a']);
     expect(state.nodes['doc-b'].orderKey).toBe('Zz');
     expect(state.nodes['doc-a'].orderKey).toBe('a0');
+  });
+});
+
+describe('sharedTree.slice updateNodeMeta', () => {
+  const nodeState: SharedTreeState = {
+    nodes: {
+      'shared-root': {
+        id: 'shared-root',
+        title: 'Old Root Title',
+        parentId: null,
+        orderKey: 'a0',
+        hasChildren: true,
+        effectiveAccessLevel: 'EDIT',
+        isExpanded: true,
+        isLoading: false,
+        children: ['shared-child'],
+        childrenLoaded: true,
+        createdAt: '2024-01-01T10:00:00Z',
+        updatedAt: '2024-01-01T11:00:00Z',
+      },
+      'shared-child': {
+        id: 'shared-child',
+        title: 'Old Child Title',
+        parentId: 'shared-root',
+        orderKey: 'c0',
+        hasChildren: false,
+        effectiveAccessLevel: 'EDIT',
+        isExpanded: false,
+        isLoading: false,
+        children: [],
+        childrenLoaded: false,
+        createdAt: '2024-01-01T10:00:00Z',
+        updatedAt: '2024-01-01T11:00:00Z',
+      },
+    },
+    rootIds: ['shared-root'],
+  };
+
+  it('updates a root title instantly', () => {
+    const state = sharedTreeReducer(
+      nodeState,
+      updateNodeMeta({ id: 'shared-root', title: 'New Root' })
+    );
+
+    expect(state.nodes['shared-root'].title).toBe('New Root');
+  });
+
+  it('updates a nested child title that syncSharedRoots never touches', () => {
+    const state = sharedTreeReducer(
+      nodeState,
+      updateNodeMeta({ id: 'shared-child', title: 'New Child' })
+    );
+
+    expect(state.nodes['shared-child'].title).toBe('New Child');
+    expect(state.nodes['shared-root'].children).toEqual(['shared-child']);
+  });
+
+  it('falls back to Untitled for blank titles', () => {
+    const state = sharedTreeReducer(nodeState, updateNodeMeta({ id: 'shared-root', title: '' }));
+
+    expect(state.nodes['shared-root'].title).toBe('Untitled');
+  });
+
+  it('falls back to Untitled for whitespace-only titles', () => {
+    const state = sharedTreeReducer(nodeState, updateNodeMeta({ id: 'shared-root', title: '   ' }));
+
+    expect(state.nodes['shared-root'].title).toBe('Untitled');
+  });
+
+  it('ignores unknown node ids', () => {
+    const state = sharedTreeReducer(nodeState, updateNodeMeta({ id: 'missing', title: 'X' }));
+
+    expect(state).toEqual(nodeState);
   });
 });
 

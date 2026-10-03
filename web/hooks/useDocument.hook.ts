@@ -23,6 +23,8 @@ import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import { getRealtimeUrl } from '@/lib/api-url.util';
+import { normalizeDocumentTitle } from '@/lib/document-content.util';
+import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
@@ -34,6 +36,11 @@ const VALID_DOCUMENT_ACCESS_LEVELS: readonly DocumentAccessLevel[] = [
   'EDIT',
   'OWNER',
 ];
+// Yjs-shared document title: `ydoc.getMap('meta').get('title')` is the live
+// transport for title edits. REST PATCH remains the durable source of truth
+// for lists/trees; Yjs carries the keystroke-instant cross-client update.
+const YJS_META_MAP_KEY = 'meta';
+const YJS_META_TITLE_KEY = 'title';
 
 class OfflineDocumentUnavailableError extends Error {
   constructor(message: string) {
@@ -194,6 +201,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [retryTrigger, setRetryTrigger] = useState(0);
   const lastLoadContextKeyRef = useRef<string | null>(null);
   const updateMetaSeqRef = useRef(0);
+  // Latest committed meta for the Yjs title observer (avoids stale closures
+  // without re-subscribing on every keystroke).
+  const metaRef = useRef(meta);
+  const resolvedDocumentIdRef = useRef(resolvedDocumentId);
   const {
     isInBackoff: isCloudReadInBackoff,
     trigger: triggerCloudReadBackoff,
@@ -230,6 +241,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           meta: result.meta,
         })
       );
+      // Reconcile sidebar/lists with the freshly loaded title (it may have
+      // changed elsewhere while this document was not open).
+      dispatchDocumentMetaUpdated(documentId, result.meta);
       const nextLevel = trashAccessLevel ?? 'VIEW';
       accessLevelRef.current = nextLevel;
       setAccessLevel(nextLevel);
@@ -283,6 +297,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   useEffect(() => {
     ydocRef.current = ydoc;
   }, [ydoc]);
+
+  useEffect(() => {
+    metaRef.current = meta;
+  }, [meta]);
+
+  useEffect(() => {
+    resolvedDocumentIdRef.current = resolvedDocumentId;
+  }, [resolvedDocumentId]);
 
   useEffect(() => {
     if (!isAuthenticated || isInitializing || errorState === null || ydoc !== null || isLoading) {
@@ -523,6 +545,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               meta: result.meta,
             })
           );
+          // The freshly loaded title is authoritative for this open document:
+          // fan it out so stale sidebar/list entries (updated elsewhere while
+          // this document was closed) reconcile instantly without a refetch.
+          dispatchDocumentMetaUpdated(effectiveId, result.meta);
         }
       } catch (err) {
         console.error('Failed to load document:', err);
@@ -940,8 +966,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // input renders 'Untitled' as empty, so normalizing here keeps the UI
       // empty with no flicker.
       const normalizedUpdates =
-        updates.title !== undefined && updates.title.trim() === ''
-          ? { ...updates, title: 'Untitled' }
+        updates.title !== undefined
+          ? { ...updates, title: normalizeDocumentTitle(updates.title) }
           : updates;
 
       const seq = updateMetaSeqRef.current + 1;
@@ -953,12 +979,21 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
       dispatch(updateMetaAction({ ...normalizedUpdates, updatedAt }));
 
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('document-meta-updated', {
-            detail: { id: resolvedDocumentId, meta: updatedMeta },
-          })
-        );
+      dispatchDocumentMetaUpdated(resolvedDocumentId, updatedMeta);
+
+      // Mirror title into the shared Yjs map for instant cross-client sync.
+      // The map observer below ignores this echo (titles already equal), and
+      // remote applies never write back, so no loop is possible. REST PATCH
+      // below remains the durable persist for lists/trees.
+      if (normalizedUpdates.title !== undefined && ydocRef.current) {
+        try {
+          const metaMap = ydocRef.current.getMap<string>(YJS_META_MAP_KEY);
+          if (metaMap.get(YJS_META_TITLE_KEY) !== normalizedUpdates.title) {
+            metaMap.set(YJS_META_TITLE_KEY, normalizedUpdates.title);
+          }
+        } catch (err) {
+          console.warn('Failed to mirror title into Yjs:', err);
+        }
       }
 
       const persistLocalMetadata = async () => {
@@ -1043,6 +1078,72 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       triggerCloudMetadataBackoff,
     ]
   );
+
+  // Live title sync across collaborators via the shared Yjs `meta` map.
+  // Local edits write the map in updateMeta above; remote Yjs updates land
+  // here through the map observer and are applied to Redux + the
+  // document-meta-updated fan-out (sidebar trees, document lists,
+  // breadcrumbs) without re-writing Yjs or re-PATCHing REST.
+  // Seed the map for documents created before Yjs title sync existed, so
+  // late joiners receive the current title over the live channel. Runs on
+  // meta.title (not just ydoc) so a late REST load still seeds, and skips
+  // read-only clients so COMMENT/VIEW never emit updates the server drops.
+  useEffect(() => {
+    if (!ydoc || !resolvedDocumentId) {
+      return;
+    }
+    if (isReadOnlyAccessLevel(accessLevel)) {
+      return;
+    }
+    const seedTitle = meta?.title;
+    if (seedTitle === undefined) {
+      return;
+    }
+    try {
+      const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+      if (metaMap.get(YJS_META_TITLE_KEY) === undefined) {
+        metaMap.set(YJS_META_TITLE_KEY, normalizeDocumentTitle(seedTitle));
+      }
+    } catch (err) {
+      console.warn('Failed to seed Yjs title:', err);
+    }
+  }, [ydoc, resolvedDocumentId, meta?.title, accessLevel]);
+
+  useEffect(() => {
+    if (!ydoc || !resolvedDocumentId) {
+      return;
+    }
+
+    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+
+    const observer = () => {
+      const yjsTitle = metaMap.get(YJS_META_TITLE_KEY);
+      if (typeof yjsTitle !== 'string') {
+        return;
+      }
+      // Hand-crafted EDIT writes can carry blank titles; honor the same
+      // Untitled invariant as local edits and the API.
+      const normalizedTitle = normalizeDocumentTitle(yjsTitle);
+      const localTitle = metaRef.current?.title;
+      // Local echo (our own updateMeta wrote the map after committing Redux)
+      // or duplicate delivery: already applied, nothing to do.
+      if (normalizedTitle === localTitle) {
+        return;
+      }
+      if (!metaRef.current) {
+        return;
+      }
+      const updatedAt = new Date().toISOString();
+      const nextMeta = { ...metaRef.current, title: normalizedTitle, updatedAt };
+      dispatch(updateMetaAction({ title: normalizedTitle, updatedAt }));
+      dispatchDocumentMetaUpdated(resolvedDocumentIdRef.current, nextMeta);
+    };
+
+    metaMap.observe(observer);
+    return () => {
+      metaMap.unobserve(observer);
+    };
+  }, [ydoc, resolvedDocumentId, dispatch]);
 
   // Listen for external restore events (e.g. from the sidebar)
   useEffect(() => {

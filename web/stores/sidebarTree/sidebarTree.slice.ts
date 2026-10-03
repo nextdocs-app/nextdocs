@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import { documentService } from '@/services/document.service';
+import { normalizeDocumentTitle } from '@/lib/document-content.util';
 import type { RootState } from '../store';
 import type { SidebarTreeNode, TreeNode, MoveDocumentRequest } from '@/types/tree.types';
 
@@ -34,7 +35,7 @@ function makeLocalOrderKey(index: number): string {
 export function toSidebarTreeNode(node: TreeNode, isExpanded = false): SidebarTreeNode {
   return {
     id: node.id,
-    title: node.title || 'Untitled',
+    title: normalizeDocumentTitle(node.title),
     parentId: node.parentId,
     orderKey: node.orderKey,
     hasChildren: node.hasChildren,
@@ -63,7 +64,7 @@ export const fetchRootNodesThunk = createAsyncThunk<
     const activeLocalDocs = localDocs.filter((d) => !d.meta.deletedAt);
     const nodes: TreeNode[] = activeLocalDocs.map((d, index) => ({
       id: d.id,
-      title: d.meta.title || 'Untitled',
+      title: normalizeDocumentTitle(d.meta.title),
       parentId: null,
       orderKey: makeLocalOrderKey(index),
       hasChildren: false,
@@ -87,7 +88,7 @@ export const fetchRootNodesThunk = createAsyncThunk<
     const activeLocalDocs = localDocs.filter((d) => !d.meta.deletedAt);
     const nodes: TreeNode[] = activeLocalDocs.map((d, index) => ({
       id: d.id,
-      title: d.meta.title || 'Untitled',
+      title: normalizeDocumentTitle(d.meta.title),
       parentId: null,
       orderKey: makeLocalOrderKey(index),
       hasChildren: false,
@@ -171,7 +172,7 @@ const sidebarTreeSlice = createSlice({
       const node = state.nodes[id];
       if (node) {
         if (title !== undefined) {
-          node.title = title || 'Untitled';
+          node.title = normalizeDocumentTitle(title);
         }
       }
     },
