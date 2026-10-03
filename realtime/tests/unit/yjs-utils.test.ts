@@ -384,6 +384,156 @@ describe('Yjs Utils', () => {
       expect(blockedWarnings.length).toBeGreaterThan(0);
     });
 
+    it('should block title (meta map) writes for comment connections', () => {
+      const commentConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      const writableConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(commentConn, docName, 'COMMENT');
+      setupWSConnection(writableConn, docName, 'EDIT');
+
+      commentConn.send.mockClear();
+      writableConn.send.mockClear();
+
+      const commentMessageHandlerCall = commentConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!commentMessageHandlerCall) {
+        throw new Error('message handler not found for comment connection');
+      }
+
+      const commentMessageHandler = commentMessageHandlerCall[1];
+      const sourceDoc = new Y.Doc();
+      sourceDoc.getMap('meta').set('title', 'Hacked Title');
+      const update = Y.encodeStateAsUpdate(sourceDoc);
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeUpdate(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+
+      (logger.warn as jest.Mock).mockClear();
+
+      commentMessageHandler(Buffer.from(message));
+
+      expect(writableConn.send).not.toHaveBeenCalled();
+
+      const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
+        ([warningMessage]) =>
+          warningMessage === 'Blocked sync write message from read-only connection'
+      );
+      expect(blockedWarnings.length).toBeGreaterThan(0);
+    });
+
+    it('should block title (meta map) writes for view connections', () => {
+      const viewConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      const writableConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(viewConn, docName, 'VIEW');
+      setupWSConnection(writableConn, docName, 'EDIT');
+
+      viewConn.send.mockClear();
+      writableConn.send.mockClear();
+
+      const viewMessageHandlerCall = viewConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!viewMessageHandlerCall) {
+        throw new Error('message handler not found for view connection');
+      }
+
+      const viewMessageHandler = viewMessageHandlerCall[1];
+      const sourceDoc = new Y.Doc();
+      sourceDoc.getMap('meta').set('title', 'Hacked Title');
+      const update = Y.encodeStateAsUpdate(sourceDoc);
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeUpdate(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+
+      viewMessageHandler(Buffer.from(message));
+
+      expect(writableConn.send).not.toHaveBeenCalled();
+    });
+
+    it('should allow title (meta map) writes for edit connections', () => {
+      const editConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      const writableConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(editConn, docName, 'EDIT');
+      setupWSConnection(writableConn, docName, 'EDIT');
+
+      editConn.send.mockClear();
+      writableConn.send.mockClear();
+
+      const editMessageHandlerCall = editConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!editMessageHandlerCall) {
+        throw new Error('message handler not found for edit connection');
+      }
+
+      const editMessageHandler = editMessageHandlerCall[1];
+      const doc = docs.get(docName);
+      if (!doc) {
+        throw new Error(`Document ${docName} not found`);
+      }
+
+      const sourceDoc = new Y.Doc();
+      sourceDoc.getMap('meta').set('title', 'New Title');
+      const update = Y.encodeStateAsUpdate(sourceDoc, Y.encodeStateVector(doc));
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeUpdate(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+
+      (logger.warn as jest.Mock).mockClear();
+
+      editMessageHandler(Buffer.from(message));
+
+      expect(writableConn.send).toHaveBeenCalled();
+
+      const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
+        ([warningMessage]) =>
+          warningMessage === 'Blocked sync write message from read-only connection'
+      );
+      expect(blockedWarnings).toHaveLength(0);
+    });
+
     it('should allow write updates after permission upgrade', () => {
       const upgradedConn: any = {
         send: jest.fn(),

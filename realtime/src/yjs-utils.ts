@@ -23,6 +23,10 @@ export type RealtimeAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
 const DOCUMENT_WRITE_BLOCKED = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT']);
 // Levels that cannot send awareness (cursor presence)
 const NO_AWARENESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW']);
+// Yjs root keys a COMMENT connection may write. The shared `meta` map
+// (live document title) is intentionally absent: only EDIT/OWNER may write
+// titles, while COMMENT/VIEW receive them read-only over sync.
+const COMMENT_WRITABLE_KEYS = new Set(['threads', 'comment-users']);
 
 interface ConnectionState {
   clientIds: Set<number>;
@@ -157,8 +161,8 @@ function shouldRejectSyncMessage(
           Y.applyUpdate(tempDoc, update);
 
           for (const key of tempDoc.share.keys()) {
-            if (key !== 'threads' && key !== 'comment-users') {
-              return true; // Block edits modifying anything else
+            if (!COMMENT_WRITABLE_KEYS.has(key)) {
+              return true; // Block edits modifying anything else (incl. `meta` title)
             }
           }
           return false; // Allowed! Only modified threads or comment-users

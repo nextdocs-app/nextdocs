@@ -14,6 +14,7 @@ import {
   selectSharedWithMeDocumentIds,
 } from '@/stores/documentList/documentList.selectors';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { subscribeDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import { Plus } from '@/icons';
 import { SidebarSection } from './SidebarSection';
 import { SidebarTreeItem } from './SidebarTreeItem';
@@ -105,17 +106,14 @@ export function SidebarTree({
   }, [dispatch, isAuthenticated, accessToken]);
 
   useEffect(() => {
-    const handleMetaUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent<{ id: string; meta: { title?: string } }>;
-      if (customEvent.detail?.id) {
-        dispatch(
-          updateNodeMeta({
-            id: customEvent.detail.id,
-            title: customEvent.detail.meta?.title,
-          })
-        );
-      }
-    };
+    const unsubscribeMeta = subscribeDocumentMetaUpdated((detail) => {
+      dispatch(
+        updateNodeMeta({
+          id: detail.id,
+          title: detail.meta?.title,
+        })
+      );
+    });
 
     const handleDocsChanged = () => {
       // Background sync (e.g. doc created/restored in another view): must not
@@ -123,12 +121,11 @@ export function SidebarTree({
       void dispatch(fetchRootNodesThunk({ background: true }));
     };
 
-    window.addEventListener('document-meta-updated', handleMetaUpdate);
     window.addEventListener('cloud-documents-changed', handleDocsChanged);
     window.addEventListener('local-documents-changed', handleDocsChanged);
 
     return () => {
-      window.removeEventListener('document-meta-updated', handleMetaUpdate);
+      unsubscribeMeta();
       window.removeEventListener('cloud-documents-changed', handleDocsChanged);
       window.removeEventListener('local-documents-changed', handleDocsChanged);
     };

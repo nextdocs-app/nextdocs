@@ -4,7 +4,6 @@ import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
-import type { DocumentMeta } from '@/types/document.types';
 import { combineSharedDocuments } from '@/stores/documentList/documentList.utils';
 import type {
   LocalDocumentEntry,
@@ -24,6 +23,7 @@ import {
 } from '@/stores/documentList/documentList.slice';
 import { resetTree as resetSidebarTree } from '@/stores/sidebarTree/sidebarTree.slice';
 import { resetTree as resetSharedTree } from '@/stores/sharedTree/sharedTree.slice';
+import { subscribeDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 
 export type { LocalDocumentEntry, SharedDocumentEntry };
 
@@ -374,14 +374,9 @@ export function useDocumentList() {
   }, [dispatch, isInBackoff, triggerCloudBackoff, clearCloudBackoff]);
 
   useEffect(() => {
-    const handleMetaUpdated = (event: CustomEvent<{ id: string; meta: DocumentMeta }>) => {
-      dispatch(updateDocumentMeta(event.detail));
-    };
-
-    window.addEventListener('document-meta-updated', handleMetaUpdated as EventListener);
-    return () => {
-      window.removeEventListener('document-meta-updated', handleMetaUpdated as EventListener);
-    };
+    return subscribeDocumentMetaUpdated((detail) => {
+      dispatch(updateDocumentMeta(detail));
+    });
   }, [dispatch]);
 
   useEffect(() => {

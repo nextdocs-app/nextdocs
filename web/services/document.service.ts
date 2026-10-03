@@ -666,11 +666,16 @@ class DocumentService {
     updates: Partial<DocumentMeta>,
     accessToken: string
   ): Promise<void> {
+    // Defense-in-depth: never send a blank title. Blank titles fall back to
+    // Untitled on the API; normalizing here keeps direct callers consistent
+    // with useDocument.updateMeta.
+    const title =
+      updates.title !== undefined && updates.title.trim() === '' ? 'Untitled' : updates.title;
     await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       accessToken,
       body: JSON.stringify({
-        title: updates.title,
+        title,
         icon: updates.icon,
         coverImage: updates.coverImage,
         createdBy: updates.createdBy,

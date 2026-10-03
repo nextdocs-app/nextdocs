@@ -6,6 +6,10 @@ export function isUntitledTitle(title: string | undefined): boolean {
   return normalized === '' || normalized === 'untitled';
 }
 
+export function normalizeDocumentTitle(title: string | undefined): string {
+  return title?.trim() ? title : 'Untitled';
+}
+
 export function isEmptyLocalDocument(doc: StoredDocument): boolean {
   try {
     const ydoc = decodeYjsState(doc.yjsState);

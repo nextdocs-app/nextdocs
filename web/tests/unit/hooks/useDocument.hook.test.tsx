@@ -304,6 +304,151 @@ describe('useDocument', () => {
     );
   });
 
+  it('should emit document-meta-updated on load so a stale sidebar reconciles', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Fresh Title From Elsewhere',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Fresh Title From Elsewhere' }),
+        }),
+      })
+    );
+  });
+
+  it('should mirror local title edits into the shared Yjs meta map', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Updated Title' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Updated Title');
+    });
+
+    expect(ydoc.getMap('meta').get('title')).toBe('Updated Title');
+  });
+
+  it('should apply remote Yjs title updates to the editor without re-persisting REST', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+    updateCloudMetadataSpy.mockClear();
+    updateMetadataSpy.mockClear();
+
+    await act(async () => {
+      ydoc.getMap('meta').set('title', 'Remote Title');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Remote Title');
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Remote Title' }),
+        }),
+      })
+    );
+    expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should normalize a blank remote Yjs title to Untitled', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      ydoc.getMap('meta').set('title', '   ');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Untitled' }),
+        }),
+      })
+    );
+  });
+
   it('should load cloud document when authenticated', async () => {
     const ydoc = new Y.Doc();
     const meta = {
@@ -642,6 +787,141 @@ describe('useDocument', () => {
       'cloud-id',
       expect.objectContaining({ title: 'Cloud Updated' })
     );
+  });
+
+  it('should normalize a blank title to Untitled instead of sending blank to the cloud', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 't',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-blank',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudMetadataSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useDocument('cloud-blank-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // Clearing "th" down to "" (the reported repro) must not PATCH a blank
+    // title: blank is normalized to Untitled, which the textarea renders as
+    // empty, so the previous "t" must not snap back via rollback.
+    await act(async () => {
+      result.current.updateMeta({ title: '' });
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'cloud-blank-id',
+        { title: 'Untitled' },
+        'token-blank'
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith(
+      'Failed to persist metadata update:',
+      expect.anything()
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('should normalize a whitespace-only title to Untitled in local metadata', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 't',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: '   ' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'test-id',
+      expect.objectContaining({ title: 'Untitled' })
+    );
+  });
+
+  it('should not roll back a newer title when an older metadata write fails', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 't',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-race',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    let rejectFirst!: (reason?: unknown) => void;
+    const firstWrite = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    firstWrite.catch(() => {});
+    updateCloudMetadataSpy.mockReturnValueOnce(firstWrite).mockResolvedValueOnce(undefined);
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useDocument('race-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'First' });
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Second' });
+    });
+
+    await act(async () => {
+      rejectFirst(new Error('stale failure'));
+      await firstWrite.catch(() => {});
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Second');
+    });
+
+    consoleErrorSpy.mockRestore();
   });
 
   it('should not reload the document when access token rotates for the same user session', async () => {

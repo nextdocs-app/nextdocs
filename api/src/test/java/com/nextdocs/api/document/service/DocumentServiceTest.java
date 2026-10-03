@@ -449,6 +449,36 @@ class DocumentServiceTest {
     }
 
     @Test
+    void update_blankTitle_fallsBackToUntitled() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null));
+
+        assertEquals("Untitled", response.title());
+    }
+
+    @Test
+    void update_whitespaceTitle_fallsBackToUntitled() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null));
+
+        assertEquals("Untitled", response.title());
+    }
+
+    @Test
     void list_usesBatchOrderKeyLookupForRootDocuments() {
         UUID userId = UUID.randomUUID();
         User user = User.builder()
