@@ -4,7 +4,8 @@ public enum DocumentAccessLevel {
     VIEW,
     COMMENT,
     EDIT,
-    OWNER;
+    OWNER,
+    NO_ACCESS;
 
     public boolean allowsEdit() {
         return this == EDIT || this == OWNER;
@@ -15,6 +16,6 @@ public enum DocumentAccessLevel {
     }
 
     public boolean allowsRead() {
-        return true;
+        return this != NO_ACCESS;
     }
 }

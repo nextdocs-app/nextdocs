@@ -601,6 +601,9 @@ public class DocumentService {
     }
 
     private void ensureCollaboratorOrderRow(Document document, DocumentCollaborator collaborator) {
+        if (collaborator.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+            return;
+        }
         UUID collaboratorId = collaborator.getUser().getId();
         if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, document.getId())) {
             return;

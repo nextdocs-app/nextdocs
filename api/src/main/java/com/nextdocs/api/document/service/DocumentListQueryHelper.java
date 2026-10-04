@@ -426,6 +426,8 @@ public class DocumentListQueryHelper {
         if (docIds.isEmpty()) return Map.of();
         Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
         String joinedIds = docIds.stream().map(UUID::toString).collect(Collectors.joining(","));
+        // resolve_effective_access maps NO_ACCESS breakpoints to NULL, so every non-null
+        // level here is already a positive effective grant.
         for (Object[] row : documentRepository.resolveEffectiveAccessBatch(userId, joinedIds)) {
             if (row[0] != null && row[1] != null) {
                 UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
@@ -439,6 +441,8 @@ public class DocumentListQueryHelper {
         if (docIds.isEmpty()) return Map.of();
         Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
         String joinedIds = docIds.stream().map(UUID::toString).collect(Collectors.joining(","));
+        // resolve_trash_access maps NO_ACCESS breakpoints to NULL (same contract as
+        // resolve_effective_access), so only positive grants show up here.
         for (Object[] row : documentRepository.resolveTrashAccessBatch(userId, joinedIds)) {
             if (row[0] != null && row[1] != null) {
                 UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());

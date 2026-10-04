@@ -29,11 +29,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             value = "SELECT d FROM Document d "
                     + "LEFT JOIN FETCH d.parent "
                     + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL "
+                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS "
                     + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC",
-            countQuery = "SELECT count(d) FROM Document d "
-                    + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL")
+            countQuery =
+                    "SELECT count(d) FROM Document d "
+                            + "JOIN DocumentCollaborator c ON c.document.id = d.id "
+                            + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS")
     Page<Document> findSharedWithUserId(@Param("userId") UUID userId, Pageable pageable);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.
@@ -46,7 +47,7 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
-            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id) "
+            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
@@ -61,8 +62,8 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.deletedAt IS NULL "
-            + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId) "
-            + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id))) "
+            + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
+            + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS))) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
@@ -133,4 +134,14 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "WHERE d.deletedAt IS NOT NULL "
             + "AND FUNCTION('resolve_trash_access', :userId, d.id) IN ('EDIT', 'OWNER')")
     Page<Document> findAccessibleTrashedDocuments(@Param("userId") UUID userId, Pageable pageable);
+
+    @Query(
+            value = "WITH RECURSIVE sub AS ("
+                    + "  SELECT id, 1 AS depth FROM documents WHERE id = :subtreeRootId AND deleted_at IS NULL "
+                    + "  UNION ALL "
+                    + "  SELECT d.id, s.depth + 1 FROM documents d JOIN sub s ON d.parent_id = s.id "
+                    + "  WHERE d.deleted_at IS NULL AND s.depth < 100 "
+                    + ") SELECT id FROM sub",
+            nativeQuery = true)
+    List<UUID> findSubtreeDocumentIds(@Param("subtreeRootId") UUID subtreeRootId);
 }
