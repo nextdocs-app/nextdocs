@@ -29,10 +29,11 @@ public class PermissionService {
     @Transactional(readOnly = true)
     public DocumentAccessLevel resolveAccess(UUID userId, UUID documentId) {
         String raw = documentRepository.resolveEffectiveAccess(userId, documentId);
-        if (raw == null || "NO_ACCESS".equals(raw)) {
+        if (raw == null) {
             return null;
         }
-        return DocumentAccessLevel.valueOf(raw);
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
     }
 
     /**
@@ -148,10 +149,11 @@ public class PermissionService {
     @Transactional(readOnly = true)
     public DocumentAccessLevel resolveTrashAccess(UUID userId, UUID documentId) {
         String raw = documentRepository.resolveTrashAccess(userId, documentId);
-        if (raw == null || "NO_ACCESS".equals(raw)) {
+        if (raw == null) {
             return null;
         }
-        return DocumentAccessLevel.valueOf(raw);
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
     }
 
     /**
