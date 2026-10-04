@@ -1,19 +1,8 @@
-import type { IconProps } from './IconBase';
+import { IconBase, type IconProps } from './IconBase';
 
-export const Lock = ({ className, size = 21 }: IconProps) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width={size}
-    height={size}
-    viewBox="0 0 20 20"
-    fill="currentColor"
-    aria-hidden="true"
-    className={className}
-  >
-    <path
-      fillRule="evenodd"
-      clipRule="evenodd"
-      d="M10 2a4 4 0 0 0-4 4v2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm2.5 6V6a2.5 2.5 0 0 0-5 0v2h5zm-2.5 3a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0v-2a1 1 0 0 0-1-1z"
-    />
-  </svg>
+export const Lock = ({ className, size = 17, strokeWidth = 1.75 }: IconProps) => (
+  <IconBase size={size} strokeWidth={strokeWidth} className={className}>
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </IconBase>
 );

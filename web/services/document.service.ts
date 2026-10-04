@@ -48,6 +48,7 @@ interface ApiDocument {
 }
 
 export type DocumentAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
+export type CollaboratorAccessLevel = DocumentAccessLevel | 'NO_ACCESS';
 export type DocumentGeneralAccessMode = 'RESTRICTED' | 'ANYONE_WITH_LINK';
 
 interface ApiDocumentAccess {
@@ -62,15 +63,22 @@ interface ApiCollaborator {
   userId: string;
   email: string;
   displayName: string;
-  accessLevel: DocumentAccessLevel;
+  accessLevel: CollaboratorAccessLevel;
   addedAt: string;
   owner?: boolean;
+  inherited?: boolean;
+  inheritedFromId?: string | null;
+  inheritedFromTitle?: string | null;
+  inheritedAccessLevel?: DocumentAccessLevel | null;
 }
 
 interface ApiSharingSettings {
   generalAccessMode: DocumentGeneralAccessMode;
   linkAccessLevel: DocumentAccessLevel;
   hasActiveLink: boolean;
+  inherited?: boolean;
+  inheritedFromId?: string | null;
+  inheritedFromTitle?: string | null;
 }
 
 export interface CloudDocumentsPage {
@@ -103,15 +111,22 @@ export interface Collaborator {
   userId: string;
   email: string;
   displayName: string;
-  accessLevel: DocumentAccessLevel;
+  accessLevel: CollaboratorAccessLevel;
   addedAt: string;
   owner: boolean;
+  inherited?: boolean;
+  inheritedFromId?: string | null;
+  inheritedFromTitle?: string | null;
+  inheritedAccessLevel?: DocumentAccessLevel | null;
 }
 
 export interface SharingSettings {
   generalAccessMode: DocumentGeneralAccessMode;
   linkAccessLevel: DocumentAccessLevel;
   hasActiveLink: boolean;
+  inherited?: boolean;
+  inheritedFromId?: string | null;
+  inheritedFromTitle?: string | null;
 }
 
 export interface DocumentBreadcrumbItem {
@@ -473,6 +488,10 @@ class DocumentService {
       accessLevel: item.accessLevel,
       addedAt: item.addedAt,
       owner: item.owner ?? false,
+      inherited: item.inherited ?? false,
+      inheritedFromId: item.inheritedFromId ?? null,
+      inheritedFromTitle: item.inheritedFromTitle ?? null,
+      inheritedAccessLevel: item.inheritedAccessLevel ?? null,
     }));
   }
 
@@ -499,34 +518,30 @@ class DocumentService {
       accessLevel: body.accessLevel,
       addedAt: body.addedAt,
       owner: body.owner ?? false,
+      inherited: body.inherited ?? false,
+      inheritedFromId: body.inheritedFromId ?? null,
+      inheritedFromTitle: body.inheritedFromTitle ?? null,
+      inheritedAccessLevel: body.inheritedAccessLevel ?? null,
     };
   }
 
   public async updateCollaboratorAccess(
     documentId: string,
     userId: string,
-    accessLevel: DocumentAccessLevel,
+    accessLevel: CollaboratorAccessLevel,
     accessToken: string
-  ): Promise<Collaborator> {
-    const body = await this.fetchApi<ApiCollaborator>(
+  ): Promise<void> {
+    await this.fetchApi<void>(
       `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators/${encodeURIComponent(userId)}`,
       {
-        method: 'PATCH',
+        method: 'PUT',
         accessToken,
         body: JSON.stringify({ accessLevel }),
+        allowEmptyData: true,
       }
     );
 
     this.emitCloudDocumentsChanged();
-
-    return {
-      userId: body.userId,
-      email: body.email,
-      displayName: body.displayName,
-      accessLevel: body.accessLevel,
-      addedAt: body.addedAt,
-      owner: body.owner ?? false,
-    };
   }
 
   public async removeCollaborator(
@@ -575,6 +590,9 @@ class DocumentService {
       generalAccessMode: body.generalAccessMode,
       linkAccessLevel: body.linkAccessLevel,
       hasActiveLink: body.hasActiveLink,
+      inherited: body.inherited ?? false,
+      inheritedFromId: body.inheritedFromId ?? null,
+      inheritedFromTitle: body.inheritedFromTitle ?? null,
     };
   }
 
@@ -599,6 +617,9 @@ class DocumentService {
       generalAccessMode: body.generalAccessMode,
       linkAccessLevel: body.linkAccessLevel,
       hasActiveLink: body.hasActiveLink,
+      inherited: body.inherited ?? false,
+      inheritedFromId: body.inheritedFromId ?? null,
+      inheritedFromTitle: body.inheritedFromTitle ?? null,
     };
   }
 
@@ -841,7 +862,7 @@ class DocumentService {
   private async fetchApi<T>(
     path: string,
     options: {
-      method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
       accessToken?: string;
       body?: string;
       allowEmptyData: true;
@@ -850,7 +871,7 @@ class DocumentService {
   private async fetchApi<T>(
     path: string,
     options: {
-      method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
       accessToken?: string;
       body?: string;
       allowEmptyData?: false | undefined;
@@ -859,7 +880,7 @@ class DocumentService {
   private async fetchApi<T>(
     path: string,
     options: {
-      method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
       accessToken?: string;
       body?: string;
       allowEmptyData?: boolean;

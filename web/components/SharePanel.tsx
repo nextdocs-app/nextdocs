@@ -1,16 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   documentService,
   type Collaborator,
+  type CollaboratorAccessLevel,
   type DocumentAccessLevel,
   type DocumentGeneralAccessMode,
   type SharingSettings,
 } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
-import { ChainLink, Check, ChevronDown, Close, GlobeSolid, Lock } from '@/icons';
+import { ChainLink, Check, ChevronDown, Close, Globe, Lock } from '@/icons';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -20,29 +22,58 @@ interface SharePanelProps {
   onClose: () => void;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   canManageSharing?: boolean;
+  onNavigate?: (documentId: string) => void;
+}
+
+interface DropdownOption {
+  value: string;
+  label: string;
+  description?: string;
+  dividerBefore?: boolean;
+  isDestructive?: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ACCESS_LABELS: Record<string, string> = {
-  VIEW: 'Viewer',
-  COMMENT: 'Commenter',
-  EDIT: 'Editor',
-  OWNER: 'Owner',
+  VIEW: 'Can view',
+  COMMENT: 'Can comment',
+  EDIT: 'Can edit',
+  OWNER: 'Full access',
+  NO_ACCESS: 'No access',
 };
 
 const ACCESS_ACTION_LABELS: Record<string, string> = {
   VIEW: 'view',
   COMMENT: 'comment',
   EDIT: 'edit',
-  OWNER: 'own',
+  OWNER: 'manage',
+  NO_ACCESS: 'no access',
 };
 
-const COLLABORATOR_ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
-const LINK_ACCESS_OPTIONS: DocumentAccessLevel[] = ['VIEW', 'COMMENT', 'EDIT'];
+const INVITE_ACCESS_OPTIONS: DropdownOption[] = [
+  { value: 'OWNER', label: 'Full access', description: 'Can edit and share' },
+  { value: 'EDIT', label: 'Can edit' },
+  { value: 'COMMENT', label: 'Can comment' },
+  { value: 'VIEW', label: 'Can view' },
+];
 
-// ─── Avatar ───────────────────────────────────────────────────────────────────
-// Uses the same getPresenceColor as the realtime cursor so colours always match.
+const LINK_ACCESS_OPTIONS: DropdownOption[] = [
+  { value: 'VIEW', label: 'Can view' },
+  { value: 'COMMENT', label: 'Can comment' },
+  { value: 'EDIT', label: 'Can edit' },
+];
+
+const GENERAL_MODE_OPTIONS: DropdownOption[] = [
+  { value: 'RESTRICTED', label: 'Restricted', description: 'Only people with access can open' },
+  {
+    value: 'ANYONE_WITH_LINK',
+    label: 'Anyone with the link',
+    description: 'Anyone with link can access',
+  },
+];
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 function Avatar({ seed, label }: { seed: string; label: string }) {
   const normalizedLabel = (label ?? '').trim();
@@ -51,21 +82,12 @@ function Avatar({ seed, label }: { seed: string; label: string }) {
   return (
     <span
       aria-hidden="true"
-      className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[15px] font-semibold text-white select-none"
+      className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white select-none shadow-xs"
       style={{ backgroundColor: bg }}
     >
       {initial}
     </span>
   );
-}
-
-// ─── Custom Dropdown ─────────────────────────────────────────────────────────
-// Styled to look like native Google-Docs-style inline text dropdown.
-
-interface DropdownOption {
-  value: string;
-  label: string;
-  description?: string;
 }
 
 function AccessDropdown({
@@ -74,12 +96,16 @@ function AccessDropdown({
   onChange,
   disabled,
   align = 'right',
+  ariaLabel,
+  muted = false,
 }: {
   value: string;
   options: DropdownOption[];
   onChange: (val: string) => void;
   disabled?: boolean;
   align?: 'left' | 'right';
+  ariaLabel?: string;
+  muted?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0, right: 0 });
@@ -100,7 +126,6 @@ function AccessDropdown({
     setOpen((v) => !v);
   };
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -115,28 +140,44 @@ function AccessDropdown({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  const isDestructive = value === 'NO_ACCESS';
+
   return (
-    <div className="relative">
+    <div className="relative inline-block">
       <button
         ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={handleOpen}
-        className="
-          inline-flex items-center gap-1 rounded-md px-1.5 py-1
-          text-[14px] font-medium text-foreground
+        aria-label={ariaLabel || selected?.label || ACCESS_LABELS[value] || value}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`
+          inline-flex items-center gap-1.5 rounded-md px-2 py-1
+          text-[13px] font-medium
+          ${
+            isDestructive
+              ? 'text-destructive dark:text-red-400'
+              : muted
+                ? 'text-muted-foreground/80'
+                : 'text-foreground'
+          }
           hover:bg-sidebar-accent
           disabled:opacity-50 disabled:cursor-not-allowed
           transition-colors cursor-pointer select-none
-          outline-none focus-visible:ring-1 focus-visible:ring-foreground/30
-        "
-        aria-haspopup="listbox"
-        aria-expanded={open}
+          outline-none focus-visible:ring-1 focus-visible:ring-ring
+        `}
       >
-        <span>{selected?.label ?? value}</span>
+        <span>{selected?.label ?? ACCESS_LABELS[value] ?? value}</span>
         <ChevronDown
-          size={15}
-          className={`h-[15px] w-[15px] flex-shrink-0 text-foreground/50 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+          size={13}
+          className={`h-3.5 w-3.5 flex-shrink-0 ${
+            isDestructive
+              ? 'text-destructive dark:text-red-400'
+              : muted
+                ? 'text-muted-foreground/80'
+                : 'text-muted-foreground'
+          } transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -150,38 +191,55 @@ function AccessDropdown({
               : { position: 'fixed', top: coords.top, left: coords.left }
           }
           className="
-            z-[9999] min-w-[8.5rem]
-            rounded-xl border border-border bg-background
-            shadow-[0_4px_20px_-2px_rgba(0,0,0,0.14),0_2px_6px_-2px_rgba(0,0,0,0.08)]
-            dark:shadow-[0_4px_20px_-2px_rgba(0,0,0,0.5)]
-            py-1 overflow-hidden
+            z-[9999] min-w-[12rem]
+            rounded-xl border border-border dark:border-white/10 bg-card text-card-foreground
+            shadow-[0_8px_24px_-4px_rgba(0,0,0,0.12),0_2px_6px_-2px_rgba(0,0,0,0.08)]
+            dark:shadow-[0_8px_24px_-4px_rgba(0,0,0,0.55)]
+            py-1.5 overflow-hidden
             animate-in fade-in slide-in-from-top-1 duration-100
           "
         >
           {options.map((opt) => {
             const isSelected = opt.value === value;
             return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                }}
-                className={`
-                  w-full flex items-center gap-2.5 px-3 py-2 text-left
-                  text-[14px] text-foreground cursor-pointer
-                  hover:bg-sidebar-accent transition-colors
-                  ${isSelected ? 'font-semibold' : 'font-normal'}
-                `}
-              >
-                <span className="flex-shrink-0 w-3.5">
-                  {isSelected && <Check size={15} className="h-[15px] w-[15px] text-foreground" />}
-                </span>
-                <span>{opt.label}</span>
-              </button>
+              <div key={opt.value}>
+                {opt.dividerBefore && (
+                  <div
+                    role="separator"
+                    className="my-1 border-t border-border/70 dark:border-white/10"
+                  />
+                )}
+                <button
+                  type="button"
+                  role="option"
+                  aria-label={opt.label}
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`
+                    w-full flex items-center justify-between px-3 py-2 text-left
+                    text-[13px] cursor-pointer transition-colors
+                    ${
+                      opt.isDestructive
+                        ? 'text-destructive dark:text-red-400 hover:bg-destructive/10 dark:hover:bg-red-500/10'
+                        : 'text-card-foreground hover:bg-sidebar-accent'
+                    }
+                    ${isSelected ? 'font-medium bg-sidebar-accent/50' : 'font-normal'}
+                  `}
+                >
+                  <div className="flex flex-col min-w-0 pr-2">
+                    <span className="truncate">{opt.label}</span>
+                    {opt.description && (
+                      <span className="text-[11px] text-muted-foreground">{opt.description}</span>
+                    )}
+                  </div>
+                  {isSelected && (
+                    <Check size={14} className="h-3.5 w-3.5 text-foreground flex-shrink-0 ml-2" />
+                  )}
+                </button>
+              </div>
             );
           })}
         </div>
@@ -190,7 +248,7 @@ function AccessDropdown({
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export function SharePanel({
   documentId,
@@ -198,10 +256,13 @@ export function SharePanel({
   onClose,
   anchorRef,
   canManageSharing = false,
+  onNavigate,
 }: SharePanelProps) {
+  const router = useRouter();
   const { isAuthenticated, accessToken, user } = useAuth();
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const [activeTab] = useState<'share' | 'publish'>('share');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -225,18 +286,9 @@ export function SharePanel({
       const rect = anchorRef.current?.getBoundingClientRect();
       if (rect) {
         let right = window.innerWidth - rect.right;
-
-        // Ensure it doesn't go off screen. The panel is a 28rem dropdown on
-        // desktop but must shrink to the viewport on a phone (28rem is wider
-        // than most phones in portrait), so measure against the same bound the
-        // stylesheet applies via `max-w-[calc(100vw-2rem)]`.
-        const panelWidth = Math.min(448, window.innerWidth - 32);
+        const panelWidth = Math.min(460, window.innerWidth - 32);
         const minMargin = 16;
-
-        // maxRightValue ensures panel's left edge doesn't go off screen left
         const maxRightValue = Math.max(minMargin, window.innerWidth - panelWidth - minMargin);
-
-        // Keep right within [minMargin, maxRightValue]
         right = Math.max(minMargin, Math.min(right, maxRightValue));
 
         setCoords({
@@ -308,8 +360,9 @@ export function SharePanel({
         !panelRef.current.contains(t) &&
         anchorRef.current &&
         !anchorRef.current.contains(t)
-      )
+      ) {
         onClose();
+      }
     };
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -349,16 +402,13 @@ export function SharePanel({
     }
   };
 
-  const handleAccessChange = async (userId: string, level: DocumentAccessLevel) => {
+  const handleAccessChange = async (userId: string, level: CollaboratorAccessLevel) => {
     if (!accessToken) return;
     try {
-      const updated = await documentService.updateCollaboratorAccess(
-        documentId,
-        userId,
-        level,
-        accessToken
-      );
-      setCollaborators((prev) => prev.map((c) => (c.userId === userId ? updated : c)));
+      setError(null);
+      await documentService.updateCollaboratorAccess(documentId, userId, level, accessToken);
+      const next = await documentService.listCollaborators(documentId, accessToken);
+      setCollaborators(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update access');
     }
@@ -367,11 +417,53 @@ export function SharePanel({
   const handleRemove = async (userId: string) => {
     if (!accessToken) return;
     try {
+      setError(null);
       await documentService.removeCollaborator(documentId, userId, accessToken);
-      setCollaborators((prev) => prev.filter((c) => c.userId !== userId));
+      const next = await documentService.listCollaborators(documentId, accessToken);
+      setCollaborators(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to remove collaborator');
     }
+  };
+
+  const handleCollaboratorAccessSelect = (collab: Collaborator, nextValue: string) => {
+    if (nextValue === 'INHERIT') {
+      void handleRemove(collab.userId);
+    } else {
+      void handleAccessChange(collab.userId, nextValue as CollaboratorAccessLevel);
+    }
+  };
+
+  const getCollaboratorRowOptions = (collab: Collaborator): DropdownOption[] => {
+    const options: DropdownOption[] = [
+      { value: 'OWNER', label: 'Full access' },
+      { value: 'EDIT', label: 'Can edit' },
+      { value: 'COMMENT', label: 'Can comment' },
+      { value: 'VIEW', label: 'Can view' },
+    ];
+
+    if (!collab.inherited && collab.inheritedFromTitle) {
+      const parentTitle = collab.inheritedFromTitle.trim().replace(/\s+/g, ' ');
+      const parentLevel = collab.inheritedAccessLevel
+        ? ACCESS_LABELS[collab.inheritedAccessLevel] || collab.inheritedAccessLevel
+        : null;
+      const inheritLabel = parentLevel
+        ? `Inherit from ${parentTitle} (${parentLevel})`
+        : `Inherit from ${parentTitle}`;
+      options.push({
+        value: 'INHERIT',
+        label: inheritLabel,
+      });
+    }
+
+    options.push({
+      value: 'NO_ACCESS',
+      label: 'No access',
+      dividerBefore: true,
+      isDestructive: true,
+    });
+
+    return options;
   };
 
   const handleGeneralModeChange = async (mode: DocumentGeneralAccessMode) => {
@@ -380,7 +472,7 @@ export function SharePanel({
       setIsSavingSettings(true);
       const payload =
         mode === 'ANYONE_WITH_LINK'
-          ? { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel }
+          ? { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' }
           : { generalAccessMode: mode };
       const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
       setSettings(next);
@@ -408,8 +500,6 @@ export function SharePanel({
     }
   };
 
-  // Copy the current page URL — no token generation needed.
-  // The document's generalAccessMode controls who can open it.
   const handleCopyLink = async () => {
     try {
       const url = typeof window !== 'undefined' ? window.location.href : '';
@@ -423,19 +513,25 @@ export function SharePanel({
     }
   };
 
-  const isAnyoneWithLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
-  const collaboratorAccessOpts = COLLABORATOR_ACCESS_OPTIONS.map((o) => ({
-    value: o,
-    label: ACCESS_LABELS[o],
-  }));
-  const linkAccessOpts = LINK_ACCESS_OPTIONS.map((o) => ({
-    value: o,
-    label: ACCESS_LABELS[o],
-  }));
-  const generalModeOpts: DropdownOption[] = [
-    { value: 'RESTRICTED', label: 'Restricted' },
-    { value: 'ANYONE_WITH_LINK', label: 'Anyone with the link' },
-  ];
+  const handleNavigate = (targetDocId: string) => {
+    onClose();
+    if (onNavigate) {
+      onNavigate(targetDocId);
+    } else {
+      router.push(`/doc/${targetDocId}`);
+    }
+  };
+
+  const hasOwnPublicLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
+  const isInheritedPublicLink = Boolean(settings?.inherited);
+  // A child can be RESTRICTED and still be effectively public through an ancestor's link.
+  const hasEffectivePublicLink =
+    Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink;
+  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
+  const effectiveLinkAction = ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view';
+  const activeCollaboratorsCount = collaborators.filter(
+    (c) => c.accessLevel !== 'NO_ACCESS'
+  ).length;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -455,24 +551,50 @@ export function SharePanel({
       }
       className="
         fixed z-50
-        w-[28rem] max-w-[calc(100vw-2rem)]
+        w-[29rem] max-w-[calc(100vw-2rem)]
         flex flex-col
         max-h-[calc(100dvh-4.5rem)]
         rounded-2xl
-        bg-background
-        shadow-[0_8px_40px_-4px_rgba(0,0,0,0.18),0_2px_8px_-2px_rgba(0,0,0,0.1)]
-        dark:shadow-[0_8px_40px_-4px_rgba(0,0,0,0.55)]
-        border border-border/60
+        bg-card text-card-foreground
+        shadow-[0_12px_40px_-6px_rgba(0,0,0,0.15),0_4px_12px_-2px_rgba(0,0,0,0.08)]
+        dark:shadow-[0_12px_40px_-6px_rgba(0,0,0,0.65)]
+        border border-border dark:border-white/10
         overflow-hidden
         animate-in fade-in slide-in-from-top-1 duration-150
       "
     >
-      {/* ── Invite input ─────────────────────────────── */}
-      <div className="px-5 pt-5 pb-4">
+      {/* ── Sectioned Top Header ── */}
+      <div className="flex items-center justify-between border-b border-border/70 dark:border-white/10 px-4 pt-2.5 pb-0">
+        <div className="flex items-center gap-1" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'share'}
+            className="
+              px-3 py-2 text-[15px] font-medium transition-colors relative cursor-default
+              text-card-foreground font-semibold after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--nd-brand)]
+            "
+          >
+            Share
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="p-1.5 rounded-md text-muted-foreground/70 hover:text-card-foreground hover:bg-sidebar-accent transition-colors cursor-pointer"
+        >
+          <Close size={16} />
+        </button>
+      </div>
+
+      {/* ── Invite bar ────────────────────────────────────────── */}
+      <div className="px-4 pt-3.5 pb-2">
         {!isAuthenticated || !accessToken ? (
-          <p className="py-2 text-sm text-muted-foreground">Sign in to manage sharing.</p>
+          <p className="py-2 text-[13.5px] text-muted-foreground">Sign in to manage sharing.</p>
         ) : !canManageSharing ? (
-          <div>
+          <div className="py-1">
             <p className="text-[13px] text-muted-foreground">
               You need owner access to manage sharing.
             </p>
@@ -490,10 +612,10 @@ export function SharePanel({
                 }}
                 placeholder="Add people by email"
                 className="
-                  flex-1 min-w-0 rounded-lg border border-border bg-background
-                  px-3.5 py-2 text-[14.5px] text-foreground
-                  placeholder:text-muted-foreground/55
-                  outline-none focus:border-foreground/35
+                  flex-1 min-w-0 rounded-lg border border-border dark:border-white/10 bg-muted/40 dark:bg-muted/20
+                  px-3 py-1.5 text-[13.5px] text-card-foreground
+                  placeholder:text-muted-foreground/60
+                  outline-none focus:border-foreground/30 focus:bg-background
                   transition-colors
                 "
               />
@@ -502,7 +624,7 @@ export function SharePanel({
                 <>
                   <AccessDropdown
                     value={inviteAccess}
-                    options={collaboratorAccessOpts}
+                    options={INVITE_ACCESS_OPTIONS}
                     onChange={(v) => setInviteAccess(v as DocumentAccessLevel)}
                     align="right"
                   />
@@ -510,12 +632,16 @@ export function SharePanel({
                     type="button"
                     onClick={() => void handleInvite()}
                     disabled={isSavingInvite}
+                    aria-label="Add"
                     className="
-                      flex-shrink-0 rounded-full bg-[#d7897f] hover:bg-[#C97B71]
-                      focus-visible:ring-2 focus-visible:ring-[#C06D5B]/50 focus:bg-[#F2BEB6]
-                      px-5 py-2 text-black/85 font-medium tracking-wide
-                      text-[14px]
-                      active:bg-[#B86D63] active:scale-95 transition-all cursor-pointer
+                      flex-shrink-0 rounded-lg
+                      bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
+                      text-neutral-950 font-medium
+                      px-3.5 py-1.5
+                      text-[13px] transition-all cursor-pointer shadow-xs
+                      outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      active:scale-95
                     "
                   >
                     {isSavingInvite ? '…' : 'Add'}
@@ -524,22 +650,22 @@ export function SharePanel({
               )}
             </div>
 
-            {error && <p className="mt-2 text-[13px] text-destructive">{error}</p>}
+            {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
           </>
         )}
       </div>
 
-      {/* ── Body ─────────────────────────────────────── */}
+      {/* ── Body (Scrollable) ─────────────────────────────────── */}
       {isAuthenticated && accessToken && (
-        <div className="min-h-0 flex-1 max-h-[58vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 max-h-[52vh] overflow-y-auto px-4 py-2">
           {isLoading ? (
-            <div className="space-y-4 px-5 pb-4">
+            <div className="space-y-3 py-2">
               {[1, 2].map((i) => (
                 <div key={i} className="flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-full bg-sidebar-accent/40 animate-pulse flex-shrink-0" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3 w-36 rounded bg-sidebar-accent/40 animate-pulse" />
-                    <div className="h-2.5 w-52 rounded bg-sidebar-accent/30 animate-pulse" />
+                  <div className="h-8 w-8 rounded-full bg-sidebar-accent/40 animate-pulse flex-shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3 w-32 rounded bg-sidebar-accent/40 animate-pulse" />
+                    <div className="h-2.5 w-44 rounded bg-sidebar-accent/30 animate-pulse" />
                   </div>
                 </div>
               ))}
@@ -548,60 +674,130 @@ export function SharePanel({
             <>
               {/* ── People with access ── */}
               {collaborators.length > 0 && (
-                <section className="px-5 pb-3">
-                  <p className="mb-2 text-[14px] font-semibold text-foreground">
-                    People with access
+                <section className="pb-3">
+                  <p className="mb-2 text-[13.5px] font-medium text-muted-foreground/80 select-none flex items-center gap-1.5">
+                    <span>People with access</span>
+                    <span className="text-[12px] text-muted-foreground/60 font-normal">
+                      ({activeCollaboratorsCount})
+                    </span>
                   </p>
-                  <ul className="space-y-0.5">
+                  <ul className="space-y-1">
                     {collaborators.map((collab) => {
                       const isSelf = collab.userId === user?.id;
-                      const canEditRow = canManageSharing && !isSelf && !collab.owner;
+                      const isDirectOwner = Boolean(collab.owner);
+                      const isInherited = Boolean(collab.inherited);
+                      // Any inherited grant is overridable here, including an ancestor
+                      // full-access grant; only the document's own owner stays locked.
+                      const canEditRow = canManageSharing && !isSelf && !isDirectOwner;
 
                       return (
                         <li
                           key={collab.userId}
-                          className="flex items-center gap-3 py-1.5 group/collab"
+                          className="flex flex-col py-1.5 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors group/collab"
                         >
-                          <Avatar seed={collab.userId} label={collab.displayName || collab.email} />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[14.5px] font-medium text-foreground truncate leading-snug">
-                              {collab.displayName || collab.email}
-                              {isSelf && (
-                                <span className="font-normal text-muted-foreground"> (you)</span>
-                              )}
-                            </p>
-                            <p className="text-[13px] text-muted-foreground/65 truncate leading-snug">
-                              {collab.email}
-                            </p>
-                          </div>
-                          {canEditRow ? (
-                            <div className="flex items-center gap-0.5 flex-shrink-0">
-                              <AccessDropdown
-                                value={collab.accessLevel}
-                                options={collaboratorAccessOpts}
-                                onChange={(v) =>
-                                  void handleAccessChange(collab.userId, v as DocumentAccessLevel)
-                                }
-                                align="right"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void handleRemove(collab.userId)}
-                                aria-label="Remove collaborator"
-                                className="
-                                  p-1 rounded-md opacity-0 group-hover/collab:opacity-100 focus-visible:opacity-100
-                                  text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10
-                                  focus-visible:text-destructive focus-visible:bg-destructive/10
-                                  transition-all cursor-pointer
-                                "
-                              >
-                                <Close size={15} className="h-[15px] w-[15px]" />
-                              </button>
+                          <div className="flex items-center gap-2.5">
+                            <Avatar
+                              seed={collab.userId}
+                              label={collab.displayName || collab.email}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[13.5px] font-medium text-card-foreground truncate leading-snug min-w-0">
+                                  {collab.displayName || collab.email}
+                                </span>
+                                {isSelf && (
+                                  <span className="text-[12px] font-normal text-muted-foreground whitespace-nowrap flex-shrink-0">
+                                    (you)
+                                  </span>
+                                )}
+                                {isInherited &&
+                                  (collab.inheritedFromId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        collab.inheritedFromId &&
+                                        handleNavigate(collab.inheritedFromId)
+                                      }
+                                      title={`Inherited via ${(collab.inheritedFromTitle || 'parent').trim()}`}
+                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
+                                    >
+                                      via{' '}
+                                      {(collab.inheritedFromTitle || 'parent')
+                                        .trim()
+                                        .replace(/\s+/g, ' ')}
+                                    </button>
+                                  ) : (
+                                    <span
+                                      title={`Inherited via ${(collab.inheritedFromTitle || 'parent').trim()}`}
+                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
+                                    >
+                                      via{' '}
+                                      {(collab.inheritedFromTitle || 'parent')
+                                        .trim()
+                                        .replace(/\s+/g, ' ')}
+                                    </span>
+                                  ))}
+                                {!isInherited &&
+                                  Boolean(collab.inheritedFromTitle) &&
+                                  (collab.inheritedFromId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        collab.inheritedFromId &&
+                                        handleNavigate(collab.inheritedFromId)
+                                      }
+                                      title={`Overrides ${(collab.inheritedFromTitle || 'parent').trim()}`}
+                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
+                                    >
+                                      Overrides{' '}
+                                      {(collab.inheritedFromTitle || 'parent')
+                                        .trim()
+                                        .replace(/\s+/g, ' ')}
+                                    </button>
+                                  ) : (
+                                    <span
+                                      title={`Overrides ${(collab.inheritedFromTitle || 'parent').trim()}`}
+                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
+                                    >
+                                      Overrides{' '}
+                                      {(collab.inheritedFromTitle || 'parent')
+                                        .trim()
+                                        .replace(/\s+/g, ' ')}
+                                    </span>
+                                  ))}
+                              </div>
+                              <p className="text-[12px] text-muted-foreground/70 truncate leading-snug mt-0.5">
+                                {collab.email}
+                              </p>
                             </div>
-                          ) : (
-                            <span className="flex-shrink-0 pr-1 text-[14px] text-muted-foreground">
-                              {ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}
-                            </span>
+
+                            {canEditRow ? (
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <AccessDropdown
+                                  value={collab.accessLevel}
+                                  options={getCollaboratorRowOptions(collab)}
+                                  onChange={(v) => handleCollaboratorAccessSelect(collab, v)}
+                                  align="right"
+                                  muted
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[13px] text-muted-foreground/80 font-medium select-none">
+                                  <span>
+                                    {ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}
+                                  </span>
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {collab.accessLevel === 'NO_ACCESS' && hasEffectivePublicLink && (
+                            <p className="mt-1 pl-10 text-[11.5px] text-amber-600 dark:text-amber-400/90 leading-tight">
+                              {collab.displayName || collab.email} is blocked while signed in;
+                              anyone with the public link can still {effectiveLinkAction} this
+                              document.
+                            </p>
                           )}
                         </li>
                       );
@@ -612,55 +808,87 @@ export function SharePanel({
 
               {/* ── General access ── */}
               {canManageSharing && settings && (
-                <section className="mt-1">
-                  <p className="px-5 mb-2 text-[14px] font-semibold text-foreground">
-                    General access
+                <section className="pt-4 border-t border-border/70 dark:border-white/10">
+                  <p className="mb-1 text-[13.5px] font-medium text-muted-foreground/80 select-none">
+                    General
                   </p>
 
-                  <div className="mx-3 rounded-xl px-3 py-3 flex items-center gap-3 hover:bg-sidebar-accent/50 dark:hover:bg-sidebar-accent/35 transition-colors cursor-default">
+                  <div className="flex items-center gap-2 py-1.5 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors">
                     <span
                       className={`
-                        inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full
+                        inline-flex h-10 w-10 rounded-full flex-shrink-0 items-center justify-center select-none shadow-xs transition-colors
                         ${
-                          isAnyoneWithLink
-                            ? 'bg-emerald-600/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
+                          hasEffectivePublicLink
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400'
                             : 'bg-sidebar-accent text-muted-foreground'
                         }
                       `}
                     >
-                      {isAnyoneWithLink ? (
-                        <GlobeSolid className="h-[21px] w-[21px]" />
+                      {hasEffectivePublicLink ? (
+                        <Globe size={20} strokeWidth={1.75} />
                       ) : (
-                        <Lock className="h-[21px] w-[21px]" />
+                        <Lock size={20} strokeWidth={1.75} />
                       )}
                     </span>
 
                     <div className="flex-1 min-w-0">
-                      <AccessDropdown
-                        value={settings?.generalAccessMode ?? 'RESTRICTED'}
-                        options={generalModeOpts}
-                        onChange={(v) =>
-                          void handleGeneralModeChange(v as DocumentGeneralAccessMode)
-                        }
-                        disabled={isSavingSettings}
-                        align="left"
-                      />
-                      <p className="text-[13px] text-muted-foreground/70 leading-snug mt-0.5 pl-1">
-                        {isAnyoneWithLink
-                          ? `Anyone on the internet with the link can ${ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view'}`
-                          : 'Only people with access can open with the link'}
+                      <div className="flex items-center justify-between gap-1 min-w-0">
+                        <div className="-ml-1">
+                          <AccessDropdown
+                            value={settings?.generalAccessMode ?? 'RESTRICTED'}
+                            options={GENERAL_MODE_OPTIONS}
+                            onChange={(v) =>
+                              void handleGeneralModeChange(v as DocumentGeneralAccessMode)
+                            }
+                            disabled={isSavingSettings}
+                            align="left"
+                          />
+                        </div>
+
+                        {hasOwnPublicLink && (
+                          <div className="flex-shrink-0">
+                            <AccessDropdown
+                              value={settings?.linkAccessLevel ?? 'VIEW'}
+                              options={LINK_ACCESS_OPTIONS}
+                              onChange={(v) =>
+                                void handleLinkAccessChange(v as DocumentAccessLevel)
+                              }
+                              disabled={isSavingSettings}
+                              align="right"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <p className="flex flex-wrap items-center gap-x-1 pb-1.5 pl-1 text-[12px] text-muted-foreground/70 leading-snug">
+                        <span>
+                          {hasEffectivePublicLink
+                            ? `Anyone on the internet with the link can ${effectiveLinkAction}`
+                            : 'Only people with access can open with the link'}
+                        </span>
+                        {isInheritedPublicLink &&
+                          (settings?.inheritedFromId ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                settings?.inheritedFromId &&
+                                handleNavigate(settings.inheritedFromId)
+                              }
+                              title={`Inherited via ${inheritedFromTitle}`}
+                              className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
+                            >
+                              via {inheritedFromTitle}
+                            </button>
+                          ) : (
+                            <span
+                              title={`Inherited via ${inheritedFromTitle}`}
+                              className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
+                            >
+                              via {inheritedFromTitle}
+                            </span>
+                          ))}
                       </p>
                     </div>
-
-                    {isAnyoneWithLink && (
-                      <AccessDropdown
-                        value={settings?.linkAccessLevel ?? 'VIEW'}
-                        options={linkAccessOpts}
-                        onChange={(v) => void handleLinkAccessChange(v as DocumentAccessLevel)}
-                        disabled={isSavingSettings}
-                        align="right"
-                      />
-                    )}
                   </div>
                 </section>
               )}
@@ -669,32 +897,38 @@ export function SharePanel({
         </div>
       )}
 
-      {/* ── Footer ──────────────────────────────────── */}
-      <div className="flex items-center justify-between px-5 py-4 mt-2 border-t border-border/50">
+      {/* ── Footer ──────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-3 border-t border-border/70 dark:border-white/10 bg-muted/20 dark:bg-muted/10">
         <button
           type="button"
           onClick={() => void handleCopyLink()}
-          className="
-            inline-flex items-center gap-2 rounded-full
-            border border-border px-4 py-2
-            text-[14px] font-medium text-foreground
-            hover:bg-sidebar-accent
+          className={`
+            inline-flex items-center gap-1.5 rounded-lg
+            border px-3 py-1.5
+            text-[13px] font-medium
             active:scale-95 transition-all cursor-pointer
-          "
+            ${
+              copied
+                ? 'border-[var(--nd-brand)] bg-[var(--nd-brand)]/15 text-[#c06d62] dark:text-[var(--nd-brand)]'
+                : 'border-border dark:border-white/10 text-card-foreground hover:bg-sidebar-accent'
+            }
+          `}
         >
-          <ChainLink className="h-[17px] w-[17px]" />
-          {copied ? 'Copied!' : 'Copy link'}
+          <ChainLink className="h-4 w-4" />
+          <span>{copied ? 'Copied!' : 'Copy link'}</span>
         </button>
 
         <button
           type="button"
           onClick={onClose}
           className="
-            rounded-full bg-[#d7897f] hover:bg-[#C97B71]
-            focus-visible:ring-2 focus-visible:ring-[#C06D5B]/50 focus:bg-[#F2BEB6]
-            px-6 py-2 text-black/85 font-semibold tracking-wide
-            text-[14px]
-            active:bg-[#B86D63] active:scale-95 transition-all cursor-pointer
+            rounded-lg
+            bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
+            text-neutral-950 font-medium
+            px-4 py-1.5
+            text-[13px]
+            outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
+            active:scale-95 transition-all cursor-pointer shadow-xs
           "
         >
           Done

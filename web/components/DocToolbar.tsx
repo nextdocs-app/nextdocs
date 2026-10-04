@@ -649,6 +649,7 @@ export function DocToolbar({
           onClose={() => setIsShareOpen(false)}
           anchorRef={shareButtonRef}
           canManageSharing={canManageSharing}
+          onNavigate={handleNavigate}
         />
       )}
     </>
