@@ -262,7 +262,6 @@ export function SharePanel({
   const { isAuthenticated, accessToken, user } = useAuth();
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const [activeTab] = useState<'share' | 'publish'>('share');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -563,21 +562,16 @@ export function SharePanel({
         animate-in fade-in slide-in-from-top-1 duration-150
       "
     >
-      {/* ── Sectioned Top Header ── */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between border-b border-border/70 dark:border-white/10 px-4 pt-2.5 pb-0">
-        <div className="flex items-center gap-1" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'share'}
-            className="
-              px-3 py-2 text-[15px] font-medium transition-colors relative cursor-default
-              text-card-foreground font-semibold after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--nd-brand)]
-            "
-          >
-            Share
-          </button>
-        </div>
+        <span
+          className="
+            px-3 py-2 text-[15px] transition-colors relative cursor-default
+            text-card-foreground font-semibold after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--nd-brand)]
+          "
+        >
+          Share
+        </span>
 
         <button
           type="button"
