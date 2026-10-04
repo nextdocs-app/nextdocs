@@ -972,6 +972,79 @@ class DocumentSharingServiceTest {
     }
 
     @Test
+    void listCollaborators_withDirectOverrideBehindNoAccess_attributesNoAncestorSource() {
+        UUID ownerId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent")
+                .build();
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .parent(grandparent)
+                .title("Parent")
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .title("Child")
+                .build();
+
+        UUID bobId = UUID.randomUUID();
+        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        DocumentCollaborator directView = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(child)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        DocumentCollaborator parentNoAccess = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(parent)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.NO_ACCESS)
+                .build();
+
+        DocumentCollaborator grandparentEdit = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(grandparent)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
+                .thenReturn(child);
+        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directView));
+        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentNoAccess));
+        when(collaboratorRepository.findAllByDocument_Id(grandparentDocId)).thenReturn(List.of(grandparentEdit));
+        // has_positive_ancestor_grant ignores intervening breakpoints, matching production SQL.
+        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, childDocId)).thenReturn(true);
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
+
+        assertEquals(2, result.size());
+        CollaboratorResponse bobResp = result.get(1);
+        assertEquals(bobId, bobResp.userId());
+        assertEquals(DocumentAccessLevel.VIEW, bobResp.accessLevel());
+        assertFalse(bobResp.inherited());
+        // Removing the direct row would still leave Bob blocked by the parent
+        // breakpoint, so the grandparent grant must not be offered as an
+        // "Inherit" target.
+        assertNull(bobResp.inheritedFromId());
+        assertNull(bobResp.inheritedFromTitle());
+        assertNull(bobResp.inheritedAccessLevel());
+    }
+
+    @Test
     void upsertCollaborator_withNoAccess_throwsValidationFailed() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();

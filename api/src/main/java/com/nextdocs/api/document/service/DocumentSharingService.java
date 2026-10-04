@@ -133,6 +133,10 @@ public class DocumentSharingService {
                     UUID uid = ac.getUser().getId();
                     if (directNeedsAncestor.contains(uid)) {
                         if (ac.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+                            // A breakpoint between the document and a farther positive
+                            // grant means removing the direct row would still leave
+                            // the user blocked, so there is no live ancestor source
+                            // to attribute (and no truthful "Inherit" target).
                             directNeedsAncestor.remove(uid);
                         } else {
                             directAncestorGrants.put(
