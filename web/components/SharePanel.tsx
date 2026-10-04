@@ -11,8 +11,15 @@ import {
   type SharingSettings,
 } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
-import { getPresenceColor } from '@/lib/realtime.util';
-import { ChainLink, Check, ChevronDown, Close, Globe, Lock } from '@/icons';
+import { ChainLink, Close, Globe, Lock } from '@/icons';
+import { AccessDropdown } from './share/AccessDropdown';
+import { CollaboratorRow } from './share/CollaboratorRow';
+import {
+  ACCESS_ACTION_LABELS,
+  GENERAL_MODE_OPTIONS,
+  INVITE_ACCESS_OPTIONS,
+  LINK_ACCESS_OPTIONS,
+} from './share/shareOptions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,229 +30,6 @@ interface SharePanelProps {
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   canManageSharing?: boolean;
   onNavigate?: (documentId: string) => void;
-}
-
-interface DropdownOption {
-  value: string;
-  label: string;
-  description?: string;
-  dividerBefore?: boolean;
-  isDestructive?: boolean;
-}
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const ACCESS_LABELS: Record<string, string> = {
-  VIEW: 'Can view',
-  COMMENT: 'Can comment',
-  EDIT: 'Can edit',
-  OWNER: 'Full access',
-  NO_ACCESS: 'No access',
-};
-
-const ACCESS_ACTION_LABELS: Record<string, string> = {
-  VIEW: 'view',
-  COMMENT: 'comment',
-  EDIT: 'edit',
-  OWNER: 'manage',
-  NO_ACCESS: 'no access',
-};
-
-const INVITE_ACCESS_OPTIONS: DropdownOption[] = [
-  { value: 'OWNER', label: 'Full access', description: 'Can edit and share' },
-  { value: 'EDIT', label: 'Can edit' },
-  { value: 'COMMENT', label: 'Can comment' },
-  { value: 'VIEW', label: 'Can view' },
-];
-
-const LINK_ACCESS_OPTIONS: DropdownOption[] = [
-  { value: 'VIEW', label: 'Can view' },
-  { value: 'COMMENT', label: 'Can comment' },
-  { value: 'EDIT', label: 'Can edit' },
-];
-
-const GENERAL_MODE_OPTIONS: DropdownOption[] = [
-  { value: 'RESTRICTED', label: 'Restricted', description: 'Only people with access can open' },
-  {
-    value: 'ANYONE_WITH_LINK',
-    label: 'Anyone with the link',
-    description: 'Anyone with link can access',
-  },
-];
-
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function Avatar({ seed, label }: { seed: string; label: string }) {
-  const normalizedLabel = (label ?? '').trim();
-  const initial = (normalizedLabel || '?').charAt(0).toUpperCase();
-  const bg = getPresenceColor(seed);
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white select-none shadow-xs"
-      style={{ backgroundColor: bg }}
-    >
-      {initial}
-    </span>
-  );
-}
-
-function AccessDropdown({
-  value,
-  options,
-  onChange,
-  disabled,
-  align = 'right',
-  ariaLabel,
-  muted = false,
-}: {
-  value: string;
-  options: DropdownOption[];
-  onChange: (val: string) => void;
-  disabled?: boolean;
-  align?: 'left' | 'right';
-  ariaLabel?: string;
-  muted?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState({ top: 0, left: 0, right: 0 });
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const selected = options.find((o) => o.value === value);
-
-  const handleOpen = () => {
-    if (disabled) return;
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setCoords({
-        top: rect.bottom + 4,
-        left: rect.left,
-        right: window.innerWidth - rect.right,
-      });
-    }
-    setOpen((v) => !v);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        !triggerRef.current?.contains(e.target as Node) &&
-        !menuRef.current?.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const isDestructive = value === 'NO_ACCESS';
-
-  return (
-    <div className="relative inline-block">
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={disabled}
-        onClick={handleOpen}
-        aria-label={ariaLabel || selected?.label || ACCESS_LABELS[value] || value}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={`
-          inline-flex items-center gap-1.5 rounded-md px-2 py-1
-          text-[13px] font-medium
-          ${
-            isDestructive
-              ? 'text-destructive dark:text-red-400'
-              : muted
-                ? 'text-muted-foreground/80'
-                : 'text-foreground'
-          }
-          hover:bg-sidebar-accent
-          disabled:opacity-50 disabled:cursor-not-allowed
-          transition-colors cursor-pointer select-none
-          outline-none focus-visible:ring-1 focus-visible:ring-ring
-        `}
-      >
-        <span>{selected?.label ?? ACCESS_LABELS[value] ?? value}</span>
-        <ChevronDown
-          size={13}
-          className={`h-3.5 w-3.5 flex-shrink-0 ${
-            isDestructive
-              ? 'text-destructive dark:text-red-400'
-              : muted
-                ? 'text-muted-foreground/80'
-                : 'text-muted-foreground'
-          } transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {open && (
-        <div
-          ref={menuRef}
-          role="listbox"
-          style={
-            align === 'right'
-              ? { position: 'fixed', top: coords.top, right: coords.right }
-              : { position: 'fixed', top: coords.top, left: coords.left }
-          }
-          className="
-            z-[9999] min-w-[12rem]
-            rounded-xl border border-border dark:border-white/10 bg-card text-card-foreground
-            shadow-[0_8px_24px_-4px_rgba(0,0,0,0.12),0_2px_6px_-2px_rgba(0,0,0,0.08)]
-            dark:shadow-[0_8px_24px_-4px_rgba(0,0,0,0.55)]
-            py-1.5 overflow-hidden
-            animate-in fade-in slide-in-from-top-1 duration-100
-          "
-        >
-          {options.map((opt) => {
-            const isSelected = opt.value === value;
-            return (
-              <div key={opt.value}>
-                {opt.dividerBefore && (
-                  <div
-                    role="separator"
-                    className="my-1 border-t border-border/70 dark:border-white/10"
-                  />
-                )}
-                <button
-                  type="button"
-                  role="option"
-                  aria-label={opt.label}
-                  aria-selected={isSelected}
-                  onClick={() => {
-                    onChange(opt.value);
-                    setOpen(false);
-                  }}
-                  className={`
-                    w-full flex items-center justify-between px-3 py-2 text-left
-                    text-[13px] cursor-pointer transition-colors
-                    ${
-                      opt.isDestructive
-                        ? 'text-destructive dark:text-red-400 hover:bg-destructive/10 dark:hover:bg-red-500/10'
-                        : 'text-card-foreground hover:bg-sidebar-accent'
-                    }
-                    ${isSelected ? 'font-medium bg-sidebar-accent/50' : 'font-normal'}
-                  `}
-                >
-                  <div className="flex flex-col min-w-0 pr-2">
-                    <span className="truncate">{opt.label}</span>
-                    {opt.description && (
-                      <span className="text-[11px] text-muted-foreground">{opt.description}</span>
-                    )}
-                  </div>
-                  {isSelected && (
-                    <Check size={14} className="h-3.5 w-3.5 text-foreground flex-shrink-0 ml-2" />
-                  )}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -431,38 +215,6 @@ export function SharePanel({
     } else {
       void handleAccessChange(collab.userId, nextValue as CollaboratorAccessLevel);
     }
-  };
-
-  const getCollaboratorRowOptions = (collab: Collaborator): DropdownOption[] => {
-    const options: DropdownOption[] = [
-      { value: 'OWNER', label: 'Full access' },
-      { value: 'EDIT', label: 'Can edit' },
-      { value: 'COMMENT', label: 'Can comment' },
-      { value: 'VIEW', label: 'Can view' },
-    ];
-
-    if (!collab.inherited && collab.inheritedFromTitle) {
-      const parentTitle = collab.inheritedFromTitle.trim().replace(/\s+/g, ' ');
-      const parentLevel = collab.inheritedAccessLevel
-        ? ACCESS_LABELS[collab.inheritedAccessLevel] || collab.inheritedAccessLevel
-        : null;
-      const inheritLabel = parentLevel
-        ? `Inherit from ${parentTitle} (${parentLevel})`
-        : `Inherit from ${parentTitle}`;
-      options.push({
-        value: 'INHERIT',
-        label: inheritLabel,
-      });
-    }
-
-    options.push({
-      value: 'NO_ACCESS',
-      label: 'No access',
-      dividerBefore: true,
-      isDestructive: true,
-    });
-
-    return options;
   };
 
   const handleGeneralModeChange = async (mode: DocumentGeneralAccessMode) => {
@@ -679,121 +431,21 @@ export function SharePanel({
                     {collaborators.map((collab) => {
                       const isSelf = collab.userId === user?.id;
                       const isDirectOwner = Boolean(collab.owner);
-                      const isInherited = Boolean(collab.inherited);
                       // Any inherited grant is overridable here, including an ancestor
                       // full-access grant; only the document's own owner stays locked.
                       const canEditRow = canManageSharing && !isSelf && !isDirectOwner;
 
                       return (
-                        <li
+                        <CollaboratorRow
                           key={collab.userId}
-                          className="flex flex-col py-1.5 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors group/collab"
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <Avatar
-                              seed={collab.userId}
-                              label={collab.displayName || collab.email}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="text-[13.5px] font-medium text-card-foreground truncate leading-snug min-w-0">
-                                  {collab.displayName || collab.email}
-                                </span>
-                                {isSelf && (
-                                  <span className="text-[12px] font-normal text-muted-foreground whitespace-nowrap flex-shrink-0">
-                                    (you)
-                                  </span>
-                                )}
-                                {isInherited &&
-                                  (collab.inheritedFromId ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        collab.inheritedFromId &&
-                                        handleNavigate(collab.inheritedFromId)
-                                      }
-                                      title={`Inherited via ${(collab.inheritedFromTitle || 'parent').trim()}`}
-                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
-                                    >
-                                      via{' '}
-                                      {(collab.inheritedFromTitle || 'parent')
-                                        .trim()
-                                        .replace(/\s+/g, ' ')}
-                                    </button>
-                                  ) : (
-                                    <span
-                                      title={`Inherited via ${(collab.inheritedFromTitle || 'parent').trim()}`}
-                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
-                                    >
-                                      via{' '}
-                                      {(collab.inheritedFromTitle || 'parent')
-                                        .trim()
-                                        .replace(/\s+/g, ' ')}
-                                    </span>
-                                  ))}
-                                {!isInherited &&
-                                  Boolean(collab.inheritedFromTitle) &&
-                                  (collab.inheritedFromId ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        collab.inheritedFromId &&
-                                        handleNavigate(collab.inheritedFromId)
-                                      }
-                                      title={`Overrides ${(collab.inheritedFromTitle || 'parent').trim()}`}
-                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
-                                    >
-                                      Overrides{' '}
-                                      {(collab.inheritedFromTitle || 'parent')
-                                        .trim()
-                                        .replace(/\s+/g, ' ')}
-                                    </button>
-                                  ) : (
-                                    <span
-                                      title={`Overrides ${(collab.inheritedFromTitle || 'parent').trim()}`}
-                                      className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
-                                    >
-                                      Overrides{' '}
-                                      {(collab.inheritedFromTitle || 'parent')
-                                        .trim()
-                                        .replace(/\s+/g, ' ')}
-                                    </span>
-                                  ))}
-                              </div>
-                              <p className="text-[12px] text-muted-foreground/70 truncate leading-snug mt-0.5">
-                                {collab.email}
-                              </p>
-                            </div>
-
-                            {canEditRow ? (
-                              <div className="flex items-center gap-1 flex-shrink-0">
-                                <AccessDropdown
-                                  value={collab.accessLevel}
-                                  options={getCollaboratorRowOptions(collab)}
-                                  onChange={(v) => handleCollaboratorAccessSelect(collab, v)}
-                                  align="right"
-                                  muted
-                                />
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1 flex-shrink-0">
-                                <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[13px] text-muted-foreground/80 font-medium select-none">
-                                  <span>
-                                    {ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}
-                                  </span>
-                                </span>
-                              </div>
-                            )}
-                          </div>
-
-                          {collab.accessLevel === 'NO_ACCESS' && hasEffectivePublicLink && (
-                            <p className="mt-1 pl-10 text-[11.5px] text-amber-600 dark:text-amber-400/90 leading-tight">
-                              {collab.displayName || collab.email} is blocked while signed in;
-                              anyone with the public link can still {effectiveLinkAction} this
-                              document.
-                            </p>
-                          )}
-                        </li>
+                          collab={collab}
+                          isSelf={isSelf}
+                          canEditRow={canEditRow}
+                          hasEffectivePublicLink={hasEffectivePublicLink}
+                          effectiveLinkAction={effectiveLinkAction}
+                          onAccessSelect={(v) => handleCollaboratorAccessSelect(collab, v)}
+                          onNavigateTo={handleNavigate}
+                        />
                       );
                     })}
                   </ul>
