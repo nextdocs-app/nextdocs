@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Document Sharing", description = "Document collaboration and sharing endpoints")
@@ -85,10 +86,11 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Update collaborator access level",
-            description = "Updates an existing collaborator's access level for the specified document.",
+            description =
+                    "Updates an existing collaborator's access level for the specified document or creates an override.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
+                        responseCode = "204",
                         description = "Collaborator access updated"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
@@ -98,16 +100,21 @@ public class DocumentSharingController {
                         description = "Authentication required"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "404",
-                        description = "Document or collaborator not found")
+                        description = "Document or collaborator not found"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "409",
+                        description = "Self-lockout or owner access conflict")
             })
-    @PatchMapping("/{id}/collaborators/{userId}")
-    public ResponseEntity<ApiResponse<CollaboratorResponse>> updateCollaboratorAccess(
+    @RequestMapping(
+            value = "/{id}/collaborators/{userId}",
+            method = {RequestMethod.PATCH, RequestMethod.PUT})
+    public ResponseEntity<Void> updateCollaboratorAccess(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @PathVariable UUID userId,
             @Valid @RequestBody CollaboratorAccessUpdateRequest request) {
-        return ResponseEntity.ok(
-                ApiResponse.ok(sharingService.updateCollaboratorAccess(principal.getId(), id, userId, request)));
+        sharingService.updateCollaboratorAccess(principal.getId(), id, userId, request);
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(

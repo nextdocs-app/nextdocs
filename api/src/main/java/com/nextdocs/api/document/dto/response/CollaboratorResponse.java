@@ -16,4 +16,27 @@ public record CollaboratorResponse(
         OffsetDateTime addedAt,
 
         @Schema(description = "Whether this is the direct document owner")
-        boolean owner) {}
+        boolean owner,
+
+        @Schema(description = "Whether access is inherited from an ancestor document")
+        boolean inherited,
+
+        @Schema(description = "ID of the ancestor document from which access is inherited")
+        UUID inheritedFromId,
+
+        @Schema(description = "Title of the ancestor document from which access is inherited")
+        String inheritedFromTitle,
+
+        @Schema(description = "Access level granted on the ancestor document")
+        DocumentAccessLevel inheritedAccessLevel) {
+
+    public CollaboratorResponse(
+            UUID userId,
+            String email,
+            String displayName,
+            DocumentAccessLevel accessLevel,
+            OffsetDateTime addedAt,
+            boolean owner) {
+        this(userId, email, displayName, accessLevel, addedAt, owner, false, null, null, null);
+    }
+}

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -478,6 +479,41 @@ class DocumentSharingServiceTest {
     }
 
     @Test
+    void upsertCollaborator_ancestorOwner_createsDirectOverrideRow() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID ancestorDocId = UUID.randomUUID();
+        User actor = User.builder().id(actorId).email("owner@example.com").build();
+        User ancestorOwner = User.builder()
+                .id(UUID.randomUUID())
+                .email("ancestor@example.com")
+                .build();
+        Document ancestor = Document.builder()
+                .id(ancestorDocId)
+                .user(ancestorOwner)
+                .title("Ancestor")
+                .build();
+        Document document =
+                Document.builder().id(documentId).user(actor).parent(ancestor).build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
+        when(userRepository.findByEmail("ancestor@example.com")).thenReturn(Optional.of(ancestorOwner));
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwner.getId()))
+                .thenReturn(Optional.empty());
+        when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwner.getId(), documentId))
+                .thenReturn(Optional.empty());
+        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        sharingService.upsertCollaborator(
+                actorId, documentId, new CollaboratorUpsertRequest("ancestor@example.com", DocumentAccessLevel.VIEW));
+
+        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
+        verify(collaboratorRepository).save(captor.capture());
+        assertEquals(DocumentAccessLevel.VIEW, captor.getValue().getAccessLevel());
+    }
+
+    @Test
     void updateCollaboratorAccess_targetIsDocumentOwner_throwsConflict() {
         UUID docOwnerId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
@@ -623,6 +659,620 @@ class DocumentSharingServiceTest {
         assertEquals(DocumentGeneralAccessMode.ANYONE_WITH_LINK, updateResponse.generalAccessMode());
         assertEquals(DocumentAccessLevel.EDIT, updateResponse.linkAccessLevel());
         assertTrue(updateResponse.hasActiveLink());
+    }
+
+    @Test
+    void listCollaborators_withAncestors_includesDirectAndInheritedCollaboratorsWithSourceDetails() {
+        UUID ownerId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .displayName("Owner")
+                .build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Page")
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .title("Child Page")
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        UUID directCollabUserId = UUID.randomUUID();
+        User directCollabUser = User.builder()
+                .id(directCollabUserId)
+                .email("direct@example.com")
+                .displayName("Direct Collab")
+                .build();
+        DocumentCollaborator directCollab = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(child)
+                .user(directCollabUser)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        UUID parentCollabUserId = UUID.randomUUID();
+        User parentCollabUser = User.builder()
+                .id(parentCollabUserId)
+                .email("parentcollab@example.com")
+                .displayName("Parent Collab")
+                .build();
+        DocumentCollaborator parentCollab = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(parent)
+                .user(parentCollabUser)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
+                .thenReturn(child);
+        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
+        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentCollab));
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
+
+        assertEquals(3, result.size());
+
+        // 1. Direct owner
+        CollaboratorResponse ownerResp = result.get(0);
+        assertEquals(ownerId, ownerResp.userId());
+        assertTrue(ownerResp.owner());
+        assertFalse(ownerResp.inherited());
+        assertNull(ownerResp.inheritedFromId());
+
+        // 2. Direct collaborator on child
+        CollaboratorResponse directResp = result.get(1);
+        assertEquals(directCollabUserId, directResp.userId());
+        assertFalse(directResp.owner());
+        assertFalse(directResp.inherited());
+        assertNull(directResp.inheritedFromId());
+
+        // 3. Inherited collaborator from parent
+        CollaboratorResponse inheritedResp = result.get(2);
+        assertEquals(parentCollabUserId, inheritedResp.userId());
+        assertFalse(inheritedResp.owner());
+        assertTrue(inheritedResp.inherited());
+        assertEquals(parentDocId, inheritedResp.inheritedFromId());
+        assertEquals("Parent Page", inheritedResp.inheritedFromTitle());
+    }
+
+    @Test
+    void getSharingSettings_withAncestorPublicLink_returnsInheritedSettings() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertEquals(DocumentGeneralAccessMode.RESTRICTED, response.generalAccessMode());
+        assertEquals(DocumentAccessLevel.VIEW, response.linkAccessLevel());
+        assertFalse(response.hasActiveLink());
+        assertTrue(response.inherited());
+        assertEquals(parentDocId, response.inheritedFromId());
+        assertEquals("Parent Wiki", response.inheritedFromTitle());
+    }
+
+    @Test
+    void getSharingSettings_withAncestorPublicLink_usesAncestorLinkLevelOverStaleChildLevel() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                // Stale level from a time when the child itself was public; it must not win.
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertEquals(DocumentAccessLevel.VIEW, response.linkAccessLevel());
+        assertTrue(response.inherited());
+        assertEquals(parentDocId, response.inheritedFromId());
+    }
+
+    @Test
+    void getSharingSettings_withTrashedAncestor_doesNotInheritFromLiveGrandparent() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID trashedParentDocId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        Document trashedParent = Document.builder()
+                .id(trashedParentDocId)
+                .user(owner)
+                .title("Trashed Parent")
+                .parent(grandparent)
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(trashedParent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkAccessLevel(DocumentAccessLevel.COMMENT)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertFalse(response.inherited());
+        assertNull(response.inheritedFromId());
+        assertNull(response.inheritedFromTitle());
+        assertEquals(DocumentAccessLevel.COMMENT, response.linkAccessLevel());
+    }
+
+    @Test
+    void listCollaborators_withDirectOverride_includesInheritedSourceDetails() {
+        UUID ownerId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Doc")
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .title("Child Doc")
+                .build();
+
+        UUID bobId = UUID.randomUUID();
+        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        DocumentCollaborator directCollab = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(child)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        DocumentCollaborator parentCollab = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(parent)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
+                .thenReturn(child);
+        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
+        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentCollab));
+        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, childDocId)).thenReturn(true);
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
+
+        assertEquals(2, result.size());
+        CollaboratorResponse bobResp = result.get(1);
+        assertEquals(bobId, bobResp.userId());
+        assertEquals(DocumentAccessLevel.VIEW, bobResp.accessLevel());
+        assertFalse(bobResp.inherited());
+        assertEquals(parentDocId, bobResp.inheritedFromId());
+        assertEquals("Parent Doc", bobResp.inheritedFromTitle());
+        assertEquals(DocumentAccessLevel.EDIT, bobResp.inheritedAccessLevel());
+    }
+
+    @Test
+    void listCollaborators_withInterveningNoAccess_omitsBlockedAncestor() {
+        UUID ownerId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent")
+                .build();
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .parent(grandparent)
+                .title("Parent")
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .title("Child")
+                .build();
+
+        UUID bobId = UUID.randomUUID();
+        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        DocumentCollaborator parentNoAccess = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(parent)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.NO_ACCESS)
+                .build();
+
+        DocumentCollaborator grandparentEdit = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(grandparent)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
+                .thenReturn(child);
+        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
+        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentNoAccess));
+        when(collaboratorRepository.findAllByDocument_Id(grandparentDocId)).thenReturn(List.of(grandparentEdit));
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
+
+        assertEquals(1, result.size());
+        assertEquals(ownerId, result.get(0).userId());
+    }
+
+    @Test
+    void upsertCollaborator_withNoAccess_throwsValidationFailed() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> sharingService.upsertCollaborator(
+                        ownerId,
+                        documentId,
+                        new CollaboratorUpsertRequest("bob@example.com", DocumentAccessLevel.NO_ACCESS)));
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+    }
+
+    @Test
+    void updateCollaboratorAccess_withOwnerLevel_succeeds() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        User bob = User.builder().id(bobId).build();
+        Document document = Document.builder().id(documentId).user(owner).build();
+        DocumentCollaborator existing = DocumentCollaborator.builder()
+                .document(document)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(existing));
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.OWNER));
+
+        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
+        verify(collaboratorRepository).save(captor.capture());
+        assertEquals(DocumentAccessLevel.OWNER, captor.getValue().getAccessLevel());
+    }
+
+    @Test
+    void updateCollaboratorAccess_directOwnerCollaborator_canBeDemotedToEdit() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        User bob = User.builder().id(bobId).build();
+        Document document = Document.builder().id(documentId).user(owner).build();
+        DocumentCollaborator existing = DocumentCollaborator.builder()
+                .document(document)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(existing));
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.EDIT));
+
+        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
+        verify(collaboratorRepository).save(captor.capture());
+        assertEquals(DocumentAccessLevel.EDIT, captor.getValue().getAccessLevel());
+    }
+
+    @Test
+    void removeCollaborator_directOwnerCollaborator_succeeds() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        User bob = User.builder().id(bobId).build();
+        Document document = Document.builder().id(documentId).user(owner).build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(true);
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.removeCollaborator(ownerId, documentId, bobId);
+
+        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+    }
+
+    @Test
+    void updateCollaboratorAccess_ancestorFullAccessUser_createsOverrideRow() {
+        UUID actorId = UUID.randomUUID();
+        UUID ancestorOwnerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
+        Document child = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(actorId).build())
+                .parent(parent)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(child);
+        when(collaboratorRepository.hasPositiveAncestorGrant(ancestorOwnerId, documentId))
+                .thenReturn(true);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
+                .thenReturn(Optional.empty());
+        when(userRepository.findById(ancestorOwnerId)).thenReturn(Optional.of(ancestorOwner));
+        when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwnerId, documentId))
+                .thenReturn(Optional.empty());
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                actorId, documentId, ancestorOwnerId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.VIEW));
+
+        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
+        verify(collaboratorRepository).save(captor.capture());
+        assertEquals(DocumentAccessLevel.VIEW, captor.getValue().getAccessLevel());
+    }
+
+    @Test
+    void updateCollaboratorAccess_withNoAccess_andAncestorGrant_persistsNoAccessRow() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        Document doc = Document.builder().id(documentId).user(owner).build();
+        User bob = User.builder().id(bobId).build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
+        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(true);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.empty());
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
+
+        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
+        verify(collaboratorRepository).save(captor.capture());
+        assertEquals(DocumentAccessLevel.NO_ACCESS, captor.getValue().getAccessLevel());
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
+    void updateCollaboratorAccess_withNoAccess_andNoAncestorGrant_deletesRowAndOrder() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        Document doc = Document.builder().id(documentId).user(owner).build();
+        User bob = User.builder().id(bobId).build();
+        DocumentCollaborator existing = DocumentCollaborator.builder()
+                .document(doc)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
+        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(false);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(existing));
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
+
+        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
+    void removeCollaborator_withInheritedOnlyUser_throwsNotFound() {
+        UUID actorId = UUID.randomUUID();
+        UUID ancestorOwnerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
+        Document child = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(actorId).build())
+                .parent(parent)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(child);
+
+        ApiException ex = assertThrows(
+                ApiException.class, () -> sharingService.removeCollaborator(actorId, documentId, ancestorOwnerId));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
+    }
+
+    @Test
+    void removeCollaborator_directOverrideOfAncestorFullAccess_succeeds() {
+        UUID actorId = UUID.randomUUID();
+        UUID ancestorOwnerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
+        Document child = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(actorId).build())
+                .parent(parent)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(child);
+        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
+                .thenReturn(true);
+        when(userRepository.findById(ancestorOwnerId)).thenReturn(Optional.of(ancestorOwner));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.removeCollaborator(actorId, documentId, ancestorOwnerId);
+
+        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, ancestorOwnerId);
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(ancestorOwnerId, documentId);
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
+    void leaveSharedDocument_prunesBreakpointsAndReconcilesOrderRows() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+
+        User user = User.builder().id(userId).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
+                .thenReturn(document);
+        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, userId))
+                .thenReturn(true);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.leaveSharedDocument(userId, documentId);
+
+        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, userId);
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(userId, documentId);
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
+    void listCollaborators_stopsAtTrashedAncestor() {
+        UUID ownerId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID trashedParentId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent")
+                .build();
+        Document trashedParent = Document.builder()
+                .id(trashedParentId)
+                .user(owner)
+                .title("Trashed Parent")
+                .parent(grandparent)
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(trashedParent)
+                .title("Child")
+                .build();
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
+                .thenReturn(child);
+        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
+
+        assertEquals(1, result.size());
+        assertEquals(ownerId, result.get(0).userId());
+        // The walk must stop at the trashed parent instead of surfacing live grandparent grants.
+        verify(collaboratorRepository, never()).findAllByDocument_Id(grandparentDocId);
     }
 
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {

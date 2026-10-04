@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -140,17 +141,10 @@ class DocumentSharingControllerTest {
     }
 
     @Test
-    void updateCollaboratorAccess_success_returns200() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
-                collaboratorUserId,
-                "alice@example.com",
-                "Alice",
-                DocumentAccessLevel.VIEW,
-                OffsetDateTime.now(),
-                false);
-
-        when(sharingService.updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any()))
-                .thenReturn(response);
+    void updateCollaboratorAccess_success_returns204_forPatchAndPut() throws Exception {
+        doNothing()
+                .when(sharingService)
+                .updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any());
 
         mockMvc.perform(patch(
                                 "/api/v1/documents/{id}/collaborators/{collaboratorUserId}",
@@ -163,9 +157,17 @@ class DocumentSharingControllerTest {
                           "accessLevel": "VIEW"
                         }
                         """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.accessLevel").value("VIEW"));
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(put("/api/v1/documents/{id}/collaborators/{collaboratorUserId}", documentId, collaboratorUserId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "accessLevel": "VIEW"
+                        }
+                        """))
+                .andExpect(status().isNoContent());
     }
 
     @Test

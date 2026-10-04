@@ -138,6 +138,16 @@ public class DocumentTreeService {
                 userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(previousOwner.getId(), documentId);
             }
 
+            Document currentAncestor = newParent;
+            int ownerWalkDepth = 0;
+            while (currentAncestor != null && ownerWalkDepth < 100) {
+                collaboratorRepository.deleteNoAccessInSubtreeForUser(
+                        documentId, currentAncestor.getUser().getId());
+                currentAncestor = currentAncestor.getParent();
+                ownerWalkDepth++;
+            }
+            collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
             boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
             DocumentAccessLevel access = permissionService.resolveAccess(userId, documentId);
@@ -238,6 +248,9 @@ public class DocumentTreeService {
                     doc.setParent(null);
                     doc.setSiblingOrderKey(null);
                     documentRepository.saveAndFlush(doc);
+                    // A root document has no ancestors, so any NO_ACCESS breakpoint in this
+                    // subtree just lost the positive ancestor grant that justified it.
+                    collaboratorRepository.pruneOrphanedBreakpoints(documentId);
                 }
                 // Collaborator: a nested shared document that appears at the root of
                 // the Shared section is only being reordered in the caller's personal
@@ -338,6 +351,9 @@ public class DocumentTreeService {
     }
 
     private void ensureCollaboratorRootOrder(Document doc, DocumentCollaborator collaborator) {
+        if (collaborator.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+            return;
+        }
         UUID collaboratorId = collaborator.getUser().getId();
         if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, doc.getId())) {
             return;

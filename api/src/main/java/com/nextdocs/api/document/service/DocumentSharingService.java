@@ -19,7 +19,13 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,26 +54,141 @@ public class DocumentSharingService {
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
 
-        CollaboratorResponse owner = new CollaboratorResponse(
-                doc.getUser().getId(),
-                doc.getUser().getEmail(),
-                doc.getUser().getDisplayName(),
+        Set<UUID> directUserIds = new HashSet<>();
+        List<CollaboratorResponse> result = new ArrayList<>();
+
+        // 1. Direct document owner
+        User owner = doc.getUser();
+        directUserIds.add(owner.getId());
+        result.add(new CollaboratorResponse(
+                owner.getId(),
+                owner.getEmail(),
+                owner.getDisplayName(),
                 DocumentAccessLevel.OWNER,
                 doc.getCreatedAt(),
-                true);
+                true,
+                false,
+                null,
+                null,
+                null));
 
-        List<CollaboratorResponse> collaborators = collaboratorRepository.findAllByDocument_Id(documentId).stream()
-                .map(c -> new CollaboratorResponse(
-                        c.getUser().getId(),
-                        c.getUser().getEmail(),
-                        c.getUser().getDisplayName(),
-                        c.getAccessLevel(),
-                        c.getCreatedAt(),
-                        false))
-                .toList();
+        // 2. Direct collaborators on this document
+        List<DocumentCollaborator> directCollaborators = collaboratorRepository.findAllByDocument_Id(documentId);
+        Set<UUID> directNeedsAncestor = new HashSet<>();
+        for (DocumentCollaborator c : directCollaborators) {
+            UUID uid = c.getUser().getId();
+            directUserIds.add(uid);
+            if (collaboratorRepository.hasPositiveAncestorGrant(uid, documentId)) {
+                directNeedsAncestor.add(uid);
+            }
+        }
 
-        return java.util.stream.Stream.concat(java.util.stream.Stream.of(owner), collaborators.stream())
-                .toList();
+        // 3. Hierarchical / inherited collaborators from ancestors
+        Map<UUID, AncestorGrantInfo> directAncestorGrants = new HashMap<>();
+        Set<UUID> handledAncestorUserIds = new HashSet<>();
+        List<CollaboratorResponse> inheritedResponses = new ArrayList<>();
+
+        Document current = doc.getParent();
+        int depth = 0;
+        while (current != null && depth < 100) {
+            if (current.getDeletedAt() == null) {
+                String ancestorTitle;
+                if (requesterId.equals(current.getUser().getId())
+                        || permissionService.resolveAccess(requesterId, current.getId()) != null) {
+                    ancestorTitle =
+                            current.getTitle() != null && !current.getTitle().isBlank()
+                                    ? current.getTitle()
+                                    : "Untitled";
+                } else {
+                    ancestorTitle = "Parent document";
+                }
+
+                // Ancestor owner
+                User ancestorOwner = current.getUser();
+                UUID ownerId = ancestorOwner.getId();
+                if (directNeedsAncestor.contains(ownerId)) {
+                    directAncestorGrants.put(
+                            ownerId, new AncestorGrantInfo(current.getId(), ancestorTitle, DocumentAccessLevel.OWNER));
+                    directNeedsAncestor.remove(ownerId);
+                }
+                if (!directUserIds.contains(ownerId) && !handledAncestorUserIds.contains(ownerId)) {
+                    handledAncestorUserIds.add(ownerId);
+                    inheritedResponses.add(new CollaboratorResponse(
+                            ancestorOwner.getId(),
+                            ancestorOwner.getEmail(),
+                            ancestorOwner.getDisplayName(),
+                            DocumentAccessLevel.OWNER,
+                            current.getCreatedAt(),
+                            false,
+                            true,
+                            current.getId(),
+                            ancestorTitle,
+                            null));
+                }
+
+                // Ancestor collaborators
+                List<DocumentCollaborator> ancestorCollaborators =
+                        collaboratorRepository.findAllByDocument_Id(current.getId());
+                for (DocumentCollaborator ac : ancestorCollaborators) {
+                    UUID uid = ac.getUser().getId();
+                    if (directNeedsAncestor.contains(uid)) {
+                        if (ac.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+                            directNeedsAncestor.remove(uid);
+                        } else {
+                            directAncestorGrants.put(
+                                    uid, new AncestorGrantInfo(current.getId(), ancestorTitle, ac.getAccessLevel()));
+                            directNeedsAncestor.remove(uid);
+                        }
+                    }
+
+                    if (!directUserIds.contains(uid) && !handledAncestorUserIds.contains(uid)) {
+                        handledAncestorUserIds.add(uid);
+                        if (ac.getAccessLevel() != DocumentAccessLevel.NO_ACCESS) {
+                            inheritedResponses.add(new CollaboratorResponse(
+                                    ac.getUser().getId(),
+                                    ac.getUser().getEmail(),
+                                    ac.getUser().getDisplayName(),
+                                    ac.getAccessLevel(),
+                                    ac.getCreatedAt(),
+                                    false,
+                                    true,
+                                    current.getId(),
+                                    ancestorTitle,
+                                    null));
+                        }
+                    }
+                }
+            } else {
+                // resolve_effective_access stops at trashed ancestors, so grants above the
+                // trash bundle never apply; never surface phantom inherited collaborators.
+                break;
+            }
+            current = current.getParent();
+            depth++;
+        }
+
+        for (DocumentCollaborator c : directCollaborators) {
+            UUID uid = c.getUser().getId();
+            AncestorGrantInfo grantInfo = directAncestorGrants.get(uid);
+            UUID inheritedFromId = grantInfo != null ? grantInfo.docId() : null;
+            String inheritedFromTitle = grantInfo != null ? grantInfo.title() : null;
+            DocumentAccessLevel inheritedAccessLevel = grantInfo != null ? grantInfo.level() : null;
+
+            result.add(new CollaboratorResponse(
+                    c.getUser().getId(),
+                    c.getUser().getEmail(),
+                    c.getUser().getDisplayName(),
+                    c.getAccessLevel(),
+                    c.getCreatedAt(),
+                    false,
+                    false,
+                    inheritedFromId,
+                    inheritedFromTitle,
+                    inheritedAccessLevel));
+        }
+
+        result.addAll(inheritedResponses);
+        return result;
     }
 
     public CollaboratorResponse upsertCollaborator(UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
@@ -94,6 +215,9 @@ public class DocumentSharingService {
             UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
+        if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "NO_ACCESS is not allowed for collaborator invites.");
+        }
 
         User targetUser = userRepository
                 .findByEmail(request.email().strip().toLowerCase())
@@ -107,6 +231,8 @@ public class DocumentSharingService {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
+        // Any inherited grant - including an ancestor owner's full access - is overridable
+        // on this document; a direct row always wins over the ancestor walk.
         DocumentCollaborator collaborator = collaboratorRepository
                 .findByDocument_IdAndUser_Id(documentId, targetUser.getId())
                 .orElseGet(() -> DocumentCollaborator.builder()
@@ -138,44 +264,91 @@ public class DocumentSharingService {
     }
 
     @Transactional
-    public CollaboratorResponse updateCollaboratorAccess(
+    public void updateCollaboratorAccess(
             UUID actorId, UUID documentId, UUID collaboratorUserId, CollaboratorAccessUpdateRequest request) {
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
-
-        if (doc.getUser().getId().equals(collaboratorUserId)) {
-            throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be changed.");
-        }
 
         if (actorId.equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
-        DocumentCollaborator collaborator = collaboratorRepository
-                .findByDocument_IdAndUser_Id(documentId, collaboratorUserId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        if (doc.getUser().getId().equals(collaboratorUserId)) {
+            // The document's own owner resolves as OWNER at depth 0, so an override row
+            // here would be inert; reject it instead of storing dead state.
+            throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be overridden or removed.");
+        }
 
-        collaborator.setAccessLevel(normalizeCollaboratorAccess(request.accessLevel()));
-        DocumentCollaborator saved = collaboratorRepository.save(collaborator);
+        DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
 
-        return new CollaboratorResponse(
-                saved.getUser().getId(),
-                saved.getUser().getEmail(),
-                saved.getUser().getDisplayName(),
-                saved.getAccessLevel(),
-                saved.getCreatedAt(),
-                false);
+        boolean hasAncestorGrant = collaboratorRepository.hasPositiveAncestorGrant(collaboratorUserId, documentId);
+        Optional<DocumentCollaborator> collaboratorOpt =
+                collaboratorRepository.findByDocument_IdAndUser_Id(documentId, collaboratorUserId);
+
+        if (collaboratorOpt.isEmpty() && !hasAncestorGrant) {
+            throw new ApiException(ErrorCode.NOT_FOUND, "Collaborator not found.");
+        }
+
+        if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
+            if (!hasAncestorGrant) {
+                if (collaboratorOpt.isPresent()) {
+                    collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
+                    userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+                }
+            } else {
+                DocumentCollaborator collaborator = collaboratorOpt.orElseGet(() -> {
+                    User targetUser = userRepository
+                            .findById(collaboratorUserId)
+                            .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Collaborator user not found."));
+                    User actor = actorId.equals(doc.getUser().getId())
+                            ? doc.getUser()
+                            : userRepository
+                                    .findById(actorId)
+                                    .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found."));
+                    return DocumentCollaborator.builder()
+                            .document(doc)
+                            .user(targetUser)
+                            .grantedBy(actor)
+                            .build();
+                });
+                collaborator.setAccessLevel(DocumentAccessLevel.NO_ACCESS);
+                collaboratorRepository.save(collaborator);
+                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+            }
+        } else {
+            DocumentCollaborator collaborator = collaboratorOpt.orElseGet(() -> {
+                User targetUser = userRepository
+                        .findById(collaboratorUserId)
+                        .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Collaborator user not found."));
+                User actor = actorId.equals(doc.getUser().getId())
+                        ? doc.getUser()
+                        : userRepository
+                                .findById(actorId)
+                                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found."));
+                return DocumentCollaborator.builder()
+                        .document(doc)
+                        .user(targetUser)
+                        .grantedBy(actor)
+                        .build();
+            });
+            collaborator.setAccessLevel(requestedLevel);
+            collaboratorRepository.save(collaborator);
+            ensureCollaboratorOrder(doc, collaborator.getUser());
+        }
+
+        reconcileSharedRoots(collaboratorUserId, documentId);
+        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
     }
 
     @Transactional
     public void removeCollaborator(UUID actorId, UUID documentId, UUID collaboratorUserId) {
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
-        if (doc.getUser().getId().equals(collaboratorUserId)) {
-            throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
-        }
-
         if (actorId.equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot remove yourself as collaborator. Use leave instead.");
+        }
+
+        if (doc.getUser().getId().equals(collaboratorUserId)) {
+            throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
         }
 
         boolean exists = collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId);
@@ -185,6 +358,9 @@ public class DocumentSharingService {
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
         userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+
+        reconcileSharedRoots(collaboratorUserId, documentId);
+        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
     }
 
     @Transactional
@@ -202,6 +378,11 @@ public class DocumentSharingService {
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, userId);
         userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(userId, documentId);
+
+        // Leaving may orphan NO_ACCESS breakpoints deeper in the subtree; if this user is
+        // later re-granted access on an ancestor those stale rows would spring back to life.
+        reconcileSharedRoots(userId, documentId);
+        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
     }
 
     @Transactional(readOnly = true)
@@ -209,7 +390,37 @@ public class DocumentSharingService {
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         boolean hasActiveLink = doc.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK;
 
-        return new SharingSettingsResponse(doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink);
+        if (!hasActiveLink && doc.getParent() != null) {
+            Document current = doc.getParent();
+            int depth = 0;
+            while (current != null && depth < 100) {
+                if (current.getDeletedAt() != null) {
+                    // resolve_effective_access stops at trashed ancestors, so link grants
+                    // above the trash bundle never apply.
+                    break;
+                }
+                if (current.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+                    String title =
+                            current.getTitle() != null && !current.getTitle().isBlank()
+                                    ? current.getTitle()
+                                    : "Untitled";
+                    return new SharingSettingsResponse(
+                            doc.getGeneralAccessMode(),
+                            // The child's own link level only takes effect when its own mode is
+                            // ANYONE_WITH_LINK; here the ancestor's level is the effective one.
+                            current.getLinkAccessLevel(),
+                            hasActiveLink,
+                            true,
+                            current.getId(),
+                            title);
+                }
+                current = current.getParent();
+                depth++;
+            }
+        }
+
+        return new SharingSettingsResponse(
+                doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink, false, null, null);
     }
 
     @Transactional
@@ -313,6 +524,57 @@ public class DocumentSharingService {
         if (accessLevel == DocumentAccessLevel.OWNER) {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "OWNER is not allowed for share links.");
         }
+        if (accessLevel == DocumentAccessLevel.NO_ACCESS) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "NO_ACCESS is not allowed for share links.");
+        }
         return accessLevel;
     }
+
+    private void reconcileSharedRoots(UUID userId, UUID subtreeRootId) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            return;
+        }
+        List<UUID> subtreeIds = documentRepository.findSubtreeDocumentIds(subtreeRootId);
+        if (subtreeIds.isEmpty()) {
+            return;
+        }
+        List<Document> subtreeDocs = documentRepository.findAllById(subtreeIds);
+
+        // Decide first, mutate last: UserDocumentOrder deletes clear the persistence context,
+        // detaching the subtree documents loaded above. Touching a lazy association afterwards
+        // (doc.getParent().getUser()) would fail with LazyInitializationException, so every
+        // access resolution has to happen before the first order row is deleted.
+        List<Document> documentsToFloat = new ArrayList<>();
+        List<UUID> orderRowsToDelete = new ArrayList<>();
+        for (Document doc : subtreeDocs) {
+            if (doc.getUser().getId().equals(userId)) {
+                continue;
+            }
+            DocumentAccessLevel access = permissionService.resolveAccess(userId, doc.getId());
+            if (access != null && !hasAccessibleParent(userId, doc)) {
+                documentsToFloat.add(doc);
+            } else {
+                orderRowsToDelete.add(doc.getId());
+            }
+        }
+
+        for (Document doc : documentsToFloat) {
+            ensureCollaboratorOrder(doc, user);
+        }
+        for (UUID docId : orderRowsToDelete) {
+            userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(userId, docId);
+        }
+    }
+
+    private boolean hasAccessibleParent(UUID userId, Document doc) {
+        Document parent = doc.getParent();
+        if (parent == null) {
+            return false;
+        }
+        return parent.getUser().getId().equals(userId)
+                || permissionService.resolveAccess(userId, parent.getId()) != null;
+    }
+
+    private record AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level) {}
 }
