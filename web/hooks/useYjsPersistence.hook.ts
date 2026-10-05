@@ -163,72 +163,91 @@ export function useYjsPersistence(
       return;
     }
 
-    const handleUpdate = () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
+    // Extracted so the pending debounce can be carried out on teardown
+    // instead of being dropped when the effect re-runs or the editor unmounts.
+    const persistDebouncedChanges = async () => {
+      const currentMeta = metaRef.current;
+
+      if (!currentMeta) {
+        console.warn('Cannot save: meta is null');
+        return;
       }
 
-      // We debounce saves to avoid excessive IndexedDB writes during rapid edits
-      saveTimeoutRef.current = setTimeout(async () => {
-        const currentMeta = metaRef.current;
+      const savedMeta = {
+        ...currentMeta,
+        updatedAt: new Date().toISOString(),
+      };
 
-        if (!currentMeta) {
-          console.warn('Cannot save: meta is null');
-          return;
-        }
+      // Bytes that arrived via an anonymous share link keep their provenance
+      // in the local cache so Private listings never claim them as owned.
+      const linkOrigin =
+        !isAuthenticated && documentService.isPublicLinkDocument(documentId)
+          ? ({ origin: 'public-link' } as const)
+          : undefined;
 
-        const savedMeta = {
-          ...currentMeta,
-          updatedAt: new Date().toISOString(),
-        };
+      const persistLocalCopy = async () => {
+        await documentService.saveDocument(
+          documentId,
+          ydoc,
+          savedMeta,
+          linkOrigin ? { origin: linkOrigin.origin } : undefined
+        );
+        documentService.emitLocalDocumentsChanged();
+        dispatch(
+          setCurrentDocument({
+            id: documentId,
+            meta: savedMeta,
+          })
+        );
+      };
 
-        // Bytes that arrived via an anonymous share link keep their provenance
-        // in the local cache so Private listings never claim them as owned.
-        const linkOrigin =
-          !isAuthenticated && documentService.isPublicLinkDocument(documentId)
-            ? ({ origin: 'public-link' } as const)
-            : undefined;
+      try {
+        dispatch(setSaving(true));
+        dispatch(setError(null));
 
-        const persistLocalCopy = async () => {
-          await documentService.saveDocument(
-            documentId,
-            ydoc,
-            savedMeta,
-            linkOrigin ? { origin: linkOrigin.origin } : undefined
-          );
-          documentService.emitLocalDocumentsChanged();
+        const canAttemptCloudSave =
+          isAuthenticated && accessToken && canPersistCloud && isOnline && !isInBackoff();
+        // Anonymous share-link editors persist snapshots through the public
+        // endpoint (the link is the capability). View/comment links stay
+        // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
+        // prevents unexpected write attempts from guests without edit rights.
+        const canPublicEdit = accessLevel === 'EDIT' || accessLevel === 'OWNER';
+        const canAttemptPublicSave =
+          !isAuthenticated && canPersistCloud && isOnline && !isInBackoff() && canPublicEdit;
+        const shouldQueuePendingSync = isAuthenticated && !!accessToken && canPersistCloud;
+
+        if (canAttemptCloudSave) {
+          await documentService.saveCloudDocument(documentId, ydoc, currentMeta, accessToken);
+          try {
+            await documentService.saveDocument(documentId, ydoc, currentMeta, {
+              touchUpdatedAt: false,
+              origin: 'local',
+            });
+          } catch (cacheErr) {
+            console.warn('Failed to mirror cloud save into local cache:', cacheErr);
+          }
           dispatch(
             setCurrentDocument({
               id: documentId,
               meta: savedMeta,
             })
           );
-        };
-
-        try {
-          dispatch(setSaving(true));
-          dispatch(setError(null));
-
-          const canAttemptCloudSave =
-            isAuthenticated && accessToken && canPersistCloud && isOnline && !isInBackoff();
-          // Anonymous share-link editors persist snapshots through the public
-          // endpoint (the link is the capability). View/comment links stay
-          // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
-          // prevents unexpected write attempts from guests without edit rights.
-          const canPublicEdit = accessLevel === 'EDIT' || accessLevel === 'OWNER';
-          const canAttemptPublicSave =
-            !isAuthenticated && canPersistCloud && isOnline && !isInBackoff() && canPublicEdit;
-          const shouldQueuePendingSync = isAuthenticated && !!accessToken && canPersistCloud;
-
-          if (canAttemptCloudSave) {
-            await documentService.saveCloudDocument(documentId, ydoc, currentMeta, accessToken);
+          clearBackoff();
+          clearPendingSyncEdits(documentId);
+          pendingEditsRef.current = 0;
+          setPendingEdits(0);
+        } else if (canAttemptPublicSave) {
+          try {
+            await documentService.savePublicDocument(documentId, ydoc, currentMeta);
             try {
               await documentService.saveDocument(documentId, ydoc, currentMeta, {
                 touchUpdatedAt: false,
-                origin: 'local',
+                // A successful public save proves link provenance.
+                origin: 'public-link',
               });
+              documentService.notePublicLinkDocument(documentId);
             } catch (cacheErr) {
-              console.warn('Failed to mirror cloud save into local cache:', cacheErr);
+              console.warn('Failed to mirror public save into local cache:', cacheErr);
             }
             dispatch(
               setCurrentDocument({
@@ -237,75 +256,63 @@ export function useYjsPersistence(
               })
             );
             clearBackoff();
-            clearPendingSyncEdits(documentId);
-            pendingEditsRef.current = 0;
-            setPendingEdits(0);
-          } else if (canAttemptPublicSave) {
-            try {
-              await documentService.savePublicDocument(documentId, ydoc, currentMeta);
-              try {
-                await documentService.saveDocument(documentId, ydoc, currentMeta, {
-                  touchUpdatedAt: false,
-                  // A successful public save proves link provenance.
-                  origin: 'public-link',
-                });
-                documentService.notePublicLinkDocument(documentId);
-              } catch (cacheErr) {
-                console.warn('Failed to mirror public save into local cache:', cacheErr);
-              }
-              dispatch(
-                setCurrentDocument({
-                  id: documentId,
-                  meta: savedMeta,
-                })
-              );
-              clearBackoff();
-            } catch (publicErr) {
-              if (isConnectivityError(publicErr)) {
-                triggerBackoff(backoffMsFor(publicErr));
-              }
-              // A 403/404 here means the link was revoked or downgraded; keep
-              // the local copy and let access revalidation surface it.
-              await persistLocalCopy();
+          } catch (publicErr) {
+            if (isConnectivityError(publicErr)) {
+              triggerBackoff(backoffMsFor(publicErr));
             }
-          } else {
-            // Comment-only access, browser offline, or cloud-save backoff path.
+            // A 403/404 here means the link was revoked or downgraded; keep
+            // the local copy and let access revalidation surface it.
             await persistLocalCopy();
-            if (shouldQueuePendingSync) {
-              const nextPendingEdits = incrementPendingSyncEdits(documentId);
-              pendingEditsRef.current = nextPendingEdits;
-              setPendingEdits(nextPendingEdits);
-            }
           }
-
-          dispatch(setLastSaved(new Date().toISOString()));
-        } catch (err) {
-          if (isAuthenticated && accessToken && canPersistCloud && isConnectivityError(err)) {
-            triggerBackoff(backoffMsFor(err));
-
-            try {
-              await persistLocalCopy();
-              const nextPendingEdits = incrementPendingSyncEdits(documentId);
-              pendingEditsRef.current = nextPendingEdits;
-              setPendingEdits(nextPendingEdits);
-              dispatch(setLastSaved(new Date().toISOString()));
-              return;
-            } catch (fallbackErr) {
-              console.error('Failed to save document:', fallbackErr);
-              dispatch(
-                setError(
-                  fallbackErr instanceof Error ? fallbackErr.message : 'Failed to save document'
-                )
-              );
-              return;
-            }
+        } else {
+          // Comment-only access, browser offline, or cloud-save backoff path.
+          await persistLocalCopy();
+          if (shouldQueuePendingSync) {
+            const nextPendingEdits = incrementPendingSyncEdits(documentId);
+            pendingEditsRef.current = nextPendingEdits;
+            setPendingEdits(nextPendingEdits);
           }
-
-          console.error('Failed to save document:', err);
-          dispatch(setError(err instanceof Error ? err.message : 'Failed to save document'));
-        } finally {
-          dispatch(setSaving(false));
         }
+
+        dispatch(setLastSaved(new Date().toISOString()));
+      } catch (err) {
+        if (isAuthenticated && accessToken && canPersistCloud && isConnectivityError(err)) {
+          triggerBackoff(backoffMsFor(err));
+
+          try {
+            await persistLocalCopy();
+            const nextPendingEdits = incrementPendingSyncEdits(documentId);
+            pendingEditsRef.current = nextPendingEdits;
+            setPendingEdits(nextPendingEdits);
+            dispatch(setLastSaved(new Date().toISOString()));
+            return;
+          } catch (fallbackErr) {
+            console.error('Failed to save document:', fallbackErr);
+            dispatch(
+              setError(
+                fallbackErr instanceof Error ? fallbackErr.message : 'Failed to save document'
+              )
+            );
+            return;
+          }
+        }
+
+        console.error('Failed to save document:', err);
+        dispatch(setError(err instanceof Error ? err.message : 'Failed to save document'));
+      } finally {
+        dispatch(setSaving(false));
+      }
+    };
+
+    const handleUpdate = () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+
+      // We debounce saves to avoid excessive IndexedDB writes during rapid edits
+      saveTimeoutRef.current = setTimeout(() => {
+        saveTimeoutRef.current = undefined;
+        void persistDebouncedChanges();
       }, SAVE_DEBOUNCE_MS);
     };
 
@@ -315,7 +322,10 @@ export function useYjsPersistence(
       ydoc.off('update', handleUpdate);
 
       if (saveTimeoutRef.current) {
+        // Don't drop the last edits: carry out the pending debounced save now.
         clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = undefined;
+        void persistDebouncedChanges();
       }
     };
   }, [

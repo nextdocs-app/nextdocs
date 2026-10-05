@@ -108,6 +108,35 @@ describe('useYjsPersistence', () => {
     });
   });
 
+  it('flushes a pending debounced save on unmount instead of dropping it', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Unsaved edits',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { unmount } = renderHook(() => useYjsPersistence('test-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    expect(saveDocumentSpy).not.toHaveBeenCalled();
+
+    unmount();
+
+    await waitFor(() => {
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'test-id',
+        ydoc,
+        expect.objectContaining({ title: meta.title }),
+        undefined
+      );
+    });
+  });
+
   it('should tag the local mirror as public-link when saving a share-link session', async () => {
     const savePublicDocumentSpy = jest
       .spyOn(documentService, 'savePublicDocument')

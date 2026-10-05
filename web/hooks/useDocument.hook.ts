@@ -653,13 +653,19 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     retryTrigger,
   ]);
 
+  // Guests connect once any level is known; later changes arrive as socket
+  // messages. Depending on the raw level would tear the provider down and
+  // rebuild it on every access revalidation.
+  const isGuestRealtimeLevelKnown = accessLevel !== null;
+
   useEffect(() => {
     const realtimeUrl = getRealtimeUrl();
     // Guests connect anonymously: the realtime server evaluates access-check
     // without credentials against share-link grants. An empty token param is
     // sent so the server treats the connection as anonymous.
-    const canConnectRealtime =
-      isAuthenticated && accessTokenRef.current ? true : !isAuthenticated && accessLevel !== null;
+    const canConnectRealtime = isAuthenticated
+      ? Boolean(accessTokenRef.current)
+      : isGuestRealtimeLevelKnown;
     if (
       !realtimeUrl ||
       !ydoc ||
@@ -849,7 +855,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isLoading,
     errorState,
     isAuthenticated,
-    accessLevel,
+    isGuestRealtimeLevelKnown,
     meta?.deletedAt,
     isCloudReadInBackoff,
     refresh,
@@ -945,7 +951,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
   // Periodically revalidate access level to detect downgrades immediately
   useEffect(() => {
-    const canPollAsGuest = !isAuthenticated && accessLevel !== null;
+    const canPollAsGuest = !isAuthenticated && accessLevelRef.current !== null;
     if (
       (!isAuthenticated && !canPollAsGuest) ||
       (isAuthenticated && !accessToken) ||
@@ -975,8 +981,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             enterRestrictedState(resolvedDocumentId, 404);
             return;
           }
-          writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
-          setAccessLevel(publicAccess.accessLevel);
+          if (publicAccess.accessLevel !== accessLevelRef.current) {
+            writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
+            setAccessLevel(publicAccess.accessLevel);
+          }
         } catch (err) {
           if (
             err instanceof DocumentServiceApiError &&
@@ -1028,8 +1036,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           enterRestrictedState(resolvedDocumentId, 404);
           return;
         }
-        writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
-        setAccessLevel(myAccess.accessLevel);
+        if (myAccess.accessLevel !== accessLevelRef.current) {
+          writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
+          setAccessLevel(myAccess.accessLevel);
+        }
       } catch (err) {
         if (err instanceof DocumentServiceApiError && err.status === 401) {
           // Stale token: silently attempt re-auth. When refreshSessionThunk resolves
@@ -1074,7 +1084,6 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   }, [
     isAuthenticated,
     accessToken,
-    accessLevel,
     isOnline,
     resolvedDocumentId,
     currentDocumentId,
