@@ -35,7 +35,7 @@ export const LINK_ACCESS_OPTIONS: DropdownOption[] = [
   { value: 'EDIT', label: 'Can edit' },
 ];
 
-export const GENERAL_MODE_OPTIONS: DropdownOption[] = [
+const GENERAL_MODE_OPTIONS: DropdownOption[] = [
   { value: 'RESTRICTED', label: 'Restricted', description: 'Only people with access can open' },
   {
     value: 'ANYONE_WITH_LINK',

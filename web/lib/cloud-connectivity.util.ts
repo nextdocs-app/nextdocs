@@ -3,10 +3,12 @@ import { DocumentServiceApiError } from '@/services/document.service';
 export const CLOUD_BACKOFF_MS = 30_000;
 // Upper bound when honoring server Retry-After so a hostile header cannot park syncing.
 const MAX_RETRY_AFTER_MS = 120_000;
+// Floor so a zero/negative Retry-After cannot make triggerBackoff(0) retry in a tight loop.
+const MIN_RETRY_AFTER_MS = 1_000;
 
 export function retryAfterMs(error: unknown): number | null {
   if (error instanceof DocumentServiceApiError && error.retryAfterMs != null) {
-    return Math.min(Math.max(error.retryAfterMs, 0), MAX_RETRY_AFTER_MS);
+    return Math.min(Math.max(error.retryAfterMs, MIN_RETRY_AFTER_MS), MAX_RETRY_AFTER_MS);
   }
   return null;
 }
@@ -30,10 +32,6 @@ export function isFetchNetworkError(error: unknown): boolean {
     message.includes('networkerror') ||
     message.includes('network error')
   );
-}
-
-export function isRateLimitedError(error: unknown): boolean {
-  return error instanceof DocumentServiceApiError && error.status === 429;
 }
 
 export function isConnectivityError(error: unknown): boolean {
