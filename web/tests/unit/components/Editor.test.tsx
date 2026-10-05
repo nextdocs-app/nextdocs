@@ -681,11 +681,9 @@ describe('Editor Component', () => {
 
     render(<Editor />, store);
 
-    expect(
-      screen.getByText(/You are viewing this shared document as a guest\./i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/You are viewing a shared document as a guest\./i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /sign up or log in/i }));
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })

@@ -1,4 +1,11 @@
-import { isConnectivityError, isFetchNetworkError } from '@/lib/cloud-connectivity.util';
+import {
+  backoffMsFor,
+  CLOUD_BACKOFF_MS,
+  isConnectivityError,
+  isFetchNetworkError,
+  isRateLimitedError,
+  retryAfterMs,
+} from '@/lib/cloud-connectivity.util';
 import { DocumentServiceApiError } from '@/services/document.service';
 
 describe('cloud-connectivity.util', () => {
@@ -39,6 +46,35 @@ describe('cloud-connectivity.util', () => {
     it('returns false for non-error values', () => {
       expect(isConnectivityError('failed to fetch')).toBe(false);
       expect(isConnectivityError(null)).toBe(false);
+    });
+
+    it('returns true for 429 rate limiting (transient backpressure)', () => {
+      expect(isConnectivityError(new DocumentServiceApiError('Too many requests', 429))).toBe(true);
+    });
+  });
+
+  describe('isRateLimitedError', () => {
+    it('matches only 429 API errors', () => {
+      expect(isRateLimitedError(new DocumentServiceApiError('Too many', 429))).toBe(true);
+      expect(isRateLimitedError(new DocumentServiceApiError('Forbidden', 403))).toBe(false);
+      expect(isRateLimitedError(new Error('Too many'))).toBe(false);
+    });
+  });
+
+  describe('retryAfterMs / backoffMsFor', () => {
+    it('parses Retry-After seconds from the error', () => {
+      expect(retryAfterMs(new DocumentServiceApiError('Too many', 429, 60_000))).toBe(60_000);
+    });
+
+    it('returns null without Retry-After info', () => {
+      expect(retryAfterMs(new DocumentServiceApiError('Too many', 429))).toBeNull();
+      expect(retryAfterMs(new Error('nope'))).toBeNull();
+    });
+
+    it('caps hostile Retry-After values and defaults otherwise', () => {
+      expect(backoffMsFor(new DocumentServiceApiError('Too many', 429, 9_000_000))).toBe(120_000);
+      expect(backoffMsFor(new DocumentServiceApiError('Too many', 429, 5_000))).toBe(5_000);
+      expect(backoffMsFor(new DocumentServiceApiError('Server error', 503))).toBe(CLOUD_BACKOFF_MS);
     });
   });
 });

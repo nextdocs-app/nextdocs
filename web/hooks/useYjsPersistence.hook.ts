@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
-import { documentService } from '@/services/document.service';
+import { documentService, type DocumentAccessLevel } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
@@ -18,7 +18,7 @@ import {
   PENDING_SYNC_EVENT,
   readPendingSyncEdits,
 } from '@/lib/offline-sync.util';
-import { CLOUD_BACKOFF_MS, isConnectivityError } from '@/lib/cloud-connectivity.util';
+import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -27,7 +27,8 @@ export function useYjsPersistence(
   ydoc: Y.Doc | null,
   meta: DocumentMeta | null,
   isReadOnly = false,
-  canPersistCloud = true
+  canPersistCloud = true,
+  accessLevel?: DocumentAccessLevel | null
 ) {
   const dispatch = useAppDispatch();
   const { isSaving, lastSaved } = useAppSelector((state) => state.document);
@@ -109,6 +110,9 @@ export function useYjsPersistence(
       await documentService.saveCloudDocument(documentId, sourceYDoc, sourceMeta, accessToken);
       await documentService.saveDocument(documentId, sourceYDoc, sourceMeta, {
         touchUpdatedAt: false,
+        // A cloud save proves account ownership; a prior guest mirror of the
+        // same id must not keep hiding the document from Private listings.
+        origin: 'local',
       });
       dispatch(
         setCurrentDocument({
@@ -124,7 +128,7 @@ export function useYjsPersistence(
       dispatch(setLastSaved(new Date().toISOString()));
     } catch (err) {
       if (isConnectivityError(err)) {
-        triggerBackoff(CLOUD_BACKOFF_MS);
+        triggerBackoff(backoffMsFor(err));
         return;
       }
 
@@ -178,8 +182,20 @@ export function useYjsPersistence(
           updatedAt: new Date().toISOString(),
         };
 
+        // Bytes that arrived via an anonymous share link keep their provenance
+        // in the local cache so Private listings never claim them as owned.
+        const linkOrigin =
+          !isAuthenticated && documentService.isPublicLinkDocument(documentId)
+            ? ({ origin: 'public-link' } as const)
+            : undefined;
+
         const persistLocalCopy = async () => {
-          await documentService.saveDocument(documentId, ydoc, savedMeta);
+          await documentService.saveDocument(
+            documentId,
+            ydoc,
+            savedMeta,
+            linkOrigin ? { origin: linkOrigin.origin } : undefined
+          );
           documentService.emitLocalDocumentsChanged();
           dispatch(
             setCurrentDocument({
@@ -195,6 +211,13 @@ export function useYjsPersistence(
 
           const canAttemptCloudSave =
             isAuthenticated && accessToken && canPersistCloud && isOnline && !isInBackoff();
+          // Anonymous share-link editors persist snapshots through the public
+          // endpoint (the link is the capability). View/comment links stay
+          // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
+          // prevents unexpected write attempts from guests without edit rights.
+          const canPublicEdit = accessLevel === 'EDIT' || accessLevel === 'OWNER';
+          const canAttemptPublicSave =
+            !isAuthenticated && canPersistCloud && isOnline && !isInBackoff() && canPublicEdit;
           const shouldQueuePendingSync = isAuthenticated && !!accessToken && canPersistCloud;
 
           if (canAttemptCloudSave) {
@@ -202,6 +225,7 @@ export function useYjsPersistence(
             try {
               await documentService.saveDocument(documentId, ydoc, currentMeta, {
                 touchUpdatedAt: false,
+                origin: 'local',
               });
             } catch (cacheErr) {
               console.warn('Failed to mirror cloud save into local cache:', cacheErr);
@@ -216,6 +240,34 @@ export function useYjsPersistence(
             clearPendingSyncEdits(documentId);
             pendingEditsRef.current = 0;
             setPendingEdits(0);
+          } else if (canAttemptPublicSave) {
+            try {
+              await documentService.savePublicDocument(documentId, ydoc, currentMeta);
+              try {
+                await documentService.saveDocument(documentId, ydoc, currentMeta, {
+                  touchUpdatedAt: false,
+                  // A successful public save proves link provenance.
+                  origin: 'public-link',
+                });
+                documentService.notePublicLinkDocument(documentId);
+              } catch (cacheErr) {
+                console.warn('Failed to mirror public save into local cache:', cacheErr);
+              }
+              dispatch(
+                setCurrentDocument({
+                  id: documentId,
+                  meta: savedMeta,
+                })
+              );
+              clearBackoff();
+            } catch (publicErr) {
+              if (isConnectivityError(publicErr)) {
+                triggerBackoff(backoffMsFor(publicErr));
+              }
+              // A 403/404 here means the link was revoked or downgraded; keep
+              // the local copy and let access revalidation surface it.
+              await persistLocalCopy();
+            }
           } else {
             // Comment-only access, browser offline, or cloud-save backoff path.
             await persistLocalCopy();
@@ -229,7 +281,7 @@ export function useYjsPersistence(
           dispatch(setLastSaved(new Date().toISOString()));
         } catch (err) {
           if (isAuthenticated && accessToken && canPersistCloud && isConnectivityError(err)) {
-            triggerBackoff(CLOUD_BACKOFF_MS);
+            triggerBackoff(backoffMsFor(err));
 
             try {
               await persistLocalCopy();
@@ -276,6 +328,7 @@ export function useYjsPersistence(
     isOnline,
     isReadOnly,
     canPersistCloud,
+    accessLevel,
     clearBackoff,
     isInBackoff,
     triggerBackoff,

@@ -2010,3 +2010,222 @@ it('does not render the "Add a document inside" button for a collaborator docume
 
   expect(screen.queryByRole('button', { name: /Add a document inside/i })).not.toBeInTheDocument();
 });
+
+// ---------------------------------------------------------------------------
+// Guest (anonymous share-link) shared section
+// ---------------------------------------------------------------------------
+
+type GuestTreeNode = {
+  id: string;
+  title: string;
+  parentId: string | null;
+  orderKey: string;
+  hasChildren: boolean;
+  effectiveAccessLevel: 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
+  isExpanded: boolean;
+  isLoading: boolean;
+  children: string[];
+  childrenLoaded: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function makeGuestNode(overrides: Partial<GuestTreeNode> & { id: string }): GuestTreeNode {
+  return {
+    title: overrides.id,
+    parentId: null,
+    orderKey: `shared:${overrides.id}`,
+    hasChildren: false,
+    effectiveAccessLevel: 'VIEW',
+    isExpanded: false,
+    isLoading: false,
+    children: [],
+    childrenLoaded: true,
+    createdAt: '2024-01-01T10:00:00Z',
+    updatedAt: '2024-01-01T11:00:00Z',
+    ...overrides,
+  };
+}
+
+/** Guest store: no account, so the Shared section is the only tree in play. */
+function makeGuestStore(options: {
+  sharedNodes?: Record<string, GuestTreeNode>;
+  sharedRootIds?: string[];
+  privateNodes?: Record<string, GuestTreeNode>;
+  privateRootIds?: string[];
+}) {
+  return configureStore({
+    reducer: {
+      auth: authReducer,
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      ui: uiReducer,
+    },
+    preloadedState: {
+      sidebarTree: {
+        nodes: options.privateNodes ?? {},
+        rootIds: options.privateRootIds ?? [],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+      sharedTree: {
+        nodes: options.sharedNodes ?? {},
+        rootIds: options.sharedRootIds ?? [],
+      },
+    },
+  });
+}
+
+function makeGuestDocumentList(documents: unknown[] = []) {
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents,
+    sharedDocuments: [],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    isSharedLoadingMore: false,
+    hasMore: false,
+    sharedHasMore: false,
+    isShowingAll: false,
+    isShowingAllShared: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+}
+
+it('expands a guest shared document through the anonymous children endpoint', async () => {
+  const user = userEvent.setup();
+  makeGuestDocumentList();
+  (useParams as jest.Mock).mockReturnValue({ id: 'guest-root' });
+  (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
+    {
+      id: 'guest-root',
+      title: 'Guest Root',
+      parentId: null,
+      orderKey: 'order-root',
+      accessLevel: 'VIEW',
+    },
+  ]);
+  (documentService.listPublicChildren as jest.Mock).mockResolvedValue({
+    items: [makeGuestNode({ id: 'guest-child', title: 'Guest Child', parentId: 'guest-root' })],
+    page: 0,
+    size: 50,
+    totalElements: 1,
+    totalPages: 1,
+    hasMore: false,
+  });
+
+  // The guest tree lives inside the sidebar's unified DnD context, so its rows
+  // route through sidebarTreeApi: expanding there must not reach for the
+  // authenticated children endpoint, which has no token and answers empty.
+  const store = makeGuestStore({
+    sharedNodes: {
+      'guest-root': makeGuestNode({ id: 'guest-root', title: 'Guest Root', hasChildren: true }),
+    },
+    sharedRootIds: ['guest-root'],
+  });
+
+  render(<Sidebar />, store);
+
+  await user.click(screen.getAllByRole('button', { name: 'Expand' })[0]);
+
+  await waitFor(() => {
+    expect(documentService.listPublicChildren).toHaveBeenCalledWith('guest-root', 0, 50);
+  });
+  expect(documentService.listChildTreeNodes).not.toHaveBeenCalled();
+  expect(await screen.findByRole('button', { name: /Guest Child/i })).toBeInTheDocument();
+});
+
+it('shows the Shared section skeleton while guest roots are still loading', () => {
+  makeGuestDocumentList();
+  (useParams as jest.Mock).mockReturnValue({ id: 'guest-pending' });
+  // Never resolves: the guest section stays in its first-load state.
+  (documentService.getDocumentBreadcrumbs as jest.Mock).mockImplementation(
+    () => new Promise(() => {})
+  );
+
+  const { container } = render(<Sidebar />, makeGuestStore({}));
+
+  expect(screen.getByRole('button', { name: /Shared/i })).toBeInTheDocument();
+  expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+  expect(screen.queryByText('No shared documents')).not.toBeInTheDocument();
+});
+
+it('hides the \"Add a document inside\" button from a guest with EDIT access', async () => {
+  makeGuestDocumentList();
+
+  const store = makeGuestStore({
+    sharedNodes: {
+      'guest-edit-doc': makeGuestNode({
+        id: 'guest-edit-doc',
+        title: 'Guest Edit Doc',
+        effectiveAccessLevel: 'EDIT',
+      }),
+    },
+    sharedRootIds: ['guest-edit-doc'],
+  });
+
+  render(<Sidebar />, store);
+
+  expect(screen.getByRole('button', { name: /Guest Edit Doc/i })).toBeInTheDocument();
+  // Creating inside someone else's tree needs an account, so the button that
+  // used to no-op is gone.
+  expect(screen.queryByRole('button', { name: /Add a document inside/i })).not.toBeInTheDocument();
+});
+
+it('keeps the \"Add a document inside\" button on a guest\'s own local documents', () => {
+  makeGuestDocumentList();
+
+  const store = makeGuestStore({
+    privateNodes: {
+      'local-owner-doc': makeGuestNode({
+        id: 'local-owner-doc',
+        title: 'Local Owner Doc',
+        effectiveAccessLevel: 'OWNER',
+      }),
+    },
+    privateRootIds: ['local-owner-doc'],
+  });
+
+  render(<Sidebar />, store);
+
+  // Guests still create documents locally; only the shared section loses the
+  // affordance it could never honour.
+  expect(screen.getByRole('button', { name: /Add a document inside/i })).toBeInTheDocument();
+});
+
+it('marks guest shared rows as non-draggable', () => {
+  makeGuestDocumentList();
+
+  const store = makeGuestStore({
+    sharedNodes: {
+      'guest-edit-doc': makeGuestNode({
+        id: 'guest-edit-doc',
+        title: 'Guest Edit Doc',
+        effectiveAccessLevel: 'EDIT',
+      }),
+    },
+    sharedRootIds: ['guest-edit-doc'],
+  });
+
+  render(<Sidebar />, store);
+
+  // A drag would land on a move endpoint that requires a token; dnd-kit marks
+  // the disabled draggable, so the guest never gets a drop line to follow.
+  expect(screen.getByRole('button', { name: /Guest Edit Doc/i })).toHaveAttribute(
+    'aria-disabled',
+    'true'
+  );
+});

@@ -33,6 +33,10 @@ export interface SidebarTreeItemProps {
    * otherwise gate editing; used by the shared tree where reordering the
    * user's own navigation is allowed for every collaborator. */
   reorderEnabled?: boolean;
+  /** Render the "add child" button. Off where the host tree cannot create
+   * documents (the guest Shared section: creating needs an account), while the
+   * guest's own local documents keep it. */
+  canCreateChildren?: boolean;
 }
 
 function zoneId(nodeId: string, zone: string) {
@@ -61,6 +65,7 @@ export function SidebarTreeItem({
   visibleIds,
   forceShowChildren = false,
   reorderEnabled = false,
+  canCreateChildren = true,
 }: SidebarTreeItemProps) {
   const dndContext = useTreeDndOptional();
   const treeApi = treeApiProp ?? dndContext?.treeApi ?? null;
@@ -75,6 +80,7 @@ export function SidebarTreeItem({
     return children;
   }, [node, excludedNodeIds, visibleIds]);
   const canEdit = node?.effectiveAccessLevel === 'EDIT' || node?.effectiveAccessLevel === 'OWNER';
+  const canCreate = canEdit && canCreateChildren;
 
   const canReorder = canEdit || (reorderEnabled && node?.parentId == null);
 
@@ -126,14 +132,14 @@ export function SidebarTreeItem({
   const actionType = resolveActionType ? resolveActionType(node.id) : 'move-to-trash';
   const showChildren = forceShowChildren || node.isExpanded;
   const isMenuOpen = docActionsAnchor?.documentId === node.id;
-  const hasTwoActions = canEdit && isActionsEnabled;
+  const hasTwoActions = canCreate && isActionsEnabled;
   // Mobile always shows the row actions (no hover), so the title must
   // permanently reserve room for them or long titles run underneath the (+).
   // pr accounts for the row's 10px right padding + 8px action offset, so keep
   // just a few px of breathing room between the ellipsis and the buttons.
   const mobileTitlePr = hasTwoActions
     ? 'pointer-coarse:pr-[60px]'
-    : canEdit || isActionsEnabled
+    : canCreate || isActionsEnabled
       ? 'pointer-coarse:pr-8'
       : 'pointer-coarse:pr-0';
 
@@ -234,7 +240,7 @@ export function SidebarTreeItem({
               : 'opacity-0 group-hover/tree-item-row:opacity-100'
           }`}
         >
-          {canEdit && (
+          {canCreate && (
             <button
               type="button"
               onClick={handleCreateChild}
@@ -312,6 +318,7 @@ export function SidebarTreeItem({
                 onSelectDocument={onSelectDocument}
                 onCreateChild={onCreateChild}
                 isActionsEnabled={isActionsEnabled}
+                canCreateChildren={canCreateChildren}
                 docActionsAnchor={docActionsAnchor}
                 onToggleDocumentActions={onToggleDocumentActions}
                 resolveActionType={resolveActionType}

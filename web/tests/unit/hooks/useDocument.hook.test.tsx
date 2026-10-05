@@ -70,6 +70,7 @@ describe('useDocument', () => {
   let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
+  let updatePublicMetadataSpy: jest.SpyInstance;
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
 
@@ -105,6 +106,9 @@ describe('useDocument', () => {
     updateCloudMetadataSpy = jest
       .spyOn(documentService, 'updateCloudMetadata')
       .mockImplementation(jest.fn());
+    updatePublicMetadataSpy = jest
+      .spyOn(documentService, 'updatePublicMetadata')
+      .mockImplementation(jest.fn());
     restoreCloudDocumentFromTrashSpy = jest
       .spyOn(documentService, 'restoreCloudDocumentFromTrash')
       .mockImplementation(jest.fn());
@@ -132,6 +136,7 @@ describe('useDocument', () => {
     saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
+    updatePublicMetadataSpy.mockRestore();
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
   });
@@ -228,6 +233,66 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
+  });
+
+  it('should revalidate a cached share-link mirror instead of trusting it as local', async () => {
+    const staleYdoc = new Y.Doc();
+    const staleMeta = {
+      title: 'Stale Mirror',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const freshYdoc = new Y.Doc();
+    const freshMeta = {
+      title: 'Live Public Doc',
+      createdAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValueOnce({
+      ydoc: staleYdoc,
+      meta: staleMeta,
+      origin: 'public-link',
+    });
+    getPublicDocumentSpy.mockResolvedValueOnce({ ydoc: freshYdoc, meta: freshMeta });
+
+    const { result } = renderHook(() => useDocument('mirror-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getPublicDocumentSpy).toHaveBeenCalledWith('mirror-id');
+    expect(result.current.ydoc).toBe(freshYdoc);
+    expect(result.current.meta).toEqual(freshMeta);
+  });
+
+  it('should not invent a writable blank doc for a known share link opened offline', async () => {
+    const isPublicLinkSpy = jest
+      .spyOn(documentService, 'isPublicLinkDocument')
+      .mockReturnValue(true);
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: false, isOffline: true });
+    loadDocumentSpy.mockResolvedValueOnce(null);
+    getPublicDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const { result } = renderHook(() => useDocument('known-link-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(result.current.meta).toBeNull();
+    expect(result.current.errorState).toMatchObject({ title: 'Document unavailable offline' });
+
+    isPublicLinkSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
 
   it('should handle load errors', async () => {
@@ -474,6 +539,7 @@ describe('useDocument', () => {
     });
     expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, {
       touchUpdatedAt: false,
+      origin: 'local',
     });
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
   });
@@ -873,6 +939,52 @@ describe('useDocument', () => {
     );
   });
 
+  it('should send Untitled from a guest that clears the title on a share link', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+    updatePublicMetadataSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => useDocument('shared-blank-id', { isSharedDocument: true }),
+      {
+        wrapper: createWrapper(),
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The anonymous PATCH travels without a token, so it cannot lean on the
+    // authenticated path's normalization: the cache and the server have to see
+    // the same Untitled the reducer already renders.
+    await act(async () => {
+      result.current.updateMeta({ title: '  ' });
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('shared-blank-id', {
+        title: 'Untitled',
+      });
+    });
+
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'shared-blank-id',
+      expect.objectContaining({ title: 'Untitled' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+  });
+
   it('should not roll back a newer title when an older metadata write fails', async () => {
     const ydoc = new Y.Doc();
     const meta = {
@@ -1096,7 +1208,7 @@ describe('useDocument', () => {
       });
 
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(15000);
         await Promise.resolve();
       });
 
@@ -1561,10 +1673,10 @@ describe('useDocument', () => {
         registeredStatusHandler!({ status: 'connected' });
       });
 
-      // Advance timers by 5000ms. Since isRealtimeConnected is true, polling should be skipped.
+      // Advance timers by 15000ms. Since isRealtimeConnected is true, polling should be skipped.
       getMyAccessSpy.mockClear();
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(15000);
         await Promise.resolve();
       });
 

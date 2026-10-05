@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { useAuth } from '@/hooks/useAuth.hook';
+import { useSharedTreeRootSync } from '@/hooks/useSharedTreeRootSync.hook';
 import {
-  syncSharedRoots,
   fetchChildrenThunk,
+  fetchPublicChildrenThunk,
   toggleExpanded,
   moveDocumentThunk,
   updateNodeMeta,
@@ -53,6 +55,7 @@ export function SharedTree({
   className,
 }: SharedTreeProps) {
   const dispatch = useAppDispatch();
+  const { isAuthenticated } = useAuth();
   // Reuse the unified Private+Shared DnD provider when one is mounted above us.
   const hasOuterDndContext = useTreeDndOptional() !== null;
   const nodes = useAppSelector((state) => state.sharedTree?.nodes ?? {});
@@ -63,16 +66,8 @@ export function SharedTree({
   const renderedRootIds = rootIds.slice(0, SIDEBAR_VISIBLE_COUNT);
 
   // Keep the shared tree roots in sync with the shared-documents list.
-  // Runs only when the list content (ids + updatedAt) actually changes.
-  const lastSyncRef = useRef<string>('');
-  useEffect(() => {
-    const signature = documents.map((doc) => `${doc.id}:${doc.meta.updatedAt}`).join('|');
-    if (signature === lastSyncRef.current) {
-      return;
-    }
-    lastSyncRef.current = signature;
-    dispatch(syncSharedRoots(documents));
-  }, [documents, dispatch]);
+  // Guests have no document list; their roots are synced by useGuestSharedTree.
+  useSharedTreeRootSync(documents);
 
   // Apply live title edits (own + collaborator via Yjs) instantly, including
   // nested children that syncSharedRoots never touches (they are loaded via
@@ -94,14 +89,24 @@ export function SharedTree({
       nodes,
       rootIds,
       toggleExpanded: (id) => dispatch(toggleExpanded(id)),
-      fetchChildren: (parentId) => void dispatch(fetchChildrenThunk({ parentId })),
-      moveDocument: (args) => void dispatch(moveDocumentThunk(args)),
+      // Guests navigate public children (no token); signed-in users use the
+      // authenticated children endpoint.
+      fetchChildren: (parentId) =>
+        void dispatch(
+          isAuthenticated
+            ? fetchChildrenThunk({ parentId })
+            : fetchPublicChildrenThunk({ parentId })
+        ),
+      moveDocument: (args) => {
+        if (!isAuthenticated) return;
+        void dispatch(moveDocumentThunk(args));
+      },
       // A document can only live at the root level of the shared section if it
       // is already a root; children are shared only through their root parent,
       // so they must never be moved out of the shared tree's root level.
       canPlaceAtRoot: (draggedId) => nodes[draggedId]?.parentId == null,
     }),
-    [nodes, rootIds, dispatch]
+    [nodes, rootIds, dispatch, isAuthenticated]
   );
 
   const treeContent = (
@@ -118,7 +123,12 @@ export function SharedTree({
           docActionsAnchor={docActionsAnchor}
           onToggleDocumentActions={onToggleDocumentActions}
           resolveActionType={resolveActionType}
-          reorderEnabled
+          reorderEnabled={isAuthenticated}
+          // Guests cannot create documents inside someone else's tree (the API
+          // needs an account), and cannot move or reorder anything in it: both
+          // handlers are authenticated calls, so the affordances stay hidden.
+          canCreateChildren={isAuthenticated}
+          dndDisabled={!isAuthenticated}
         />
       ))}
     </ul>

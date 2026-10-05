@@ -563,7 +563,7 @@ export function DocToolbar({
               sm:whitespace-nowrap
             "
           >
-            <span>You are viewing this shared document as a guest.</span>
+            <span>You are viewing a shared document as a guest.</span>
             <button
               type="button"
               onClick={() => onGuestNoticeCtaClick?.()}
@@ -576,9 +576,9 @@ export function DocToolbar({
                 transition-colors cursor-pointer
               "
             >
-              Sign up or log in
+              Sign in
             </button>
-            <span className="hidden lg:inline">to get full access to this document.</span>
+            <span className="hidden lg:inline">to access your own documents.</span>
           </div>
         )}
 

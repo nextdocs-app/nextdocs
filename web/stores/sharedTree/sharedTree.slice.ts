@@ -41,6 +41,28 @@ export const fetchChildrenThunk = createAsyncThunk<
   };
 });
 
+export const fetchPublicChildrenThunk = createAsyncThunk<
+  { parentId: string; children: TreeNode[] },
+  { parentId: string },
+  { state: RootState }
+>('sharedTree/fetchPublicChildren', async ({ parentId }) => {
+  const allChildren: TreeNode[] = [];
+  let page = 0;
+  let hasMore = true;
+
+  while (hasMore && page < 10) {
+    const result = await documentService.listPublicChildren(parentId, page, 50);
+    allChildren.push(...result.items);
+    hasMore = result.hasMore;
+    page += 1;
+  }
+
+  return {
+    parentId,
+    children: allChildren,
+  };
+});
+
 export const moveDocumentThunk = createAsyncThunk<
   { updatedNode: TreeNode; prevSiblingId: string | null; nextSiblingId: string | null },
   MoveDocumentArgs,
@@ -64,6 +86,31 @@ export const moveDocumentThunk = createAsyncThunk<
     return { updatedNode, prevSiblingId, nextSiblingId };
   }
 );
+
+function applyFetchedChildren(
+  state: SharedTreeState,
+  payload: { parentId: string; children: TreeNode[] }
+) {
+  const { parentId, children } = payload;
+  const parent = state.nodes[parentId];
+  if (!parent) return;
+
+  parent.isLoading = false;
+  parent.childrenLoaded = true;
+  parent.hasChildren = children.length > 0;
+
+  const childIds: string[] = [];
+  for (const rawChild of children) {
+    childIds.push(rawChild.id);
+    const existing = state.nodes[rawChild.id];
+    state.nodes[rawChild.id] = toSidebarTreeNode(rawChild, existing ? existing.isExpanded : false);
+    if (existing) {
+      state.nodes[rawChild.id].children = existing.children;
+      state.nodes[rawChild.id].childrenLoaded = existing.childrenLoaded;
+    }
+  }
+  parent.children = childIds;
+}
 
 const sharedTreeSlice = createSlice({
   name: 'sharedTree',
@@ -121,6 +168,83 @@ const sharedTreeSlice = createSlice({
       if (node) {
         if (title !== undefined) {
           node.title = normalizeDocumentTitle(title);
+        }
+      }
+    },
+
+    /**
+     * Guest (anonymous share-link) roots. Nodes come from public breadcrumbs /
+     * public children endpoints which already enforce effective public access
+     * (own or inherited links), so no relationship/ordering metadata applies.
+     * Expansion and previously fetched children are preserved across syncs.
+     */
+    syncPublicRoots(state, action: PayloadAction<TreeNode[]>) {
+      const entries = action.payload;
+      const entryIds = new Set(entries.map((entry) => entry.id));
+
+      // Public endpoints can report a real parentId whose node is not visible
+      // (e.g. a breadcrumb chain truncated at a private ancestor, or a child
+      // response whose parent is outside the fetched page). Those documents
+      // have to float as roots: only parentId==null roots would leave them
+      // unreachable, and the sweep below would delete them.
+      const isDanglingParent = (entry: TreeNode) =>
+        entry.parentId != null && !entryIds.has(entry.parentId);
+      const rootIds = entries
+        .filter((entry) => entry.parentId == null || isDanglingParent(entry))
+        .map((entry) => entry.id);
+
+      for (const entry of entries) {
+        const existing = state.nodes[entry.id];
+        state.nodes[entry.id] = toSidebarTreeNode(
+          isDanglingParent(entry) ? { ...entry, parentId: null } : entry,
+          existing?.isExpanded ?? false
+        );
+        if (existing) {
+          state.nodes[entry.id].children = existing.children;
+          state.nodes[entry.id].childrenLoaded = existing.childrenLoaded;
+          if (existing.children.length > 0) {
+            state.nodes[entry.id].hasChildren = true;
+          }
+        }
+      }
+
+      // Link breadcrumb chains (child-before-parent ordering does not matter).
+      for (const entry of entries) {
+        if (entry.parentId == null || !entryIds.has(entry.parentId)) {
+          continue;
+        }
+        const parentNode = state.nodes[entry.parentId];
+        if (!parentNode) {
+          continue;
+        }
+        parentNode.hasChildren = true;
+        if (!parentNode.children.includes(entry.id)) {
+          parentNode.children.push(entry.id);
+        }
+      }
+
+      state.rootIds = rootIds.filter((id) => state.nodes[id]);
+
+      // Prune nodes that are no longer reachable from the roots, except keep
+      // previously fetched children of surviving nodes (lazy-loaded subtrees).
+      const reachable = new Set<string>(state.rootIds);
+      const queue = [...state.rootIds];
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        const node = state.nodes[id];
+        if (!node) {
+          continue;
+        }
+        for (const childId of node.children) {
+          if (!reachable.has(childId)) {
+            reachable.add(childId);
+            queue.push(childId);
+          }
+        }
+      }
+      for (const id of Object.keys(state.nodes)) {
+        if (!reachable.has(id)) {
+          delete state.nodes[id];
         }
       }
     },
@@ -286,30 +410,27 @@ const sharedTreeSlice = createSlice({
         }
       })
       .addCase(fetchChildrenThunk.fulfilled, (state, action) => {
-        const { parentId, children } = action.payload;
-        const parent = state.nodes[parentId];
-        if (parent) {
-          parent.isLoading = false;
-          parent.childrenLoaded = true;
-          parent.hasChildren = children.length > 0;
-
-          const childIds: string[] = [];
-          for (const rawChild of children) {
-            childIds.push(rawChild.id);
-            const existing = state.nodes[rawChild.id];
-            state.nodes[rawChild.id] = toSidebarTreeNode(
-              rawChild,
-              existing ? existing.isExpanded : false
-            );
-            if (existing) {
-              state.nodes[rawChild.id].children = existing.children;
-              state.nodes[rawChild.id].childrenLoaded = existing.childrenLoaded;
-            }
-          }
-          parent.children = childIds;
-        }
+        applyFetchedChildren(state, action.payload);
       })
       .addCase(fetchChildrenThunk.rejected, (state, action) => {
+        const parentId = action.meta.arg.parentId;
+        if (state.nodes[parentId]) {
+          state.nodes[parentId].isLoading = false;
+        }
+      });
+
+    // fetchPublicChildrenThunk (guest share-link navigation, no auth)
+    builder
+      .addCase(fetchPublicChildrenThunk.pending, (state, action) => {
+        const parentId = action.meta.arg.parentId;
+        if (state.nodes[parentId]) {
+          state.nodes[parentId].isLoading = true;
+        }
+      })
+      .addCase(fetchPublicChildrenThunk.fulfilled, (state, action) => {
+        applyFetchedChildren(state, action.payload);
+      })
+      .addCase(fetchPublicChildrenThunk.rejected, (state, action) => {
         const parentId = action.meta.arg.parentId;
         if (state.nodes[parentId]) {
           state.nodes[parentId].isLoading = false;
@@ -383,7 +504,13 @@ const sharedTreeSlice = createSlice({
   },
 });
 
-export const { toggleExpanded, syncSharedRoots, removeNode, resetTree, updateNodeMeta } =
-  sharedTreeSlice.actions;
+export const {
+  toggleExpanded,
+  syncSharedRoots,
+  syncPublicRoots,
+  removeNode,
+  resetTree,
+  updateNodeMeta,
+} = sharedTreeSlice.actions;
 
 export default sharedTreeSlice.reducer;

@@ -13,7 +13,7 @@ import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
-import { isConnectivityError } from '@/lib/cloud-connectivity.util';
+import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
 import {
   clearCachedDocumentAccessLevel,
   readCachedDocumentAccessLevel,
@@ -159,6 +159,21 @@ function resolveAuthenticatedFallbackAccessLevel(
     options.currentAccessLevel ??
     (options.isSharedDocument ? 'VIEW' : 'EDIT')
   );
+}
+
+async function resolveGuestAccessLevel(
+  documentId: string,
+  fallback: DocumentAccessLevel = 'VIEW'
+): Promise<DocumentAccessLevel> {
+  try {
+    const access = await documentService.checkAccess(documentId);
+    if (access.allowed && access.accessLevel) {
+      return access.accessLevel;
+    }
+  } catch {
+    // Fall through to cached/fallback level so offline guests keep reading.
+  }
+  return readCachedDocumentAccessLevel(documentId) ?? fallback;
 }
 
 async function resolveLocalFallbackDocument(
@@ -425,8 +440,16 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           if (isSharedDocument) {
             try {
               result = await documentService.getPublicDocument(id);
-              guestAccessLevel = 'VIEW';
+              documentService.notePublicLinkDocument(id);
+              guestAccessLevel = await resolveGuestAccessLevel(id);
             } catch (publicErr) {
+              if (
+                publicErr instanceof DocumentServiceApiError &&
+                (publicErr.status === 403 || publicErr.status === 404)
+              ) {
+                enterRestrictedState(effectiveId, publicErr.status);
+                return;
+              }
               if (!isConnectivityError(publicErr)) {
                 throw publicErr;
               }
@@ -437,28 +460,55 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               }
 
               result = localResult;
-              guestAccessLevel = 'VIEW';
+              guestAccessLevel = await resolveGuestAccessLevel(id, 'VIEW');
             }
           } else {
             const localResult = await documentService.loadDocument(id);
 
-            if (localResult) {
+            if (localResult && localResult.origin !== 'public-link') {
               result = localResult;
             } else {
+              const isKnownPublicLink =
+                localResult?.origin === 'public-link' || documentService.isPublicLinkDocument(id);
               try {
                 result = await documentService.getPublicDocument(id);
-                guestAccessLevel = 'VIEW';
+                documentService.notePublicLinkDocument(id);
+                guestAccessLevel = await resolveGuestAccessLevel(id);
               } catch (publicErr) {
                 if (isConnectivityError(publicErr)) {
+                  if (localResult) {
+                    result = localResult;
+                    guestAccessLevel = await resolveGuestAccessLevel(id, 'VIEW');
+                  } else if (isKnownPublicLink) {
+                    // The session remembers this id as a share link, but its local
+                    // mirror is gone. Recreating a blank EDIT copy offline would let a
+                    // guest fabricate writes that later hit the public endpoint, so
+                    // deny the opening instead of inventing an editable document.
+                    throw new OfflineDocumentUnavailableError(
+                      'This shared document has not been opened on this device yet.'
+                    );
+                  } else {
+                    result = await documentService.getOrCreateDocument(id);
+                    guestAccessLevel = 'EDIT';
+                  }
+                } else if (
+                  publicErr instanceof DocumentServiceApiError &&
+                  publicErr.status === 403
+                ) {
+                  enterRestrictedState(effectiveId, publicErr.status);
+                  return;
+                } else if (
+                  publicErr instanceof DocumentServiceApiError &&
+                  publicErr.status === 404
+                ) {
+                  if (isKnownPublicLink) {
+                    enterRestrictedState(effectiveId, publicErr.status);
+                    return;
+                  }
                   result = await documentService.getOrCreateDocument(id);
                   guestAccessLevel = 'EDIT';
-                } else if (
-                  !(publicErr instanceof DocumentServiceApiError) ||
-                  (publicErr.status !== 403 && publicErr.status !== 404)
-                ) {
-                  throw publicErr;
                 } else {
-                  result = await documentService.getOrCreateDocument(id);
+                  throw publicErr;
                 }
               }
             }
@@ -522,12 +572,19 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 : guestAccessLevel;
             accessLevelRef.current = fallbackLevel;
             setAccessLevel(fallbackLevel);
+            if (!isAuthenticated && !isTrashedDoc) {
+              writeCachedDocumentAccessLevel(effectiveId, fallbackLevel);
+            }
           }
 
           if (isAuthenticated && token && loadedFromCloud) {
             try {
+              // An account-backed read proves the local copy now belongs to the
+              // signed-in user; re-tagging keeps a previous guest mirror from
+              // staying filtered out of Private listings after login.
               await documentService.saveDocument(effectiveId, result.ydoc, result.meta, {
                 touchUpdatedAt: false,
+                origin: 'local',
               });
             } catch (cacheErr) {
               // Cloud read already succeeded; keep editor usable even if local cache write fails.
@@ -598,6 +655,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
   useEffect(() => {
     const realtimeUrl = getRealtimeUrl();
+    // Guests connect anonymously: the realtime server evaluates access-check
+    // without credentials against share-link grants. An empty token param is
+    // sent so the server treats the connection as anonymous.
+    const canConnectRealtime =
+      isAuthenticated && accessTokenRef.current ? true : !isAuthenticated && accessLevel !== null;
     if (
       !realtimeUrl ||
       !ydoc ||
@@ -612,8 +674,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // error for the document owner.
       !!meta?.deletedAt ||
       isCloudReadInBackoff() ||
-      !isAuthenticated ||
-      !accessTokenRef.current
+      !canConnectRealtime
     ) {
       setIsRealtimeConnected(false);
       setRealtimeProvider(null);
@@ -699,6 +760,33 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
             // Access is still valid - allow reconnection
             provider.shouldConnect = true;
+          } else if (!isAuthenticated) {
+            // Anonymous guest: re-check the share link. A revoked link (or a
+            // link downgraded below the needed level) surfaces as restricted;
+            // otherwise keep reconnecting.
+            try {
+              const publicAccess = await documentService.checkAccess(resolvedDocumentId);
+              if (closeHandlerCancelled) return;
+              if (!publicAccess.allowed || !publicAccess.accessLevel) {
+                handleAccessRevoked(404);
+                return;
+              }
+              writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
+              setAccessLevel(publicAccess.accessLevel);
+              provider.shouldConnect = true;
+            } catch (publicErr) {
+              if (closeHandlerCancelled) return;
+              if (
+                publicErr instanceof DocumentServiceApiError &&
+                (publicErr.status === 403 || publicErr.status === 404)
+              ) {
+                handleAccessRevoked(publicErr.status);
+                return;
+              }
+              // Transient failure (e.g. 429 rate limit or offline): keep reconnecting
+              provider.shouldConnect = true;
+              return;
+            }
           } else {
             handleAccessRevoked(401);
             return;
@@ -761,6 +849,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isLoading,
     errorState,
     isAuthenticated,
+    accessLevel,
     meta?.deletedAt,
     isCloudReadInBackoff,
     refresh,
@@ -856,9 +945,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
   // Periodically revalidate access level to detect downgrades immediately
   useEffect(() => {
+    const canPollAsGuest = !isAuthenticated && accessLevel !== null;
     if (
-      !isAuthenticated ||
-      !accessToken ||
+      (!isAuthenticated && !canPollAsGuest) ||
+      (isAuthenticated && !accessToken) ||
       !isOnline ||
       isCloudReadInBackoff() ||
       !resolvedDocumentId ||
@@ -870,17 +960,50 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     }
 
     const checkAccessLevel = async () => {
+      // Background tabs share the IP rate-limit budget with the visible tab;
+      // skip polling while hidden (fresh check runs on visibilitychange below).
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+      if (isCloudReadInBackoff()) {
+        return;
+      }
+      if (!isAuthenticated) {
+        try {
+          const publicAccess = await documentService.checkAccess(resolvedDocumentId);
+          if (!publicAccess.allowed || !publicAccess.accessLevel) {
+            enterRestrictedState(resolvedDocumentId, 404);
+            return;
+          }
+          writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
+          setAccessLevel(publicAccess.accessLevel);
+        } catch (err) {
+          if (
+            err instanceof DocumentServiceApiError &&
+            (err.status === 403 || err.status === 404)
+          ) {
+            enterRestrictedState(resolvedDocumentId, err);
+            return;
+          }
+          if (isConnectivityError(err)) {
+            triggerCloudReadBackoff(backoffMsFor(err));
+          }
+        }
+        return;
+      }
+      const token = accessToken;
+      if (!token) {
+        return;
+      }
       try {
-        const myAccess = await documentService.getMyAccess(resolvedDocumentId, accessToken);
+        const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
         if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
           // The document moved to trash between polls - swap to the read-only trash view
           // for anyone who held pre-trash access.
           try {
-            const cloudCopy = await documentService.getCloudDocument(
-              resolvedDocumentId,
-              accessToken,
-              { includeTrashed: true }
-            );
+            const cloudCopy = await documentService.getCloudDocument(resolvedDocumentId, token, {
+              includeTrashed: true,
+            });
             if (cloudCopy.meta.deletedAt) {
               applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
               return;
@@ -921,21 +1044,37 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           return;
         }
 
+        if (isConnectivityError(err)) {
+          triggerCloudReadBackoff(backoffMsFor(err));
+        }
+
         console.warn('Failed to revalidate access level:', err);
       }
     };
 
-    // Check immediately on mount, then every 5 seconds as a fallback
+    // Check immediately on mount, then every 15 seconds as a fallback
     // in case websocket access-level pushes are delayed.
     checkAccessLevel();
-    const interval = setInterval(checkAccessLevel, 5000);
+    const interval = setInterval(checkAccessLevel, 15000);
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        void checkAccessLevel();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility);
+    }
 
     return () => {
       clearInterval(interval);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility);
+      }
     };
   }, [
     isAuthenticated,
     accessToken,
+    accessLevel,
     isOnline,
     resolvedDocumentId,
     currentDocumentId,
@@ -946,6 +1085,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isRealtimeConnected,
     applyTrashedDocumentView,
     enterRestrictedState,
+    triggerCloudReadBackoff,
   ]);
 
   const updateMeta = useCallback(
@@ -1003,6 +1143,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
       const canAttemptCloudMetadataWrite =
         isAuthenticated && accessToken && isOnline && !isCloudMetadataInBackoff();
+      const canAttemptPublicMetadataWrite =
+        !isAuthenticated &&
+        (isSharedDocument || documentService.isPublicLinkDocument(resolvedDocumentId)) &&
+        (accessLevelRef.current === 'EDIT' || accessLevelRef.current === 'OWNER') &&
+        isOnline &&
+        !isCloudMetadataInBackoff();
+      const isRemoteMetadataWrite = canAttemptCloudMetadataWrite || canAttemptPublicMetadataWrite;
 
       const queuePendingSync = () => {
         if (isAuthenticated && accessToken) {
@@ -1037,18 +1184,31 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 console.warn('Failed to mirror cloud metadata into local cache:', cacheErr);
               }
             })
-        : persistLocalMetadata().then(() => {
-            queuePendingSync();
-          });
+        : canAttemptPublicMetadataWrite
+          ? documentService
+              .updatePublicMetadata(resolvedDocumentId, normalizedUpdates)
+              .then(async () => {
+                try {
+                  await documentService.updateMetadata(resolvedDocumentId, {
+                    ...normalizedUpdates,
+                    updatedAt: updatedMeta.updatedAt,
+                  });
+                } catch (cacheErr) {
+                  console.warn('Failed to mirror public metadata into local cache:', cacheErr);
+                }
+              })
+          : persistLocalMetadata().then(() => {
+              queuePendingSync();
+            });
 
       persistPromise
         .then(() => {
-          if (canAttemptCloudMetadataWrite) {
+          if (isRemoteMetadataWrite) {
             clearCloudMetadataBackoff();
           }
         })
         .catch(async (err) => {
-          if (canAttemptCloudMetadataWrite && isConnectivityError(err)) {
+          if (isRemoteMetadataWrite && isConnectivityError(err)) {
             triggerCloudMetadataBackoff();
 
             try {
@@ -1076,6 +1236,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       isCloudMetadataInBackoff,
       clearCloudMetadataBackoff,
       triggerCloudMetadataBackoff,
+      isSharedDocument,
     ]
   );
 

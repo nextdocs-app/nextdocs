@@ -64,7 +64,8 @@ export default function Editor() {
     ydoc,
     meta,
     isReadOnly || isGuestSharedView,
-    !(isReadOnly || isGuestSharedView)
+    !(isReadOnly || isGuestSharedView),
+    accessLevel
   );
 
   const dispatch = useAppDispatch();

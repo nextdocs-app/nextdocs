@@ -8,8 +8,10 @@ import type {
 import { authApiService, ApiError } from '@/services/auth.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
 import { indexedDBService } from '@/services/indexed-db.service';
+import { documentService } from '@/services/document.service';
 
 export const AUTH_SESSION_STORAGE_KEY = 'nextdocs.auth.session';
+export const SILENT_REFRESH_MIN_INTERVAL_MS = 30_000;
 
 interface PersistedAuthSnapshot {
   user: AuthState['user'];
@@ -83,6 +85,7 @@ const initialState: AuthState = {
   accessToken: persistedAuth?.accessToken ?? null,
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastAuthAction: null,
+  lastSilentRefreshAt: null,
   isLoading: false,
   isInitializing: true,
   error: null,
@@ -116,7 +119,11 @@ export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentia
   }
 );
 
-export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
+export const refreshSessionThunk = createAsyncThunk<
+  AuthApiResponse,
+  void,
+  { state: { auth: AuthState } }
+>(
   'auth/refresh',
   async (_, { rejectWithValue }) => {
     try {
@@ -131,6 +138,18 @@ export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
       }
       return rejectWithValue('failed');
     }
+  },
+  {
+    condition: (_, { getState }) => {
+      const { auth } = getState();
+      if (
+        auth.lastSilentRefreshAt != null &&
+        Date.now() - auth.lastSilentRefreshAt < SILENT_REFRESH_MIN_INTERVAL_MS
+      ) {
+        return false;
+      }
+      return true;
+    },
   }
 );
 
@@ -147,6 +166,7 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
     }
     await clearLocalUserData();
     indexedDBService.setUserId(null);
+    documentService.clearSessionRegistries();
   }
 );
 
@@ -161,6 +181,10 @@ const authSlice = createSlice({
       state.expiresAt = Date.now() + expiresIn * 1000;
       state.lastAuthAction = null;
       state.error = null;
+      // Guest session bookkeeping (link mirrors opened anonymously) must not
+      // leak into the signed-in session: documents the account can reach are
+      // re-tagged as local by the authenticated load paths.
+      documentService.clearSessionRegistries();
       persistAuthSnapshot(state);
     },
     clearAuth(state) {
@@ -168,8 +192,10 @@ const authSlice = createSlice({
       state.accessToken = null;
       state.expiresAt = null;
       state.lastAuthAction = null;
+      state.lastSilentRefreshAt = null;
       state.error = null;
       clearPersistedAuthSnapshot();
+      documentService.clearSessionRegistries();
     },
     clearError(state) {
       state.error = null;
@@ -227,16 +253,22 @@ const authSlice = createSlice({
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = null;
         persistAuthSnapshot(state);
+        // Stamp the coalescing window on success only: a failed attempt must
+        // stay retryable, or a transient error would leave the session expired
+        // for the rest of the interval.
+        state.lastSilentRefreshAt = Date.now();
         if (state.isInitializing) {
           state.isInitializing = false;
         }
       })
       .addCase(refreshSessionThunk.rejected, (state, action) => {
+        state.lastSilentRefreshAt = null;
         if (action.payload === 'unauthorized') {
           state.user = null;
           state.accessToken = null;
           state.expiresAt = null;
           state.lastAuthAction = null;
+          state.lastSilentRefreshAt = null;
           clearPersistedAuthSnapshot();
         }
         if (state.isInitializing) {
@@ -249,6 +281,7 @@ const authSlice = createSlice({
       state.accessToken = null;
       state.expiresAt = null;
       state.lastAuthAction = null;
+      state.lastSilentRefreshAt = null;
       state.error = null;
       clearPersistedAuthSnapshot();
     });

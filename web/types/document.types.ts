@@ -36,10 +36,18 @@ export interface StoredDocument {
   meta: DocumentMeta;
   yjsState: Uint8Array;
   version: number;
+  /**
+   * Provenance of the cached bytes. Documents mirrored from an anonymous
+   * share-link view are tagged 'public-link' so private listings (sidebar,
+   * panels, login promotion) can exclude someone else's shared content.
+   * Absent on records written before this tag existed — treated as local.
+   */
+  origin?: 'local' | 'public-link';
 }
 
 // Format we use when passing loaded documents to components
 export interface DocumentLoadResult {
   ydoc: Y.Doc;
   meta: DocumentMeta;
+  origin?: StoredDocument['origin'];
 }

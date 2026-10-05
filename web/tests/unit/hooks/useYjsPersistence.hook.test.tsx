@@ -102,9 +102,87 @@ describe('useYjsPersistence', () => {
           title: meta.title,
           createdAt: meta.createdAt,
           updatedAt: expect.any(String),
-        })
+        }),
+        undefined
       );
     });
+  });
+
+  it('should tag the local mirror as public-link when saving a share-link session', async () => {
+    const savePublicDocumentSpy = jest
+      .spyOn(documentService, 'savePublicDocument')
+      .mockResolvedValue(undefined);
+    documentService.notePublicLinkDocument('link-id');
+
+    try {
+      const ydoc = new Y.Doc();
+      const meta: DocumentMeta = {
+        title: 'Linked',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      saveDocumentSpy.mockResolvedValue(undefined);
+
+      renderHook(() => useYjsPersistence('link-id', ydoc, meta, false, true, 'EDIT'), {
+        wrapper,
+      });
+
+      const fragment = ydoc.getXmlFragment('blocknote');
+      fragment.push([new Y.XmlElement('paragraph')]);
+
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+
+      await waitFor(() => {
+        expect(savePublicDocumentSpy).toHaveBeenCalled();
+        expect(saveDocumentSpy).toHaveBeenCalledWith(
+          'link-id',
+          ydoc,
+          expect.anything(),
+          expect.objectContaining({ origin: 'public-link' })
+        );
+      });
+    } finally {
+      savePublicDocumentSpy.mockRestore();
+    }
+  });
+
+  it('should not persist to public endpoint when accessLevel is VIEW or COMMENT', async () => {
+    const savePublicDocumentSpy = jest
+      .spyOn(documentService, 'savePublicDocument')
+      .mockResolvedValue(undefined);
+    documentService.notePublicLinkDocument('view-link-id');
+
+    try {
+      const ydoc = new Y.Doc();
+      const meta: DocumentMeta = {
+        title: 'View Only',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      saveDocumentSpy.mockResolvedValue(undefined);
+
+      renderHook(() => useYjsPersistence('view-link-id', ydoc, meta, false, true, 'VIEW'), {
+        wrapper,
+      });
+
+      const fragment = ydoc.getXmlFragment('blocknote');
+      fragment.push([new Y.XmlElement('paragraph')]);
+
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+
+      await waitFor(() => {
+        expect(saveDocumentSpy).toHaveBeenCalled();
+      });
+      expect(savePublicDocumentSpy).not.toHaveBeenCalled();
+    } finally {
+      savePublicDocumentSpy.mockRestore();
+    }
   });
 
   it('should debounce multiple rapid updates', async () => {
@@ -282,6 +360,7 @@ describe('useYjsPersistence', () => {
       }),
       {
         touchUpdatedAt: false,
+        origin: 'local',
       }
     );
     expect(emitLocalDocumentsChangedSpy).not.toHaveBeenCalled();
@@ -325,7 +404,8 @@ describe('useYjsPersistence', () => {
           title: meta.title,
           createdAt: meta.createdAt,
           updatedAt: expect.any(String),
-        })
+        }),
+        undefined
       );
       expect(result.current.lastSaved).not.toBeNull();
     });

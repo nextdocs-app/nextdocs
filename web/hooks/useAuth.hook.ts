@@ -15,7 +15,8 @@ import type { LoginCredentials, RegisterCredentials } from '@/stores/auth/auth.t
  *
  * Session initialisation (silent token refresh on app load) is performed once
  * inside AppShell, not here, to avoid firing the refresh API call for every
- * component that calls this hook.
+ * component that calls this hook. Silent refresh dispatches are throttled via
+ * refreshSessionThunk's condition check on AuthState.lastSilentRefreshAt.
  */
 export function useAuth() {
   const dispatch = useAppDispatch();

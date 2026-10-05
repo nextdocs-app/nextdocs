@@ -79,6 +79,7 @@ interface ApiSharingSettings {
   inherited?: boolean;
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
+  linkInheritBlocked?: boolean;
 }
 
 export interface CloudDocumentsPage {
@@ -127,6 +128,8 @@ export interface SharingSettings {
   inherited?: boolean;
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
+  /** Own block on link inheritance (general-access NO_ACCESS analogue). */
+  linkInheritBlocked?: boolean;
 }
 
 export interface DocumentBreadcrumbItem {
@@ -134,19 +137,53 @@ export interface DocumentBreadcrumbItem {
   title: string;
   icon?: string | null;
   parentId?: string | null;
+  orderKey?: string | null;
+  accessLevel?: DocumentAccessLevel | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export class DocumentServiceApiError extends Error {
   readonly status: number;
+  /** Milliseconds from the server Retry-After response header (429s), if present. */
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, retryAfterMs?: number) {
     super(message);
     this.name = 'DocumentServiceApiError';
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const seconds = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  return seconds * 1000;
+}
+
+const MAX_SESSION_REGISTRY_SIZE = 500;
+
 class DocumentService {
+  private originByDocId = new Map<string, StoredDocument['origin']>();
+
+  private recordOrigin(id: string, origin: StoredDocument['origin']): void {
+    if (this.originByDocId.has(id)) {
+      this.originByDocId.delete(id);
+    } else if (this.originByDocId.size >= MAX_SESSION_REGISTRY_SIZE) {
+      const oldestKey = this.originByDocId.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.originByDocId.delete(oldestKey);
+      }
+    }
+    this.originByDocId.set(id, origin);
+  }
+
   private normalizeCloudDocumentTitle(title: string | null | undefined): string {
     const value = title?.trim();
     return value ? value : 'Untitled';
@@ -159,19 +196,53 @@ class DocumentService {
       return null;
     }
 
+    if (storedDoc.origin !== undefined) {
+      this.recordOrigin(id, storedDoc.origin);
+    }
+
     const ydoc = decodeYjsState(storedDoc.yjsState);
 
     return {
       ydoc,
       meta: storedDoc.meta,
+      origin: storedDoc.origin,
     };
+  }
+
+  /**
+   * In-memory registry of documents opened through an anonymous share link in
+   * this session. Combined with the persisted {@link StoredDocument.origin}
+   * tag, it lets background savers (which only see id/ydoc/meta) attribute
+   * guest writes to the link instead of the local account.
+   */
+  private publicLinkSessionIds = new Set<string>();
+
+  public notePublicLinkDocument(id: string): void {
+    if (this.publicLinkSessionIds.has(id)) {
+      this.publicLinkSessionIds.delete(id);
+    } else if (this.publicLinkSessionIds.size >= MAX_SESSION_REGISTRY_SIZE) {
+      const oldest = this.publicLinkSessionIds.values().next().value;
+      if (oldest !== undefined) {
+        this.publicLinkSessionIds.delete(oldest);
+      }
+    }
+    this.publicLinkSessionIds.add(id);
+  }
+
+  public isPublicLinkDocument(id: string): boolean {
+    return this.publicLinkSessionIds.has(id);
+  }
+
+  public clearSessionRegistries(): void {
+    this.originByDocId.clear();
+    this.publicLinkSessionIds.clear();
   }
 
   public async saveDocument(
     id: string,
     ydoc: Y.Doc,
     meta: DocumentMeta,
-    options?: { touchUpdatedAt?: boolean }
+    options?: { touchUpdatedAt?: boolean; origin?: StoredDocument['origin'] }
   ): Promise<void> {
     try {
       // We store Yjs state as binary for efficient sync and future backend compatibility
@@ -183,11 +254,21 @@ class DocumentService {
         updatedAt: touchUpdatedAt ? new Date().toISOString() : meta.updatedAt,
       };
 
+      // Preserve a previously recorded origin (e.g. a share-link mirror being
+      // re-saved by a title update) unless the caller explicitly sets one.
+      let origin = options?.origin;
+      if (origin !== undefined) {
+        this.recordOrigin(id, origin);
+      } else {
+        origin = this.originByDocId.get(id);
+      }
+
       await indexedDBService.saveDocument({
         id,
         meta: updatedMeta,
         yjsState,
         version: CURRENT_SCHEMA_VERSION,
+        ...(origin !== undefined ? { origin } : {}),
       });
     } catch (error) {
       console.error('Failed to save document:', error);
@@ -203,6 +284,8 @@ class DocumentService {
   }
 
   public async deleteDocument(id: string): Promise<void> {
+    this.originByDocId.delete(id);
+    this.publicLinkSessionIds.delete(id);
     try {
       await indexedDBService.deleteDocument(id);
     } catch (error) {
@@ -216,7 +299,11 @@ class DocumentService {
     return doc !== undefined;
   }
 
-  public async getOrCreateDocument(id: string, title?: string): Promise<DocumentLoadResult> {
+  public async getOrCreateDocument(
+    id: string,
+    title?: string,
+    options?: { origin?: StoredDocument['origin'] }
+  ): Promise<DocumentLoadResult> {
     const existing = await this.loadDocument(id);
 
     if (existing) {
@@ -224,15 +311,27 @@ class DocumentService {
     }
 
     const { ydoc, meta } = await this.createDocument(title);
-    await this.saveDocument(id, ydoc, meta);
+    await this.saveDocument(
+      id,
+      ydoc,
+      meta,
+      options?.origin ? { origin: options.origin } : undefined
+    );
 
-    return { ydoc, meta };
+    return { ydoc, meta, origin: options?.origin };
   }
 
-  public async getAllDocumentsMeta(): Promise<{ id: string; meta: DocumentMeta }[]> {
+  public async getAllDocumentsMeta(): Promise<
+    { id: string; meta: DocumentMeta; origin?: StoredDocument['origin'] }[]
+  > {
     try {
       const docs = await indexedDBService.getAllDocuments();
-      return docs.map((doc) => ({ id: doc.id, meta: doc.meta }));
+      // Share-link mirrors carry someone else's content: they live in the
+      // guest Shared section (public endpoints), never in Private listings.
+      // Records predating the origin tag have it undefined and count as local.
+      return docs
+        .filter((doc) => doc.origin !== 'public-link')
+        .map((doc) => ({ id: doc.id, meta: doc.meta, origin: doc.origin }));
     } catch (error) {
       console.error('Failed to get all documents:', error);
       return [];
@@ -405,43 +504,48 @@ class DocumentService {
   }
 
   public async getPublicDocument(id: string): Promise<DocumentLoadResult> {
-    const body = await this.fetchApi<ApiDocument>(
-      `/api/v1/documents/${encodeURIComponent(id)}/public`,
-      {
-        method: 'GET',
-      }
-    );
+    return this.dedupedGet(`public-doc:${id}`, async () => {
+      const body = await this.fetchApi<ApiDocument>(
+        `/api/v1/documents/${encodeURIComponent(id)}/public`,
+        {
+          method: 'GET',
+        }
+      );
 
-    const ydoc = body.yjsState
-      ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
-      : createYjsDoc();
+      const ydoc = body.yjsState
+        ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
+        : createYjsDoc();
 
-    return {
-      ydoc,
-      meta: this.toDocumentMeta(body),
-    };
+      return {
+        ydoc,
+        meta: this.toDocumentMeta(body),
+      };
+    });
   }
 
   public async getDocumentBreadcrumbs(
     id: string,
     accessToken?: string | null
   ): Promise<DocumentBreadcrumbItem[]> {
-    if (accessToken) {
-      return await this.fetchApi<DocumentBreadcrumbItem[]>(
-        `/api/v1/documents/${encodeURIComponent(id)}/path`,
-        {
-          method: 'GET',
-          accessToken,
-        }
-      );
-    } else {
-      return await this.fetchApi<DocumentBreadcrumbItem[]>(
-        `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
-        {
-          method: 'GET',
-        }
-      );
-    }
+    // Breadcrumb chain and guest sidebar need the same path concurrently.
+    return this.dedupedGet(`breadcrumbs:${id}:${accessToken ? 'auth' : 'anon'}`, async () => {
+      if (accessToken) {
+        return await this.fetchApi<DocumentBreadcrumbItem[]>(
+          `/api/v1/documents/${encodeURIComponent(id)}/path`,
+          {
+            method: 'GET',
+            accessToken,
+          }
+        );
+      } else {
+        return await this.fetchApi<DocumentBreadcrumbItem[]>(
+          `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
+          {
+            method: 'GET',
+          }
+        );
+      }
+    });
   }
 
   public async getMyAccess(id: string, accessToken: string): Promise<DocumentAccess> {
@@ -459,6 +563,59 @@ class DocumentService {
       accessLevel: body.accessLevel,
       owner: body.owner,
       trashed: body.trashed,
+    };
+  }
+
+  public async checkAccess(id: string, accessToken?: string | null): Promise<DocumentAccess> {
+    return this.dedupedGet(`access-check:${id}:${accessToken ? 'auth' : 'anon'}`, async () => {
+      const body = await this.fetchApi<ApiDocumentAccess>(
+        `/api/v1/documents/${encodeURIComponent(id)}/access-check`,
+        {
+          method: 'GET',
+          ...(accessToken ? { accessToken } : {}),
+        }
+      );
+
+      return {
+        documentId: body.documentId,
+        allowed: body.allowed,
+        accessLevel: body.accessLevel,
+        owner: body.owner,
+        trashed: body.trashed,
+      };
+    });
+  }
+
+  public async listPublicChildren(parentId: string, page = 0, size = 50): Promise<TreeNodePage> {
+    const params = new URLSearchParams({
+      page: String(page),
+      size: String(size),
+    });
+    const body = await this.fetchApi<ApiPage<ApiDocument>>(
+      `/api/v1/documents/${encodeURIComponent(parentId)}/public/children?${params.toString()}`,
+      {
+        method: 'GET',
+      }
+    );
+
+    const items = body.content.map((doc) => ({
+      id: doc.id,
+      title: doc.title || 'Untitled',
+      parentId: doc.parentId ?? parentId,
+      orderKey: doc.orderKey ?? '',
+      hasChildren: doc.hasChildren ?? false,
+      effectiveAccessLevel: doc.accessLevel ?? 'VIEW',
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+    }));
+
+    return {
+      items,
+      page: body.number,
+      size: body.size,
+      totalElements: body.totalElements,
+      totalPages: body.totalPages,
+      hasMore: !body.last,
     };
   }
 
@@ -593,6 +750,7 @@ class DocumentService {
       inherited: body.inherited ?? false,
       inheritedFromId: body.inheritedFromId ?? null,
       inheritedFromTitle: body.inheritedFromTitle ?? null,
+      linkInheritBlocked: body.linkInheritBlocked ?? false,
     };
   }
 
@@ -601,6 +759,7 @@ class DocumentService {
     payload: {
       generalAccessMode: DocumentGeneralAccessMode;
       linkAccessLevel?: DocumentAccessLevel;
+      linkInheritBlocked?: boolean;
     },
     accessToken: string
   ): Promise<SharingSettings> {
@@ -620,6 +779,7 @@ class DocumentService {
       inherited: body.inherited ?? false,
       inheritedFromId: body.inheritedFromId ?? null,
       inheritedFromTitle: body.inheritedFromTitle ?? null,
+      linkInheritBlocked: body.linkInheritBlocked ?? false,
     };
   }
 
@@ -682,6 +842,16 @@ class DocumentService {
     });
   }
 
+  public async savePublicDocument(id: string, ydoc: Y.Doc, meta: DocumentMeta): Promise<void> {
+    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        title: meta.title,
+        yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
+      }),
+    });
+  }
+
   public async updateCloudMetadata(
     id: string,
     updates: Partial<DocumentMeta>,
@@ -700,6 +870,20 @@ class DocumentService {
         icon: updates.icon,
         coverImage: updates.coverImage,
         createdBy: updates.createdBy,
+      }),
+    });
+  }
+
+  public async updatePublicMetadata(id: string, updates: Partial<DocumentMeta>): Promise<void> {
+    // Same blank-title guard as the cloud path: guest saves must not persist a
+    // title the API would fall back to Untitled, or the guest's cache would
+    // disagree with both the server and the reducer.
+    const title =
+      updates.title !== undefined && updates.title.trim() === '' ? 'Untitled' : updates.title;
+    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        title,
       }),
     });
   }
@@ -747,7 +931,10 @@ class DocumentService {
   }
 
   public async getAllGuestDocuments(): Promise<StoredDocument[]> {
-    return indexedDBService.getAllGuestDocuments();
+    // Share-link mirrors must never be promoted: creating cloud copies of them
+    // would clone someone else's shared content into the new account.
+    const docs = await indexedDBService.getAllGuestDocuments();
+    return docs.filter((doc) => doc.origin !== 'public-link');
   }
 
   public async promoteGuestDocumentsToAccount(
@@ -915,11 +1102,36 @@ class DocumentService {
     if (!res.ok || !body?.success || body.data == null) {
       throw new DocumentServiceApiError(
         body?.message || body?.error || `Request failed: ${options.method} ${path}`,
-        res.status
+        res.status,
+        parseRetryAfterMs(
+          typeof res.headers?.get === 'function' ? res.headers.get('Retry-After') : null
+        )
       );
     }
 
     return body.data;
+  }
+
+  /**
+   * Coalesces concurrent identical GETs (React StrictMode double-mounts, two
+   * hooks needing the same breadcrumbs/access check on one page open) into a
+   * single network request. Only in-flight requests are shared — settled
+   * results are never cached, so access revocation is always observed fresh.
+   */
+  private inflightGets = new Map<string, Promise<unknown>>();
+
+  private dedupedGet<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const existing = this.inflightGets.get(key);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+    const pending = run().finally(() => {
+      if (this.inflightGets.get(key) === pending) {
+        this.inflightGets.delete(key);
+      }
+    });
+    this.inflightGets.set(key, pending);
+    return pending;
   }
 }
 
