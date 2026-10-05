@@ -1811,6 +1811,45 @@ class DocumentServiceTest {
     }
 
     @Test
+    void updatePublic_oversizedState_throwsValidationFailed() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
+        String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Too big", encodedState, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
+    void updatePublic_stateAtTheExactByteLimit_isAccepted() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(doc)).thenReturn(doc);
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+
+        // Exactly at the cap, not one byte over: the bound is inclusive, so a snapshot
+        // the realtime layer accepts can always be persisted through the API.
+        byte[] atLimit = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES];
+        String encodedState = java.util.Base64.getEncoder().encodeToString(atLimit);
+
+        documentService.updatePublic(docId, new DocumentUpdateRequest(null, encodedState, null));
+
+        assertEquals(DocumentService.MAX_PUBLIC_STATE_BYTES, doc.getYjsState().length);
+    }
+
+    @Test
     void updatePublic_viewLink_throwsForbidden() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);

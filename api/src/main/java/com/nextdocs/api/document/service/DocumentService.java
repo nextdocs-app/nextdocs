@@ -53,6 +53,11 @@ public class DocumentService {
     // an unauthenticated caller must not be able to ask for thousands of rows per request.
     static final int MAX_PUBLIC_CHILDREN_PAGE_SIZE = 50;
 
+    // Anonymous saves share a per-IP budget of 20 requests/min, and the realtime
+    // layer refuses payloads above 5 MB, so an unbounded snapshot write can only
+    // burn bandwidth and storage on data that could never sync.
+    static final int MAX_PUBLIC_STATE_BYTES = 5 * 1024 * 1024;
+
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
@@ -311,7 +316,13 @@ public class DocumentService {
         }
 
         if (request.yjsState() != null) {
-            document.setYjsState(decodeBase64State(request.yjsState()));
+            byte[] state = decodeBase64State(request.yjsState());
+            if (state.length > MAX_PUBLIC_STATE_BYTES) {
+                throw new ApiException(
+                        ErrorCode.VALIDATION_FAILED,
+                        "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
+            }
+            document.setYjsState(state);
         }
 
         return toResponse(documentRepository.save(document), true);
