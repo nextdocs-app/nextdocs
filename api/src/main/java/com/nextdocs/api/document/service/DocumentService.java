@@ -332,10 +332,10 @@ public class DocumentService {
     public List<DocumentBreadcrumbResponse> getBreadcrumbs(UUID userId, UUID documentId) {
         Document target =
                 documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-        DocumentAccessLevel targetAccess = target.getDeletedAt() != null
+        DocumentAccessLevel currentAccess = target.getDeletedAt() != null
                 ? permissionService.resolveTrashAccess(userId, documentId)
                 : permissionService.resolveAccess(userId, documentId);
-        if (targetAccess == null) {
+        if (currentAccess == null) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
@@ -345,9 +345,10 @@ public class DocumentService {
         while (current != null && depth < MAX_TREE_DEPTH) {
             Document parent = current.getParent();
             UUID parentId = null;
+            DocumentAccessLevel parentAccess = null;
 
             if (parent != null) {
-                DocumentAccessLevel parentAccess = parent.getDeletedAt() != null
+                parentAccess = parent.getDeletedAt() != null
                         ? permissionService.resolveTrashAccess(userId, parent.getId())
                         : permissionService.resolveAccess(userId, parent.getId());
                 if (parentAccess != null) {
@@ -355,11 +356,9 @@ public class DocumentService {
                 }
             }
 
-            DocumentAccessLevel currentAccess = current.getDeletedAt() != null
-                    ? permissionService.resolveTrashAccess(userId, current.getId())
-                    : permissionService.resolveAccess(userId, current.getId());
-
-            // Document icon is reserved for future icon/cover support when introduced to the Document entity model
+            // Document icon is reserved for future icon/cover support when introduced to the Document entity model.
+            // The level resolved while checking the parent is reused for its own
+            // row, so each ancestor costs one recursive CTE instead of two.
             path.add(new DocumentBreadcrumbResponse(
                     current.getId(),
                     formatBreadcrumbTitle(current.getTitle()),
@@ -376,6 +375,7 @@ public class DocumentService {
             }
 
             current = parent;
+            currentAccess = parentAccess;
             depth++;
         }
         Collections.reverse(path);
@@ -388,29 +388,31 @@ public class DocumentService {
                 .findByIdAndDeletedAtIsNull(documentId)
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-        if (permissionService.resolvePublicAccess(documentId) == null) {
+        DocumentAccessLevel currentAccess = permissionService.resolvePublicAccess(documentId);
+        if (currentAccess == null) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         Document current = target;
         int depth = 0;
-        // Traversal bound: Walks up to MAX_TREE_DEPTH (100) parent nodes, checking resolvePublicAccess per ancestor:
-        // O(depth^2) bounded at depth <= 100.
+        // Traversal bound: walks up to MAX_TREE_DEPTH (100) parent nodes. The
+        // level resolved while checking each parent is reused for its own row,
+        // so a breadcrumb costs one CTE per level instead of two.
         while (current != null && depth < MAX_TREE_DEPTH) {
             Document parent = current.getParent();
             UUID parentId = null;
+            DocumentAccessLevel parentAccess = null;
 
-            if (parent != null) {
+            if (parent != null && parent.getDeletedAt() == null) {
                 // For public access, the parent must also be effectively public
                 // (own link or inherited). If the parent is private or trashed,
                 // we stop here so public viewers cannot see private parent titles.
-                if (parent.getDeletedAt() == null && permissionService.resolvePublicAccess(parent.getId()) != null) {
+                parentAccess = permissionService.resolvePublicAccess(parent.getId());
+                if (parentAccess != null) {
                     parentId = parent.getId();
                 }
             }
-
-            DocumentAccessLevel currentAccess = permissionService.resolvePublicAccess(current.getId());
 
             // Document icon is reserved for future icon/cover support when introduced to the Document entity model
             path.add(new DocumentBreadcrumbResponse(
@@ -429,6 +431,7 @@ public class DocumentService {
             }
 
             current = parent;
+            currentAccess = parentAccess;
             depth++;
         }
         Collections.reverse(path);
