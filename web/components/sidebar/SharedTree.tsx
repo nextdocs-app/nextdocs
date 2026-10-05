@@ -35,7 +35,7 @@ export interface SharedTreeProps {
     actionType: DocActionType
   ) => void;
   resolveActionType: (documentId: string) => DocActionType;
-  onShowAll: () => void;
+  onShowAll?: () => void;
   className?: string;
 }
 

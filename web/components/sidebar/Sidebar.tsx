@@ -1105,7 +1105,6 @@ function Sidebar() {
                   docActionsAnchor={null}
                   onToggleDocumentActions={() => {}}
                   resolveActionType={() => 'move-to-trash'}
-                  onShowAll={() => {}}
                 />
               )}
             </SidebarTreeDndContext>
