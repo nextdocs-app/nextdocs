@@ -1,3 +1,5 @@
+import type { DocumentAccessLevel, DocumentGeneralAccessMode } from '@/services/document.service';
+
 export interface DropdownOption {
   value: string;
   label: string;
@@ -43,6 +45,80 @@ const GENERAL_MODE_OPTIONS: DropdownOption[] = [
     description: 'Anyone with the link can access',
   },
 ];
+
+/** Subset of SharingSettings the general-access view model reads. */
+export interface GeneralAccessSettings {
+  generalAccessMode: DocumentGeneralAccessMode;
+  linkAccessLevel: DocumentAccessLevel;
+  hasActiveLink?: boolean | null;
+  inherited?: boolean | null;
+  inheritedFromId?: string | null;
+  inheritedFromTitle?: string | null;
+  linkInheritBlocked?: boolean | null;
+}
+
+export type GeneralAccessState = 'own' | 'inherited' | 'blocked' | 'private';
+
+export interface GeneralAccessViewModel {
+  /** Own link, inherited link, blocked inheritance, or fully private. */
+  state: GeneralAccessState;
+  hasOwnPublicLink: boolean;
+  isInheritedPublicLink: boolean;
+  hasEffectivePublicLink: boolean;
+  showInheritOption: boolean;
+  showProvenanceBadge: boolean;
+  provenanceBadgePrefix: 'Overrides' | 'Blocked from';
+  provenanceBadgeTooltip: string;
+  inheritedFromTitle: string;
+  displayMode: DocumentGeneralAccessMode;
+}
+
+/**
+ * Single source of truth for the General access control, so the dropdown, the
+ * badges and the save handlers cannot drift apart: an own link masks the
+ * ancestor grant, a block shadows it entirely, and only own/effective links
+ * display as "Anyone with the link".
+ */
+export function getGeneralAccessViewModel(
+  settings: GeneralAccessSettings | null | undefined
+): GeneralAccessViewModel {
+  const hasOwnPublicLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
+  const isInheritedPublicLink = Boolean(settings?.inherited);
+  const isLinkBlocked = Boolean(settings?.linkInheritBlocked);
+  const isOverridingPublicLink = hasOwnPublicLink && Boolean(settings?.inheritedFromId);
+  const isBlockedWithAncestor = isLinkBlocked && Boolean(settings?.inheritedFromId);
+  const hasEffectivePublicLink =
+    (Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink) &&
+    !isLinkBlocked;
+  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
+
+  const state: GeneralAccessState = isLinkBlocked
+    ? 'blocked'
+    : isInheritedPublicLink
+      ? 'inherited'
+      : hasOwnPublicLink
+        ? 'own'
+        : 'private';
+
+  return {
+    state,
+    hasOwnPublicLink,
+    isInheritedPublicLink,
+    hasEffectivePublicLink,
+    // An override or a block can be undone back to parent inheritance, like a
+    // collaborator row's Inherit option.
+    showInheritOption: isOverridingPublicLink || isLinkBlocked,
+    showProvenanceBadge: isOverridingPublicLink || isBlockedWithAncestor,
+    provenanceBadgePrefix: isBlockedWithAncestor ? 'Blocked from' : 'Overrides',
+    provenanceBadgeTooltip: isBlockedWithAncestor
+      ? `Blocks inheritance from ${inheritedFromTitle}`
+      : `Overrides ${inheritedFromTitle}`,
+    inheritedFromTitle,
+    // Inherited links show the effective mode so the dropdown never contradicts
+    // the helper sentence ("Restricted" plus "Anyone ... can edit").
+    displayMode: hasOwnPublicLink || isInheritedPublicLink ? 'ANYONE_WITH_LINK' : 'RESTRICTED',
+  };
+}
 
 /**
  * Mode options for the General access dropdown, mirroring

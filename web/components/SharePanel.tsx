@@ -16,6 +16,7 @@ import { AccessDropdown } from './share/AccessDropdown';
 import { CollaboratorRow } from './share/CollaboratorRow';
 import {
   ACCESS_ACTION_LABELS,
+  getGeneralAccessViewModel,
   getGeneralModeOptions,
   INVITE_ACCESS_OPTIONS,
   LINK_ACCESS_OPTIONS,
@@ -261,9 +262,10 @@ export function SharePanel({
       if (mode === 'ANYONE_WITH_LINK') {
         payload = { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' };
       } else if (hasOwnPublicLink || isInheritedPublicLink) {
-        // Restricting an inherited or overridden link blocks inheritance on
-        // this document (the general-access NO_ACCESS): the document goes
-        // private on the link channel while collaborators keep their access.
+        // Restricted means the document is private on the link channel. With
+        // an own or inherited link that requires blocking inheritance, or the
+        // ancestor grant would keep it public; dropping only the own link is
+        // the explicit Inherit option instead.
         payload = { generalAccessMode: mode, linkInheritBlocked: true };
       } else {
         payload = { generalAccessMode: mode };
@@ -323,35 +325,17 @@ export function SharePanel({
     }
   };
 
-  const hasOwnPublicLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
-  const isInheritedPublicLink = Boolean(settings?.inherited);
-  // Override provenance mirrors the People section: a direct (own) link wins over
-  // the ancestor walk, but we still surface the ancestor source as "Overrides X".
-  const isOverridingPublicLink = Boolean(hasOwnPublicLink) && Boolean(settings?.inheritedFromId);
-  // Blocked inheritance (the general-access NO_ACCESS): the document stays
-  // private on the link channel even with an ancestor link.
-  const isLinkBlocked = Boolean(settings?.linkInheritBlocked);
-  // Like a collaborator row's Inherit option: an override (own link over an
-  // ancestor grant) or a block can be undone back to parent inheritance.
-  const showGeneralInheritOption = isOverridingPublicLink || isLinkBlocked;
-  // A blocked document shadows its ancestor grant: distinct badge from an own-link override.
-  const isBlockedWithAncestor = isLinkBlocked && Boolean(settings?.inheritedFromId);
-  const showGeneralProvenanceBadge = isOverridingPublicLink || isBlockedWithAncestor;
-  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
-  const provenanceBadgePrefix = isBlockedWithAncestor ? 'Blocked from' : 'Overrides';
-  const provenanceBadgeTooltip = isBlockedWithAncestor
-    ? `Blocks inheritance from ${inheritedFromTitle}`
-    : `Overrides ${inheritedFromTitle}`;
-  // A child can be RESTRICTED and still be effectively public through an ancestor's link.
-  const hasEffectivePublicLink =
-    (Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink) &&
-    !isLinkBlocked;
-  // Like inherited collaborator rows (which show the inherited level + "via"),
-  // general access shows the *effective* mode so the dropdown never contradicts
-  // the helper sentence ("Restricted" + "Anyone ... can edit" at the same time).
-  const displayGeneralMode: DocumentGeneralAccessMode = hasEffectivePublicLink
-    ? 'ANYONE_WITH_LINK'
-    : 'RESTRICTED';
+  const {
+    hasOwnPublicLink,
+    isInheritedPublicLink,
+    hasEffectivePublicLink,
+    showInheritOption,
+    showProvenanceBadge,
+    provenanceBadgePrefix,
+    provenanceBadgeTooltip,
+    inheritedFromTitle,
+    displayMode: displayGeneralMode,
+  } = getGeneralAccessViewModel(settings);
   const effectiveLinkAction = ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view';
   const activeCollaboratorsCount = collaborators.filter(
     (c) => c.accessLevel !== 'NO_ACCESS'
@@ -557,7 +541,7 @@ export function SharePanel({
                           <AccessDropdown
                             value={displayGeneralMode}
                             options={getGeneralModeOptions({
-                              showInheritOption: showGeneralInheritOption,
+                              showInheritOption,
                               inheritedFromTitle: settings?.inheritedFromTitle,
                             })}
                             onChange={(v) => void handleGeneralModeSelect(v)}
@@ -582,7 +566,7 @@ export function SharePanel({
                       </div>
 
                       {/* Row 2: provenance (via / Overrides) replaces the description, mirroring People rows */}
-                      {isInheritedPublicLink || showGeneralProvenanceBadge ? (
+                      {isInheritedPublicLink || showProvenanceBadge ? (
                         <div className="pl-1">
                           {isInheritedPublicLink &&
                             (settings?.inheritedFromId ? (
@@ -605,7 +589,7 @@ export function SharePanel({
                                 via {inheritedFromTitle}
                               </span>
                             ))}
-                          {showGeneralProvenanceBadge &&
+                          {showProvenanceBadge &&
                             (settings?.inheritedFromId ? (
                               <button
                                 type="button"

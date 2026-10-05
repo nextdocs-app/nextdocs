@@ -1449,6 +1449,51 @@ describe('SharePanel', () => {
       );
     });
 
+    it('blocks inheritance when Restricted is chosen on an override', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: false,
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: false,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: true,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'Overrides Parent Wiki' });
+      await user.click(screen.getByRole('button', { name: 'Anyone with the link' }));
+      await user.click(screen.getByRole('option', { name: 'Restricted' }));
+
+      // Restricted must make the document private on the link channel, so the
+      // ancestor grant is blocked; the Inherit option is what drops the override.
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'RESTRICTED', linkInheritBlocked: true },
+        'test-token'
+      );
+    });
+
     it('blocks via the Restricted mode option on an inherited link', async () => {
       const user = userEvent.setup();
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
