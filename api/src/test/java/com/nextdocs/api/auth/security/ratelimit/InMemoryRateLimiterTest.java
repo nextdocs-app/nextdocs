@@ -34,6 +34,17 @@ class InMemoryRateLimiterTest {
     }
 
     @Test
+    void customBudget_allowsConfiguredRequests() {
+        for (int i = 0; i < 120; i++) {
+            assertThat(rateLimiter.allowRequest("public-read:10.0.0.9", 120, java.time.Duration.ofMinutes(1)))
+                    .isTrue();
+        }
+
+        assertThat(rateLimiter.allowRequest("public-read:10.0.0.9", 120, java.time.Duration.ofMinutes(1)))
+                .isFalse();
+    }
+
+    @Test
     void differentKeys_haveIndependentBuckets() {
         for (int i = 0; i < 20; i++) {
             assertThat(rateLimiter.allowRequest("192.168.1.1")).isTrue();

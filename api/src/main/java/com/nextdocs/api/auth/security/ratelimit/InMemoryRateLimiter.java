@@ -14,9 +14,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class InMemoryRateLimiter implements RateLimiter {
 
-    private static final int MAX_REQUESTS = 20;
-    private static final Duration WINDOW = Duration.ofMinutes(1);
-
     private final CacheStore<String, Bucket> bucketCache;
 
     public InMemoryRateLimiter(CacheStore<String, Bucket> bucketCache) {
@@ -25,13 +22,18 @@ public class InMemoryRateLimiter implements RateLimiter {
 
     @Override
     public boolean allowRequest(String key) {
-        Bucket bucket = bucketCache.get(key, ignoredKey -> newBucket());
+        return allowRequest(key, DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW);
+    }
+
+    @Override
+    public boolean allowRequest(String key, int maxRequests, Duration window) {
+        Bucket bucket = bucketCache.get(key, ignoredKey -> newBucket(maxRequests, window));
         return bucket.tryConsume(1);
     }
 
-    private Bucket newBucket() {
+    private Bucket newBucket(int maxRequests, Duration window) {
         return Bucket.builder()
-                .addLimit(limit -> limit.capacity(MAX_REQUESTS).refillGreedy(MAX_REQUESTS, WINDOW))
+                .addLimit(limit -> limit.capacity(maxRequests).refillGreedy(maxRequests, window))
                 .build();
     }
 }
