@@ -160,13 +160,63 @@ interface ApiEnvelope<T> {
   error: string | null;
 }
 
-function getClientIp(req: http.IncomingMessage): string {
-  const xForwardedFor = req.headers['x-forwarded-for'];
-  if (typeof xForwardedFor === 'string') {
-    // The header can contain a comma-separated list of IPs. The first one is the original client.
-    return xForwardedFor.split(',')[0].trim();
+export function normalizeIp(ip: string): string {
+  if (ip.startsWith('::ffff:')) {
+    return ip.slice(7);
   }
-  return req.socket?.remoteAddress || 'unknown';
+  return ip;
+}
+
+function ipToLong(ip: string): number {
+  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+}
+
+export function isTrustedProxy(rawRemoteAddr: string): boolean {
+  if (!config.trustedProxies || config.trustedProxies.length === 0) {
+    return false;
+  }
+  const remoteAddr = normalizeIp(rawRemoteAddr);
+
+  for (const proxy of config.trustedProxies) {
+    const trimmed = proxy.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.includes('/')) {
+      const [subnet, prefixStr] = trimmed.split('/');
+      const prefix = parseInt(prefixStr, 10);
+      const normSubnet = normalizeIp(subnet);
+
+      if (!normSubnet.includes(':') && !remoteAddr.includes(':')) {
+        const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+        if ((ipToLong(remoteAddr) & mask) === (ipToLong(normSubnet) & mask)) {
+          return true;
+        }
+      }
+    } else {
+      const normProxy = normalizeIp(trimmed);
+      if (remoteAddr === normProxy) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function getClientIp(req: http.IncomingMessage): string {
+  // Normalize once here: this value keys per-IP connection limits, cooldown
+  // maps, fetchAccess X-Forwarded-For propagation, and log lines, so a raw
+  // ::ffff: form would split one client across two buckets.
+  const remoteAddr = normalizeIp(req.socket?.remoteAddress || 'unknown');
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (typeof xForwardedFor === 'string' && isTrustedProxy(remoteAddr)) {
+    // The header can contain a comma-separated list of IPs. The first one is the original client.
+    const candidate = normalizeIp(xForwardedFor.split(',')[0].trim());
+    if (candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return remoteAddr;
 }
 
 // Prefer Authorization headers to reduce token leakage in logs/proxies.
@@ -197,7 +247,14 @@ function getTokenFingerprint(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 12);
 }
 
-function buildUnauthorizedCooldownKey(roomId: string, clientIp: string, token: string): string {
+function buildUnauthorizedCooldownKey(
+  roomId: string,
+  clientIp: string,
+  token: string | null
+): string {
+  if (!token) {
+    return `${roomId}:${clientIp}:anonymous`;
+  }
   return `${roomId}:${clientIp}:${getTokenFingerprint(token)}`;
 }
 
@@ -422,48 +479,95 @@ function cleanupExpiredUnauthorizedCooldown(now = Date.now()): void {
   maybeRebuildUnauthorizedCooldownExpirationHeap();
 }
 
-async function fetchAccess(token: string, roomId: string): Promise<AccessCheckData | null> {
+const VALID_ACCESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT', 'EDIT', 'OWNER']);
+
+export type FetchAccessStatus = 'allowed' | 'denied' | 'rate_limited' | 'error';
+
+export interface FetchAccessOutcome {
+  status: FetchAccessStatus;
+  data?: AccessCheckData;
+  retryAfterMs?: number;
+}
+
+export async function fetchAccess(
+  token: string | null,
+  roomId: string,
+  clientIp?: string
+): Promise<FetchAccessOutcome> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
   }, config.fetchTimeoutMs);
 
   try {
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    // Forward client IP to API so rate-limiting is keyed on caller IP,
+    // not the realtime server IP.
+    if (clientIp && clientIp !== 'unknown') {
+      headers['X-Forwarded-For'] = clientIp;
+    }
+
     const res = await fetch(
       `${config.apiBaseUrl}/api/v1/documents/${encodeURIComponent(roomId)}/access-check`,
       {
         method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         signal: controller.signal,
       }
     );
 
+    if (res.status === 429) {
+      const retryAfterHeader = res.headers.get('retry-after');
+      const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 60;
+      return {
+        status: 'rate_limited',
+        retryAfterMs:
+          (!Number.isNaN(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec : 60) * 1000,
+      };
+    }
+
+    // Every remaining 4xx is a definitive answer (401/403/404 access, 400/422
+    // malformed or unknown document): retrying cannot succeed, so deny instead
+    // of reporting a transient error the revalidation loop would tolerate.
+    if (res.status >= 400 && res.status < 500) {
+      return { status: 'denied' };
+    }
+
     if (!res.ok) {
-      return null;
+      return { status: 'error' };
     }
 
     const body = (await res.json()) as ApiEnvelope<AccessCheckData>;
-    if (!body.success || !body.data) {
-      return null;
+    if (!body.success || !body.data || !body.data.allowed || !body.data.accessLevel) {
+      return { status: 'denied' };
     }
 
-    return body.data;
+    if (!VALID_ACCESS_LEVELS.has(body.data.accessLevel)) {
+      logger.warn('Unknown access level received from API', {
+        roomId,
+        accessLevel: body.data.accessLevel,
+      });
+      return { status: 'denied' };
+    }
+
+    return { status: 'allowed', data: body.data };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       logger.debug('Document access check timed out', {
         roomId,
         error: error.message,
       });
-      return null;
+      return { status: 'error' };
     }
 
     logger.debug('Document access check failed', {
       roomId,
       error: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    return { status: 'error' };
   } finally {
     clearTimeout(timeout);
   }
@@ -583,11 +687,10 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     }
 
     const token = extractToken(req, parsedUrl);
-    if (!token) {
-      logger.warn('Connection rejected: missing access token', { roomId, ip: clientIp });
-      conn.close(1008, 'Authentication required');
-      return;
-    }
+    // No token means an anonymous guest following a share link. The API
+    // evaluates access-check without credentials against ANYONE_WITH_LINK
+    // grants (including inherited ancestor links), so guests with a link
+    // level of VIEW/COMMENT/EDIT can sync without signing in.
 
     const authCheckNow = Date.now();
     const unauthorizedCooldownKey = buildUnauthorizedCooldownKey(roomId, clientIp, token);
@@ -607,16 +710,23 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
       return;
     }
 
-    const access = await fetchAccess(token, roomId);
-    if (!access?.allowed || !access.accessLevel) {
-      const unauthorizedState = trackUnauthorizedAccess(unauthorizedCooldownKey, authCheckNow);
-      logUnauthorizedRejection(unauthorizedState, {
-        roomId,
-        clientIp,
-        now: authCheckNow,
-        source: 'access-check',
-      });
-      conn.close(1008, 'Access denied');
+    const access = await fetchAccess(token, roomId, clientIp);
+    if (access.status !== 'allowed' || !access.data?.accessLevel) {
+      if (access.status === 'denied') {
+        const unauthorizedState = trackUnauthorizedAccess(unauthorizedCooldownKey, authCheckNow);
+        logUnauthorizedRejection(unauthorizedState, {
+          roomId,
+          clientIp,
+          now: authCheckNow,
+          source: 'access-check',
+        });
+        conn.close(1008, 'Access denied');
+      } else if (access.status === 'rate_limited') {
+        logger.warn('Access check rate limited on connection', { roomId, clientIp });
+        conn.close(1008, 'Rate limit exceeded');
+      } else {
+        conn.close(1011, 'Internal server error');
+      }
       return;
     }
 
@@ -639,7 +749,7 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     room.lastActivity = Date.now();
 
     try {
-      setupWSConnection(conn, roomId, access.accessLevel);
+      setupWSConnection(conn, roomId, access.data.accessLevel);
     } catch (error) {
       logger.error('Error setting up Yjs connection', {
         roomId,
@@ -657,16 +767,30 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     }
 
     let isRevalidating = false;
+    let nextBackoffUntil = 0;
+    // Anonymous rooms share one API rate-limit budget per egress IP with page
+    // loads, so they revalidate lazily; revocation still closes live rooms.
+    const revalidationIntervalMs = token
+      ? config.accessRevalidationIntervalMs
+      : config.anonymousAccessRevalidationIntervalMs;
+    const MAX_CONSECUTIVE_REVALIDATION_FAILURES = 5;
+    let consecutiveRevalidationFailures = 0;
+
     revalidateAccessInterval = setInterval(async () => {
       if (conn.readyState !== WebSocket.OPEN || isRevalidating) {
         return;
       }
 
+      const now = Date.now();
+      if (now < nextBackoffUntil) {
+        return;
+      }
+
       isRevalidating = true;
       try {
-        const latestAccess = await fetchAccess(token, roomId);
-        if (!latestAccess?.allowed || !latestAccess.accessLevel) {
-          logger.info('Connection closed after access revalidation failure', {
+        const latestAccess = await fetchAccess(token, roomId, clientIp);
+        if (latestAccess.status === 'denied') {
+          logger.info('Connection closed after access revalidation denial', {
             roomId,
             ip: clientIp,
           });
@@ -674,11 +798,55 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
           return;
         }
 
-        updateConnectionAccessLevel(conn, roomId, latestAccess.accessLevel);
+        if (latestAccess.status === 'rate_limited') {
+          consecutiveRevalidationFailures++;
+          logger.warn('Access check rate limited during revalidation; backing off', {
+            roomId,
+            ip: clientIp,
+            consecutiveRevalidationFailures,
+          });
+          if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
+            logger.warn('Connection closed after consecutive revalidation rate limits', {
+              roomId,
+              ip: clientIp,
+              consecutiveRevalidationFailures,
+            });
+            conn.close(1008, 'Rate limit exceeded');
+            return;
+          }
+          nextBackoffUntil = Date.now() + (latestAccess.retryAfterMs ?? 30000);
+          return;
+        }
+
+        if (latestAccess.status === 'error') {
+          consecutiveRevalidationFailures++;
+          logger.debug('Transient failure during revalidation; retrying next cycle', {
+            roomId,
+            ip: clientIp,
+            consecutiveRevalidationFailures,
+          });
+          if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
+            logger.error('Connection closed after consecutive revalidation errors', {
+              roomId,
+              ip: clientIp,
+              consecutiveRevalidationFailures,
+            });
+            conn.close(1011, 'Access check failed');
+            return;
+          }
+          return;
+        }
+
+        if (latestAccess.status === 'allowed') {
+          consecutiveRevalidationFailures = 0;
+          if (latestAccess.data?.accessLevel) {
+            updateConnectionAccessLevel(conn, roomId, latestAccess.data.accessLevel);
+          }
+        }
       } finally {
         isRevalidating = false;
       }
-    }, config.accessRevalidationIntervalMs);
+    }, revalidationIntervalMs);
     revalidateAccessInterval.unref();
 
     let messageCount = 0;

@@ -18,8 +18,14 @@ jest.unstable_mockModule('../../src/logger.js', () => ({
 
 const { default: logger } = await import('../../src/logger.js');
 
-const { setupWSConnection, updateConnectionAccessLevel, docs, getDocsStats } =
-  await import('../../src/yjs-utils.js');
+const {
+  setupWSConnection,
+  updateConnectionAccessLevel,
+  docs,
+  getDocsStats,
+  canWriteDocument,
+  shouldRejectSyncMessage,
+} = await import('../../src/yjs-utils.js');
 
 describe('Yjs Utils', () => {
   let mockConn: any;
@@ -592,6 +598,99 @@ describe('Yjs Utils', () => {
       expect(stats).toHaveLength(2);
       expect(stats).toContainEqual({ name: 'doc1', connections: 1 });
       expect(stats).toContainEqual({ name: 'doc2', connections: 1 });
+    });
+  });
+
+  describe('Write gate permission matrix', () => {
+    it('canWriteDocument enforces write permissions', () => {
+      expect(canWriteDocument('OWNER')).toBe(true);
+      expect(canWriteDocument('EDIT')).toBe(true);
+      expect(canWriteDocument('COMMENT')).toBe(false);
+      expect(canWriteDocument('VIEW')).toBe(false);
+      expect(canWriteDocument(undefined)).toBe(false);
+      expect(canWriteDocument('UNKNOWN')).toBe(false);
+    });
+
+    it('shouldRejectSyncMessage rejects unknown or missing connection state', () => {
+      setupWSConnection(mockConn, docName, 'EDIT');
+      const doc = docs.get(docName)!;
+      const unknownConn: any = { send: jest.fn(), readyState: WebSocket.OPEN };
+      expect(shouldRejectSyncMessage(doc, unknownConn, syncing.messageYjsSyncStep1)).toBe(true);
+    });
+
+    it('shouldRejectSyncMessage allows EDIT and OWNER for all sync messages', () => {
+      for (const level of ['EDIT', 'OWNER'] as const) {
+        const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
+        setupWSConnection(conn, `${docName}-${level}`, level);
+        const doc = docs.get(`${docName}-${level}`)!;
+
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(false);
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2)).toBe(false);
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate)).toBe(false);
+      }
+    });
+
+    it('shouldRejectSyncMessage lets VIEW request document state but rejects its writes', () => {
+      const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
+      setupWSConnection(conn, `${docName}-view`, 'VIEW');
+      const doc = docs.get(`${docName}-view`)!;
+
+      // Step 1 only asks for the state; denying it would leave read-only
+      // y-protocols clients without the document.
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(false);
+      // Step 2 and updates carry writes.
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2)).toBe(true);
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate)).toBe(true);
+    });
+
+    it('shouldRejectSyncMessage default-denies undefined or unknown access levels', () => {
+      for (const level of ['INVALID', undefined] as const) {
+        const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
+        setupWSConnection(conn, `${docName}-${level}`, 'VIEW');
+        const doc = docs.get(`${docName}-${level}`)!;
+        doc.conns.get(conn)!.accessLevel = level as any;
+
+        // Must reject all sync messages: step1, step2, update
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(true);
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2)).toBe(true);
+        expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate)).toBe(true);
+      }
+    });
+
+    it('shouldRejectSyncMessage handles COMMENT access level correctly', () => {
+      const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
+      setupWSConnection(conn, docName, 'COMMENT');
+      const doc = docs.get(docName)!;
+
+      // Sync step 1 is allowed (read-only state request)
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(false);
+
+      // Step 2 without decoder is rejected
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2)).toBe(true);
+
+      // Step 2 modifying comment threads is allowed
+      const commentDoc = new Y.Doc();
+      commentDoc.getArray('threads').insert(0, ['comment-1']);
+      const commentUpdate = Y.encodeStateAsUpdate(commentDoc);
+      const commentEncoder = encoding.createEncoder();
+      encoding.writeVarUint8Array(commentEncoder, commentUpdate);
+      const commentDecoder = decoding.createDecoder(encoding.toUint8Array(commentEncoder));
+
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2, commentDecoder)).toBe(
+        false
+      );
+
+      // Update modifying document content is rejected
+      const docContentDoc = new Y.Doc();
+      docContentDoc.getText('content').insert(0, 'blocked edit');
+      const docContentUpdate = Y.encodeStateAsUpdate(docContentDoc);
+      const contentEncoder = encoding.createEncoder();
+      encoding.writeVarUint8Array(contentEncoder, docContentUpdate);
+      const contentDecoder = decoding.createDecoder(encoding.toUint8Array(contentEncoder));
+
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate, contentDecoder)).toBe(
+        true
+      );
     });
   });
 });
