@@ -266,6 +266,29 @@ class DocumentSharingControllerTest {
     }
 
     @Test
+    void updateSharingSettings_anyoneWithLink_withBlockedTrue_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/documents/{id}/sharing", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                                                                                {
+                                                                                                        "generalAccessMode": "ANYONE_WITH_LINK",
+                                                                                                        "linkAccessLevel": "VIEW",
+                                                                                                        "linkInheritBlocked": true
+                                                                                                }
+                                                                                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(
+                        jsonPath("$.message")
+                                .value(
+                                        org.hamcrest.Matchers.containsString(
+                                                "linkInheritBlocked must be omitted or false when generalAccessMode is ANYONE_WITH_LINK.")));
+
+        verifyNoInteractions(sharingService);
+    }
+
+    @Test
     void accessCheck_success_returns200() throws Exception {
         DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.EDIT, false);
 
@@ -275,6 +298,31 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.allowed").value(true))
+                .andExpect(jsonPath("$.data.accessLevel").value("EDIT"));
+    }
+
+    @Test
+    void accessCheck_withoutAuthentication_returnsPublicAccess() throws Exception {
+        DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.VIEW, false);
+
+        when(sharingService.accessCheckPublic(documentId)).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/access-check", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.allowed").value(true))
+                .andExpect(jsonPath("$.data.accessLevel").value("VIEW"));
+    }
+
+    @Test
+    void myAccess_withoutAuthentication_returnsPublicAccess() throws Exception {
+        DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.EDIT, false);
+
+        when(sharingService.accessCheckPublic(documentId)).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/my-access", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.accessLevel").value("EDIT"));
     }
 

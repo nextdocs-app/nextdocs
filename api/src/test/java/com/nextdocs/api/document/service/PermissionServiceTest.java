@@ -9,6 +9,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +74,28 @@ class PermissionServiceTest {
         DocumentAccessLevel level = permissionService.resolveAccess(userId, documentId);
 
         assertNull(level);
+    }
+
+    @Test
+    void resolvePublicAccessBatch_skipsNullIdsInsteadOfAbortingBatch() {
+        UUID documentId = UUID.randomUUID();
+        when(documentRepository.resolvePublicAccessBatch(documentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {documentId, "VIEW"}));
+
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolvePublicAccessBatch(java.util.Arrays.asList(documentId, null));
+
+        assertEquals(java.util.Map.of(documentId, DocumentAccessLevel.VIEW), levels);
+        verify(documentRepository).resolvePublicAccessBatch(documentId.toString());
+    }
+
+    @Test
+    void resolvePublicAccessBatch_allNullIds_returnsEmptyWithoutQuerying() {
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolvePublicAccessBatch(java.util.Arrays.asList(null, null));
+
+        assertTrue(levels.isEmpty());
+        verifyNoInteractions(documentRepository);
     }
 
     @Test

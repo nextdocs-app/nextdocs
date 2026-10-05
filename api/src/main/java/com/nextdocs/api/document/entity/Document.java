@@ -55,6 +55,17 @@ public class Document {
     @Builder.Default
     private DocumentAccessLevel linkAccessLevel = DocumentAccessLevel.VIEW;
 
+    /**
+     * Blocks share-link inheritance for this document and its descendants.
+     * The general-access analogue of a NO_ACCESS collaborator breakpoint,
+     * scoped to the anonymous link channel only: owner and collaborator grants
+     * keep resolving while public (guest) access reports private, until a
+     * descendant sets its own ANYONE_WITH_LINK override.
+     */
+    @Column(name = "link_inherit_blocked", nullable = false)
+    @Builder.Default
+    private boolean linkInheritBlocked = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_id")
     private Document parent;

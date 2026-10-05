@@ -36,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -1589,12 +1590,61 @@ class DocumentServiceTest {
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
+        when(permissionService.resolvePublicAccess(publicDoc.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(permissionService.resolvePublicAccess(privateRoot.getId())).thenReturn(null);
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
 
         assertEquals(1, crumbs.size());
         assertEquals("Public Spec", crumbs.get(0).title());
         assertNull(crumbs.get(0).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_restrictedChildWithPublicParent_returnsInheritedHierarchy() {
+        Document publicParent = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Project")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(null)
+                .build();
+
+        Document restrictedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Inherited Task")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .parent(publicParent)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(restrictedChild.getId()))
+                .thenReturn(Optional.of(restrictedChild));
+        when(permissionService.resolvePublicAccess(restrictedChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(permissionService.resolvePublicAccess(publicParent.getId())).thenReturn(DocumentAccessLevel.VIEW);
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(restrictedChild.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Public Project", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertEquals("Inherited Task", crumbs.get(1).title());
+        assertEquals(publicParent.getId(), crumbs.get(1).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_privateDoc_throwsNotFound() {
+        Document privateDoc = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Private")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .parent(null)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(privateDoc.getId())).thenReturn(Optional.of(privateDoc));
+        when(permissionService.resolvePublicAccess(privateDoc.getId())).thenReturn(null);
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> documentService.getPublicBreadcrumbs(privateDoc.getId()));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
     @Test
@@ -1614,6 +1664,8 @@ class DocumentServiceTest {
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
+        when(permissionService.resolvePublicAccess(publicChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(permissionService.resolvePublicAccess(publicParent.getId())).thenReturn(DocumentAccessLevel.VIEW);
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
 
@@ -1651,6 +1703,7 @@ class DocumentServiceTest {
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
+        when(permissionService.resolvePublicAccess(publicChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
 
@@ -1699,11 +1752,163 @@ class DocumentServiceTest {
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
+        when(permissionService.resolvePublicAccess(publicDoc.getId())).thenReturn(DocumentAccessLevel.VIEW);
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
 
         assertEquals(1, crumbs.size());
         assertEquals("Untitled", crumbs.get(0).title());
+    }
+
+    @Test
+    void getPublic_restrictedChildOfPublicParent_returnsDocWithInheritedLevel() {
+        UUID docId = UUID.randomUUID();
+        Document child = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        child.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(child));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+
+        DocumentResponse response = documentService.getPublic(docId);
+
+        assertEquals(docId, response.id());
+        assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
+    }
+
+    @Test
+    void getPublic_privateDoc_throwsNotFound() {
+        UUID docId = UUID.randomUUID();
+        Document privateDoc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        privateDoc.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(privateDoc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(null);
+
+        ApiException ex = assertThrows(ApiException.class, () -> documentService.getPublic(docId));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
+    }
+
+    @Test
+    void updatePublic_editLink_updatesTitleAndState() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(doc)).thenReturn(doc);
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+
+        String encodedState = java.util.Base64.getEncoder().encodeToString("edit".getBytes(StandardCharsets.UTF_8));
+        DocumentResponse response =
+                documentService.updatePublic(docId, new DocumentUpdateRequest("Guest edit", encodedState, "Guest"));
+
+        assertEquals("Guest edit", response.title());
+        // Guest creator labels are not adopted for public saves.
+        assertNull(doc.getCreatedBy());
+    }
+
+    @Test
+    void updatePublic_viewLink_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+    }
+
+    @Test
+    void updatePublic_commentLink_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.COMMENT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.COMMENT);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+    }
+
+    @Test
+    void updatePublic_privateDoc_throwsNotFound() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(null);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
+    }
+
+    @Test
+    void listPublicChildren_publicParent_returnsOnlyPublicChildren() {
+        UUID parentId = UUID.randomUUID();
+        Document parent = createSharedDocument(parentId, DocumentAccessLevel.VIEW);
+
+        Document child = createSharedDocument(UUID.randomUUID(), DocumentAccessLevel.EDIT);
+        child.setParent(parent);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolvePublicAccess(parentId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findPublicChildren(eq(parentId), any())).thenReturn(new PageImpl<>(List.of(child)));
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+        when(permissionService.resolvePublicAccessBatch(any()))
+                .thenReturn(Map.of(child.getId(), DocumentAccessLevel.EDIT));
+
+        Page<DocumentResponse> page =
+                documentService.listPublicChildren(parentId, org.springframework.data.domain.PageRequest.of(0, 50));
+
+        assertEquals(1, page.getTotalElements());
+        assertEquals(DocumentAccessLevel.EDIT, page.getContent().get(0).accessLevel());
+        assertFalse(page.getContent().get(0).hasCollaborators());
+        assertFalse(page.getContent().get(0).hasChildren());
+    }
+
+    @Test
+    void listPublicChildren_clampsOversizedPageRequestToCap() {
+        UUID parentId = UUID.randomUUID();
+        Document parent = createSharedDocument(parentId, DocumentAccessLevel.VIEW);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolvePublicAccess(parentId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findPublicChildren(eq(parentId), any())).thenReturn(new PageImpl<>(List.of()));
+
+        documentService.listPublicChildren(parentId, org.springframework.data.domain.PageRequest.of(0, 5000));
+
+        ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(documentRepository).findPublicChildren(eq(parentId), pageableCaptor.capture());
+        assertEquals(
+                DocumentService.MAX_PUBLIC_CHILDREN_PAGE_SIZE,
+                pageableCaptor.getValue().getPageSize());
+    }
+
+    @Test
+    void listPublicChildren_privateParent_throwsNotFound() {
+        UUID parentId = UUID.randomUUID();
+        Document parent = createSharedDocument(parentId, DocumentAccessLevel.VIEW);
+        parent.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolvePublicAccess(parentId)).thenReturn(null);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.listPublicChildren(
+                        parentId, org.springframework.data.domain.PageRequest.of(0, 50)));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {

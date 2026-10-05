@@ -12,7 +12,6 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
-import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
@@ -22,14 +21,18 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +48,10 @@ public class DocumentService {
 
     // Mirrors the depth cap of resolve_effective_access / resolve_trash_access in the DB.
     private static final int MAX_TREE_DEPTH = 100;
+
+    // Anonymous public child listings fan out to per-row resolve_public_access CTEs;
+    // an unauthenticated caller must not be able to ask for thousands of rows per request.
+    static final int MAX_PUBLIC_CHILDREN_PAGE_SIZE = 50;
 
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
@@ -186,11 +193,128 @@ public class DocumentService {
                 .findByIdAndDeletedAtIsNull(documentId)
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-        if (document.getGeneralAccessMode() != DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+        DocumentAccessLevel publicAccess = permissionService.resolvePublicAccess(documentId);
+        if (publicAccess == null) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
         return toResponse(document, true);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<DocumentResponse> listPublicChildren(UUID parentId, Pageable pageable) {
+        Document parent = documentRepository
+                .findByIdAndDeletedAtIsNull(parentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        if (permissionService.resolvePublicAccess(parentId) == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+
+        Pageable clampedPageable = clampPageSize(pageable, MAX_PUBLIC_CHILDREN_PAGE_SIZE);
+        Page<Document> page = documentRepository.findPublicChildren(parent.getId(), clampedPageable);
+        if (page.isEmpty()) {
+            return page.map(child -> toResponse(child, false));
+        }
+
+        List<Document> children = page.getContent();
+        List<UUID> childIds = children.stream().map(Document::getId).toList();
+
+        Map<UUID, Long> childCounts = fetchPublicChildCounts(childIds);
+        Map<UUID, DocumentAccessLevel> accessLevels = permissionService.resolvePublicAccessBatch(childIds);
+
+        return page.map(child -> {
+            boolean hasChildren = childCounts.getOrDefault(child.getId(), 0L) > 0;
+            boolean hasCollaborators = false;
+            DocumentAccessLevel accessLevel = accessLevels.get(child.getId());
+            OffsetDateTime deletedAt = child.getDeletedAt();
+            OffsetDateTime purgeAt =
+                    deletedAt != null ? deletedAt.plusDays(documentProperties.getTrashRetentionDays()) : null;
+
+            return new DocumentResponse(
+                    child.getId(),
+                    child.getTitle(),
+                    null,
+                    child.getParent() != null ? child.getParent().getId() : null,
+                    child.getSiblingOrderKey(),
+                    hasChildren,
+                    hasCollaborators,
+                    accessLevel,
+                    child.getCreatedBy(),
+                    child.getCreatedAt(),
+                    child.getUpdatedAt(),
+                    deletedAt,
+                    purgeAt);
+        });
+    }
+
+    private Map<UUID, Long> fetchPublicChildCounts(Collection<UUID> docIds) {
+        if (docIds.isEmpty()) return Map.of();
+        Map<UUID, Long> childCounts = new HashMap<>();
+        for (Object[] row : documentRepository.countPublicChildrenByParentIds(docIds)) {
+            if (row[0] != null && row[1] != null) {
+                UUID pId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
+                long count = ((Number) row[1]).longValue();
+                childCounts.put(pId, count);
+            }
+        }
+        return childCounts;
+    }
+
+    private static Pageable clampPageSize(Pageable pageable, int maxSize) {
+        if (pageable == null) {
+            return PageRequest.of(0, maxSize);
+        }
+        if (pageable.getPageSize() <= maxSize) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), maxSize, pageable.getSort());
+    }
+
+    private Map<UUID, Long> fetchChildCounts(Collection<UUID> docIds) {
+        if (docIds.isEmpty()) return Map.of();
+        Map<UUID, Long> childCounts = new HashMap<>();
+        for (Object[] row : documentRepository.countNonTrashedChildrenByParentIds(docIds)) {
+            if (row[0] != null && row[1] != null) {
+                UUID pId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
+                long count = ((Number) row[1]).longValue();
+                childCounts.put(pId, count);
+            }
+        }
+        return childCounts;
+    }
+
+    /**
+     * Anonymous snapshot save for share links. Anyone holding a link whose effective
+     * (possibly inherited) access allows editing may persist title/content without
+     * signing in — the link UUID itself is the capability, like polished
+     * self-hostable docs (Docmost/Outline public edit links). Comment-only and
+     * view-only links cannot save snapshots here; comments still sync live over
+     * the realtime channel where per-key write guards apply.
+     */
+    @Transactional
+    public DocumentResponse updatePublic(UUID documentId, DocumentUpdateRequest request) {
+        Document document = documentRepository
+                .findByIdAndDeletedAtIsNull(documentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessLevel access = permissionService.resolvePublicAccess(documentId);
+        if (access == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        if (!access.allowsEdit()) {
+            throw new ApiException(ErrorCode.FORBIDDEN);
+        }
+
+        if (request.title() != null) {
+            document.setTitle(normalizeTitle(request.title()));
+        }
+
+        if (request.yjsState() != null) {
+            document.setYjsState(decodeBase64State(request.yjsState()));
+        }
+
+        return toResponse(documentRepository.save(document), true);
     }
 
     @Transactional(readOnly = true)
@@ -220,9 +344,20 @@ public class DocumentService {
                 }
             }
 
+            DocumentAccessLevel currentAccess = current.getDeletedAt() != null
+                    ? permissionService.resolveTrashAccess(userId, current.getId())
+                    : permissionService.resolveAccess(userId, current.getId());
+
             // Document icon is reserved for future icon/cover support when introduced to the Document entity model
             path.add(new DocumentBreadcrumbResponse(
-                    current.getId(), formatBreadcrumbTitle(current.getTitle()), null, parentId));
+                    current.getId(),
+                    formatBreadcrumbTitle(current.getTitle()),
+                    null,
+                    parentId,
+                    current.getSiblingOrderKey(),
+                    currentAccess,
+                    current.getCreatedAt(),
+                    current.getUpdatedAt()));
 
             if (parentId == null) {
                 // Reached the top of the user's accessible hierarchy
@@ -242,30 +377,40 @@ public class DocumentService {
                 .findByIdAndDeletedAtIsNull(documentId)
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-        if (target.getGeneralAccessMode() != DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+        if (permissionService.resolvePublicAccess(documentId) == null) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         Document current = target;
         int depth = 0;
+        // Traversal bound: Walks up to MAX_TREE_DEPTH (100) parent nodes, checking resolvePublicAccess per ancestor:
+        // O(depth^2) bounded at depth <= 100.
         while (current != null && depth < MAX_TREE_DEPTH) {
             Document parent = current.getParent();
             UUID parentId = null;
 
             if (parent != null) {
-                // For public access, the parent must also be non-trashed and shared as ANYONE_WITH_LINK.
-                // If the parent is private/restricted or trashed, we stop here so public viewers cannot see private
-                // parent titles.
-                if (parent.getDeletedAt() == null
-                        && parent.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+                // For public access, the parent must also be effectively public
+                // (own link or inherited). If the parent is private or trashed,
+                // we stop here so public viewers cannot see private parent titles.
+                if (parent.getDeletedAt() == null && permissionService.resolvePublicAccess(parent.getId()) != null) {
                     parentId = parent.getId();
                 }
             }
 
+            DocumentAccessLevel currentAccess = permissionService.resolvePublicAccess(current.getId());
+
             // Document icon is reserved for future icon/cover support when introduced to the Document entity model
             path.add(new DocumentBreadcrumbResponse(
-                    current.getId(), formatBreadcrumbTitle(current.getTitle()), null, parentId));
+                    current.getId(),
+                    formatBreadcrumbTitle(current.getTitle()),
+                    null,
+                    parentId,
+                    current.getSiblingOrderKey(),
+                    currentAccess,
+                    current.getCreatedAt(),
+                    current.getUpdatedAt()));
 
             if (parentId == null) {
                 // Reached the top of public access
@@ -550,7 +695,7 @@ public class DocumentService {
         boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(document.getId());
         DocumentAccessLevel accessLevel;
         if (callerUserId == null) {
-            accessLevel = DocumentAccessLevel.VIEW;
+            accessLevel = permissionService.resolvePublicAccess(document.getId());
         } else if (document.getUser().getId().equals(callerUserId)) {
             accessLevel = DocumentAccessLevel.OWNER;
         } else if (document.getDeletedAt() != null) {

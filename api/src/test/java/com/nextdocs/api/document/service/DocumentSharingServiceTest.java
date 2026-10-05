@@ -654,7 +654,8 @@ class DocumentSharingServiceTest {
         SharingSettingsResponse updateResponse = sharingService.updateSharingSettings(
                 actorId,
                 documentId,
-                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT));
+                new SharingSettingsUpdateRequest(
+                        DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, null));
 
         assertEquals(DocumentGeneralAccessMode.ANYONE_WITH_LINK, updateResponse.generalAccessMode());
         assertEquals(DocumentAccessLevel.EDIT, updateResponse.linkAccessLevel());
@@ -860,6 +861,322 @@ class DocumentSharingServiceTest {
         assertNull(response.inheritedFromId());
         assertNull(response.inheritedFromTitle());
         assertEquals(DocumentAccessLevel.COMMENT, response.linkAccessLevel());
+    }
+
+    @Test
+    void getSharingSettings_withOwnLinkOverAncestorPublicLink_returnsOverrideProvenance() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertTrue(response.hasActiveLink());
+        assertFalse(response.inherited());
+        assertEquals(parentDocId, response.inheritedFromId());
+        assertEquals("Parent Wiki", response.inheritedFromTitle());
+        // The child's own level wins (closest-ancestor-wins), not the ancestor's.
+        assertEquals(DocumentAccessLevel.EDIT, response.linkAccessLevel());
+    }
+
+    @Test
+    void accessCheckPublic_inheritedLink_returnsAncestorLevel() {
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.VIEW);
+        document.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolvePublicAccess(documentId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        DocumentAccessResponse response = sharingService.accessCheckPublic(documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.EDIT, response.accessLevel());
+        assertFalse(response.owner());
+    }
+
+    @Test
+    void accessCheckPublic_privateDoc_deniesAccess() {
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.VIEW);
+        document.setGeneralAccessMode(DocumentGeneralAccessMode.RESTRICTED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolvePublicAccess(documentId)).thenReturn(null);
+
+        DocumentAccessResponse response = sharingService.accessCheckPublic(documentId);
+
+        assertFalse(response.allowed());
+        assertNull(response.accessLevel());
+    }
+
+    @Test
+    void accessCheckPublic_trashedDoc_deniesAccess() {
+        UUID documentId = UUID.randomUUID();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.empty());
+
+        DocumentAccessResponse response = sharingService.accessCheckPublic(documentId);
+
+        assertFalse(response.allowed());
+        assertFalse(response.trashed());
+    }
+
+    @Test
+    void updateSharingSettings_underBlockedParent_normalizesRedundantBlockAway() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .parent(grandparent)
+                .title("Blocked Parent")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkInheritBlocked(true)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .title("Child Doc")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkInheritBlocked(false)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsUpdateRequest request =
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true);
+
+        SharingSettingsResponse response = sharingService.updateSharingSettings(actorId, childDocId, request);
+
+        // Child must normalize linkInheritBlocked away to false because parent is already blocked
+        assertFalse(child.isLinkInheritBlocked());
+        assertFalse(response.linkInheritBlocked());
+        assertNull(response.inheritedFromId());
+    }
+
+    @Test
+    void getSharingSettings_withOwnBlock_returnsBlockedWithShadowedGrant() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkInheritBlocked(true)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertTrue(response.linkInheritBlocked());
+        assertFalse(response.inherited());
+        assertFalse(response.hasActiveLink());
+        // Shadowed grant is surfaced for the "Inherit from X" affordance only;
+        // the effective link level stays the child's own (private).
+        assertEquals(parentDocId, response.inheritedFromId());
+        assertEquals("Parent Wiki", response.inheritedFromTitle());
+    }
+
+    @Test
+    void getSharingSettings_withBlockedAncestor_doesNotInherit() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID blockedParentDocId = UUID.randomUUID();
+        UUID grandparentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document grandparent = Document.builder()
+                .id(grandparentDocId)
+                .user(owner)
+                .title("Grandparent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+
+        Document blockedParent = Document.builder()
+                .id(blockedParentDocId)
+                .user(owner)
+                .title("Blocked Parent")
+                .parent(grandparent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkInheritBlocked(true)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(blockedParent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+
+        assertFalse(response.linkInheritBlocked());
+        assertFalse(response.inherited());
+        assertNull(response.inheritedFromId());
+        assertNull(response.inheritedFromTitle());
+    }
+
+    @Test
+    void updateSharingSettings_canBlockAndUnblockInheritance() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        when(documentRepository.save(child)).thenReturn(child);
+
+        SharingSettingsResponse blocked = sharingService.updateSharingSettings(
+                actorId,
+                childDocId,
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true));
+
+        assertTrue(blocked.linkInheritBlocked());
+        assertFalse(blocked.inherited());
+
+        SharingSettingsResponse reinherited = sharingService.updateSharingSettings(
+                actorId,
+                childDocId,
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, false));
+
+        assertFalse(reinherited.linkInheritBlocked());
+        assertTrue(reinherited.inherited());
+        assertEquals(parentDocId, reinherited.inheritedFromId());
+    }
+
+    @Test
+    void updateSharingSettings_ownLinkAutoClearsBlock() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .linkInheritBlocked(true)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
+        when(documentRepository.save(doc)).thenReturn(doc);
+
+        SharingSettingsResponse response = sharingService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(
+                        DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, null));
+
+        assertTrue(response.hasActiveLink());
+        assertFalse(response.linkInheritBlocked());
+        assertEquals(DocumentAccessLevel.EDIT, response.linkAccessLevel());
+    }
+
+    @Test
+    void updateSharingSettings_blockWithoutLiveAncestorGrant_isNormalizedAway() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Private Parent")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .build();
+
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        when(documentRepository.save(child)).thenReturn(child);
+
+        SharingSettingsResponse response = sharingService.updateSharingSettings(
+                actorId,
+                childDocId,
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true));
+
+        // No ancestor link exists, so the block would deny nothing (mirrors a
+        // NO_ACCESS row with no ancestor grant being deleted, not stored).
+        assertFalse(response.linkInheritBlocked());
+        assertFalse(response.inherited());
+        assertNull(response.inheritedFromId());
     }
 
     @Test

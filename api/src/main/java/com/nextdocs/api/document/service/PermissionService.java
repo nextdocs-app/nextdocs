@@ -5,7 +5,12 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +39,53 @@ public class PermissionService {
         }
         DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
         return level.allowsRead() ? level : null;
+    }
+
+    /**
+     * Resolves the effective anonymous (share-link) access level of a document.
+     * Walks up the ancestor chain (closest-ancestor-wins); per-document
+     * ANYONE_WITH_LINK contributes its link_access_level, RESTRICTED inherits
+     * through. Returns null when no ancestor grants public access.
+     */
+    @Transactional(readOnly = true)
+    public DocumentAccessLevel resolvePublicAccess(UUID documentId) {
+        String raw = documentRepository.resolvePublicAccess(documentId);
+        if (raw == null) {
+            return null;
+        }
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
+    }
+
+    /**
+     * Resolves the effective anonymous access level for a batch of documents.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolvePublicAccessBatch(Collection<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Map.of();
+        }
+        // The native batch query joins ids into a comma-separated string and casts each
+        // token with ::uuid; a single null element would either NPE the join or abort the
+        // whole batch cast. Skip nulls so one bad caller entry cannot deny every document.
+        String joined = documentIds.stream()
+                .filter(Objects::nonNull)
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
+        if (joined.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, DocumentAccessLevel> result = new HashMap<>();
+        for (Object[] row : documentRepository.resolvePublicAccessBatch(joined)) {
+            if (row[0] != null && row[1] != null) {
+                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
+                DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
+                if (level.allowsRead()) {
+                    result.put(docId, level);
+                }
+            }
+        }
+        return result;
     }
 
     /**

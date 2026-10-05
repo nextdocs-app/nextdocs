@@ -206,35 +206,38 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Get my effective access",
-            description = "Returns the authenticated user's effective access level for the specified document.",
+            description = "Returns the caller's effective access level for the specified document. "
+                    + "Unauthenticated callers receive the anonymous share-link access (if any).",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
-                        description = "Access returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
+                        description = "Access returned")
             })
     @GetMapping("/{id}/my-access")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> myAccess(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        if (principal == null) {
+            return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
+        }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.getMyAccess(principal.getId(), id)));
     }
 
     @Operation(
             summary = "Check effective access",
-            description = "Returns whether the authenticated user can access the specified document and at what level.",
+            description = "Returns whether the caller can access the specified document and at what level. "
+                    + "Unauthenticated callers are evaluated against share-link (general access) grants, "
+                    + "including inherited ancestor links, so guest realtime connections can be gated here.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
-                        description = "Access check returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
+                        description = "Access check returned")
             })
     @GetMapping("/{id}/access-check")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> accessCheck(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        if (principal == null) {
+            return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
+        }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheck(principal.getId(), id)));
     }
 }

@@ -439,6 +439,91 @@ class DocumentControllerTest {
     }
 
     @Test
+    void listPublicChildren_success_returns200() throws Exception {
+        DocumentResponse child = new DocumentResponse(
+                UUID.randomUUID(),
+                "Public Child",
+                null,
+                documentId,
+                "a0",
+                false,
+                false,
+                DocumentAccessLevel.VIEW,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+        Page<DocumentResponse> page = new PageImpl<>(List.of(child));
+
+        when(documentService.listPublicChildren(eq(documentId), any())).thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public/children", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].title").value("Public Child"));
+    }
+
+    @Test
+    void updatePublic_success_returns200() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Guest edit",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.EDIT,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        when(documentService.updatePublic(eq(documentId), any())).thenReturn(response);
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Guest edit"
+                        }
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.title").value("Guest edit"));
+    }
+
+    @Test
+    void updatePublic_privateDoc_returns404() throws Exception {
+        when(documentService.updatePublic(eq(documentId), any())).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Nope"
+                        }
+                        """))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void updatePublic_commentLink_returns403() throws Exception {
+        when(documentService.updatePublic(eq(documentId), any())).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Nope"
+                        }
+                        """))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void retiredTreeEndpoints_return404() throws Exception {
         mockMvc.perform(get("/api/v1/documents/tree/root").with(user(principal)))
                 .andExpect(status().isNotFound());

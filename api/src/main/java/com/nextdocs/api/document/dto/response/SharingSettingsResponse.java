@@ -22,10 +22,15 @@ public record SharingSettingsResponse(
         UUID inheritedFromId,
 
         @Schema(description = "Title of the ancestor document from which general access is inherited")
-        String inheritedFromTitle) {
+        String inheritedFromTitle,
+
+        @Schema(
+                description = "Whether this document blocks share-link inheritance for itself and "
+                        + "its descendants (general-access analogue of a NO_ACCESS breakpoint)")
+        boolean linkInheritBlocked) {
 
     public SharingSettingsResponse(
             DocumentGeneralAccessMode generalAccessMode, DocumentAccessLevel linkAccessLevel, boolean hasActiveLink) {
-        this(generalAccessMode, linkAccessLevel, hasActiveLink, false, null, null);
+        this(generalAccessMode, linkAccessLevel, hasActiveLink, false, null, null, false);
     }
 }

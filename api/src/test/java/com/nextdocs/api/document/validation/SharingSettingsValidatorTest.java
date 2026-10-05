@@ -31,7 +31,7 @@ class SharingSettingsValidatorTest {
     @Test
     void validate_returnsViolation_whenAnyoneWithLinkWithoutLinkAccessLevel() {
         SharingSettingsUpdateRequest request =
-                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.ANYONE_WITH_LINK, null);
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.ANYONE_WITH_LINK, null, null);
 
         Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
 
@@ -43,7 +43,7 @@ class SharingSettingsValidatorTest {
     @Test
     void validate_returnsViolation_whenRestrictedWithLinkAccessLevel() {
         SharingSettingsUpdateRequest request =
-                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, DocumentAccessLevel.VIEW);
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, DocumentAccessLevel.VIEW, null);
 
         Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
 
@@ -54,8 +54,8 @@ class SharingSettingsValidatorTest {
 
     @Test
     void validate_passes_whenAnyoneWithLinkWithLinkAccessLevel() {
-        SharingSettingsUpdateRequest request =
-                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT);
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, null);
 
         Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
 
@@ -65,7 +65,29 @@ class SharingSettingsValidatorTest {
     @Test
     void validate_passes_whenRestrictedWithoutLinkAccessLevel() {
         SharingSettingsUpdateRequest request =
-                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null);
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, null);
+
+        Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
+
+        assertTrue(violations.isEmpty());
+    }
+
+    @Test
+    void validate_returnsViolation_whenAnyoneWithLinkWithBlockedTrue() {
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, true);
+
+        Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
+
+        assertFalse(violations.isEmpty());
+        assertTrue(violations.stream()
+                .anyMatch(v -> "linkInheritBlocked".equals(v.getPropertyPath().toString())));
+    }
+
+    @Test
+    void validate_passes_whenRestrictedWithBlockedTrue() {
+        SharingSettingsUpdateRequest request =
+                new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true);
 
         Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
 

@@ -14,4 +14,11 @@ public record SharingSettingsUpdateRequest(
         DocumentGeneralAccessMode generalAccessMode,
 
         @Schema(description = "Default access level for anyone-with-link mode", example = "VIEW")
-        DocumentAccessLevel linkAccessLevel) {}
+        DocumentAccessLevel linkAccessLevel,
+
+        @Schema(
+                description = "Block share-link inheritance for this document and its descendants. "
+                        + "Omit to leave unchanged. Only meaningful with RESTRICTED; setting "
+                        + "ANYONE_WITH_LINK clears the block.",
+                example = "true")
+        Boolean linkInheritBlocked) {}

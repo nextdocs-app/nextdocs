@@ -394,7 +394,22 @@ public class DocumentSharingService {
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         boolean hasActiveLink = doc.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK;
 
-        if (!hasActiveLink && doc.getParent() != null) {
+        if (doc.isLinkInheritBlocked()) {
+            // Own block shadows every ancestor grant (mirrors a NO_ACCESS
+            // breakpoint): the document is effectively private on the link
+            // channel regardless of ancestors.
+            ShadowedGrant shadowed = findShadowedLinkGrant(doc);
+            return new SharingSettingsResponse(
+                    doc.getGeneralAccessMode(),
+                    doc.getLinkAccessLevel(),
+                    hasActiveLink,
+                    false,
+                    shadowed != null ? shadowed.docId() : null,
+                    shadowed != null ? shadowed.title() : null,
+                    true);
+        }
+
+        if (doc.getParent() != null) {
             Document current = doc.getParent();
             int depth = 0;
             while (current != null && depth < 100) {
@@ -403,20 +418,39 @@ public class DocumentSharingService {
                     // above the trash bundle never apply.
                     break;
                 }
+                if (current.isLinkInheritBlocked()) {
+                    // A blocked ancestor shadows grants above it (mirrors
+                    // resolve_public_access), so nothing below inherits.
+                    break;
+                }
                 if (current.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
                     String title =
                             current.getTitle() != null && !current.getTitle().isBlank()
                                     ? current.getTitle()
                                     : "Untitled";
+                    if (!hasActiveLink) {
+                        return new SharingSettingsResponse(
+                                doc.getGeneralAccessMode(),
+                                // The child's own link level only takes effect when its own mode is
+                                // ANYONE_WITH_LINK; here the ancestor's level is the effective one.
+                                current.getLinkAccessLevel(),
+                                false,
+                                true,
+                                current.getId(),
+                                title,
+                                false);
+                    }
+                    // Own link overrides the ancestor grant (closest-ancestor-wins),
+                    // but surface the ancestor source so the UI can show
+                    // "Overrides <parent>" like collaborator overrides.
                     return new SharingSettingsResponse(
                             doc.getGeneralAccessMode(),
-                            // The child's own link level only takes effect when its own mode is
-                            // ANYONE_WITH_LINK; here the ancestor's level is the effective one.
-                            current.getLinkAccessLevel(),
-                            hasActiveLink,
+                            doc.getLinkAccessLevel(),
                             true,
+                            false,
                             current.getId(),
-                            title);
+                            title,
+                            false);
                 }
                 current = current.getParent();
                 depth++;
@@ -424,7 +458,35 @@ public class DocumentSharingService {
         }
 
         return new SharingSettingsResponse(
-                doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink, false, null, null);
+                doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink, false, null, null, false);
+    }
+
+    /**
+     * Finds the nearest reachable ancestor ANYONE_WITH_LINK grant shadowed by a block,
+     * for display only ("Inherit from X").
+     * Traversal bound: Walks up to 100 parent nodes (lazy selects bounded at depth <= 100).
+     * Trashed ancestors stop resolution. Intervening blocks also stop resolution because
+     * an already-blocked parent leaves no reachable link grant for descendants to shadow.
+     */
+    private ShadowedGrant findShadowedLinkGrant(Document doc) {
+        Document current = doc.getParent();
+        int depth = 0;
+        while (current != null && depth < 100) {
+            if (current.getDeletedAt() != null) {
+                break;
+            }
+            if (current.isLinkInheritBlocked()) {
+                break;
+            }
+            if (current.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+                String title =
+                        current.getTitle() != null && !current.getTitle().isBlank() ? current.getTitle() : "Untitled";
+                return new ShadowedGrant(current.getId(), title);
+            }
+            current = current.getParent();
+            depth++;
+        }
+        return null;
     }
 
     @Transactional
@@ -441,11 +503,27 @@ public class DocumentSharingService {
         if (request.linkAccessLevel() != null) {
             doc.setLinkAccessLevel(normalizeLinkAccess(request.linkAccessLevel()));
         }
+        if (mode == DocumentGeneralAccessMode.ANYONE_WITH_LINK) {
+            // An own link always wins by closest-ancestor-wins, so a stored
+            // block would be dead state: clear it like a direct collaborator
+            // row overwriting a NO_ACCESS breakpoint.
+            doc.setLinkInheritBlocked(false);
+        } else if (request.linkInheritBlocked() != null) {
+            doc.setLinkInheritBlocked(request.linkInheritBlocked());
+        }
+        if (doc.isLinkInheritBlocked()
+                && doc.getGeneralAccessMode() == DocumentGeneralAccessMode.RESTRICTED
+                && findShadowedLinkGrant(doc) == null) {
+            // A block without an ancestor grant denies nothing (mirrors a
+            // NO_ACCESS row with no ancestor grant, which is deleted instead of
+            // stored): normalize so the flag always implies a shadowed grant.
+            doc.setLinkInheritBlocked(false);
+        }
 
         documentRepository.save(doc);
-        boolean hasActiveLink = doc.getGeneralAccessMode() == DocumentGeneralAccessMode.ANYONE_WITH_LINK;
-
-        return new SharingSettingsResponse(doc.getGeneralAccessMode(), doc.getLinkAccessLevel(), hasActiveLink);
+        // Return full provenance (inherited / Overrides) like getSharingSettings
+        // so the UI can immediately show override badges without a reload.
+        return getSharingSettings(actorId, documentId);
     }
 
     @Transactional(readOnly = true)
@@ -474,6 +552,19 @@ public class DocumentSharingService {
     @Transactional(readOnly = true)
     public DocumentAccessResponse accessCheck(UUID userId, UUID documentId) {
         return computeAccess(userId, documentId);
+    }
+
+    @Transactional(readOnly = true)
+    public DocumentAccessResponse accessCheckPublic(UUID documentId) {
+        Document doc = documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
+        if (doc == null) {
+            return new DocumentAccessResponse(documentId, false, null, false, false);
+        }
+        DocumentAccessLevel level = permissionService.resolvePublicAccess(documentId);
+        if (level == null) {
+            return new DocumentAccessResponse(documentId, false, null, false, false);
+        }
+        return new DocumentAccessResponse(documentId, true, level, false, false);
     }
 
     private void ensureCollaboratorOrder(Document doc, User targetUser) {
@@ -581,4 +672,6 @@ public class DocumentSharingService {
     }
 
     private record AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level) {}
+
+    private record ShadowedGrant(UUID docId, String title) {}
 }

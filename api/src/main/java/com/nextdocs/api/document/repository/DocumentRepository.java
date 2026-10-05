@@ -116,6 +116,36 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query(value = "SELECT resolve_effective_access(:userId, :documentId)", nativeQuery = true)
     String resolveEffectiveAccess(@Param("userId") UUID userId, @Param("documentId") UUID documentId);
 
+    @Query(value = "SELECT resolve_public_access(:documentId)", nativeQuery = true)
+    String resolvePublicAccess(@Param("documentId") UUID documentId);
+
+    // Public access level per document, for batch public tree listing
+    @Query(
+            value = "SELECT u.id::uuid AS document_id, resolve_public_access(u.id::uuid) AS access_level "
+                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
+            nativeQuery = true)
+    List<Object[]> resolvePublicAccessBatch(@Param("ids") String ids);
+
+    @Query(
+            value = "SELECT * FROM documents d "
+                    + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+                    + "AND resolve_public_access(d.id) IS NOT NULL "
+                    + "ORDER BY d.sibling_order_key ASC NULLS LAST, d.created_at ASC, d.id ASC",
+            countQuery = "SELECT COUNT(*) FROM documents d "
+                    + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+                    + "AND resolve_public_access(d.id) IS NOT NULL",
+            nativeQuery = true)
+    Page<Document> findPublicChildren(@Param("parentId") UUID parentId, Pageable pageable);
+
+    // Public child counts per parent, for batch public tree listing
+    @Query(
+            value = "SELECT d.parent_id, COUNT(d.id) FROM documents d "
+                    + "WHERE d.parent_id IN (:parentIds) AND d.deleted_at IS NULL "
+                    + "AND resolve_public_access(d.id) IS NOT NULL "
+                    + "GROUP BY d.parent_id",
+            nativeQuery = true)
+    List<Object[]> countPublicChildrenByParentIds(@Param("parentIds") Collection<UUID> parentIds);
+
     // Effective access level including trashed documents: resolves against the trash bundle
     // root (topmost contiguous trashed ancestor, or the document itself).
     @Query(value = "SELECT resolve_trash_access(:userId, :documentId)", nativeQuery = true)
