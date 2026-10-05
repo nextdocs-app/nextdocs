@@ -28,24 +28,28 @@ export function getCollaboratorRowOptions(collab: Collaborator): DropdownOption[
     { value: 'VIEW', label: 'Can view' },
   ];
 
+  // An override (own level over an ancestor grant) offers its way back via
+  // an explicit Inherit option. We append it rather than mutating the
+  // matching access level option in place, which would break the selected
+  // state when the override matches that level.
   if (!collab.inherited && collab.inheritedFromTitle) {
     const parentTitle = collab.inheritedFromTitle.trim().replace(/\s+/g, ' ');
-    const parentLevel = collab.inheritedAccessLevel
-      ? ACCESS_LABELS[collab.inheritedAccessLevel] || collab.inheritedAccessLevel
-      : null;
-    const inheritLabel = parentLevel
-      ? `Inherit from ${parentTitle} (${parentLevel})`
-      : `Inherit from ${parentTitle}`;
+    const inheritableLabel = collab.inheritedAccessLevel
+      ? ACCESS_LABELS[collab.inheritedAccessLevel]
+      : undefined;
     options.push({
       value: 'INHERIT',
-      label: inheritLabel,
+      label: inheritableLabel
+        ? `Inherit from ${parentTitle} (${inheritableLabel.toLowerCase()})`
+        : `Inherit from ${parentTitle}`,
+      dividerBefore: true,
     });
   }
 
   options.push({
     value: 'NO_ACCESS',
     label: 'No access',
-    dividerBefore: true,
+    dividerBefore: Boolean(collab.inherited) || !collab.inheritedFromTitle,
     isDestructive: true,
   });
 
@@ -70,7 +74,7 @@ function ProvenanceBadge({
       : `Overrides ${(rawTitle || 'parent').trim()}`;
   const prefix = kind === 'via' ? 'via' : 'Overrides';
   const className =
-    'inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0';
+    'inline-block min-w-0 max-w-[140px] shrink-[2] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle';
   if (targetId) {
     return (
       <button
@@ -115,7 +119,7 @@ export function CollaboratorRow({
         <ShareAvatar seed={collab.userId} label={collab.displayName || collab.email} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[13.5px] font-medium text-card-foreground truncate leading-snug min-w-0">
+            <span className="text-[13.5px] font-medium text-card-foreground truncate leading-snug min-w-0 shrink">
               {collab.displayName || collab.email}
             </span>
             {isSelf && (

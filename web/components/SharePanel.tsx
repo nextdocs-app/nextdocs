@@ -16,7 +16,7 @@ import { AccessDropdown } from './share/AccessDropdown';
 import { CollaboratorRow } from './share/CollaboratorRow';
 import {
   ACCESS_ACTION_LABELS,
-  GENERAL_MODE_OPTIONS,
+  getGeneralModeOptions,
   INVITE_ACCESS_OPTIONS,
   LINK_ACCESS_OPTIONS,
 } from './share/shareOptions';
@@ -217,14 +217,57 @@ export function SharePanel({
     }
   };
 
-  const handleGeneralModeChange = async (mode: DocumentGeneralAccessMode) => {
+  // Mode selection mirrors a collaborator row's single dropdown: picking a
+  // state writes it (override), and the Inherit option deletes the override.
+  const handleGeneralModeSelect = async (nextValue: string) => {
     if (!accessToken || !settings) return;
+    // Restore parent inheritance (mirrors deleting a collaborator override row
+    // via its Inherit option).
+    if (nextValue === 'INHERIT') {
+      try {
+        setIsSavingSettings(true);
+        setError(null);
+        const next = await documentService.updateSharingSettings(
+          documentId,
+          { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
+          accessToken
+        );
+        setSettings(next);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to restore link inheritance');
+      } finally {
+        setIsSavingSettings(false);
+      }
+      return;
+    }
+    const mode = nextValue as DocumentGeneralAccessMode;
+    // Already in this explicit own mode: nothing to write (guards against no-op re-select).
+    // An inherited link CAN be re-selected as ANYONE_WITH_LINK to pin it as an own override.
+    if (mode === 'ANYONE_WITH_LINK' && hasOwnPublicLink) return;
+    if (
+      mode === 'RESTRICTED' &&
+      settings.generalAccessMode === 'RESTRICTED' &&
+      !isInheritedPublicLink
+    )
+      return;
     try {
       setIsSavingSettings(true);
-      const payload =
-        mode === 'ANYONE_WITH_LINK'
-          ? { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' }
-          : { generalAccessMode: mode };
+      setError(null);
+      let payload: {
+        generalAccessMode: DocumentGeneralAccessMode;
+        linkAccessLevel?: DocumentAccessLevel;
+        linkInheritBlocked?: boolean;
+      };
+      if (mode === 'ANYONE_WITH_LINK') {
+        payload = { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' };
+      } else if (hasOwnPublicLink || isInheritedPublicLink) {
+        // Restricting an inherited or overridden link blocks inheritance on
+        // this document (the general-access NO_ACCESS): the document goes
+        // private on the link channel while collaborators keep their access.
+        payload = { generalAccessMode: mode, linkInheritBlocked: true };
+      } else {
+        payload = { generalAccessMode: mode };
+      }
       const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
       setSettings(next);
     } catch (e) {
@@ -238,9 +281,16 @@ export function SharePanel({
     if (!accessToken || !settings) return;
     try {
       setIsSavingSettings(true);
+      // Changing the level on an inherited link creates an override on this
+      // document (same as changing an inherited collaborator row), so the
+      // mode must be ANYONE_WITH_LINK even though the stored own mode is RESTRICTED.
+      const modeToSend =
+        isInheritedPublicLink && !hasOwnPublicLink
+          ? 'ANYONE_WITH_LINK'
+          : settings.generalAccessMode;
       const next = await documentService.updateSharingSettings(
         documentId,
-        { generalAccessMode: settings.generalAccessMode, linkAccessLevel: level },
+        { generalAccessMode: modeToSend, linkAccessLevel: level },
         accessToken
       );
       setSettings(next);
@@ -275,10 +325,33 @@ export function SharePanel({
 
   const hasOwnPublicLink = settings?.generalAccessMode === 'ANYONE_WITH_LINK';
   const isInheritedPublicLink = Boolean(settings?.inherited);
+  // Override provenance mirrors the People section: a direct (own) link wins over
+  // the ancestor walk, but we still surface the ancestor source as "Overrides X".
+  const isOverridingPublicLink = Boolean(hasOwnPublicLink) && Boolean(settings?.inheritedFromId);
+  // Blocked inheritance (the general-access NO_ACCESS): the document stays
+  // private on the link channel even with an ancestor link.
+  const isLinkBlocked = Boolean(settings?.linkInheritBlocked);
+  // Like a collaborator row's Inherit option: an override (own link over an
+  // ancestor grant) or a block can be undone back to parent inheritance.
+  const showGeneralInheritOption = isOverridingPublicLink || isLinkBlocked;
+  // A blocked document shadows its ancestor grant: distinct badge from an own-link override.
+  const isBlockedWithAncestor = isLinkBlocked && Boolean(settings?.inheritedFromId);
+  const showGeneralProvenanceBadge = isOverridingPublicLink || isBlockedWithAncestor;
+  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
+  const provenanceBadgePrefix = isBlockedWithAncestor ? 'Blocked from' : 'Overrides';
+  const provenanceBadgeTooltip = isBlockedWithAncestor
+    ? `Blocks inheritance from ${inheritedFromTitle}`
+    : `Overrides ${inheritedFromTitle}`;
   // A child can be RESTRICTED and still be effectively public through an ancestor's link.
   const hasEffectivePublicLink =
-    Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink;
-  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
+    (Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink) &&
+    !isLinkBlocked;
+  // Like inherited collaborator rows (which show the inherited level + "via"),
+  // general access shows the *effective* mode so the dropdown never contradicts
+  // the helper sentence ("Restricted" + "Anyone ... can edit" at the same time).
+  const displayGeneralMode: DocumentGeneralAccessMode = hasEffectivePublicLink
+    ? 'ANYONE_WITH_LINK'
+    : 'RESTRICTED';
   const effectiveLinkAction = ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view';
   const activeCollaboratorsCount = collaborators.filter(
     (c) => c.accessLevel !== 'NO_ACCESS'
@@ -478,20 +551,22 @@ export function SharePanel({
                     </span>
 
                     <div className="flex-1 min-w-0">
+                      {/* Row 1: state + level */}
                       <div className="flex items-center justify-between gap-1 min-w-0">
                         <div className="-ml-1">
                           <AccessDropdown
-                            value={settings?.generalAccessMode ?? 'RESTRICTED'}
-                            options={GENERAL_MODE_OPTIONS}
-                            onChange={(v) =>
-                              void handleGeneralModeChange(v as DocumentGeneralAccessMode)
-                            }
+                            value={displayGeneralMode}
+                            options={getGeneralModeOptions({
+                              showInheritOption: showGeneralInheritOption,
+                              inheritedFromTitle: settings?.inheritedFromTitle,
+                            })}
+                            onChange={(v) => void handleGeneralModeSelect(v)}
                             disabled={isSavingSettings}
                             align="left"
                           />
                         </div>
 
-                        {hasOwnPublicLink && (
+                        {hasEffectivePublicLink && (
                           <div className="flex-shrink-0">
                             <AccessDropdown
                               value={settings?.linkAccessLevel ?? 'VIEW'}
@@ -506,34 +581,52 @@ export function SharePanel({
                         )}
                       </div>
 
-                      <p className="flex flex-wrap items-center gap-x-1 pb-1.5 pl-1 text-[12px] text-muted-foreground/70 leading-snug">
-                        <span>
+                      {/* Row 2: provenance (via / Overrides) replaces the description, mirroring People rows */}
+                      {isInheritedPublicLink || showGeneralProvenanceBadge ? (
+                        <div className="pl-1">
+                          {isInheritedPublicLink &&
+                            (settings?.inheritedFromId ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  settings?.inheritedFromId &&
+                                  handleNavigate(settings.inheritedFromId)
+                                }
+                                title={`Inherited via ${inheritedFromTitle}`}
+                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
+                              >
+                                via {inheritedFromTitle}
+                              </button>
+                            ) : (
+                              <span
+                                title={`Inherited via ${inheritedFromTitle}`}
+                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
+                              >
+                                via {inheritedFromTitle}
+                              </span>
+                            ))}
+                          {showGeneralProvenanceBadge &&
+                            (settings?.inheritedFromId ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  settings?.inheritedFromId &&
+                                  handleNavigate(settings.inheritedFromId)
+                                }
+                                title={provenanceBadgeTooltip}
+                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
+                              >
+                                {provenanceBadgePrefix} {inheritedFromTitle}
+                              </button>
+                            ) : null)}
+                        </div>
+                      ) : (
+                        <p className="pl-1 text-[12px] text-muted-foreground/70 leading-snug">
                           {hasEffectivePublicLink
                             ? `Anyone on the internet with the link can ${effectiveLinkAction}`
                             : 'Only people with access can open with the link'}
-                        </span>
-                        {isInheritedPublicLink &&
-                          (settings?.inheritedFromId ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                settings?.inheritedFromId &&
-                                handleNavigate(settings.inheritedFromId)
-                              }
-                              title={`Inherited via ${inheritedFromTitle}`}
-                              className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
-                            >
-                              via {inheritedFromTitle}
-                            </button>
-                          ) : (
-                            <span
-                              title={`Inherited via ${inheritedFromTitle}`}
-                              className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
-                            >
-                              via {inheritedFromTitle}
-                            </span>
-                          ))}
-                      </p>
+                        </p>
+                      )}
                     </div>
                   </div>
                 </section>

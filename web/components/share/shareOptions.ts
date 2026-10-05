@@ -40,6 +40,29 @@ export const GENERAL_MODE_OPTIONS: DropdownOption[] = [
   {
     value: 'ANYONE_WITH_LINK',
     label: 'Anyone with the link',
-    description: 'Anyone with link can access',
+    description: 'Anyone with the link can access',
   },
 ];
+
+/**
+ * Mode options for the General access dropdown, mirroring
+ * getCollaboratorRowOptions: an override (own link over an ancestor grant, or
+ * a blocked inheritance) offers its way back via an Inherit option.
+ */
+export function getGeneralModeOptions({
+  showInheritOption,
+  inheritedFromTitle,
+}: {
+  showInheritOption: boolean;
+  inheritedFromTitle?: string | null;
+}): DropdownOption[] {
+  const options = [...GENERAL_MODE_OPTIONS];
+  if (showInheritOption) {
+    const parentTitle = (inheritedFromTitle || '').trim().replace(/\s+/g, ' ');
+    options.push({
+      value: 'INHERIT',
+      label: parentTitle ? `Inherit from ${parentTitle}` : 'Resume inheriting',
+    });
+  }
+  return options;
+}

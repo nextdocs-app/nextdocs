@@ -549,7 +549,7 @@ describe('SharePanel', () => {
       await user.click(dropdown);
 
       expect(
-        screen.getByRole('option', { name: 'Inherit from Parent Doc (Full access)' })
+        screen.getByRole('option', { name: 'Inherit from Parent Doc (full access)' })
       ).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'Can edit' })).toBeInTheDocument();
     });
@@ -971,7 +971,7 @@ describe('SharePanel', () => {
       });
     });
 
-    it('renders Overrides badge and allows restoring parent inheritance via Inherit option', async () => {
+    it('renders Overrides badge and allows restoring parent inheritance via inherit entry', async () => {
       const user = userEvent.setup();
       (documentService.removeCollaborator as jest.Mock).mockResolvedValue(undefined);
       (documentService.listCollaborators as jest.Mock)
@@ -1021,7 +1021,7 @@ describe('SharePanel', () => {
       await user.click(bobDropdown);
 
       const inheritOption = screen.getByRole('option', {
-        name: 'Inherit from Design System (Can edit)',
+        name: 'Inherit from Design System (can edit)',
       });
       expect(inheritOption).toBeInTheDocument();
 
@@ -1143,15 +1143,15 @@ describe('SharePanel', () => {
 
       await screen.findByText('Bob Blocked');
 
-      // Effective public state comes from the ancestor, not this document's RESTRICTED mode.
+      // The via badge replaces the description when provenance must be shown.
+      const viaButton = await screen.findByRole('button', { name: 'via Parent Wiki' });
       expect(
-        screen.getByText('Anyone on the internet with the link can comment')
-      ).toBeInTheDocument();
+        screen.queryByText('Anyone on the internet with the link can comment')
+      ).not.toBeInTheDocument();
       expect(
         screen.queryByText('Only people with access can open with the link')
       ).not.toBeInTheDocument();
-
-      const viaButton = screen.getByRole('button', { name: 'via Parent Wiki' });
+      expect(screen.getByRole('button', { name: 'Anyone with the link' })).toBeInTheDocument();
       await user.click(viaButton);
       expect(mockNavigate).toHaveBeenCalledWith('doc-parent');
 
@@ -1161,6 +1161,337 @@ describe('SharePanel', () => {
           'Bob Blocked is blocked while signed in; anyone with the public link can still comment this document.'
         )
       ).toBeInTheDocument();
+    });
+
+    it('shows the effective Anyone mode (not Restricted) for an inherited public link', async () => {
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      // The badge replaces the helper sentence, so the description stays hidden.
+      expect(
+        screen.queryByText('Anyone on the internet with the link can edit')
+      ).not.toBeInTheDocument();
+      // The mode dropdown reflects effective access, so it never contradicts
+      // the hidden helper sentence with a simultaneous "Restricted".
+      expect(screen.getByRole('button', { name: 'Anyone with the link' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Restricted' })).not.toBeInTheDocument();
+    });
+
+    it('renders an Overrides badge when the document has its own link over an ancestor link', async () => {
+      const mockNavigate = jest.fn();
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+          onNavigate={mockNavigate}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'Overrides Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can edit')
+      ).not.toBeInTheDocument();
+      const overridesButton = screen.getByRole('button', { name: 'Overrides Parent Wiki' });
+      await user.click(overridesButton);
+      expect(mockNavigate).toHaveBeenCalledWith('doc-parent');
+    });
+
+    it('creates an override link when the level changes on an inherited public link', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can view')
+      ).not.toBeInTheDocument();
+      const linkDropdown = screen.getByRole('button', { name: /Can view/i });
+      await user.click(linkDropdown);
+      await user.click(screen.getByRole('option', { name: 'Can edit' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'ANYONE_WITH_LINK', linkAccessLevel: 'EDIT' },
+        'test-token'
+      );
+      await screen.findByRole('button', { name: 'Overrides Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can edit')
+      ).not.toBeInTheDocument();
+    });
+
+    it('shows a Blocked from badge and Inherit option for a blocked link, without extra buttons', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: true,
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      const badge = await screen.findByRole('button', { name: 'Blocked from Parent Wiki' });
+      expect(badge).toHaveAttribute('title', 'Blocks inheritance from Parent Wiki');
+      // The badge replaces the description, so the helper sentence stays hidden.
+      expect(
+        screen.queryByText('Only people with access can open with the link')
+      ).not.toBeInTheDocument();
+      // Distinct badge from an own-link override; no bespoke buttons.
+      expect(screen.queryByRole('button', { name: 'Restrict access' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Inheritance blocked')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Restricted' }));
+      await user.click(screen.getByRole('option', { name: 'Inherit from Parent Wiki' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
+        'test-token'
+      );
+      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can edit')
+      ).not.toBeInTheDocument();
+    });
+
+    it('pins an inherited link mode as an explicit own override when selecting Anyone with the link', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: true,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      const modeDropdown = screen.getByRole('button', { name: 'Anyone with the link' });
+      await user.click(modeDropdown);
+
+      const option = screen.getByRole('option', { name: /^Anyone with the link/i });
+      await user.click(option);
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'ANYONE_WITH_LINK', linkAccessLevel: 'VIEW' },
+        'test-token'
+      );
+    });
+
+    it('does not write an override when re-selecting the explicit own mode', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: null,
+        inheritedFromTitle: null,
+        linkInheritBlocked: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      const modeDropdown = await screen.findByRole('button', { name: 'Anyone with the link' });
+      await user.click(modeDropdown);
+
+      const option = screen.getByRole('option', { name: /^Anyone with the link/i });
+      await user.click(option);
+
+      expect(documentService.updateSharingSettings).not.toHaveBeenCalled();
+    });
+
+    it('offers Inherit from parent in the mode dropdown for an own-link override', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'EDIT',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: false,
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkInheritBlocked: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'Overrides Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can edit')
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Anyone with the link' }));
+      await user.click(screen.getByRole('option', { name: 'Inherit from Parent Wiki' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
+        'test-token'
+      );
+    });
+
+    it('blocks via the Restricted mode option on an inherited link', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: false,
+        inheritedFromId: null,
+        inheritedFromTitle: null,
+        linkInheritBlocked: true,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      expect(
+        screen.queryByText('Anyone on the internet with the link can view')
+      ).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Anyone with the link' }));
+      await user.click(screen.getByRole('option', { name: 'Restricted' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        { generalAccessMode: 'RESTRICTED', linkInheritBlocked: true },
+        'test-token'
+      );
     });
   });
 });

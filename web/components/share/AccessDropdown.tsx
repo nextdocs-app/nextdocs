@@ -6,6 +6,9 @@ import { ACCESS_LABELS, type DropdownOption } from './shareOptions';
 
 export type { DropdownOption };
 
+const MENU_MARGIN = 8;
+const MENU_MIN_WIDTH = 192; // matches min-w-[12rem]
+
 export function AccessDropdown({
   value,
   options,
@@ -33,10 +36,13 @@ export function AccessDropdown({
     if (disabled) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
+      // Keep the menu on-screen horizontally: clamp the anchor edge so the
+      // menu (min-w-[12rem]) never runs past the viewport.
+      const maxEdge = Math.max(MENU_MARGIN, window.innerWidth - MENU_MIN_WIDTH - MENU_MARGIN);
       setCoords({
         top: rect.bottom + 4,
-        left: rect.left,
-        right: window.innerWidth - rect.right,
+        left: Math.max(MENU_MARGIN, Math.min(rect.left, maxEdge)),
+        right: Math.max(MENU_MARGIN, Math.min(window.innerWidth - rect.right, maxEdge)),
       });
     }
     setOpen((v) => !v);
@@ -54,6 +60,27 @@ export function AccessDropdown({
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Keep the open menu on-screen vertically: flip above the trigger when it
+  // would run past the viewport bottom (easy to hit on mobile), else clamp.
+  useEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const trigger = triggerRef.current;
+    if (!menu || !trigger) return;
+    const menuRect = menu.getBoundingClientRect();
+    if (menuRect.bottom <= window.innerHeight - MENU_MARGIN) return;
+    const triggerRect = trigger.getBoundingClientRect();
+    const above = triggerRect.top - menuRect.height - 4;
+    const nextTop =
+      above >= MENU_MARGIN
+        ? above
+        : Math.max(MENU_MARGIN, window.innerHeight - menuRect.height - MENU_MARGIN);
+    // Post-render DOM measurement: the early return above guarantees this
+    // only runs when an adjustment is needed, so it never loops.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCoords((prev) => (prev.top === nextTop ? prev : { ...prev, top: nextTop }));
   }, [open]);
 
   const isDestructive = value === 'NO_ACCESS';
@@ -103,15 +130,25 @@ export function AccessDropdown({
           role="listbox"
           style={
             align === 'right'
-              ? { position: 'fixed', top: coords.top, right: coords.right }
-              : { position: 'fixed', top: coords.top, left: coords.left }
+              ? {
+                  position: 'fixed',
+                  top: coords.top,
+                  right: coords.right,
+                  maxWidth: `calc(100vw - ${coords.right}px - ${MENU_MARGIN}px)`,
+                }
+              : {
+                  position: 'fixed',
+                  top: coords.top,
+                  left: coords.left,
+                  maxWidth: `calc(100vw - ${coords.left}px - ${MENU_MARGIN}px)`,
+                }
           }
           className="
-            z-[9999] min-w-[12rem]
+            z-[9999] min-w-[12rem] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-1rem)]
             rounded-xl border border-border dark:border-white/10 bg-card text-card-foreground
             shadow-[0_8px_24px_-4px_rgba(0,0,0,0.12),0_2px_6px_-2px_rgba(0,0,0,0.08)]
             dark:shadow-[0_8px_24px_-4px_rgba(0,0,0,0.55)]
-            py-1.5 overflow-hidden
+            py-1.5 overflow-x-hidden overflow-y-auto
             animate-in fade-in slide-in-from-top-1 duration-100
           "
         >
