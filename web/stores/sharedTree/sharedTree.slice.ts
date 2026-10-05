@@ -41,6 +41,11 @@ export const fetchChildrenThunk = createAsyncThunk<
   };
 });
 
+// Guests share one API rate-limit budget per IP with page loads, so a level
+// with a large fan-out must not be pulled serially without bound. Deeper
+// levels still load on expand. The authenticated path loads a single page.
+const MAX_PUBLIC_CHILDREN_PAGES = 2;
+
 export const fetchPublicChildrenThunk = createAsyncThunk<
   { parentId: string; children: TreeNode[] },
   { parentId: string },
@@ -50,7 +55,7 @@ export const fetchPublicChildrenThunk = createAsyncThunk<
   let page = 0;
   let hasMore = true;
 
-  while (hasMore && page < 10) {
+  while (hasMore && page < MAX_PUBLIC_CHILDREN_PAGES) {
     const result = await documentService.listPublicChildren(parentId, page, 50);
     allChildren.push(...result.items);
     hasMore = result.hasMore;

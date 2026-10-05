@@ -913,4 +913,26 @@ describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
 
     listSpy.mockRestore();
   });
+
+  it('stops paginating at the page cap even when the server reports more', async () => {
+    const listSpy = jest.spyOn(documentService, 'listPublicChildren').mockResolvedValue({
+      items: [node('child-x', 'public-root', 'Child X')],
+      page: 0,
+      size: 50,
+      totalElements: 500,
+      totalPages: 10,
+      hasMore: true,
+    });
+
+    const dispatch = jest.fn();
+    const getState = () => ({ auth: { accessToken: null } }) as unknown as RootState;
+
+    await fetchPublicChildrenThunk({ parentId: 'public-root' })(dispatch, getState, undefined);
+
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(listSpy).toHaveBeenNthCalledWith(1, 'public-root', 0, 50);
+    expect(listSpy).toHaveBeenNthCalledWith(2, 'public-root', 1, 50);
+
+    listSpy.mockRestore();
+  });
 });
