@@ -39,8 +39,10 @@ AS $$
         SELECT
             ch.depth,
             CASE
-                WHEN ch.link_inherit_blocked THEN 'BLOCKED'
+                -- Own link wins over an own block: closest-ancestor-wins
+                -- override re-enables the subtree below it.
                 WHEN ch.general_access_mode = 'ANYONE_WITH_LINK' THEN ch.link_access_level
+                WHEN ch.link_inherit_blocked THEN 'BLOCKED'
                 ELSE NULL
             END AS resolved_level
           FROM chain ch

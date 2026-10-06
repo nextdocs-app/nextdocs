@@ -3,6 +3,8 @@ package com.nextdocs.api.document.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -340,6 +342,18 @@ class DocumentControllerTest {
     }
 
     @Test
+    void update_titleLongerThanTheColumn_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/documents/{id}", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"" + "t".repeat(256) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(documentService, never()).update(eq(userId), eq(documentId), any());
+    }
+
+    @Test
     void delete_success_returns204() throws Exception {
         doNothing().when(documentService).delete(userId, documentId, false);
 
@@ -493,6 +507,19 @@ class DocumentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.title").value("Guest edit"));
+    }
+
+    @Test
+    void updatePublic_titleLongerThanTheColumn_returns400() throws Exception {
+        // Reachable without an account: the bound has to answer 400 here rather than
+        // letting the anonymous write reach the database's VARCHAR(255).
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"" + "t".repeat(256) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(documentService, never()).updatePublic(eq(documentId), any());
     }
 
     @Test

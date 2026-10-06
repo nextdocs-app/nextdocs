@@ -14,7 +14,10 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -138,13 +141,20 @@ public class DocumentTreeService {
                 userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(previousOwner.getId(), documentId);
             }
 
-            Document currentAncestor = newParent;
-            int ownerWalkDepth = 0;
-            while (currentAncestor != null && ownerWalkDepth < 100) {
-                collaboratorRepository.deleteNoAccessInSubtreeForUser(
-                        documentId, currentAncestor.getUser().getId());
-                currentAncestor = currentAncestor.getParent();
-                ownerWalkDepth++;
+            // Collect new-ancestor owners in fixed queries instead of one lazy
+            // parent load plus one delete CTE per level.
+            List<UUID> ancestorIds = new ArrayList<>();
+            ancestorIds.add(newParent.getId());
+            ancestorIds.addAll(documentRepository.findAncestorChainIds(newParent.getId()));
+            Set<UUID> ownerIds = new HashSet<>();
+            ownerIds.add(newParent.getUser().getId());
+            for (Document ancestor : documentRepository.findAllWithUserByIdIn(ancestorIds)) {
+                if (ancestor.getUser() != null) {
+                    ownerIds.add(ancestor.getUser().getId());
+                }
+            }
+            for (UUID ownerId : ownerIds) {
+                collaboratorRepository.deleteNoAccessInSubtreeForUser(documentId, ownerId);
             }
             collaboratorRepository.pruneOrphanedBreakpoints(documentId);
 

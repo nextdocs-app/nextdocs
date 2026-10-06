@@ -2,7 +2,6 @@ package com.nextdocs.api.document.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -117,8 +116,8 @@ class DocumentListQueryHelperTest {
         when(documentRepository.findSharedRootDocuments(userId, pageable)).thenReturn(queryPage);
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of(ownerShared.getId()));
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.<Object[]>of(new Object[] {sharedWithMe.getId(), "EDIT"}));
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(sharedWithMe.getId(), DocumentAccessLevel.EDIT));
 
         Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, pageable);
 
@@ -161,12 +160,9 @@ class DocumentListQueryHelperTest {
                 .thenReturn(new PageImpl<>(List.of(floatedChild)));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
-        // Parent is inaccessible (not returned in resolveEffectiveAccessBatch for parentIds)
-        when(documentRepository.resolveEffectiveAccessBatch(
-                        eq(userId), eq(floatedChild.getId().toString())))
-                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "VIEW"}));
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(privateParentId.toString())))
-                .thenReturn(List.of());
+        // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
         when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "user-order-1"}));
 
@@ -206,12 +202,9 @@ class DocumentListQueryHelperTest {
                 .thenReturn(new PageImpl<>(List.of(floatedChild)));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
-        // Parent is inaccessible (not returned in resolveEffectiveAccessBatch for parentIds)
-        when(documentRepository.resolveEffectiveAccessBatch(
-                        eq(userId), eq(floatedChild.getId().toString())))
-                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "VIEW"}));
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(privateParentId.toString())))
-                .thenReturn(List.of());
+        // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
         when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.of());
 
@@ -251,12 +244,10 @@ class DocumentListQueryHelperTest {
                 .thenReturn(new PageImpl<>(List.of(sharedChild)));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
-        // Parent IS accessible
-        when(documentRepository.resolveEffectiveAccessBatch(
-                        eq(userId), eq(sharedChild.getId().toString())))
-                .thenReturn(List.<Object[]>of(new Object[] {sharedChild.getId(), "VIEW"}));
-        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), eq(sharedParentId.toString())))
-                .thenReturn(List.<Object[]>of(new Object[] {sharedParentId, "VIEW"}));
+        // Parent IS accessible, so the child keeps its owner's sibling order key.
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(
+                        sharedChild.getId(), DocumentAccessLevel.VIEW, sharedParentId, DocumentAccessLevel.VIEW));
 
         Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
 
@@ -344,8 +335,8 @@ class DocumentListQueryHelperTest {
         when(documentRepository.findAccessibleTrashedDocuments(eq(userId), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(trashedDoc)));
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
-        when(documentRepository.resolveTrashAccessBatch(eq(userId), anyString()))
-                .thenReturn(List.<Object[]>of(new Object[] {trashedDoc.getId(), "OWNER"}));
+        when(permissionService.resolveTrashAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(trashedDoc.getId(), DocumentAccessLevel.OWNER));
 
         Page<DocumentResponse> result = queryHelper.list(userId, null, null, true, pageable);
 

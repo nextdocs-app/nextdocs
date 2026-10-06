@@ -27,7 +27,11 @@ public class InMemoryRateLimiter implements RateLimiter {
 
     @Override
     public Decision allowRequest(String key, int maxRequests, Duration window) {
-        Bucket bucket = bucketCache.get(key, ignoredKey -> newBucket(maxRequests, window));
+        // Budgets are part of the cache key so a reconfigured limit (or two
+        // callers sharing one IP with different budgets) never reuses a stale
+        // bucket minted under another budget.
+        String bucketKey = key + "|" + maxRequests + "|" + window.toNanos();
+        Bucket bucket = bucketCache.get(bucketKey, ignoredKey -> newBucket(maxRequests, window));
         if (bucket.tryConsume(1)) {
             return Decision.allow();
         }

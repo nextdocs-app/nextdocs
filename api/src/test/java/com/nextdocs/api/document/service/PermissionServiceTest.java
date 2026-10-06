@@ -100,6 +100,58 @@ class PermissionServiceTest {
     }
 
     @Test
+    void resolveAccessBatch_dropsLevelsTheCallerMayNotRead() {
+        UUID userId = UUID.randomUUID();
+        UUID readableId = UUID.randomUUID();
+        UUID revokedId = UUID.randomUUID();
+        UUID unresolvedId = UUID.randomUUID();
+        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
+                .thenReturn(List.<Object[]>of(
+                        new Object[] {readableId, "NO_ACCESS"},
+                        new Object[] {readableId, "VIEW"},
+                        new Object[] {revokedId, "NO_ACCESS"},
+                        new Object[] {unresolvedId, null}));
+
+        java.util.Map<UUID, DocumentAccessLevel> levels = permissionService.resolveAccessBatch(
+                userId, java.util.Arrays.asList(readableId, revokedId, unresolvedId));
+
+        // A breakpoint and an unresolved row must not reach a caller as a level: only
+        // allowsRead passes, and the last readable row wins for a duplicated id.
+        assertEquals(java.util.Map.of(readableId, DocumentAccessLevel.VIEW), levels);
+    }
+
+    @Test
+    void resolvePublicAccessBatch_dropsLevelsNoReaderMayOpen() {
+        UUID readableId = UUID.randomUUID();
+        UUID blockedId = UUID.randomUUID();
+        when(documentRepository.resolvePublicAccessBatch(anyString()))
+                .thenReturn(List.<Object[]>of(
+                        new Object[] {readableId, "COMMENT"},
+                        new Object[] {blockedId, "NO_ACCESS"},
+                        new Object[] {blockedId, null}));
+
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolvePublicAccessBatch(java.util.Arrays.asList(readableId, blockedId));
+
+        assertEquals(java.util.Map.of(readableId, DocumentAccessLevel.COMMENT), levels);
+    }
+
+    @Test
+    void resolveTrashAccessBatch_dropsLevelsTheCallerMayNotRead() {
+        UUID userId = UUID.randomUUID();
+        UUID readableId = UUID.randomUUID();
+        UUID revokedId = UUID.randomUUID();
+        when(documentRepository.resolveTrashAccessBatch(eq(userId), anyString()))
+                .thenReturn(
+                        List.<Object[]>of(new Object[] {readableId, "EDIT"}, new Object[] {revokedId, "NO_ACCESS"}));
+
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolveTrashAccessBatch(userId, java.util.Arrays.asList(readableId, revokedId));
+
+        assertEquals(java.util.Map.of(readableId, DocumentAccessLevel.EDIT), levels);
+    }
+
+    @Test
     void resolvePublicAccessBatch_skipsNullIdsInsteadOfAbortingBatch() {
         UUID documentId = UUID.randomUUID();
         when(documentRepository.resolvePublicAccessBatch(documentId.toString()))

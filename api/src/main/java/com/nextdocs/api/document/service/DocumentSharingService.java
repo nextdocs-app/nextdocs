@@ -53,6 +53,7 @@ public class DocumentSharingService {
     @Transactional(readOnly = true)
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
+        requireIdentityGrantForRoster(requesterId, doc);
 
         Set<UUID> directUserIds = new HashSet<>();
         List<CollaboratorResponse> result = new ArrayList<>();
@@ -286,7 +287,10 @@ public class DocumentSharingService {
             // Breakpoints shadow identity-channel grants only: hasPositiveAncestorGrant
             // counts ownership and non-NO_ACCESS collaborator rows (V13) and ignores
             // link grants, so a NO_ACCESS row is stored only when an ancestor identity
-            // grant exists to shadow. Link-derived access is unaffected by design.
+            // grant exists to shadow. The anonymous link channel
+            // (resolve_public_access) ignores collaborator rows by design, but for
+            // the affected user resolve_effective_access returns NULL at a
+            // NO_ACCESS row even under an ancestor link grant: revocation revokes all.
             // The empty-and-grantless case throws above, so reaching here without a
             // grant means a direct row exists: delete it instead of storing a breakpoint.
             if (!hasAncestorGrant) {
@@ -351,7 +355,9 @@ public class DocumentSharingService {
 
         boolean exists = collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId);
         if (!exists) {
-            throw new ApiException(ErrorCode.NOT_FOUND);
+            throw new ApiException(
+                    ErrorCode.NOT_FOUND,
+                    "Collaborator not found. Inherited access is managed with a NO_ACCESS override.");
         }
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
@@ -371,7 +377,9 @@ public class DocumentSharingService {
 
         boolean exists = collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, userId);
         if (!exists) {
-            throw new ApiException(ErrorCode.NOT_FOUND);
+            throw new ApiException(
+                    ErrorCode.NOT_FOUND,
+                    "Collaborator not found. Inherited access cannot be left; ask an admin for a NO_ACCESS override.");
         }
 
         collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, userId);
@@ -621,7 +629,7 @@ public class DocumentSharingService {
         List<UUID> orderRowsToDelete = new ArrayList<>();
         for (int start = 0; start < subtreeIds.size(); start += RECONCILE_CHUNK_SIZE) {
             List<UUID> chunk = subtreeIds.subList(start, Math.min(start + RECONCILE_CHUNK_SIZE, subtreeIds.size()));
-            decideSharedRoots(userId, user, subtreeRootId, chunk, documentsToFloat, orderRowsToDelete);
+            decideSharedRoots(userId, chunk, documentsToFloat, orderRowsToDelete);
         }
 
         for (Document doc : documentsToFloat) {
@@ -633,12 +641,7 @@ public class DocumentSharingService {
     }
 
     private void decideSharedRoots(
-            UUID userId,
-            User user,
-            UUID subtreeRootId,
-            List<UUID> chunk,
-            List<Document> documentsToFloat,
-            List<UUID> orderRowsToDelete) {
+            UUID userId, List<UUID> chunk, List<Document> documentsToFloat, List<UUID> orderRowsToDelete) {
         Set<UUID> chunkIds = new HashSet<>(chunk);
         Map<UUID, UUID> parentById = new HashMap<>();
         for (Object[] row : documentRepository.findParentIdsByIdIn(chunk)) {
@@ -647,12 +650,13 @@ public class DocumentSharingService {
                     (UUID) row[0],
                     parent instanceof UUID u ? u : (parent != null ? UUID.fromString(parent.toString()) : null));
         }
-        // The subtree root's parent sits outside the subtree: resolve it alongside
-        // the chunk so the accessible-parent check below never touches a lazy proxy.
-        UUID rootParentId = parentById.get(subtreeRootId);
+        // Parents of chunk rows can sit in another chunk: resolve every parent
+        // alongside the chunk so the accessible-parent check never misses.
         Set<UUID> loadIds = new HashSet<>(chunk);
-        if (rootParentId != null) {
-            loadIds.add(rootParentId);
+        for (UUID parentId : parentById.values()) {
+            if (parentId != null) {
+                loadIds.add(parentId);
+            }
         }
         Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveAccessBatch(userId, loadIds);
         Map<UUID, UUID> ownerById = new HashMap<>();
@@ -722,6 +726,12 @@ public class DocumentSharingService {
      * (mirrors resolve_effective_access, whose grants never resolve above a trash bundle) or
      * a concurrently deleted one. One recursive id query plus one batch load, instead of a
      * lazy parent select per level.
+     *
+     * <p>Stopping at trash is deliberate and differs from
+     * {@link DocumentCollaboratorRepository#hasPositiveAncestorGrant}, which walks through trash so
+     * a NO_ACCESS breakpoint survives a trashed grant and re-arms when the ancestor is restored.
+     * What is displayed here is the chain a reader can browse, so a trashed ancestor is not part
+     * of it even when its grants still govern the breakpoint table.
      */
     private List<Document> loadAncestors(Document doc) {
         // Traversal bound: the query stops at the same 100 levels the resolution
@@ -749,6 +759,29 @@ public class DocumentSharingService {
 
     private static String titleOrUntitled(Document doc) {
         return doc.getTitle() != null && !doc.getTitle().isBlank() ? doc.getTitle() : "Untitled";
+    }
+
+    /**
+     * Roster visibility requires an identity grant (owner or collaborator,
+     * direct or inherited). Link-only readers can open the document but must
+     * not enumerate member emails and names. Masked as not found so link
+     * holders cannot distinguish a private document from a hidden roster.
+     */
+    private void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
+        if (doc.getUser().getId().equals(requesterId)) {
+            return;
+        }
+        boolean directGrant = collaboratorRepository
+                .findByDocument_IdAndUser_Id(doc.getId(), requesterId)
+                .map(c -> c.getAccessLevel() != DocumentAccessLevel.NO_ACCESS)
+                .orElse(false);
+        if (directGrant) {
+            return;
+        }
+        if (collaboratorRepository.hasPositiveAncestorGrant(requesterId, doc.getId())) {
+            return;
+        }
+        throw new ApiException(ErrorCode.NOT_FOUND);
     }
 
     private record AncestorContext(

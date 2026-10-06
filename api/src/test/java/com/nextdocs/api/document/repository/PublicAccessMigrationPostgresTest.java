@@ -13,7 +13,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,13 +27,20 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 /**
  * Migration & native query test against real PostgreSQL.
  * Exercises Postgres-specific SQL syntax (resolve_public_access recursive CTE,
- * unnest(string_to_array(..., ',')), ::uuid casts) that never executes in H2.
+ * unnest(string_to_array(..., ',')), ::uuid casts, DELETE ... USING) that never
+ * executes in H2.
+ *
+ * <p>The fixture is built from nothing: every migration is applied by Flyway into a
+ * throwaway schema. Replaying individual migration files on top of whichever schema
+ * the test run happened to find used to pass against a Flyway-built dev database and
+ * fail on an empty CI database, where the API suite creates its tables through
+ * Hibernate (no named CHECK constraints) and the migration's
+ * {@code DROP CONSTRAINT} had nothing to drop.
  */
 class PublicAccessMigrationPostgresTest {
 
     private Connection connection;
-    private final List<UUID> createdDocIds = new ArrayList<>();
-    private final List<UUID> createdUserIds = new ArrayList<>();
+    private String schema;
     private UUID testUserId;
 
     @BeforeEach
@@ -51,30 +60,21 @@ class PublicAccessMigrationPostgresTest {
             return;
         }
 
-        // Apply the real V13 + V14 migration files so drift between the SQL and the
-        // @Query/native callers is caught here instead of shipping green. Both are
-        // needed: the ancestor-grant assertions exercise V13 functions while the
-        // link assertions exercise V14.
+        schema = "pgtest_" + UUID.randomUUID().toString().replace("-", "");
+        Flyway.configure()
+                .dataSource(url, username, password)
+                .schemas(schema)
+                .defaultSchema(schema)
+                .createSchemas(true)
+                .locations("classpath:db/migration")
+                .load()
+                .migrate();
+
         try (Statement stmt = connection.createStatement()) {
-            stmt.execute(loadMigrationSql("V13__allow_no_access_collaborator.sql"));
-            stmt.execute(loadMigrationSql("V14__public_access_resolution.sql"));
+            stmt.execute("SET search_path TO " + schema);
         }
 
         testUserId = insertUser();
-    }
-
-    /** Inserts a throwaway user and returns its id; removed again in {@link #tearDown()}. */
-    private UUID insertUser() throws SQLException {
-        UUID userId = UUID.randomUUID();
-        createdUserIds.add(userId);
-        try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) "
-                        + "VALUES (?, ?, 'hash', 'Test User', now(), now()) ON CONFLICT DO NOTHING")) {
-            stmt.setObject(1, userId);
-            stmt.setString(2, "pgtest-" + userId + "@example.com");
-            stmt.executeUpdate();
-        }
-        return userId;
     }
 
     @AfterEach
@@ -83,22 +83,30 @@ class PublicAccessMigrationPostgresTest {
             return;
         }
         try (Statement stmt = connection.createStatement()) {
-            for (UUID docId : createdDocIds) {
-                stmt.execute("DELETE FROM document_collaborators WHERE document_id = '" + docId + "'");
-                stmt.execute("DELETE FROM documents WHERE id = '" + docId + "'");
-            }
-            for (UUID userId : createdUserIds) {
-                stmt.execute("DELETE FROM users WHERE id = '" + userId + "'");
-            }
+            // Everything this test created lives in its own schema, so dropping the schema
+            // is the cleanup: no per-row bookkeeping to miss.
+            stmt.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         } finally {
             connection.close();
         }
     }
 
+    /** Inserts a throwaway user and returns its id. */
+    private UUID insertUser() throws SQLException {
+        UUID userId = UUID.randomUUID();
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) "
+                        + "VALUES (?, ?, 'hash', 'Test User', now(), now())")) {
+            stmt.setObject(1, userId);
+            stmt.setString(2, "pgtest-" + userId + "@example.com");
+            stmt.executeUpdate();
+        }
+        return userId;
+    }
+
     private void insertDoc(
             UUID id, UUID parentId, String generalAccessMode, String linkAccessLevel, boolean blocked, boolean trashed)
             throws SQLException {
-        createdDocIds.add(id);
         String sql = "INSERT INTO documents (id, user_id, parent_id, title, yjs_state, general_access_mode, "
                 + "link_access_level, link_inherit_blocked, sibling_order_key, deleted_at, created_at, updated_at) "
                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())";
@@ -128,29 +136,27 @@ class PublicAccessMigrationPostgresTest {
         }
     }
 
-    private static String loadMigrationSql(String fileName) throws SQLException {
-        try (java.io.InputStream in = PublicAccessMigrationPostgresTest.class
-                .getClassLoader()
-                .getResourceAsStream("db/migration/" + fileName)) {
-            if (in == null) {
-                throw new SQLException(fileName + " not found on the test classpath");
+    private String resolvePublicAccess(UUID docId) throws SQLException {
+        return scalarString("SELECT resolve_public_access(?)", docId);
+    }
+
+    private String resolveEffectiveAccess(UUID userId, UUID docId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT resolve_effective_access(?, ?)")) {
+            stmt.setObject(1, userId);
+            stmt.setObject(2, docId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
             }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (java.io.IOException e) {
-            throw new SQLException("Failed to read " + fileName, e);
         }
     }
 
-    private String resolvePublicAccess(UUID docId) throws SQLException {
-        try (PreparedStatement stmt = connection.prepareStatement("SELECT resolve_public_access(?)")) {
-            stmt.setObject(1, docId);
+    private String scalarString(String sql, UUID argument) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setObject(1, argument);
             try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getString(1);
-                }
+                return rs.next() ? rs.getString(1) : null;
             }
         }
-        return null;
     }
 
     @Test
@@ -284,6 +290,35 @@ class PublicAccessMigrationPostgresTest {
     }
 
     /**
+     * {@code has_positive_ancestor_grant} deliberately ignores {@code deleted_at} while
+     * {@code resolve_effective_access} stops at trash. The difference is the point: a NO_ACCESS
+     * breakpoint has to outlive the trash of the ancestor that justified it, so restoring that
+     * ancestor re-arms it, even though the descendant stays private until then.
+     */
+    @Test
+    void ancestorGrant_ignoresTrashWhileResolutionStopsAtIt() throws SQLException {
+        UUID root = UUID.randomUUID();
+        UUID trashedChild = UUID.randomUUID();
+        UUID grandchild = UUID.randomUUID();
+        UUID collaborator = insertUser();
+
+        insertDoc(root, null, "RESTRICTED", null, false, false);
+        insertDoc(trashedChild, root, "RESTRICTED", null, false, true);
+        insertDoc(grandchild, trashedChild, "RESTRICTED", null, false, false);
+
+        insertCollaborator(root, collaborator, "EDIT");
+        insertCollaborator(grandchild, collaborator, "NO_ACCESS");
+
+        // Walks through the trashed ancestor...
+        assertThat(hasPositiveAncestorGrant(collaborator, grandchild)).isTrue();
+        // ...so pruning keeps the breakpoint row...
+        assertThat(pruneOrphanedBreakpoints(root)).isZero();
+        assertThat(collaboratorUserIds(grandchild)).containsExactly(collaborator);
+        // ...while the grant itself does not resolve above a trash bundle.
+        assertThat(resolveEffectiveAccess(collaborator, grandchild)).isNull();
+    }
+
+    /**
      * Runs {@code DocumentRepository#findAncestorChainIds} verbatim: callers index into the
      * result by level, so the closest ancestor must come first and a root must yield nothing.
      */
@@ -302,8 +337,139 @@ class PublicAccessMigrationPostgresTest {
         assertThat(ancestorChain(root)).isEmpty();
     }
 
-    private List<UUID> collaboratorUserIdsWithAncestorGrant(UUID documentId) throws SQLException {
-        return namedQuery(DocumentCollaboratorRepository.COLLABORATOR_ANCESTOR_GRANT_SQL, documentId, "user_id");
+    /**
+     * Runs {@code DocumentCollaboratorRepository#pruneOrphanedBreakpoints} verbatim: only the
+     * breakpoints whose user lost every positive ancestor grant may go, and only inside the
+     * subtree. A copied statement would keep passing after the shipped one changed.
+     */
+    @Test
+    void pruneOrphanedBreakpoints_deletesOnlyGrantlessBreakpointsInSubtree() throws SQLException {
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        UUID grandchild = UUID.randomUUID();
+        UUID outside = UUID.randomUUID();
+        UUID keptUser = insertUser();
+        UUID orphanedUser = insertUser();
+
+        insertDoc(root, null, "RESTRICTED", null, false, false);
+        insertDoc(child, root, "RESTRICTED", null, false, false);
+        insertDoc(grandchild, child, "RESTRICTED", null, false, false);
+        insertDoc(outside, null, "RESTRICTED", null, false, false);
+
+        // keptUser still holds a positive grant above the breakpoint.
+        insertCollaborator(root, keptUser, "EDIT");
+        insertCollaborator(grandchild, keptUser, "NO_ACCESS");
+        // orphanedUser's only positive grant was on the child, which now holds a breakpoint.
+        insertCollaborator(root, orphanedUser, "NO_ACCESS");
+        insertCollaborator(child, orphanedUser, "NO_ACCESS");
+        insertCollaborator(grandchild, orphanedUser, "NO_ACCESS");
+        // Same user, outside the pruned subtree: untouched.
+        insertCollaborator(outside, orphanedUser, "NO_ACCESS");
+
+        int deleted = pruneOrphanedBreakpoints(root);
+
+        assertThat(deleted).isEqualTo(3);
+        // keptUser's positive grant and the breakpoint it justifies both survive.
+        assertThat(collaboratorUserIds(root)).containsExactly(keptUser);
+        assertThat(collaboratorUserIds(grandchild)).containsExactly(keptUser);
+        // orphanedUser's rows inside the subtree are gone; the one outside it is not.
+        assertThat(collaboratorUserIds(child)).isEmpty();
+        assertThat(collaboratorUserIds(outside)).containsExactly(orphanedUser);
+    }
+
+    /**
+     * Runs {@code DocumentCollaboratorRepository#deleteNoAccessInSubtreeForUser} verbatim: the
+     * statement pairs a recursive subtree walk with DELETE ... USING, so a syntax or scope
+     * mistake is invisible to the H2-backed service tests.
+     */
+    @Test
+    void deleteNoAccessInSubtreeForUser_removesOnlyThatUsersBreakpointsInSubtree() throws SQLException {
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        UUID outside = UUID.randomUUID();
+        UUID leavingUser = insertUser();
+        UUID otherUser = insertUser();
+
+        insertDoc(root, null, "RESTRICTED", null, false, false);
+        insertDoc(child, root, "RESTRICTED", null, false, false);
+        insertDoc(outside, null, "RESTRICTED", null, false, false);
+
+        insertCollaborator(root, leavingUser, "NO_ACCESS");
+        insertCollaborator(child, leavingUser, "NO_ACCESS");
+        insertCollaborator(child, otherUser, "NO_ACCESS");
+        insertCollaborator(outside, leavingUser, "NO_ACCESS");
+
+        int deleted = deleteNoAccessInSubtreeForUser(root, leavingUser);
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(collaboratorUserIds(root)).isEmpty();
+        assertThat(collaboratorUserIds(child)).containsExactly(otherUser);
+        assertThat(collaboratorUserIds(outside)).containsExactly(leavingUser);
+    }
+
+    /**
+     * Runs {@code DocumentRepository#findPublicChildren} and its count query verbatim: the page
+     * must contain exactly the children a reader can open, and the count must agree with it.
+     */
+    @Test
+    void findPublicChildren_returnsOnlyReadableChildren() throws SQLException {
+        UUID parent = UUID.randomUUID();
+        UUID publicChild = UUID.randomUUID();
+        UUID inheritedChild = UUID.randomUUID();
+        UUID blockedChild = UUID.randomUUID();
+        UUID trashedPublicChild = UUID.randomUUID();
+
+        insertDoc(parent, null, "ANYONE_WITH_LINK", "VIEW", false, false);
+        insertDoc(publicChild, parent, "RESTRICTED", null, false, false);
+        insertDoc(inheritedChild, parent, "ANYONE_WITH_LINK", "COMMENT", false, false);
+        insertDoc(blockedChild, parent, "RESTRICTED", null, true, false); // blocked -> private
+        insertDoc(trashedPublicChild, parent, "ANYONE_WITH_LINK", "VIEW", false, true); // trashed
+
+        assertThat(publicChildIds(parent)).containsExactlyInAnyOrder(publicChild, inheritedChild);
+        assertThat(publicChildCount(parent)).isEqualTo(2);
+        assertThat(publicChildCountsForParents(List.of(parent))).containsExactly(Map.entry(parent, 2L));
+    }
+
+    private List<UUID> collaboratorUserIdsWithAncestorGrant(UUID documentId) {
+        return namedQuery(DocumentCollaboratorRepository.COLLABORATOR_ANCESTOR_GRANT_SQL, "documentId", documentId);
+    }
+
+    private int pruneOrphanedBreakpoints(UUID subtreeRootId) {
+        return namedQueryTemplate()
+                .update(
+                        DocumentCollaboratorRepository.PRUNE_ORPHANED_BREAKPOINTS_SQL,
+                        new MapSqlParameterSource("subtreeRootId", subtreeRootId));
+    }
+
+    private int deleteNoAccessInSubtreeForUser(UUID subtreeRootId, UUID userId) {
+        MapSqlParameterSource params = new MapSqlParameterSource("subtreeRootId", subtreeRootId);
+        params.addValue("userId", userId);
+        return namedQueryTemplate().update(DocumentCollaboratorRepository.DELETE_NO_ACCESS_IN_SUBTREE_SQL, params);
+    }
+
+    private List<UUID> publicChildIds(UUID parentId) {
+        return namedQueryTemplate()
+                .query(
+                        DocumentRepository.PUBLIC_CHILDREN_SQL,
+                        new MapSqlParameterSource("parentId", parentId),
+                        (rs, rowNum) -> (UUID) rs.getObject("id"));
+    }
+
+    private long publicChildCount(UUID parentId) {
+        Long count = namedQueryTemplate()
+                .queryForObject(
+                        DocumentRepository.PUBLIC_CHILDREN_COUNT_SQL,
+                        new MapSqlParameterSource("parentId", parentId),
+                        Long.class);
+        return count == null ? 0L : count;
+    }
+
+    private List<Map.Entry<UUID, Long>> publicChildCountsForParents(List<UUID> parentIds) {
+        return namedQueryTemplate()
+                .query(
+                        DocumentRepository.PUBLIC_CHILD_COUNTS_SQL,
+                        new MapSqlParameterSource("parentIds", parentIds),
+                        (rs, rowNum) -> Map.entry((UUID) rs.getObject("parent_id"), rs.getLong(2)));
     }
 
     private List<UUID> collaboratorUserIds(UUID documentId) throws SQLException {
@@ -330,50 +496,23 @@ class PublicAccessMigrationPostgresTest {
         }
     }
 
-    private List<UUID> ancestorChain(UUID documentId) throws SQLException {
-        return namedQuery(DocumentRepository.ANCESTOR_CHAIN_SQL, documentId, "id");
+    private List<UUID> ancestorChain(UUID documentId) {
+        return namedQuery(DocumentRepository.ANCESTOR_CHAIN_SQL, "documentId", documentId);
     }
 
     /**
-     * Runs one of the repositories' own SQL strings, binding and reading one column.
+     * Runs one of the repositories' own SQL strings, binding and reading its single UUID column.
      *
      * The query is taken from the repository constant rather than copied here: a copy
      * would keep passing after the shipped query changed, which is exactly the drift
      * these tests exist to catch. Named parameters are bound by name, so a renamed
      * placeholder fails here too.
      */
-    private List<UUID> namedQuery(String sql, UUID documentId, String column) throws SQLException {
-        MapSqlParameterSource params = new MapSqlParameterSource("documentId", documentId);
-        NamedParameterJdbcTemplate jdbc =
-                new NamedParameterJdbcTemplate(new SingleConnectionDataSource(connection, true));
-        return jdbc.queryForList(sql, params, UUID.class);
+    private List<UUID> namedQuery(String sql, String parameterName, UUID value) {
+        return namedQueryTemplate().queryForList(sql, new MapSqlParameterSource(parameterName, value), UUID.class);
     }
 
-    @Test
-    void findPublicChildren_returnsOnlyPublicChildren() throws SQLException {
-        UUID parent = UUID.randomUUID();
-        UUID publicChild = UUID.randomUUID();
-        UUID privateChild = UUID.randomUUID();
-        UUID trashedPublicChild = UUID.randomUUID();
-
-        insertDoc(parent, null, "ANYONE_WITH_LINK", "VIEW", false, false);
-        insertDoc(publicChild, parent, "RESTRICTED", null, false, false);
-        insertDoc(privateChild, parent, "RESTRICTED", null, true, false); // blocked -> private
-        insertDoc(trashedPublicChild, parent, "ANYONE_WITH_LINK", "VIEW", false, true); // trashed
-
-        String sql = "SELECT d.id FROM documents d "
-                + "WHERE d.parent_id = ? AND d.deleted_at IS NULL "
-                + "AND resolve_public_access(d.id) IS NOT NULL";
-
-        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            stmt.setObject(1, parent);
-            try (ResultSet rs = stmt.executeQuery()) {
-                List<UUID> returnedIds = new ArrayList<>();
-                while (rs.next()) {
-                    returnedIds.add((UUID) rs.getObject("id"));
-                }
-                assertThat(returnedIds).containsExactly(publicChild);
-            }
-        }
+    private NamedParameterJdbcTemplate namedQueryTemplate() {
+        return new NamedParameterJdbcTemplate(new SingleConnectionDataSource(connection, true));
     }
 }

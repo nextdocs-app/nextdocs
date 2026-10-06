@@ -296,11 +296,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         try {
             decodedMiddle = UriUtils.decode(middle, StandardCharsets.UTF_8);
         } catch (IllegalArgumentException ignored) {
-            return Verdict.unlimited();
+            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         if (decodedMiddle.isBlank() || decodedMiddle.contains("%")) {
-            return Verdict.unlimited();
+            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         // Strip trailing slash(es) so /public/ matches /public
@@ -308,7 +308,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             decodedMiddle = decodedMiddle.substring(0, decodedMiddle.length() - 1);
         }
         if (decodedMiddle.isBlank()) {
-            return Verdict.unlimited();
+            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         String method = request.getMethod();
@@ -320,13 +320,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 return Verdict.anonymousWriteBudget(
                         "public-write:", publicWriteMaxRequests, publicWriteWindow, publicWriteMaxBodyBytes);
             }
-            if ("GET".equalsIgnoreCase(method)) {
+            if ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)) {
                 return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
             }
             return Verdict.unlimited();
         }
 
-        if (!"GET".equalsIgnoreCase(method)) {
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
             return Verdict.unlimited();
         }
 
@@ -439,10 +439,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
     /**
      * True for IPv4 dotted quads and IPv6 literals (which always contain a colon).
      * Hostnames and garbage never come from a proxy's appended peer address, so
-     * they are skipped rather than keying a rate-limit bucket.
+     * they are skipped rather than keying a rate-limit bucket. Colon alone is
+     * not enough: garbage like "abc:def" must not become a bucket key.
      */
     private static boolean isIpLiteral(String candidate) {
         if (candidate.contains(":")) {
+            // IPv6 hex digits, colons, dots (IPv4-mapped) and zone ids only.
+            for (int i = 0; i < candidate.length(); i++) {
+                char c = candidate.charAt(i);
+                if (c == ':' || c == '.' || c == '%') {
+                    continue;
+                }
+                if (Character.digit(c, 16) == -1) {
+                    return false;
+                }
+            }
             return true;
         }
         String[] octets = candidate.split("\\.", -1);

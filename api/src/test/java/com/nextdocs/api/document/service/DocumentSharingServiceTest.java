@@ -196,6 +196,30 @@ class DocumentSharingServiceTest {
     }
 
     @Test
+    void listCollaborators_linkOnlyReader_cannotEnumerateRoster() {
+        UUID ownerId = UUID.randomUUID();
+        UUID linkOnlyId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(User.builder()
+                        .id(ownerId)
+                        .email("owner@example.com")
+                        .displayName("Owner")
+                        .build())
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(linkOnlyId, documentId))
+                .thenReturn(doc);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, linkOnlyId))
+                .thenReturn(Optional.empty());
+        when(collaboratorRepository.hasPositiveAncestorGrant(linkOnlyId, documentId))
+                .thenReturn(false);
+
+        assertThrows(ApiException.class, () -> sharingService.listCollaborators(linkOnlyId, documentId));
+    }
+
+    @Test
     void upsertCollaborator_createsUserDocumentOrderForRootDocument() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();

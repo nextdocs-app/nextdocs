@@ -7,9 +7,11 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -64,22 +66,51 @@ public class PermissionService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, DocumentAccessLevel> resolveAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolveEffectiveAccessBatch(userId, joined);
+        });
+    }
+
+    /**
+     * Resolves the effective anonymous access level for a batch of documents.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolvePublicAccessBatch(Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolvePublicAccessBatch(joined);
+        });
+    }
+
+    /**
+     * Resolves trash-scope access for a batch of documents.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveTrashAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolveTrashAccessBatch(userId, joined);
+        });
+    }
+
+    /**
+     * Shared batch loop: one bad entry must not deny the whole batch, and the
+     * allowsRead gate must stay in one place so a future edit cannot drop it
+     * on a single path and leak NO_ACCESS/BLOCKED as a level.
+     */
+    private Map<UUID, DocumentAccessLevel> resolveBatch(Collection<UUID> documentIds, Supplier<List<Object[]>> query) {
         if (documentIds == null || documentIds.isEmpty()) {
             return Map.of();
         }
-        // Same null-guard as resolvePublicAccessBatch: one bad entry must not
-        // deny the whole batch.
-        String joined = documentIds.stream()
-                .filter(Objects::nonNull)
-                .map(UUID::toString)
-                .collect(Collectors.joining(","));
-        if (joined.isEmpty()) {
-            return Map.of();
-        }
+        // The native batch query joins ids into a comma-separated string and casts each
+        // token with ::uuid; a single null element would either NPE the join or abort the
+        // whole batch cast. Skip nulls so one bad caller entry cannot deny every document.
+        List<Object[]> rows = query.get();
         Map<UUID, DocumentAccessLevel> result = new HashMap<>();
-        for (Object[] row : documentRepository.resolveEffectiveAccessBatch(userId, joined)) {
+        for (Object[] row : rows) {
             if (row[0] != null && row[1] != null) {
-                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
+                UUID docId = toUuid(row[0]);
                 DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
                 if (level.allowsRead()) {
                     result.put(docId, level);
@@ -89,35 +120,16 @@ public class PermissionService {
         return result;
     }
 
-    /**
-     * Resolves the effective anonymous access level for a batch of documents.
-     */
-    @Transactional(readOnly = true)
-    public Map<UUID, DocumentAccessLevel> resolvePublicAccessBatch(Collection<UUID> documentIds) {
-        if (documentIds == null || documentIds.isEmpty()) {
-            return Map.of();
-        }
-        // The native batch query joins ids into a comma-separated string and casts each
-        // token with ::uuid; a single null element would either NPE the join or abort the
-        // whole batch cast. Skip nulls so one bad caller entry cannot deny every document.
+    private static String joinIds(Collection<UUID> documentIds) {
         String joined = documentIds.stream()
                 .filter(Objects::nonNull)
                 .map(UUID::toString)
                 .collect(Collectors.joining(","));
-        if (joined.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, DocumentAccessLevel> result = new HashMap<>();
-        for (Object[] row : documentRepository.resolvePublicAccessBatch(joined)) {
-            if (row[0] != null && row[1] != null) {
-                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
-                DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
-                if (level.allowsRead()) {
-                    result.put(docId, level);
-                }
-            }
-        }
-        return result;
+        return joined.isEmpty() ? null : joined;
+    }
+
+    private static UUID toUuid(Object raw) {
+        return raw instanceof UUID u ? u : UUID.fromString(raw.toString());
     }
 
     /**

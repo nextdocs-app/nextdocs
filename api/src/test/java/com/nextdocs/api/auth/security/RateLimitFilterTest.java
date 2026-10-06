@@ -2,6 +2,7 @@ package com.nextdocs.api.auth.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -85,6 +86,17 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void headOnPublicReadPath_usesSameReadBucketAsGet() throws Exception {
+        // HEAD is a bodyless GET: it must consume the same public-read budget
+        // rather than passing through unlimited.
+        mockMvc.perform(head("/api/v1/documents/{id}/public", "11111111-1111-1111-1111-111111111111")
+                .remoteAddress("10.0.0.7"));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.0.7");
+    }
+
+    @Test
     void publicDocumentPath_whenRejected_returnsTooManyRequests() throws Exception {
         rateLimiter.allowed = false;
 
@@ -98,12 +110,13 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void publicDocumentPath_withEncodedSlashInId_isNotRateLimited() throws Exception {
+    void publicDocumentPath_withEncodedSlashInId_isRateLimitedFailClosed() throws Exception {
         mockMvc.perform(get("/api/v1/documents/11111111-1111-1111-1111-111111111111%2Fchild/public")
                         .remoteAddress("10.0.0.6"))
                 .andReturn();
 
-        assertThat(rateLimiter.invocationCount).isZero();
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.0.6");
     }
 
     @Test
@@ -445,6 +458,27 @@ class RateLimitFilterTest {
                 .andExpect(status().isOk());
 
         assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
+    }
+
+    @Test
+    void malformedPublicPaths_areRateLimitedFailClosed() throws Exception {
+        int before = rateLimiter.invocationCount;
+
+        for (String uri : new String[] {
+            "/api/v1/documents/%ZZ/public", "/api/v1/documents/%25/public", "/api/v1/documents/%/public",
+        }) {
+            org.springframework.mock.web.MockHttpServletRequest request =
+                    new org.springframework.mock.web.MockHttpServletRequest("GET", uri);
+            request.setRemoteAddr("10.0.3.1");
+            org.springframework.mock.web.MockHttpServletResponse response =
+                    new org.springframework.mock.web.MockHttpServletResponse();
+            jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+            filter.doFilter(request, response, chain);
+        }
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(before + 3);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.3.1");
     }
 
     private static final class StubRateLimiter implements RateLimiter {

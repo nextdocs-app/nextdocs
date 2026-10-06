@@ -126,24 +126,28 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             nativeQuery = true)
     List<Object[]> resolvePublicAccessBatch(@Param("ids") String ids);
 
-    @Query(
-            value = "SELECT * FROM documents d "
-                    + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
-                    + "AND resolve_public_access(d.id) IS NOT NULL "
-                    + "ORDER BY d.sibling_order_key ASC NULLS LAST, d.created_at ASC, d.id ASC",
-            countQuery = "SELECT COUNT(*) FROM documents d "
-                    + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
-                    + "AND resolve_public_access(d.id) IS NOT NULL",
-            nativeQuery = true)
+    // Public child listing gates on the levels a reader can actually open (every level
+    // DocumentAccessLevel#allowsRead accepts that resolve_public_access can return), pinned
+    // explicitly instead of leaning on V5's CHECK constraint to keep the set narrow. Extracted
+    // as a constant so the Postgres test runs the shipped string instead of a copy.
+    String PUBLIC_CHILDREN_SQL = "SELECT * FROM documents d "
+            + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT') "
+            + "ORDER BY d.sibling_order_key ASC NULLS LAST, d.created_at ASC, d.id ASC";
+
+    String PUBLIC_CHILDREN_COUNT_SQL = "SELECT COUNT(*) FROM documents d "
+            + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT')";
+
+    @Query(value = PUBLIC_CHILDREN_SQL, countQuery = PUBLIC_CHILDREN_COUNT_SQL, nativeQuery = true)
     Page<Document> findPublicChildren(@Param("parentId") UUID parentId, Pageable pageable);
 
-    // Public child counts per parent, for batch public tree listing
-    @Query(
-            value = "SELECT d.parent_id, COUNT(d.id) FROM documents d "
-                    + "WHERE d.parent_id IN (:parentIds) AND d.deleted_at IS NULL "
-                    + "AND resolve_public_access(d.id) IS NOT NULL "
-                    + "GROUP BY d.parent_id",
-            nativeQuery = true)
+    String PUBLIC_CHILD_COUNTS_SQL = "SELECT d.parent_id, COUNT(d.id) FROM documents d "
+            + "WHERE d.parent_id IN (:parentIds) AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT') "
+            + "GROUP BY d.parent_id";
+
+    @Query(value = PUBLIC_CHILD_COUNTS_SQL, nativeQuery = true)
     List<Object[]> countPublicChildrenByParentIds(@Param("parentIds") Collection<UUID> parentIds);
 
     // Effective access level including trashed documents: resolves against the trash bundle

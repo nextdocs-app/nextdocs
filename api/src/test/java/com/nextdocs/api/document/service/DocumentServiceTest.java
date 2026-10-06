@@ -1440,8 +1440,17 @@ class DocumentServiceTest {
 
         when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
         when(permissionService.resolveAccess(ownerId, subChild.getId())).thenReturn(DocumentAccessLevel.OWNER);
-        when(permissionService.resolveAccess(ownerId, child.getId())).thenReturn(DocumentAccessLevel.OWNER);
-        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(documentRepository.findAncestorChainIds(subChild.getId()))
+                .thenReturn(List.of(child.getId(), root.getId()));
+        when(documentRepository.findAllById(List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(List.of(subChild, child, root));
+        when(permissionService.resolveAccessBatch(ownerId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(Map.of(
+                        subChild.getId(), DocumentAccessLevel.OWNER,
+                        child.getId(), DocumentAccessLevel.OWNER,
+                        root.getId(), DocumentAccessLevel.OWNER));
+        when(permissionService.resolveTrashAccessBatch(ownerId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(Map.of());
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, subChild.getId());
 
@@ -1477,7 +1486,13 @@ class DocumentServiceTest {
         when(documentRepository.findById(trashedChild.getId())).thenReturn(Optional.of(trashedChild));
         when(permissionService.resolveTrashAccess(ownerId, trashedChild.getId()))
                 .thenReturn(DocumentAccessLevel.OWNER);
-        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(documentRepository.findAncestorChainIds(trashedChild.getId())).thenReturn(List.of(root.getId()));
+        when(documentRepository.findAllById(List.of(trashedChild.getId(), root.getId())))
+                .thenReturn(List.of(trashedChild, root));
+        when(permissionService.resolveAccessBatch(ownerId, List.of(trashedChild.getId(), root.getId())))
+                .thenReturn(Map.of(root.getId(), DocumentAccessLevel.OWNER));
+        when(permissionService.resolveTrashAccessBatch(ownerId, List.of(trashedChild.getId(), root.getId())))
+                .thenReturn(Map.of(trashedChild.getId(), DocumentAccessLevel.OWNER));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, trashedChild.getId());
 
@@ -1517,8 +1532,16 @@ class DocumentServiceTest {
 
         when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
         when(permissionService.resolveAccess(collaboratorId, subChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        // Collaborator does NOT have access to the parent "Secret Parent"
-        when(permissionService.resolveAccess(collaboratorId, child.getId())).thenReturn(null);
+        when(documentRepository.findAncestorChainIds(subChild.getId()))
+                .thenReturn(List.of(child.getId(), root.getId()));
+        when(documentRepository.findAllById(List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(List.of(subChild, child, root));
+        when(permissionService.resolveAccessBatch(
+                        collaboratorId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(Map.of(subChild.getId(), DocumentAccessLevel.VIEW));
+        when(permissionService.resolveTrashAccessBatch(
+                        collaboratorId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(Map.of());
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(collaboratorId, subChild.getId());
 
@@ -1526,8 +1549,6 @@ class DocumentServiceTest {
         assertEquals("Shared SubChild", crumbs.get(0).title());
         assertEquals(subChild.getId(), crumbs.get(0).id());
         assertNull(crumbs.get(0).parentId());
-        // Verify that resolveAccess on root was never even attempted
-        verify(permissionService, never()).resolveAccess(collaboratorId, root.getId());
     }
 
     @Test
@@ -1559,10 +1580,17 @@ class DocumentServiceTest {
 
         when(documentRepository.findById(subChild.getId())).thenReturn(Optional.of(subChild));
         when(permissionService.resolveAccess(collaboratorId, subChild.getId())).thenReturn(DocumentAccessLevel.EDIT);
-        // Collaborator has access to "Shared Project"
-        when(permissionService.resolveAccess(collaboratorId, child.getId())).thenReturn(DocumentAccessLevel.EDIT);
-        // But NOT to "Secret Company Root"
-        when(permissionService.resolveAccess(collaboratorId, root.getId())).thenReturn(null);
+        when(documentRepository.findAncestorChainIds(subChild.getId()))
+                .thenReturn(List.of(child.getId(), root.getId()));
+        when(documentRepository.findAllById(List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(List.of(subChild, child, root));
+        when(permissionService.resolveAccessBatch(
+                        collaboratorId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(
+                        Map.of(subChild.getId(), DocumentAccessLevel.EDIT, child.getId(), DocumentAccessLevel.EDIT));
+        when(permissionService.resolveTrashAccessBatch(
+                        collaboratorId, List.of(subChild.getId(), child.getId(), root.getId())))
+                .thenReturn(Map.of());
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(collaboratorId, subChild.getId());
 
@@ -1591,7 +1619,11 @@ class DocumentServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
         when(permissionService.resolvePublicAccess(publicDoc.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolvePublicAccess(privateRoot.getId())).thenReturn(null);
+        when(documentRepository.findAncestorChainIds(publicDoc.getId())).thenReturn(List.of(privateRoot.getId()));
+        when(documentRepository.findAllById(List.of(publicDoc.getId(), privateRoot.getId())))
+                .thenReturn(List.of(publicDoc, privateRoot));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicDoc.getId(), privateRoot.getId())))
+                .thenReturn(Map.of(publicDoc.getId(), DocumentAccessLevel.VIEW));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
 
@@ -1619,7 +1651,14 @@ class DocumentServiceTest {
         when(documentRepository.findByIdAndDeletedAtIsNull(restrictedChild.getId()))
                 .thenReturn(Optional.of(restrictedChild));
         when(permissionService.resolvePublicAccess(restrictedChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolvePublicAccess(publicParent.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(restrictedChild.getId()))
+                .thenReturn(List.of(publicParent.getId()));
+        when(documentRepository.findAllById(List.of(restrictedChild.getId(), publicParent.getId())))
+                .thenReturn(List.of(restrictedChild, publicParent));
+        when(permissionService.resolvePublicAccessBatch(List.of(restrictedChild.getId(), publicParent.getId())))
+                .thenReturn(Map.of(
+                        restrictedChild.getId(), DocumentAccessLevel.VIEW,
+                        publicParent.getId(), DocumentAccessLevel.VIEW));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(restrictedChild.getId());
 
@@ -1665,7 +1704,13 @@ class DocumentServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
         when(permissionService.resolvePublicAccess(publicChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolvePublicAccess(publicParent.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(publicChild.getId())).thenReturn(List.of(publicParent.getId()));
+        when(documentRepository.findAllById(List.of(publicChild.getId(), publicParent.getId())))
+                .thenReturn(List.of(publicChild, publicParent));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicChild.getId(), publicParent.getId())))
+                .thenReturn(Map.of(
+                        publicChild.getId(), DocumentAccessLevel.VIEW,
+                        publicParent.getId(), DocumentAccessLevel.VIEW));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
 
@@ -1704,6 +1749,12 @@ class DocumentServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
         when(permissionService.resolvePublicAccess(publicChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(publicChild.getId()))
+                .thenReturn(List.of(trashedPublicParent.getId()));
+        when(documentRepository.findAllById(List.of(publicChild.getId(), trashedPublicParent.getId())))
+                .thenReturn(List.of(publicChild));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicChild.getId(), trashedPublicParent.getId())))
+                .thenReturn(Map.of(publicChild.getId(), DocumentAccessLevel.VIEW));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
 
@@ -1733,7 +1784,13 @@ class DocumentServiceTest {
 
         when(documentRepository.findById(child.getId())).thenReturn(Optional.of(child));
         when(permissionService.resolveAccess(ownerId, child.getId())).thenReturn(DocumentAccessLevel.OWNER);
-        when(permissionService.resolveAccess(ownerId, root.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(documentRepository.findAncestorChainIds(child.getId())).thenReturn(List.of(root.getId()));
+        when(documentRepository.findAllById(List.of(child.getId(), root.getId())))
+                .thenReturn(List.of(child, root));
+        when(permissionService.resolveAccessBatch(ownerId, List.of(child.getId(), root.getId())))
+                .thenReturn(Map.of(child.getId(), DocumentAccessLevel.OWNER, root.getId(), DocumentAccessLevel.OWNER));
+        when(permissionService.resolveTrashAccessBatch(ownerId, List.of(child.getId(), root.getId())))
+                .thenReturn(Map.of());
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, child.getId());
 
@@ -1753,6 +1810,10 @@ class DocumentServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
         when(permissionService.resolvePublicAccess(publicDoc.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(publicDoc.getId())).thenReturn(List.of());
+        when(documentRepository.findAllById(List.of(publicDoc.getId()))).thenReturn(List.of(publicDoc));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicDoc.getId())))
+                .thenReturn(Map.of(publicDoc.getId(), DocumentAccessLevel.VIEW));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
 
@@ -1768,13 +1829,13 @@ class DocumentServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(child));
         when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         DocumentResponse response = documentService.getPublic(docId);
 
         assertEquals(docId, response.id());
         assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
+        assertFalse(response.hasCollaborators());
     }
 
     @Test
@@ -1791,6 +1852,136 @@ class DocumentServiceTest {
     }
 
     @Test
+    void getPublic_neverAsksForCollaboratorsOnBehalfOfAnAnonymousCaller() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        doc.setGeneralAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+
+        DocumentResponse response = documentService.getPublic(docId);
+
+        // A share-link reader holds no roster: reporting that the document has named
+        // collaborators would leak the sharing state listPublicChildren keeps at false.
+        assertFalse(response.hasCollaborators());
+        verify(collaboratorRepository, never()).existsByDocument_Id(docId);
+    }
+
+    @Test
+    void getPublic_hidesNonPublicChildrenFromAnonymousCaller() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        doc.setGeneralAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+
+        DocumentResponse response = documentService.getPublic(docId);
+
+        // A non-public child must not reveal itself through the parent flag.
+        assertFalse(response.hasChildren());
+        verify(documentRepository, never()).existsNonTrashedChildrenByParentId(docId);
+    }
+
+    @Test
+    void update_stillReportsCollaboratorsToSignedInCallers() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(collaboratorRepository.existsByDocument_Id(documentId)).thenReturn(true);
+
+        DocumentResponse response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
+
+        assertTrue(response.hasCollaborators());
+    }
+
+    @Test
+    void update_titleLongerThanTheColumn_throwsValidationFailed() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        String tooLong = "t".repeat(DocumentService.MAX_TITLE_LENGTH + 1);
+
+        // The DTO's @Size already rejects this over HTTP; the service guard keeps the
+        // VARCHAR(255) invariant for every other caller instead of failing at the column.
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> documentService.update(requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    void update_titleAtTheColumnLimit_isAccepted() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        String longest = "t".repeat(DocumentService.MAX_TITLE_LENGTH);
+
+        DocumentResponse response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest(longest, null, null));
+
+        assertEquals(longest, response.title());
+    }
+
+    @Test
+    void update_oversizedState_throwsValidationFailed() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
+        String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.update(
+                        requesterId, documentId, new DocumentUpdateRequest(null, encodedState, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    void updatePublic_titleLongerThanTheColumn_throwsValidationFailed() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        String tooLong = "t".repeat(DocumentService.MAX_TITLE_LENGTH + 1);
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
     void updatePublic_editLink_updatesTitleAndState() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
@@ -1798,8 +1989,7 @@ class DocumentServiceTest {
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
         when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(doc)).thenReturn(doc);
-        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         String encodedState = java.util.Base64.getEncoder().encodeToString("edit".getBytes(StandardCharsets.UTF_8));
         DocumentResponse response =
@@ -1837,7 +2027,7 @@ class DocumentServiceTest {
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
         when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(doc)).thenReturn(doc);
-        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         // Exactly at the cap, not one byte over: the bound is inclusive, so a snapshot
         // the realtime layer accepts can always be persisted through the API.

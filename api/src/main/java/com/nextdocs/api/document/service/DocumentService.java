@@ -58,6 +58,9 @@ public class DocumentService {
     // burn bandwidth and storage on data that could never sync.
     static final int MAX_PUBLIC_STATE_BYTES = 5 * 1024 * 1024;
 
+    // Mirrors documents.title VARCHAR(255) in V2 and the DTOs' @Size bound.
+    static final int MAX_TITLE_LENGTH = 255;
+
     // Base64 turns 3 bytes into 4 characters, so this bounds what a caller can make the
     // decoder allocate. Deliberately a little generous (the 3-byte encoding quantum
     // hides up to two extra bytes) and only a pre-filter: MAX_PUBLIC_STATE_BYTES stays
@@ -226,7 +229,7 @@ public class DocumentService {
         Pageable clampedPageable = clampPageSize(pageable, MAX_PUBLIC_CHILDREN_PAGE_SIZE);
         Page<Document> page = documentRepository.findPublicChildren(parent.getId(), clampedPageable);
         if (page.isEmpty()) {
-            return page.map(child -> toResponse(child, false));
+            return Page.empty(clampedPageable);
         }
 
         List<Document> children = page.getContent();
@@ -287,10 +290,9 @@ public class DocumentService {
         if (pageable == null) {
             return PageRequest.of(0, maxSize);
         }
-        if (pageable.getPageSize() <= maxSize) {
-            return pageable;
-        }
-        return PageRequest.of(pageable.getPageNumber(), maxSize, pageable.getSort());
+        // PUBLIC_CHILDREN_SQL pins its own ORDER BY, so any client-supplied
+        // sort must be dropped; native queries would otherwise apply it.
+        return PageRequest.of(pageable.getPageNumber(), Math.min(pageable.getPageSize(), maxSize));
     }
 
     private Map<UUID, Long> fetchChildCounts(Collection<UUID> docIds) {
@@ -359,43 +361,67 @@ public class DocumentService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
-        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
-        Document current = target;
-        int depth = 0;
-        while (current != null && depth < MAX_TREE_DEPTH) {
-            Document parent = current.getParent();
-            UUID parentId = null;
-            DocumentAccessLevel parentAccess = null;
+        // Fixed query count whatever the depth: one ancestor-chain query, one
+        // entity load, and one access batch per scope (active/trash).
+        List<UUID> chainIds = documentRepository.findAncestorChainIds(documentId);
+        List<UUID> allIds = new ArrayList<>(chainIds.size() + 1);
+        allIds.add(documentId);
+        allIds.addAll(chainIds);
+        Map<UUID, Document> docsById = new HashMap<>();
+        for (Document doc : documentRepository.findAllById(allIds)) {
+            docsById.put(doc.getId(), doc);
+        }
+        Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveAccessBatch(userId, allIds);
+        Map<UUID, DocumentAccessLevel> trashAccessById = permissionService.resolveTrashAccessBatch(userId, allIds);
 
-            if (parent != null) {
-                parentAccess = parent.getDeletedAt() != null
-                        ? permissionService.resolveTrashAccess(userId, parent.getId())
-                        : permissionService.resolveAccess(userId, parent.getId());
-                if (parentAccess != null) {
-                    parentId = parent.getId();
+        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
+        List<UUID> orderedIds = new ArrayList<>(allIds);
+        int depth = 0;
+        for (int i = 0; i < orderedIds.size(); i++) {
+            UUID currentId = orderedIds.get(i);
+            if (depth >= MAX_TREE_DEPTH) {
+                break;
+            }
+            Document current = docsById.get(currentId);
+            if (current == null) {
+                break;
+            }
+            DocumentAccessLevel level =
+                    current.getDeletedAt() != null ? trashAccessById.get(currentId) : accessById.get(currentId);
+            if (level == null && !currentId.equals(documentId)) {
+                break;
+            }
+            if (currentId.equals(documentId)) {
+                level = currentAccess;
+            }
+            UUID parentId = null;
+            int currentIndex = i;
+            if (currentIndex + 1 < orderedIds.size()) {
+                UUID candidateParentId = orderedIds.get(currentIndex + 1);
+                Document candidateParent = docsById.get(candidateParentId);
+                if (candidateParent != null) {
+                    DocumentAccessLevel parentLevel = candidateParent.getDeletedAt() != null
+                            ? trashAccessById.get(candidateParentId)
+                            : accessById.get(candidateParentId);
+                    if (parentLevel != null) {
+                        parentId = candidateParentId;
+                    }
                 }
             }
 
-            // Document icon is reserved for future icon/cover support when introduced to the Document entity model.
-            // The level resolved while checking the parent is reused for its own
-            // row, so each ancestor costs one recursive CTE instead of two.
             path.add(new DocumentBreadcrumbResponse(
                     current.getId(),
                     formatBreadcrumbTitle(current.getTitle()),
                     null,
                     parentId,
                     current.getSiblingOrderKey(),
-                    currentAccess,
+                    level,
                     current.getCreatedAt(),
                     current.getUpdatedAt()));
 
             if (parentId == null) {
-                // Reached the top of the user's accessible hierarchy
                 break;
             }
-
-            current = parent;
-            currentAccess = parentAccess;
             depth++;
         }
         Collections.reverse(path);
@@ -413,45 +439,55 @@ public class DocumentService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
-        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
-        Document current = target;
-        int depth = 0;
-        // Traversal bound: walks up to MAX_TREE_DEPTH (100) parent nodes. The
-        // level resolved while checking each parent is reused for its own row,
-        // so a breadcrumb costs one CTE per level instead of two.
-        while (current != null && depth < MAX_TREE_DEPTH) {
-            Document parent = current.getParent();
-            UUID parentId = null;
-            DocumentAccessLevel parentAccess = null;
+        List<UUID> chainIds = documentRepository.findAncestorChainIds(documentId);
+        List<UUID> allIds = new ArrayList<>(chainIds.size() + 1);
+        allIds.add(documentId);
+        allIds.addAll(chainIds);
+        Map<UUID, Document> docsById = new HashMap<>();
+        for (Document doc : documentRepository.findAllById(allIds)) {
+            if (doc.getDeletedAt() == null) {
+                docsById.put(doc.getId(), doc);
+            }
+        }
+        Map<UUID, DocumentAccessLevel> publicAccessById = permissionService.resolvePublicAccessBatch(allIds);
 
-            if (parent != null && parent.getDeletedAt() == null) {
-                // For public access, the parent must also be effectively public
-                // (own link or inherited). If the parent is private or trashed,
-                // we stop here so public viewers cannot see private parent titles.
-                parentAccess = permissionService.resolvePublicAccess(parent.getId());
-                if (parentAccess != null) {
-                    parentId = parent.getId();
+        List<DocumentBreadcrumbResponse> path = new ArrayList<>();
+        int depth = 0;
+        for (int i = 0; i < allIds.size(); i++) {
+            UUID currentId = allIds.get(i);
+            if (depth >= MAX_TREE_DEPTH) {
+                break;
+            }
+            Document current = docsById.get(currentId);
+            if (current == null) {
+                break;
+            }
+            DocumentAccessLevel level = currentId.equals(documentId) ? currentAccess : publicAccessById.get(currentId);
+            if (level == null) {
+                break;
+            }
+            UUID parentId = null;
+            int currentIndex = i;
+            if (currentIndex + 1 < allIds.size()) {
+                UUID candidateParentId = allIds.get(currentIndex + 1);
+                if (publicAccessById.get(candidateParentId) != null && docsById.containsKey(candidateParentId)) {
+                    parentId = candidateParentId;
                 }
             }
 
-            // Document icon is reserved for future icon/cover support when introduced to the Document entity model
             path.add(new DocumentBreadcrumbResponse(
                     current.getId(),
                     formatBreadcrumbTitle(current.getTitle()),
                     null,
                     parentId,
                     current.getSiblingOrderKey(),
-                    currentAccess,
+                    level,
                     current.getCreatedAt(),
                     current.getUpdatedAt()));
 
             if (parentId == null) {
-                // Reached the top of public access
                 break;
             }
-
-            current = parent;
-            currentAccess = parentAccess;
             depth++;
         }
         Collections.reverse(path);
@@ -485,7 +521,14 @@ public class DocumentService {
         }
 
         if (request.yjsState() != null) {
-            document.setYjsState(decodeBase64State(request.yjsState()));
+            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
+                throw publicStateTooLarge();
+            }
+            byte[] state = decodeBase64State(request.yjsState());
+            if (state.length > MAX_PUBLIC_STATE_BYTES) {
+                throw publicStateTooLarge();
+            }
+            document.setYjsState(state);
         }
 
         if (request.createdBy() != null) {
@@ -652,10 +695,19 @@ public class DocumentService {
         return purgeExpiredTrash(nowUtc);
     }
 
+    /**
+     * Blank titles fall back to Untitled. Over-long titles are rejected here as well as at the
+     * request boundary ({@code @Size}): the column is VARCHAR(255), so a title that slipped past
+     * the DTO would otherwise surface as a 500 from the database instead of a validation error.
+     */
     private static String normalizeTitle(String title) {
         String value = title == null ? "" : title.strip();
         if (value.isBlank()) {
             return "Untitled";
+        }
+        if (value.length() > MAX_TITLE_LENGTH) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED, "Title must be at most " + MAX_TITLE_LENGTH + " characters.");
         }
         return value;
     }
@@ -739,8 +791,18 @@ public class DocumentService {
             orderKey = null;
         }
 
-        boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(document.getId());
-        boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(document.getId());
+        boolean hasChildren = callerUserId == null
+                // Share-link guests must not learn about children they cannot
+                // open: filter by public readability like listPublicChildren
+                // instead of counting every non-trashed child.
+                ? !documentRepository
+                        .countPublicChildrenByParentIds(List.of(document.getId()))
+                        .isEmpty()
+                : documentRepository.existsNonTrashedChildrenByParentId(document.getId());
+        // Anonymous readers (share-link guests) must not learn whether a document has
+        // collaborators: listPublicChildren answers false for the same reason, and only a
+        // signed-in caller has a roster to compare the flag against.
+        boolean hasCollaborators = callerUserId != null && collaboratorRepository.existsByDocument_Id(document.getId());
         DocumentAccessLevel accessLevel;
         if (callerUserId == null) {
             accessLevel = publicAccessHint != null
