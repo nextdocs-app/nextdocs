@@ -909,6 +909,7 @@ describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
         node('child-1', 'public-root', 'Child 1'),
         node('child-2', 'public-root', 'Child 2'),
       ],
+      truncated: false,
     });
 
     listSpy.mockRestore();
@@ -927,12 +928,75 @@ describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
     const dispatch = jest.fn();
     const getState = () => ({ auth: { accessToken: null } }) as unknown as RootState;
 
-    await fetchPublicChildrenThunk({ parentId: 'public-root' })(dispatch, getState, undefined);
+    const result = await fetchPublicChildrenThunk({ parentId: 'public-root' })(
+      dispatch,
+      getState,
+      undefined
+    );
 
     expect(listSpy).toHaveBeenCalledTimes(2);
     expect(listSpy).toHaveBeenNthCalledWith(1, 'public-root', 0, 50);
     expect(listSpy).toHaveBeenNthCalledWith(2, 'public-root', 1, 50);
+    expect(result.payload).toMatchObject({ parentId: 'public-root', truncated: true });
 
     listSpy.mockRestore();
+  });
+
+  it('marks the parent truncated when the page cap hides children', () => {
+    const synced = sharedTreeReducer(initialState, syncPublicRoots([node('public-root', null)]));
+    const state = sharedTreeReducer(
+      synced,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: true,
+        },
+        'request-id',
+        { parentId: 'public-root' }
+      )
+    );
+
+    expect(state.nodes['public-root'].childrenLoaded).toBe(true);
+    expect(state.nodes['public-root'].childrenTruncated).toBe(true);
+  });
+
+  it('preserves a known child truncation hint across parent refetches', () => {
+    const synced = sharedTreeReducer(initialState, syncPublicRoots([node('public-root', null)]));
+    const first = sharedTreeReducer(
+      synced,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: false,
+        },
+        'request-id-1',
+        { parentId: 'public-root' }
+      )
+    );
+    const truncatedChild = {
+      ...first.nodes['child-1'],
+      childrenTruncated: true,
+    };
+    const withHint = {
+      ...first,
+      nodes: { ...first.nodes, 'child-1': truncatedChild },
+    };
+
+    const second = sharedTreeReducer(
+      withHint,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: false,
+        },
+        'request-id-2',
+        { parentId: 'public-root' }
+      )
+    );
+
+    expect(second.nodes['child-1'].childrenTruncated).toBe(true);
   });
 });

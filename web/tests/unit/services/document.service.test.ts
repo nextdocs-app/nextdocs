@@ -543,6 +543,27 @@ describe('document.service', () => {
         Authorization: 'Bearer tok',
       });
     });
+
+    it('should map a malformed access level to null instead of trusting it', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            documentId: 'doc-123',
+            allowed: true,
+            accessLevel: 'SUPERADMIN',
+            owner: false,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.checkAccess('doc-123');
+
+      expect(access.accessLevel).toBeNull();
+    });
   });
 
   describe('listPublicChildren', () => {
@@ -590,6 +611,41 @@ describe('document.service', () => {
         expect.objectContaining({ method: 'GET' })
       );
       expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+    });
+
+    it('should fall back to VIEW for a malformed child access level', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            content: [
+              {
+                id: 'child-9',
+                title: 'Odd',
+                parentId: 'parent-1',
+                orderKey: 'a0',
+                hasChildren: false,
+                accessLevel: 'SUPERADMIN',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+              },
+            ],
+            totalElements: 1,
+            totalPages: 1,
+            size: 50,
+            number: 0,
+            first: true,
+            last: true,
+          },
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const page = await documentService.listPublicChildren('parent-1');
+
+      expect(page.items[0].effectiveAccessLevel).toBe('VIEW');
     });
   });
 

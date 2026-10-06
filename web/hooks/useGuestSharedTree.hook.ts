@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { documentService, DocumentServiceApiError } from '@/services/document.service';
+import {
+  documentService,
+  DocumentServiceApiError,
+  sanitizeDocumentAccessLevel,
+} from '@/services/document.service';
 import { useAppDispatch } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import {
@@ -57,7 +61,7 @@ export function useGuestSharedTree(activeDocId: string) {
           // Non-leaf chain nodes necessarily have children (the next crumb);
           // the open document's children load once below.
           hasChildren: index < crumbs.length - 1,
-          effectiveAccessLevel: crumb.accessLevel ?? 'VIEW',
+          effectiveAccessLevel: sanitizeDocumentAccessLevel(crumb.accessLevel, 'VIEW'),
           createdAt: crumb.createdAt ?? '',
           updatedAt: crumb.updatedAt ?? '',
         }));

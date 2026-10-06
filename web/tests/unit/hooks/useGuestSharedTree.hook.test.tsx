@@ -159,6 +159,42 @@ describe('useGuestSharedTree', () => {
     });
   });
 
+  it('falls back to VIEW for a malformed breadcrumb access level', async () => {
+    const crumbs = [
+      {
+        id: 'doc-odd',
+        title: 'Odd',
+        parentId: null,
+        orderKey: 'order-odd',
+        accessLevel: 'SUPERADMIN',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      },
+    ];
+
+    jest.spyOn(documentService, 'getDocumentBreadcrumbs').mockResolvedValue(crumbs as never);
+    jest.spyOn(documentService, 'listPublicChildren').mockResolvedValue({
+      items: [],
+      page: 0,
+      size: 50,
+      totalElements: 0,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    const { result } = renderHook(() => useGuestSharedTree('doc-odd'), {
+      wrapper: createWrapper(store),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isGuestSharedLoading).toBe(false);
+    });
+
+    expect(store.getState().sharedTree.nodes['doc-odd']).toMatchObject({
+      effectiveAccessLevel: 'VIEW',
+    });
+  });
+
   it('resets tree on 403 or 404 error (link revoked/not found)', async () => {
     jest
       .spyOn(documentService, 'getDocumentBreadcrumbs')

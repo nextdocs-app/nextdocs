@@ -51,6 +51,30 @@ export type DocumentAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
 export type CollaboratorAccessLevel = DocumentAccessLevel | 'NO_ACCESS';
 export type DocumentGeneralAccessMode = 'RESTRICTED' | 'ANYONE_WITH_LINK';
 
+const DOCUMENT_ACCESS_LEVELS: readonly string[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
+
+/** True for the four levels the API may report on the document channel. */
+export function isValidDocumentAccessLevel(value: unknown): value is DocumentAccessLevel {
+  return typeof value === 'string' && DOCUMENT_ACCESS_LEVELS.includes(value);
+}
+
+/**
+ * Untrusted payloads (share-link reads, breadcrumbs, public children) flow
+ * straight into access state that gates editing. A malformed level must never
+ * become edit capability: unknown values fall back instead of passing through.
+ */
+export function sanitizeDocumentAccessLevel(
+  value: unknown,
+  fallback: DocumentAccessLevel = 'VIEW'
+): DocumentAccessLevel {
+  return isValidDocumentAccessLevel(value) ? value : fallback;
+}
+
+/** Same guard for nullable access fields: unknown values become null (unknown). */
+export function sanitizeNullableAccessLevel(value: unknown): DocumentAccessLevel | null {
+  return isValidDocumentAccessLevel(value) ? value : null;
+}
+
 interface ApiDocumentAccess {
   documentId: string;
   allowed: boolean;
@@ -519,7 +543,7 @@ class DocumentService {
       return {
         ydoc,
         meta: this.toDocumentMeta(body),
-        accessLevel: body.accessLevel ?? null,
+        accessLevel: sanitizeNullableAccessLevel(body.accessLevel),
       };
     });
   }
@@ -561,7 +585,7 @@ class DocumentService {
     return {
       documentId: body.documentId,
       allowed: body.allowed,
-      accessLevel: body.accessLevel,
+      accessLevel: sanitizeNullableAccessLevel(body.accessLevel),
       owner: body.owner,
       trashed: body.trashed,
     };
@@ -580,7 +604,7 @@ class DocumentService {
       return {
         documentId: body.documentId,
         allowed: body.allowed,
-        accessLevel: body.accessLevel,
+        accessLevel: sanitizeNullableAccessLevel(body.accessLevel),
         owner: body.owner,
         trashed: body.trashed,
       };
@@ -605,7 +629,7 @@ class DocumentService {
       parentId: doc.parentId ?? parentId,
       orderKey: doc.orderKey ?? '',
       hasChildren: doc.hasChildren ?? false,
-      effectiveAccessLevel: doc.accessLevel ?? 'VIEW',
+      effectiveAccessLevel: sanitizeDocumentAccessLevel(doc.accessLevel, 'VIEW'),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
     }));

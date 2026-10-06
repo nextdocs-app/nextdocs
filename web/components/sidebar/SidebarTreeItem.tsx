@@ -331,6 +331,14 @@ export function SidebarTreeItem({
               />
             ))
           )}
+          {node.childrenTruncated && !node.isLoading && (
+            <div
+              className="py-1 text-[13px] text-muted-foreground/50 italic select-none"
+              style={{ paddingLeft: `${indentPx + 24}px` }}
+            >
+              Showing the first 100 documents
+            </div>
+          )}
         </ul>
       )}
     </li>

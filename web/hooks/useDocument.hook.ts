@@ -1,5 +1,9 @@
 import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
-import { documentService, DocumentServiceApiError } from '@/services/document.service';
+import {
+  documentService,
+  DocumentServiceApiError,
+  isValidDocumentAccessLevel,
+} from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
@@ -173,7 +177,7 @@ async function resolveGuestAccessLevel(
   documentId: string,
   options?: { payloadLevel?: DocumentAccessLevel | null; fallback?: DocumentAccessLevel }
 ): Promise<DocumentAccessLevel> {
-  if (options?.payloadLevel) {
+  if (options?.payloadLevel && isValidDocumentAccessLevel(options.payloadLevel)) {
     return options.payloadLevel;
   }
   try {

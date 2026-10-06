@@ -47,7 +47,7 @@ export const fetchChildrenThunk = createAsyncThunk<
 const MAX_PUBLIC_CHILDREN_PAGES = 2;
 
 export const fetchPublicChildrenThunk = createAsyncThunk<
-  { parentId: string; children: TreeNode[] },
+  { parentId: string; children: TreeNode[]; truncated: boolean },
   { parentId: string },
   { state: RootState }
 >('sharedTree/fetchPublicChildren', async ({ parentId }) => {
@@ -65,6 +65,7 @@ export const fetchPublicChildrenThunk = createAsyncThunk<
   return {
     parentId,
     children: allChildren,
+    truncated: hasMore,
   };
 });
 
@@ -94,7 +95,7 @@ export const moveDocumentThunk = createAsyncThunk<
 
 function applyFetchedChildren(
   state: SharedTreeState,
-  payload: { parentId: string; children: TreeNode[] }
+  payload: { parentId: string; children: TreeNode[]; truncated?: boolean }
 ) {
   const { parentId, children } = payload;
   const parent = state.nodes[parentId];
@@ -103,6 +104,7 @@ function applyFetchedChildren(
   parent.isLoading = false;
   parent.childrenLoaded = true;
   parent.hasChildren = children.length > 0;
+  parent.childrenTruncated = payload.truncated ?? false;
 
   const childIds: string[] = [];
   for (const rawChild of children) {
@@ -112,6 +114,7 @@ function applyFetchedChildren(
     if (existing) {
       state.nodes[rawChild.id].children = existing.children;
       state.nodes[rawChild.id].childrenLoaded = existing.childrenLoaded;
+      state.nodes[rawChild.id].childrenTruncated = existing.childrenTruncated;
     }
   }
   parent.children = childIds;
@@ -207,6 +210,7 @@ const sharedTreeSlice = createSlice({
         if (existing) {
           state.nodes[entry.id].children = existing.children;
           state.nodes[entry.id].childrenLoaded = existing.childrenLoaded;
+          state.nodes[entry.id].childrenTruncated = existing.childrenTruncated;
           if (existing.children.length > 0) {
             state.nodes[entry.id].hasChildren = true;
           }
@@ -336,6 +340,7 @@ const sharedTreeSlice = createSlice({
           isLoading: existing.isLoading,
           children: existing.children,
           childrenLoaded: existing.childrenLoaded,
+          childrenTruncated: existing.childrenTruncated,
         };
       }
 
@@ -479,6 +484,7 @@ const sharedTreeSlice = createSlice({
       if (existing) {
         state.nodes[updatedNode.id].children = existing.children;
         state.nodes[updatedNode.id].childrenLoaded = existing.childrenLoaded;
+        state.nodes[updatedNode.id].childrenTruncated = existing.childrenTruncated;
       }
 
       if (effectiveParentId && state.nodes[effectiveParentId]) {
