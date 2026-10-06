@@ -629,16 +629,9 @@ class DocumentService {
     });
   }
 
-  public async listCollaborators(documentId: string, accessToken: string): Promise<Collaborator[]> {
-    const body = await this.fetchApi<ApiCollaborator[]>(
-      `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators`,
-      {
-        method: 'GET',
-        accessToken,
-      }
-    );
-
-    return body.map((item) => ({
+  /** One collaborator row, from any endpoint that answers with collaborator rows. */
+  private toCollaborator(item: ApiCollaborator): Collaborator {
+    return {
       userId: item.userId,
       email: item.email,
       displayName: item.displayName,
@@ -649,15 +642,33 @@ class DocumentService {
       inheritedFromId: item.inheritedFromId ?? null,
       inheritedFromTitle: item.inheritedFromTitle ?? null,
       inheritedAccessLevel: item.inheritedAccessLevel ?? null,
-    }));
+    };
   }
 
+  public async listCollaborators(documentId: string, accessToken: string): Promise<Collaborator[]> {
+    const body = await this.fetchApi<ApiCollaborator[]>(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators`,
+      {
+        method: 'GET',
+        accessToken,
+      }
+    );
+
+    return body.map((item) => this.toCollaborator(item));
+  }
+
+  /**
+   * Collaborator mutations answer with the recalculated list, so a caller never
+   * has to follow its own write with a list request to see rows that appeared or
+   * vanished with it (an added grant can surface an inherited row; a removed
+   * override can bring one back).
+   */
   public async upsertCollaborator(
     documentId: string,
     payload: { email: string; accessLevel: DocumentAccessLevel },
     accessToken: string
-  ): Promise<Collaborator> {
-    const body = await this.fetchApi<ApiCollaborator>(
+  ): Promise<Collaborator[]> {
+    const body = await this.fetchApi<ApiCollaborator[]>(
       `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators`,
       {
         method: 'POST',
@@ -668,18 +679,7 @@ class DocumentService {
 
     this.emitCloudDocumentsChanged();
 
-    return {
-      userId: body.userId,
-      email: body.email,
-      displayName: body.displayName,
-      accessLevel: body.accessLevel,
-      addedAt: body.addedAt,
-      owner: body.owner ?? false,
-      inherited: body.inherited ?? false,
-      inheritedFromId: body.inheritedFromId ?? null,
-      inheritedFromTitle: body.inheritedFromTitle ?? null,
-      inheritedAccessLevel: body.inheritedAccessLevel ?? null,
-    };
+    return body.map((item) => this.toCollaborator(item));
   }
 
   public async updateCollaboratorAccess(
@@ -687,35 +687,37 @@ class DocumentService {
     userId: string,
     accessLevel: CollaboratorAccessLevel,
     accessToken: string
-  ): Promise<void> {
-    await this.fetchApi<void>(
+  ): Promise<Collaborator[]> {
+    const body = await this.fetchApi<ApiCollaborator[]>(
       `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators/${encodeURIComponent(userId)}`,
       {
         method: 'PUT',
         accessToken,
         body: JSON.stringify({ accessLevel }),
-        allowEmptyData: true,
       }
     );
 
     this.emitCloudDocumentsChanged();
+
+    return body.map((item) => this.toCollaborator(item));
   }
 
   public async removeCollaborator(
     documentId: string,
     userId: string,
     accessToken: string
-  ): Promise<void> {
-    await this.fetchApi<void>(
+  ): Promise<Collaborator[]> {
+    const body = await this.fetchApi<ApiCollaborator[]>(
       `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators/${encodeURIComponent(userId)}`,
       {
         method: 'DELETE',
         accessToken,
-        allowEmptyData: true,
       }
     );
 
     this.emitCloudDocumentsChanged();
+
+    return body.map((item) => this.toCollaborator(item));
   }
 
   public async leaveSharedDocument(documentId: string, accessToken: string): Promise<void> {

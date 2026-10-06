@@ -171,12 +171,11 @@ export function SharePanel({
     try {
       setIsSavingInvite(true);
       setError(null);
-      await documentService.upsertCollaborator(
+      const next = await documentService.upsertCollaborator(
         documentId,
         { email: inviteEmail.trim(), accessLevel: inviteAccess },
         accessToken
       );
-      const next = await documentService.listCollaborators(documentId, accessToken);
       setCollaborators(next);
       setInviteEmail('');
     } catch (e) {
@@ -190,8 +189,12 @@ export function SharePanel({
     if (!accessToken) return;
     try {
       setError(null);
-      await documentService.updateCollaboratorAccess(documentId, userId, level, accessToken);
-      const next = await documentService.listCollaborators(documentId, accessToken);
+      const next = await documentService.updateCollaboratorAccess(
+        documentId,
+        userId,
+        level,
+        accessToken
+      );
       setCollaborators(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update access');
@@ -202,8 +205,7 @@ export function SharePanel({
     if (!accessToken) return;
     try {
       setError(null);
-      await documentService.removeCollaborator(documentId, userId, accessToken);
-      const next = await documentService.listCollaborators(documentId, accessToken);
+      const next = await documentService.removeCollaborator(documentId, userId, accessToken);
       setCollaborators(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to remove collaborator');

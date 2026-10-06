@@ -60,11 +60,13 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Add or update a collaborator",
-            description = "Creates or updates collaborator access for the specified document by email.",
+            description = "Creates or updates collaborator access for the specified document by email "
+                    + "and returns the recalculated collaborator list, so a client never has to "
+                    + "follow the write with a read to see inherited rows appear or disappear.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "201",
-                        description = "Collaborator saved"),
+                        description = "Collaborator saved, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
                         description = "Invalid request payload"),
@@ -76,22 +78,24 @@ public class DocumentSharingController {
                         description = "Document or user not found")
             })
     @PostMapping("/{id}/collaborators")
-    public ResponseEntity<ApiResponse<CollaboratorResponse>> upsertCollaborator(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> upsertCollaborator(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @Valid @RequestBody CollaboratorUpsertRequest request) {
-        CollaboratorResponse response = sharingService.upsertCollaborator(principal.getId(), id, request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Collaborator saved."));
+        sharingService.upsertCollaborator(principal.getId(), id, request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id), "Collaborator saved."));
     }
 
     @Operation(
             summary = "Update collaborator access level",
-            description =
-                    "Updates an existing collaborator's access level for the specified document or creates an override.",
+            description = "Updates an existing collaborator's access level for the specified document or creates "
+                    + "an override, and returns the recalculated collaborator list. Accepted on both verbs "
+                    + "because the body is a partial update that older clients sent as PUT.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "204",
-                        description = "Collaborator access updated"),
+                        responseCode = "200",
+                        description = "Collaborator access updated, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
                         description = "Invalid request payload"),
@@ -108,22 +112,23 @@ public class DocumentSharingController {
     @RequestMapping(
             value = "/{id}/collaborators/{userId}",
             method = {RequestMethod.PATCH, RequestMethod.PUT})
-    public ResponseEntity<Void> updateCollaboratorAccess(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> updateCollaboratorAccess(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @PathVariable UUID userId,
             @Valid @RequestBody CollaboratorAccessUpdateRequest request) {
         sharingService.updateCollaboratorAccess(principal.getId(), id, userId, request);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id)));
     }
 
     @Operation(
             summary = "Remove a collaborator",
-            description = "Removes collaborator access from the specified document.",
+            description = "Removes collaborator access from the specified document and returns the recalculated "
+                    + "collaborator list: dropping a direct row can surface an inherited one.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "204",
-                        description = "Collaborator removed"),
+                        responseCode = "200",
+                        description = "Collaborator removed, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "401",
                         description = "Authentication required"),
@@ -132,10 +137,10 @@ public class DocumentSharingController {
                         description = "Document or collaborator not found")
             })
     @DeleteMapping("/{id}/collaborators/{userId}")
-    public ResponseEntity<Void> removeCollaborator(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> removeCollaborator(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id, @PathVariable UUID userId) {
         sharingService.removeCollaborator(principal.getId(), id, userId);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id)));
     }
 
     @Operation(

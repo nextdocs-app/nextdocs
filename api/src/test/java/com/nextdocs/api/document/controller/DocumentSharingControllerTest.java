@@ -90,8 +90,8 @@ class DocumentSharingControllerTest {
     }
 
     @Test
-    void upsertCollaborator_success_returns201() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
+    void upsertCollaborator_success_returns201WithRecalculatedList() throws Exception {
+        CollaboratorResponse saved = new CollaboratorResponse(
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
@@ -100,7 +100,8 @@ class DocumentSharingControllerTest {
                 false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
-                .thenReturn(response);
+                .thenReturn(saved);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(saved));
 
         mockMvc.perform(post("/api/v1/documents/{id}/collaborators", documentId)
                         .with(user(principal))
@@ -113,16 +114,17 @@ class DocumentSharingControllerTest {
                         """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.email").value("alice@example.com"));
+                .andExpect(jsonPath("$.data[0].email").value("alice@example.com"));
     }
 
     @Test
     void upsertCollaborator_ownerPayload_success_returns201() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
+        CollaboratorResponse saved = new CollaboratorResponse(
                 collaboratorUserId, "bob@example.com", "Bob", DocumentAccessLevel.OWNER, OffsetDateTime.now(), false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
-                .thenReturn(response);
+                .thenReturn(saved);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(saved));
 
         mockMvc.perform(post("/api/v1/documents/{id}/collaborators", documentId)
                         .with(user(principal))
@@ -135,16 +137,24 @@ class DocumentSharingControllerTest {
                         """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.email").value("bob@example.com"))
-                .andExpect(jsonPath("$.data.accessLevel").value("OWNER"))
-                .andExpect(jsonPath("$.data.owner").value(false));
+                .andExpect(jsonPath("$.data[0].email").value("bob@example.com"))
+                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
+                .andExpect(jsonPath("$.data[0].owner").value(false));
     }
 
     @Test
-    void updateCollaboratorAccess_success_returns204_forPatchAndPut() throws Exception {
+    void updateCollaboratorAccess_success_returnsTheList_forPatchAndPut() throws Exception {
         doNothing()
                 .when(sharingService)
                 .updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any());
+        CollaboratorResponse updated = new CollaboratorResponse(
+                collaboratorUserId,
+                "alice@example.com",
+                "Alice",
+                DocumentAccessLevel.VIEW,
+                OffsetDateTime.now(),
+                false);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(updated));
 
         mockMvc.perform(patch(
                                 "/api/v1/documents/{id}/collaborators/{collaboratorUserId}",
@@ -157,7 +167,8 @@ class DocumentSharingControllerTest {
                           "accessLevel": "VIEW"
                         }
                         """))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].accessLevel").value("VIEW"));
 
         mockMvc.perform(put("/api/v1/documents/{id}/collaborators/{collaboratorUserId}", documentId, collaboratorUserId)
                         .with(user(principal))
@@ -167,19 +178,34 @@ class DocumentSharingControllerTest {
                           "accessLevel": "VIEW"
                         }
                         """))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].accessLevel").value("VIEW"));
     }
 
     @Test
-    void removeCollaborator_success_returns204() throws Exception {
+    void removeCollaborator_success_returns200WithRecalculatedList() throws Exception {
         doNothing().when(sharingService).removeCollaborator(userId, documentId, collaboratorUserId);
+        CollaboratorResponse inherited = new CollaboratorResponse(
+                collaboratorUserId,
+                "alice@example.com",
+                "Alice",
+                DocumentAccessLevel.VIEW,
+                OffsetDateTime.now(),
+                false,
+                true,
+                UUID.randomUUID(),
+                "Parent Wiki",
+                DocumentAccessLevel.VIEW);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(inherited));
 
         mockMvc.perform(delete(
                                 "/api/v1/documents/{id}/collaborators/{collaboratorUserId}",
                                 documentId,
                                 collaboratorUserId)
                         .with(user(principal)))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].inherited").value(true))
+                .andExpect(jsonPath("$.data[0].inheritedFromTitle").value("Parent Wiki"));
     }
 
     @Test

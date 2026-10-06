@@ -230,16 +230,39 @@ describe('SharePanel', () => {
 
     it('allows inviting a new collaborator with Full access', async () => {
       const user = userEvent.setup();
-      (documentService.upsertCollaborator as jest.Mock).mockResolvedValue({
-        id: 'collab-3',
-        userId: 'user-3',
-        email: 'charlie@example.com',
-        displayName: 'Charlie New',
-        accessLevel: 'OWNER',
-        owner: false,
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      });
+      // The write answers with the recalculated list, including the invited row.
+      (documentService.upsertCollaborator as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'EDIT',
+          owner: false,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'collab-3',
+          userId: 'user-3',
+          email: 'charlie@example.com',
+          displayName: 'Charlie New',
+          accessLevel: 'OWNER',
+          owner: false,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ]);
 
       render(
         <SharePanel
@@ -276,44 +299,44 @@ describe('SharePanel', () => {
 
     it('allows changing collaborator access level', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock)
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-owner',
-            userId: 'user-1',
-            email: 'owner@example.com',
-            displayName: 'Doc Owner',
-            accessLevel: 'OWNER',
-            owner: true,
-          },
-          {
-            id: 'collab-2',
-            userId: 'user-2',
-            email: 'bob@example.com',
-            displayName: 'Bob Collab',
-            accessLevel: 'EDIT',
-            owner: false,
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-owner',
-            userId: 'user-1',
-            email: 'owner@example.com',
-            displayName: 'Doc Owner',
-            accessLevel: 'OWNER',
-            owner: true,
-          },
-          {
-            id: 'collab-2',
-            userId: 'user-2',
-            email: 'bob@example.com',
-            displayName: 'Bob Collab',
-            accessLevel: 'VIEW',
-            owner: false,
-          },
-        ]);
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'EDIT',
+          owner: false,
+        },
+      ]);
+      // The mutation answers with the recalculated list, so the panel renders the
+      // new level without following the write with a list request.
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'VIEW',
+          owner: false,
+        },
+      ]);
 
       render(
         <SharePanel
@@ -341,12 +364,18 @@ describe('SharePanel', () => {
         'VIEW',
         'test-token'
       );
+
+      // The mutation's own response carries the recalculated list, so the panel renders
+      // the new level without asking for the list a second time.
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Can view/i })).toBeInTheDocument();
+      });
+      expect(documentService.listCollaborators).toHaveBeenCalledTimes(1);
     });
 
     it('allows changing collaborator access level to Full access from dropdown', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+      const collaborators = [
         {
           id: 'collab-owner',
           userId: 'user-1',
@@ -363,7 +392,9 @@ describe('SharePanel', () => {
           accessLevel: 'EDIT',
           owner: false,
         },
-      ]);
+      ];
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue(collaborators);
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(collaborators);
 
       render(
         <SharePanel
@@ -396,8 +427,7 @@ describe('SharePanel', () => {
 
     it('allows demoting a direct Full access collaborator to Can edit', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+      const collaborators = [
         {
           id: 'collab-owner',
           userId: 'user-actual-owner',
@@ -415,7 +445,9 @@ describe('SharePanel', () => {
           owner: false,
           inherited: false,
         },
-      ]);
+      ];
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue(collaborators);
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(collaborators);
 
       render(
         <SharePanel
@@ -450,8 +482,7 @@ describe('SharePanel', () => {
 
     it('allows overriding an inherited full-access collaborator', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+      const collaborators = [
         {
           id: 'collab-owner',
           userId: 'user-1',
@@ -471,7 +502,9 @@ describe('SharePanel', () => {
           inheritedFromTitle: 'Parent Doc',
           inheritedFromId: 'doc-parent',
         },
-      ]);
+      ];
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue(collaborators);
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(collaborators);
 
       render(
         <SharePanel
@@ -556,36 +589,35 @@ describe('SharePanel', () => {
 
     it('allows removing direct collaborator by selecting "No access"', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock)
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-owner',
-            userId: 'user-1',
-            email: 'owner@example.com',
-            displayName: 'Doc Owner',
-            accessLevel: 'OWNER',
-            owner: true,
-          },
-          {
-            id: 'collab-2',
-            userId: 'user-2',
-            email: 'bob@example.com',
-            displayName: 'Bob Collab',
-            accessLevel: 'EDIT',
-            owner: false,
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-owner',
-            userId: 'user-1',
-            email: 'owner@example.com',
-            displayName: 'Doc Owner',
-            accessLevel: 'OWNER',
-            owner: true,
-          },
-        ]);
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'EDIT',
+          owner: false,
+        },
+      ]);
+      // The recalculation drops the row the write just removed.
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+      ]);
 
       render(
         <SharePanel
@@ -911,36 +943,35 @@ describe('SharePanel', () => {
 
     it('allows overriding an inherited collaborator to a direct access level', async () => {
       const user = userEvent.setup();
-      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock)
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-inherited',
-            userId: 'user-inherited',
-            email: 'bob@example.com',
-            displayName: 'Bob Inherited',
-            accessLevel: 'EDIT',
-            owner: false,
-            inherited: true,
-            inheritedFromId: 'doc-parent',
-            inheritedFromTitle: 'Parent Wiki',
-            inheritedAccessLevel: 'EDIT',
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-inherited',
-            userId: 'user-inherited',
-            email: 'bob@example.com',
-            displayName: 'Bob Inherited',
-            accessLevel: 'VIEW',
-            owner: false,
-            inherited: false,
-            inheritedFromId: 'doc-parent',
-            inheritedFromTitle: 'Parent Wiki',
-            inheritedAccessLevel: 'EDIT',
-          },
-        ]);
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-inherited',
+          userId: 'user-inherited',
+          email: 'bob@example.com',
+          displayName: 'Bob Inherited',
+          accessLevel: 'EDIT',
+          owner: false,
+          inherited: true,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Parent Wiki',
+          inheritedAccessLevel: 'EDIT',
+        },
+      ]);
+      // The recalculated row is direct again, so it overrides the ancestor grant.
+      (documentService.updateCollaboratorAccess as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-inherited',
+          userId: 'user-inherited',
+          email: 'bob@example.com',
+          displayName: 'Bob Inherited',
+          accessLevel: 'VIEW',
+          owner: false,
+          inherited: false,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Parent Wiki',
+          inheritedAccessLevel: 'EDIT',
+        },
+      ]);
 
       render(
         <SharePanel
@@ -973,36 +1004,35 @@ describe('SharePanel', () => {
 
     it('renders Overrides badge and allows restoring parent inheritance via inherit entry', async () => {
       const user = userEvent.setup();
-      (documentService.removeCollaborator as jest.Mock).mockResolvedValue(undefined);
-      (documentService.listCollaborators as jest.Mock)
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-overridden',
-            userId: 'user-bob',
-            email: 'bob@example.com',
-            displayName: 'Bob Overridden',
-            accessLevel: 'VIEW',
-            owner: false,
-            inherited: false,
-            inheritedFromId: 'doc-parent',
-            inheritedFromTitle: 'Design System',
-            inheritedAccessLevel: 'EDIT',
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            id: 'collab-overridden',
-            userId: 'user-bob',
-            email: 'bob@example.com',
-            displayName: 'Bob Overridden',
-            accessLevel: 'EDIT',
-            owner: false,
-            inherited: true,
-            inheritedFromId: 'doc-parent',
-            inheritedFromTitle: 'Design System',
-            inheritedAccessLevel: 'EDIT',
-          },
-        ]);
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-overridden',
+          userId: 'user-bob',
+          email: 'bob@example.com',
+          displayName: 'Bob Overridden',
+          accessLevel: 'VIEW',
+          owner: false,
+          inherited: false,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Design System',
+          inheritedAccessLevel: 'EDIT',
+        },
+      ]);
+      // Deleting the override uncovers the inherited row again.
+      (documentService.removeCollaborator as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-overridden',
+          userId: 'user-bob',
+          email: 'bob@example.com',
+          displayName: 'Bob Overridden',
+          accessLevel: 'EDIT',
+          owner: false,
+          inherited: true,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Design System',
+          inheritedAccessLevel: 'EDIT',
+        },
+      ]);
 
       render(
         <SharePanel
