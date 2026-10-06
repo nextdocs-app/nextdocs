@@ -91,7 +91,9 @@ class RateLimitFilterTest {
         mockMvc.perform(get("/api/v1/documents/{id}/public", "11111111-1111-1111-1111-111111111111")
                         .remoteAddress("10.0.0.5"))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(header().string("Retry-After", "60"))
+                // The limiter's own refill estimate, not the 60s window length: a client
+                // that waits the window would idle nineteen times longer than needed.
+                .andExpect(header().string("Retry-After", "3"))
                 .andExpect(jsonPath("$.success").value(false));
     }
 
@@ -311,25 +313,30 @@ class RateLimitFilterTest {
 
     private static final class StubRateLimiter implements RateLimiter {
         private boolean allowed = true;
+        private Duration retryAfter = Duration.ofSeconds(3);
         private String lastKey;
         private int lastMaxRequests;
         private Duration lastWindow;
         private int invocationCount;
 
         @Override
-        public boolean allowRequest(String key) {
+        public RateLimiter.Decision allowRequest(String key) {
             invocationCount++;
             lastKey = key;
-            return allowed;
+            return decision();
         }
 
         @Override
-        public boolean allowRequest(String key, int maxRequests, java.time.Duration window) {
+        public RateLimiter.Decision allowRequest(String key, int maxRequests, java.time.Duration window) {
             invocationCount++;
             lastKey = key;
             lastMaxRequests = maxRequests;
             lastWindow = window;
-            return allowed;
+            return decision();
+        }
+
+        private RateLimiter.Decision decision() {
+            return allowed ? RateLimiter.Decision.allow() : RateLimiter.Decision.deny(retryAfter);
         }
     }
 

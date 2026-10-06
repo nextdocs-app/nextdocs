@@ -40,6 +40,10 @@ import tools.jackson.databind.ObjectMapper;
  * are not rate limited here: the caller is identified by JWT and the rest of the
  * API is unthrottled, so throttling them would only starve guests sharing the
  * same egress IP (same office, same NAT, adjacent browser tabs).
+ *
+ * A 429 carries the wait until the bucket's next token, not the length of its
+ * window: with greedy refill those differ by an order of magnitude at the default
+ * limits, and clients (the editor's cloud backoff included) sleep for the value.
  */
 @Slf4j
 @Component
@@ -110,14 +114,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String ip = resolveClientIp(request);
         String key = verdict.bucketPrefix() + ip;
 
-        boolean allowed = verdict.useDefaultBudget()
+        RateLimiter.Decision decision = verdict.useDefaultBudget()
                 ? rateLimiter.allowRequest(key)
                 : rateLimiter.allowRequest(key, verdict.maxRequests(), verdict.window());
 
-        if (!allowed) {
+        if (!decision.allowed()) {
             String maskedIp = maskIp(ip);
             log.warn("Rate limit exceeded for IP: {}", maskedIp);
-            response.setHeader("Retry-After", String.valueOf(verdict.window().getSeconds()));
+            // Advertising the window length would park a well-behaved client far longer
+            // than it needs to wait - buckets refill greedily, so the next token is due
+            // much sooner - and the realtime backoff sleeps for this value verbatim.
+            response.setHeader("Retry-After", String.valueOf(decision.retryAfterSeconds()));
             writeError(response, 429, ErrorCode.RATE_LIMIT_EXCEEDED.defaultMessage());
             return;
         }
