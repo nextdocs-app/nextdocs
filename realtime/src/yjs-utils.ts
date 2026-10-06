@@ -185,8 +185,9 @@ export function shouldRejectSyncMessage(
         }
       }
 
-      // Any other sync messages (like sync step 1) are allowed since they don't perform writes
-      return false;
+      // Fail closed for any other sync message type: only step 2 and updates
+      // carrying comment-thread changes are allowed through.
+      return true;
     }
 
     // Default deny for all other non-writing access levels (VIEW, unknown, undefined)

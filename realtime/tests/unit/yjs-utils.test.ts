@@ -661,7 +661,6 @@ describe('Yjs Utils', () => {
       const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
       setupWSConnection(conn, docName, 'COMMENT');
       const doc = docs.get(docName)!;
-
       // Sync step 1 is allowed (read-only state request)
       expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(false);
 
@@ -691,6 +690,14 @@ describe('Yjs Utils', () => {
       expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate, contentDecoder)).toBe(
         true
       );
+    });
+
+    it('shouldRejectSyncMessage denies unknown sync types for COMMENT connections', () => {
+      const conn: any = { send: jest.fn(), on: jest.fn(), readyState: WebSocket.OPEN };
+      setupWSConnection(conn, `${docName}-comment-unknown`, 'COMMENT');
+      const doc = docs.get(`${docName}-comment-unknown`)!;
+
+      expect(shouldRejectSyncMessage(doc, conn, 99)).toBe(true);
     });
   });
 });

@@ -66,3 +66,14 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 Every line of a commit message is ≤ 72 characters; the subject follows `<area>: <description>.` and stays under 72 chars too. **Never say anything the diff already shows.** No "added tests", "tests pass", or other narration of the change — write for a reviewer skimming `git log`, not for the diff. A line that is obvious from the diff has no place in the message; say _why_ instead: the problem being fixed, the constraint, the trade-off (for example `sidebar: Silence background root syncs and cut tree re-renders.` with a body explaining `fetchRootNodesThunk pulsed isRootLoading on every meta sync`). If the subject alone tells the whole story, omit the body.
 
 Keep commits coherent for reviewers: one logical change per commit, and every commit that needs tests carries its tests in the same commit. Splitting behavior and its tests across commits is a review smell. Title & body structure of the commit should be: area-prefixed sentence-style subject ending with a period, blank line, then a short body that explains why — not what the diff shows.
+
+<!-- BEGIN:turborepo-agent-rules -->
+
+# This is NOT the Turborepo you know
+
+Turborepo configuration, task behavior, and CLI commands can vary between installed versions and may differ from your training data. Resolve the `turbo` package from this file's directory or relevant workspace; in monorepos, it may not be visible from the repository root. For example, run `node -p "require.resolve('turbo/package.json')"` from a workspace that depends on `turbo`.
+
+Read `docs/README.md` inside that installed package first, then read the relevant pages from its `docs/` directory before changing Turborepo configuration or commands. Heed deprecation notices. These bundled docs match the installed package version and are available without network access.
+
+This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
+<!-- END:turborepo-agent-rules -->

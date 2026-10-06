@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import http from 'http';
+import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   setupWSConnection,
@@ -161,14 +162,24 @@ interface ApiEnvelope<T> {
 }
 
 export function normalizeIp(ip: string): string {
-  if (ip.startsWith('::ffff:')) {
+  const lower = ip.toLowerCase();
+  if (lower.startsWith('::ffff:')) {
     return ip.slice(7);
   }
   return ip;
 }
 
-function ipToLong(ip: string): number {
-  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+function ipToLong(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let acc = 0;
+  for (const octet of parts) {
+    if (!/^\d{1,3}$/.test(octet)) return null;
+    const n = parseInt(octet, 10);
+    if (n < 0 || n > 255) return null;
+    acc = (acc << 8) + n;
+  }
+  return acc >>> 0;
 }
 
 export function isTrustedProxy(rawRemoteAddr: string): boolean {
@@ -187,8 +198,16 @@ export function isTrustedProxy(rawRemoteAddr: string): boolean {
       const normSubnet = normalizeIp(subnet);
 
       if (!normSubnet.includes(':') && !remoteAddr.includes(':')) {
+        const remoteLong = ipToLong(remoteAddr);
+        const subnetLong = ipToLong(normSubnet);
+        if (remoteLong === null || subnetLong === null) {
+          continue;
+        }
+        if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) {
+          continue;
+        }
         const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
-        if ((ipToLong(remoteAddr) & mask) === (ipToLong(normSubnet) & mask)) {
+        if ((remoteLong & mask) === (subnetLong & mask)) {
           return true;
         }
       }
@@ -217,7 +236,10 @@ export function getClientIp(req: http.IncomingMessage): string {
     const hops = xForwardedFor.split(',');
     for (let i = hops.length - 1; i >= 0; i--) {
       const candidate = normalizeIp(hops[i].trim());
-      if (candidate.length > 0 && !isTrustedProxy(candidate)) {
+      if (candidate.length === 0 || net.isIP(candidate) === 0) {
+        continue;
+      }
+      if (!isTrustedProxy(candidate)) {
         return candidate;
       }
     }
@@ -238,8 +260,8 @@ function extractToken(req: http.IncomingMessage, url: URL): string | null {
   }
 
   const queryToken = url.searchParams.get('token');
-  if (queryToken) {
-    return queryToken;
+  if (queryToken && queryToken.trim().length > 0) {
+    return queryToken.trim();
   }
 
   return null;

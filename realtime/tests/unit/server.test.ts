@@ -195,6 +195,30 @@ describe('Server', () => {
 
       expect(getClientIp(req)).toBe('198.51.100.7');
     });
+
+    it('skips garbage hops instead of keying limits on them', () => {
+      const req = {
+        socket: { remoteAddress: '127.0.0.1' },
+        headers: { 'x-forwarded-for': 'evil, 203.0.113.9, 127.0.0.1' },
+      } as any;
+
+      expect(getClientIp(req)).toBe('203.0.113.9');
+    });
+
+    it('falls back to the peer address when every hop is garbage', () => {
+      const req = {
+        socket: { remoteAddress: '127.0.0.1' },
+        headers: { 'x-forwarded-for': ' , evil, unknown' },
+      } as any;
+
+      expect(getClientIp(req)).toBe('127.0.0.1');
+    });
+
+    it('normalizes uppercase IPv4-mapped IPv6 forms', () => {
+      const req = { socket: { remoteAddress: '::FFFF:127.0.0.1' }, headers: {} } as any;
+
+      expect(getClientIp(req)).toBe('127.0.0.1');
+    });
   });
 
   describe('fetchAccess', () => {
