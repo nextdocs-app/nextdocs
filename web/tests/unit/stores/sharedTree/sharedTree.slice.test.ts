@@ -858,6 +858,7 @@ describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
         {
           parentId: 'public-root',
           children: [node('override-child', 'public-root', 'Override', 'EDIT')],
+          truncated: false,
         },
         'request-id',
         { parentId: 'public-root' }

@@ -3,7 +3,12 @@
 import { getPresenceColor } from '@/lib/realtime.util';
 import type { Collaborator } from '@/services/document.service';
 import { AccessDropdown } from './AccessDropdown';
-import { ACCESS_LABELS, type DropdownOption } from './shareOptions';
+import {
+  ACCESS_LABELS,
+  normalizeTitle,
+  type CollaboratorDropdownValue,
+  type DropdownOption,
+} from './shareOptions';
 
 export function ShareAvatar({ seed, label }: { seed: string; label: string }) {
   const normalizedLabel = (label ?? '').trim();
@@ -20,8 +25,10 @@ export function ShareAvatar({ seed, label }: { seed: string; label: string }) {
   );
 }
 
-export function getCollaboratorRowOptions(collab: Collaborator): DropdownOption[] {
-  const options: DropdownOption[] = [
+export function getCollaboratorRowOptions(
+  collab: Collaborator
+): DropdownOption<CollaboratorDropdownValue>[] {
+  const options: DropdownOption<CollaboratorDropdownValue>[] = [
     { value: 'OWNER', label: 'Full access' },
     { value: 'EDIT', label: 'Can edit' },
     { value: 'COMMENT', label: 'Can comment' },
@@ -32,8 +39,12 @@ export function getCollaboratorRowOptions(collab: Collaborator): DropdownOption[
   // an explicit Inherit option. We append it rather than mutating the
   // matching access level option in place, which would break the selected
   // state when the override matches that level.
-  if (!collab.inherited && collab.inheritedFromTitle) {
-    const parentTitle = collab.inheritedFromTitle.trim().replace(/\s+/g, ' ');
+  // Whitespace-only titles normalize to '' (see below), so gate on the
+  // normalized value to avoid rendering `Inherit from ` with an empty title.
+  const hasInheritOption =
+    !collab.inherited && normalizeTitle(collab.inheritedFromTitle, '').length > 0;
+  if (hasInheritOption) {
+    const parentTitle = normalizeTitle(collab.inheritedFromTitle, '');
     const inheritableLabel = collab.inheritedAccessLevel
       ? ACCESS_LABELS[collab.inheritedAccessLevel]
       : undefined;
@@ -42,14 +53,14 @@ export function getCollaboratorRowOptions(collab: Collaborator): DropdownOption[
       label: inheritableLabel
         ? `Inherit from ${parentTitle} (${inheritableLabel.toLowerCase()})`
         : `Inherit from ${parentTitle}`,
-      dividerBefore: true,
+      dividerBefore: false,
     });
   }
 
   options.push({
     value: 'NO_ACCESS',
     label: 'No access',
-    dividerBefore: Boolean(collab.inherited) || !collab.inheritedFromTitle,
+    dividerBefore: true,
     isDestructive: true,
   });
 
@@ -67,11 +78,11 @@ function ProvenanceBadge({
   targetId?: string | null;
   onNavigateTo: (documentId: string) => void;
 }) {
-  const display = (rawTitle || 'parent').trim().replace(/\s+/g, ' ');
+  const display = normalizeTitle(rawTitle);
   const fullTitle =
     kind === 'via'
-      ? `Inherited via ${(rawTitle || 'parent').trim()}`
-      : `Overrides ${(rawTitle || 'parent').trim()}`;
+      ? `Inherited via ${normalizeTitle(rawTitle, '').trim() || 'parent'}`
+      : `Overrides ${normalizeTitle(rawTitle, '').trim() || 'parent'}`;
   const prefix = kind === 'via' ? 'via' : 'Overrides';
   const className =
     'inline-block min-w-0 max-w-[140px] shrink-[2] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle';
@@ -108,10 +119,12 @@ export function CollaboratorRow({
   canEditRow: boolean;
   hasEffectivePublicLink: boolean;
   effectiveLinkAction: string;
-  onAccessSelect: (value: string) => void;
+  onAccessSelect: (value: CollaboratorDropdownValue) => void;
   onNavigateTo: (documentId: string) => void;
 }) {
   const isInherited = Boolean(collab.inherited);
+  // "comment this document" is ungrammatical; every other action reads fine.
+  const linkActionPhrase = effectiveLinkAction === 'comment' ? 'comment on' : effectiveLinkAction;
 
   return (
     <li className="flex flex-col py-1.5 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors group/collab">
@@ -171,7 +184,7 @@ export function CollaboratorRow({
       {collab.accessLevel === 'NO_ACCESS' && hasEffectivePublicLink && (
         <p className="mt-1 pl-10 text-[11.5px] text-amber-600 dark:text-amber-400/90 leading-tight">
           {collab.displayName || collab.email} is blocked while signed in; anyone with the public
-          link can still {effectiveLinkAction} this document.
+          link can still {linkActionPhrase} this document.
         </p>
       )}
     </li>

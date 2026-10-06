@@ -9,7 +9,7 @@ export type { DropdownOption };
 const MENU_MARGIN = 8;
 const MENU_MIN_WIDTH = 192; // matches min-w-[12rem]
 
-export function AccessDropdown({
+export function AccessDropdown<T extends string>({
   value,
   options,
   onChange,
@@ -18,9 +18,9 @@ export function AccessDropdown({
   ariaLabel,
   muted = false,
 }: {
-  value: string;
-  options: DropdownOption[];
-  onChange: (val: string) => void;
+  value: T;
+  options: DropdownOption<T>[];
+  onChange: (val: T) => void;
   disabled?: boolean;
   align?: 'left' | 'right';
   ariaLabel?: string;
@@ -50,7 +50,7 @@ export function AccessDropdown({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const onPointer = (e: MouseEvent) => {
       if (
         !triggerRef.current?.contains(e.target as Node) &&
         !menuRef.current?.contains(e.target as Node)
@@ -58,8 +58,26 @@ export function AccessDropdown({
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Capture phase (see addEventListener below): the panel's own
+        // document-level Escape handler is registered first (bubble), so a
+        // bubble-phase handler here would run second — after the panel
+        // already closed. Intercepting on the way down wins regardless of
+        // registration order; preventDefault also signals same-target
+        // handlers via defaultPrevented.
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey, true);
+    };
   }, [open]);
 
   // Keep the open menu on-screen vertically: flip above the trigger when it

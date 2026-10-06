@@ -93,6 +93,8 @@ const SIDEBAR_COLLAPSE_HOVER_GUARD_MS = 260;
 // Stable empty list for the guest Shared section (guests have no document
 // list); a fresh literal per render would re-run the roots sync effect.
 const EMPTY_SHARED_DOCUMENTS: SharedDocumentEntry[] = [];
+const guestNoop = () => {};
+const guestResolveActionType = () => 'move-to-trash' as const;
 
 function Sidebar() {
   const router = useRouter();
@@ -1100,11 +1102,11 @@ function Sidebar() {
                     dispatch(setDocActionsAnchor(null));
                     handleSelectDocument(docId);
                   }}
-                  onCreateChild={() => {}}
+                  onCreateChild={guestNoop}
                   isActionsEnabled={false}
                   docActionsAnchor={null}
-                  onToggleDocumentActions={() => {}}
-                  resolveActionType={() => 'move-to-trash'}
+                  onToggleDocumentActions={guestNoop}
+                  resolveActionType={guestResolveActionType}
                 />
               )}
             </SidebarTreeDndContext>

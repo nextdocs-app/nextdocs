@@ -52,10 +52,26 @@ export type CollaboratorAccessLevel = DocumentAccessLevel | 'NO_ACCESS';
 export type DocumentGeneralAccessMode = 'RESTRICTED' | 'ANYONE_WITH_LINK';
 
 const DOCUMENT_ACCESS_LEVELS: readonly string[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
+const COLLABORATOR_ACCESS_LEVELS: readonly string[] = [
+  'VIEW',
+  'COMMENT',
+  'EDIT',
+  'OWNER',
+  'NO_ACCESS',
+];
+const GENERAL_ACCESS_MODES: readonly string[] = ['RESTRICTED', 'ANYONE_WITH_LINK'];
 
 /** True for the four levels the API may report on the document channel. */
 export function isValidDocumentAccessLevel(value: unknown): value is DocumentAccessLevel {
   return typeof value === 'string' && DOCUMENT_ACCESS_LEVELS.includes(value);
+}
+
+function isValidCollaboratorAccessLevel(value: unknown): value is CollaboratorAccessLevel {
+  return typeof value === 'string' && COLLABORATOR_ACCESS_LEVELS.includes(value);
+}
+
+function isValidGeneralAccessMode(value: unknown): value is DocumentGeneralAccessMode {
+  return typeof value === 'string' && GENERAL_ACCESS_MODES.includes(value);
 }
 
 /**
@@ -73,6 +89,22 @@ export function sanitizeDocumentAccessLevel(
 /** Same guard for nullable access fields: unknown values become null (unknown). */
 export function sanitizeNullableAccessLevel(value: unknown): DocumentAccessLevel | null {
   return isValidDocumentAccessLevel(value) ? value : null;
+}
+
+/** Collaborator rows carry an extra NO_ACCESS breakpoint; unknown values fall back. */
+function sanitizeCollaboratorAccessLevel(
+  value: unknown,
+  fallback: CollaboratorAccessLevel = 'VIEW'
+): CollaboratorAccessLevel {
+  return isValidCollaboratorAccessLevel(value) ? value : fallback;
+}
+
+/** Sharing settings mode; unknown values fall back to RESTRICTED. */
+function sanitizeGeneralAccessMode(
+  value: unknown,
+  fallback: DocumentGeneralAccessMode = 'RESTRICTED'
+): DocumentGeneralAccessMode {
+  return isValidGeneralAccessMode(value) ? value : fallback;
 }
 
 interface ApiDocumentAccess {
@@ -184,6 +216,8 @@ function parseRetryAfterMs(value: string | null): number | undefined {
   if (value == null) {
     return undefined;
   }
+  // Server only sends delay-seconds (see RateLimitFilter); an HTTP-date falls
+  // through to undefined so callers use their default backoff instead of 0.
   const seconds = Number.parseInt(value.trim(), 10);
   if (!Number.isFinite(seconds) || seconds < 0) {
     return undefined;
@@ -406,7 +440,7 @@ class DocumentService {
       orderKey: doc.orderKey ?? null,
       hasChildren: doc.hasChildren ?? false,
       hasCollaborators: doc.hasCollaborators ?? false,
-      accessLevel: doc.accessLevel ?? null,
+      accessLevel: sanitizeNullableAccessLevel(doc.accessLevel),
     }));
 
     return {
@@ -432,7 +466,7 @@ class DocumentService {
         parentId: item.parentId,
         orderKey: item.orderKey ?? '',
         hasChildren: item.hasChildren ?? false,
-        effectiveAccessLevel: item.accessLevel ?? 'OWNER',
+        effectiveAccessLevel: sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER'),
         createdAt: item.meta.createdAt,
         updatedAt: item.meta.updatedAt,
       })),
@@ -461,7 +495,7 @@ class DocumentService {
         parentId: item.parentId,
         orderKey: item.orderKey ?? '',
         hasChildren: item.hasChildren ?? false,
-        effectiveAccessLevel: item.accessLevel ?? null,
+        effectiveAccessLevel: sanitizeNullableAccessLevel(item.accessLevel),
         createdAt: item.meta.createdAt,
         updatedAt: item.meta.updatedAt,
       })),
@@ -496,7 +530,7 @@ class DocumentService {
       parentId: body.parentId ?? null,
       orderKey: body.orderKey ?? '',
       hasChildren: body.hasChildren ?? false,
-      effectiveAccessLevel: body.accessLevel ?? null,
+      effectiveAccessLevel: sanitizeNullableAccessLevel(body.accessLevel),
       createdAt: body.createdAt,
       updatedAt: body.updatedAt,
     };
@@ -660,13 +694,13 @@ class DocumentService {
       userId: item.userId,
       email: item.email,
       displayName: item.displayName,
-      accessLevel: item.accessLevel,
+      accessLevel: sanitizeCollaboratorAccessLevel(item.accessLevel),
       addedAt: item.addedAt,
       owner: item.owner ?? false,
       inherited: item.inherited ?? false,
       inheritedFromId: item.inheritedFromId ?? null,
       inheritedFromTitle: item.inheritedFromTitle ?? null,
-      inheritedAccessLevel: item.inheritedAccessLevel ?? null,
+      inheritedAccessLevel: sanitizeNullableAccessLevel(item.inheritedAccessLevel),
     };
   }
 
@@ -772,8 +806,8 @@ class DocumentService {
     );
 
     return {
-      generalAccessMode: body.generalAccessMode,
-      linkAccessLevel: body.linkAccessLevel,
+      generalAccessMode: sanitizeGeneralAccessMode(body.generalAccessMode),
+      linkAccessLevel: sanitizeDocumentAccessLevel(body.linkAccessLevel),
       hasActiveLink: body.hasActiveLink,
       inherited: body.inherited ?? false,
       inheritedFromId: body.inheritedFromId ?? null,
@@ -801,8 +835,8 @@ class DocumentService {
     );
 
     return {
-      generalAccessMode: body.generalAccessMode,
-      linkAccessLevel: body.linkAccessLevel,
+      generalAccessMode: sanitizeGeneralAccessMode(body.generalAccessMode),
+      linkAccessLevel: sanitizeDocumentAccessLevel(body.linkAccessLevel),
       hasActiveLink: body.hasActiveLink,
       inherited: body.inherited ?? false,
       inheritedFromId: body.inheritedFromId ?? null,

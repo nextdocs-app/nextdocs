@@ -1,12 +1,19 @@
-import type { DocumentAccessLevel, DocumentGeneralAccessMode } from '@/services/document.service';
+import type {
+  CollaboratorAccessLevel,
+  DocumentAccessLevel,
+  DocumentGeneralAccessMode,
+} from '@/services/document.service';
 
-export interface DropdownOption {
-  value: string;
+export interface DropdownOption<T extends string = string> {
+  value: T;
   label: string;
   description?: string;
   dividerBefore?: boolean;
   isDestructive?: boolean;
 }
+
+export type CollaboratorDropdownValue = CollaboratorAccessLevel | 'INHERIT';
+export type GeneralModeDropdownValue = DocumentGeneralAccessMode | 'INHERIT';
 
 export const ACCESS_LABELS: Record<string, string> = {
   VIEW: 'Can view',
@@ -24,20 +31,20 @@ export const ACCESS_ACTION_LABELS: Record<string, string> = {
   NO_ACCESS: 'no access',
 };
 
-export const INVITE_ACCESS_OPTIONS: DropdownOption[] = [
+export const INVITE_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'OWNER', label: 'Full access', description: 'Can edit and share' },
   { value: 'EDIT', label: 'Can edit' },
   { value: 'COMMENT', label: 'Can comment' },
   { value: 'VIEW', label: 'Can view' },
 ];
 
-export const LINK_ACCESS_OPTIONS: DropdownOption[] = [
+export const LINK_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'VIEW', label: 'Can view' },
   { value: 'COMMENT', label: 'Can comment' },
   { value: 'EDIT', label: 'Can edit' },
 ];
 
-const GENERAL_MODE_OPTIONS: DropdownOption[] = [
+const GENERAL_MODE_OPTIONS: DropdownOption<DocumentGeneralAccessMode>[] = [
   { value: 'RESTRICTED', label: 'Restricted', description: 'Only people with access can open' },
   {
     value: 'ANYONE_WITH_LINK',
@@ -45,6 +52,10 @@ const GENERAL_MODE_OPTIONS: DropdownOption[] = [
     description: 'Anyone with the link can access',
   },
 ];
+
+export function normalizeTitle(value?: string | null, fallback = 'parent'): string {
+  return (value || fallback).trim().replace(/\s+/g, ' ');
+}
 
 /** Subset of SharingSettings the general-access view model reads. */
 export interface GeneralAccessSettings {
@@ -78,6 +89,11 @@ export interface GeneralAccessViewModel {
  * badges and the save handlers cannot drift apart: an own link masks the
  * ancestor grant, a block shadows it entirely, and only own/effective links
  * display as "Anyone with the link".
+ *
+ * Server contract: the API clears `inherited` when an own link exists, and
+ * never reports `hasActiveLink:true` with `RESTRICTED` and no inheritance.
+ * `displayMode` is derived from the effective link so the dropdown cannot
+ * contradict the helper sentence.
  */
 export function getGeneralAccessViewModel(
   settings: GeneralAccessSettings | null | undefined
@@ -90,7 +106,7 @@ export function getGeneralAccessViewModel(
   const hasEffectivePublicLink =
     (Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink) &&
     !isLinkBlocked;
-  const inheritedFromTitle = (settings?.inheritedFromTitle || 'parent').trim().replace(/\s+/g, ' ');
+  const inheritedFromTitle = normalizeTitle(settings?.inheritedFromTitle);
 
   const state: GeneralAccessState = isLinkBlocked
     ? 'blocked'
@@ -106,17 +122,18 @@ export function getGeneralAccessViewModel(
     isInheritedPublicLink,
     hasEffectivePublicLink,
     // An override or a block can be undone back to parent inheritance, like a
-    // collaborator row's Inherit option.
-    showInheritOption: isOverridingPublicLink || isLinkBlocked,
+    // collaborator row's Inherit option. A block without an ancestor has
+    // nowhere to inherit from, so it offers no Inherit option.
+    showInheritOption: isOverridingPublicLink || isBlockedWithAncestor,
     showProvenanceBadge: isOverridingPublicLink || isBlockedWithAncestor,
     provenanceBadgePrefix: isBlockedWithAncestor ? 'Blocked from' : 'Overrides',
     provenanceBadgeTooltip: isBlockedWithAncestor
       ? `Blocks inheritance from ${inheritedFromTitle}`
       : `Overrides ${inheritedFromTitle}`,
     inheritedFromTitle,
-    // Inherited links show the effective mode so the dropdown never contradicts
+    // Effective links show the effective mode so the dropdown never contradicts
     // the helper sentence ("Restricted" plus "Anyone ... can edit").
-    displayMode: hasOwnPublicLink || isInheritedPublicLink ? 'ANYONE_WITH_LINK' : 'RESTRICTED',
+    displayMode: hasEffectivePublicLink ? 'ANYONE_WITH_LINK' : 'RESTRICTED',
   };
 }
 
@@ -131,10 +148,10 @@ export function getGeneralModeOptions({
 }: {
   showInheritOption: boolean;
   inheritedFromTitle?: string | null;
-}): DropdownOption[] {
-  const options = [...GENERAL_MODE_OPTIONS];
+}): DropdownOption<GeneralModeDropdownValue>[] {
+  const options: DropdownOption<GeneralModeDropdownValue>[] = [...GENERAL_MODE_OPTIONS];
   if (showInheritOption) {
-    const parentTitle = (inheritedFromTitle || '').trim().replace(/\s+/g, ' ');
+    const parentTitle = normalizeTitle(inheritedFromTitle, '');
     options.push({
       value: 'INHERIT',
       label: parentTitle ? `Inherit from ${parentTitle}` : 'Resume inheriting',

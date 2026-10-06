@@ -649,6 +649,57 @@ describe('document.service', () => {
     });
   });
 
+  describe('listCollaborators', () => {
+    it('should fall back malformed collaborator levels instead of trusting them', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              userId: 'u-1',
+              email: 'a@example.com',
+              displayName: 'A',
+              accessLevel: 'SUPERADMIN',
+              addedAt: '2024-01-01T00:00:00.000Z',
+              inheritedAccessLevel: 'SUPERPOWER',
+            },
+          ],
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const rows = await documentService.listCollaborators('doc-1', 'tok');
+
+      expect(rows[0].accessLevel).toBe('VIEW');
+      expect(rows[0].inheritedAccessLevel).toBeNull();
+    });
+  });
+
+  describe('getSharingSettings', () => {
+    it('should fall back malformed sharing mode and level', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            generalAccessMode: 'EVERYONE',
+            linkAccessLevel: 'SUPERADMIN',
+            hasActiveLink: true,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const settings = await documentService.getSharingSettings('doc-1', 'tok');
+
+      expect(settings.generalAccessMode).toBe('RESTRICTED');
+      expect(settings.linkAccessLevel).toBe('VIEW');
+    });
+  });
+
   describe('savePublicDocument', () => {
     it('should PATCH the public endpoint without an Authorization header', async () => {
       const fetchMock = jest.fn().mockResolvedValue({

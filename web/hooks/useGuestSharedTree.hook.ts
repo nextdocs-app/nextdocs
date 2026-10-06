@@ -38,17 +38,35 @@ export function useGuestSharedTree(activeDocId: string) {
   }, [isAuthenticated, dispatch]);
 
   useEffect(() => {
-    if (isAuthenticated || !activeDocId) {
+    if (isAuthenticated) {
+      // A cancelled in-flight load leaves isLoading true via its guarded
+      // finally; clear it so the Shared section never sticks on skeletons.
+      setIsLoading(false);
+      return;
+    }
+    if (!activeDocId) {
+      // Guests navigating to a non-doc route (e.g. `/`) would otherwise keep
+      // the previous document's shared tree mounted in the sidebar.
+      dispatch(resetTree());
+      setIsLoading(false);
       return;
     }
 
     let cancelled = false;
+    // A superseded children fetch keeps running after navigation unless
+    // aborted: its fulfilled payload would attach stale children to a tree
+    // the user already left.
+    let childrenRequest: { abort: () => void } | undefined;
 
     const load = async () => {
       try {
         setIsLoading(true);
         const crumbs = await documentService.getDocumentBreadcrumbs(activeDocId);
-        if (cancelled || crumbs.length === 0) {
+        if (cancelled) {
+          return;
+        }
+        if (crumbs.length === 0) {
+          dispatch(resetTree());
           return;
         }
 
@@ -76,10 +94,12 @@ export function useGuestSharedTree(activeDocId: string) {
         }
 
         try {
-          await dispatch(fetchPublicChildrenThunk({ parentId: activeDocId })).unwrap();
+          const request = dispatch(fetchPublicChildrenThunk({ parentId: activeDocId }));
+          childrenRequest = request;
+          await request.unwrap();
         } catch {
-          // A throttled/offline children fetch must not wipe the chain;
-          // expansion retries it lazily.
+          // An aborted or throttled/offline children fetch must not wipe the
+          // chain; expansion retries it lazily.
         }
       } catch (err) {
         if (cancelled) {
@@ -102,6 +122,7 @@ export function useGuestSharedTree(activeDocId: string) {
 
     return () => {
       cancelled = true;
+      childrenRequest?.abort();
     };
   }, [isAuthenticated, activeDocId, dispatch]);
 

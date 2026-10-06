@@ -34,12 +34,6 @@ import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 const MESSAGE_ACCESS_LEVEL = 2;
-const VALID_DOCUMENT_ACCESS_LEVELS: readonly DocumentAccessLevel[] = [
-  'VIEW',
-  'COMMENT',
-  'EDIT',
-  'OWNER',
-];
 // Yjs-shared document title: `ydoc.getMap('meta').get('title')` is the live
 // transport for title edits. REST PATCH remains the durable source of truth
 // for lists/trees; Yjs carries the keystroke-instant cross-client update.
@@ -145,10 +139,6 @@ function decodeStringFromBuffer(data: ArrayBuffer, offset: number): string {
   // Extract the string
   const bytes = new Uint8Array(data, offset + pos, length);
   return new TextDecoder().decode(bytes);
-}
-
-function isValidDocumentAccessLevel(value: string): value is DocumentAccessLevel {
-  return VALID_DOCUMENT_ACCESS_LEVELS.includes(value as DocumentAccessLevel);
 }
 
 function resolveAuthenticatedFallbackAccessLevel(
@@ -984,9 +974,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
   // Periodically revalidate access level to detect downgrades immediately
   useEffect(() => {
-    const canPollAsGuest = !isAuthenticated && accessLevelRef.current !== null;
+    // Guests poll only once their level is known; otherwise the interval
+    // would spin before the initial share-payload resolution lands.
     if (
-      (!isAuthenticated && !canPollAsGuest) ||
+      (!isAuthenticated && accessLevel === null) ||
       (isAuthenticated && !accessToken) ||
       !isOnline ||
       isCloudReadInBackoff() ||
@@ -1117,6 +1108,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   }, [
     isAuthenticated,
     accessToken,
+    accessLevel,
     isOnline,
     resolvedDocumentId,
     currentDocumentId,

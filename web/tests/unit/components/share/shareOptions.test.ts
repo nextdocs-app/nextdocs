@@ -87,4 +87,43 @@ describe('getGeneralAccessViewModel', () => {
     expect(vm.displayMode).toBe('RESTRICTED');
     expect(vm.hasEffectivePublicLink).toBe(false);
   });
+
+  it('keeps dropdown and helper consistent when the link is active', () => {
+    const vm = getGeneralAccessViewModel({
+      ...base,
+      generalAccessMode: 'RESTRICTED',
+      hasActiveLink: true,
+    });
+
+    expect(vm.hasEffectivePublicLink).toBe(true);
+    expect(vm.displayMode).toBe('ANYONE_WITH_LINK');
+  });
+
+  it('prefers inherited state when own and inherited flags are both set', () => {
+    const vm = getGeneralAccessViewModel({
+      ...base,
+      generalAccessMode: 'ANYONE_WITH_LINK',
+      hasActiveLink: true,
+      inherited: true,
+      inheritedFromId: 'doc-parent',
+      inheritedFromTitle: 'Parent Wiki',
+    });
+
+    expect(vm.state).toBe('inherited');
+    expect(vm.displayMode).toBe('ANYONE_WITH_LINK');
+    expect(vm.hasEffectivePublicLink).toBe(true);
+  });
+
+  it('offers no Inherit option for a block without an ancestor', () => {
+    const vm = getGeneralAccessViewModel({
+      ...base,
+      generalAccessMode: 'RESTRICTED',
+      hasActiveLink: false,
+      linkInheritBlocked: true,
+    });
+
+    expect(vm.state).toBe('blocked');
+    expect(vm.showInheritOption).toBe(false);
+    expect(vm.showProvenanceBadge).toBe(false);
+  });
 });

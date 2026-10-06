@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { SharePanel } from '../../../components/SharePanel';
@@ -28,6 +28,8 @@ jest.mock('../../../services/document.service', () => ({
     removeCollaborator: jest.fn(),
     updateSharingSettings: jest.fn(),
   },
+  DocumentServiceApiError: jest.requireActual('../../../services/document.service')
+    .DocumentServiceApiError,
 }));
 
 describe('SharePanel', () => {
@@ -94,8 +96,55 @@ describe('SharePanel', () => {
         canManageSharing={false}
       />
     );
-
     expect(screen.getByText('Sign in to manage sharing.')).toBeInTheDocument();
+  });
+
+  it('clears the previous document roster when documentId changes while open', async () => {
+    const alice = {
+      id: 'collab-alice',
+      userId: 'user-alice',
+      email: 'alice@example.com',
+      displayName: 'Alice Owner',
+      accessLevel: 'OWNER',
+      owner: true,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    // Doc B stays pending so we can assert the reset happens before it resolves.
+    let resolveDocB: (v: never[]) => void = () => {};
+    const docBPending = new Promise<never[]>((resolve) => {
+      resolveDocB = resolve;
+    });
+    (documentService.listCollaborators as jest.Mock).mockImplementation((docId: string) =>
+      docId === 'doc-1' ? Promise.resolve([alice]) : docBPending
+    );
+
+    const { rerender } = render(
+      <SharePanel
+        documentId="doc-1"
+        isOpen={true}
+        onClose={mockOnClose}
+        anchorRef={anchorRef}
+        canManageSharing={false}
+      />
+    );
+    await screen.findByText('Alice Owner');
+
+    rerender(
+      <SharePanel
+        documentId="doc-2"
+        isOpen={true}
+        onClose={mockOnClose}
+        anchorRef={anchorRef}
+        canManageSharing={false}
+      />
+    );
+
+    // Stale roster must not linger under the new document while loading.
+    expect(screen.queryByText('Alice Owner')).not.toBeInTheDocument();
+    expect(documentService.listCollaborators).toHaveBeenLastCalledWith('doc-2', 'test-token');
+
+    resolveDocB([]);
   });
 
   describe('Non-admin mode (canManageSharing = false)', () => {
@@ -816,6 +865,32 @@ describe('SharePanel', () => {
         expect(screen.getByText('Network error loading collaborators')).toBeInTheDocument();
       });
     });
+
+    it('hides the roster instead of erroring for readers without an identity grant', async () => {
+      const { DocumentServiceApiError } = jest.requireActual('../../../services/document.service');
+      (documentService.listCollaborators as jest.Mock).mockRejectedValue(
+        new DocumentServiceApiError('Not found', 404)
+      );
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={false}
+        />
+      );
+
+      await waitFor(() => {
+        expect(documentService.listCollaborators).toHaveBeenCalled();
+      });
+      // Flush the pending 404 rejection so the roster-hidden state has
+      // rendered before asserting absence.
+      await act(async () => {});
+      expect(screen.queryByText('People with access')).not.toBeInTheDocument();
+      expect(screen.queryByText('Not found')).not.toBeInTheDocument();
+    });
   });
 
   describe('Hierarchical access and provenance (Notion-style)', () => {
@@ -927,13 +1002,14 @@ describe('SharePanel', () => {
         />
       );
 
+      const viaBtn = await screen.findByRole('button', { name: 'via Product Docs' });
+      expect(viaBtn).toBeInTheDocument();
+
+      // Absence checks only mean something after the roster has loaded.
       expect(screen.queryByText(/Permissions inherited from/i)).not.toBeInTheDocument();
       expect(
         screen.queryByText(/Collaborators with access to ancestor pages inherit access/i)
       ).not.toBeInTheDocument();
-
-      const viaBtn = await screen.findByRole('button', { name: 'via Product Docs' });
-      expect(viaBtn).toBeInTheDocument();
 
       await user.click(viaBtn);
 
@@ -1188,7 +1264,7 @@ describe('SharePanel', () => {
       // The blocked-user warning reflects the inherited link level, not always "view".
       expect(
         screen.getByText(
-          'Bob Blocked is blocked while signed in; anyone with the public link can still comment this document.'
+          'Bob Blocked is blocked while signed in; anyone with the public link can still comment on this document.'
         )
       ).toBeInTheDocument();
     });
@@ -1520,6 +1596,49 @@ describe('SharePanel', () => {
       expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
         'doc-child',
         { generalAccessMode: 'RESTRICTED', linkInheritBlocked: true },
+        'test-token'
+      );
+    });
+
+    it('sends a bare Restricted payload for a pure-own link with no ancestor', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: true,
+        inherited: false,
+        inheritedFromId: null,
+        inheritedFromTitle: null,
+        linkInheritBlocked: false,
+      });
+      (documentService.updateSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: false,
+        inheritedFromId: null,
+        inheritedFromTitle: null,
+        linkInheritBlocked: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-top"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      const modeButton = await screen.findByRole('button', { name: 'Anyone with the link' });
+      await user.click(modeButton);
+      await user.click(screen.getByRole('option', { name: 'Restricted' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-top',
+        { generalAccessMode: 'RESTRICTED' },
         'test-token'
       );
     });

@@ -6,6 +6,7 @@ import authReducer, {
   logoutThunk,
   clearAuth,
   setAuthFromResponse,
+  authListenerMiddleware,
   AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
@@ -74,7 +75,12 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
         },
       }
     : undefined;
-  return configureStore({ reducer: { auth: authReducer }, preloadedState });
+  return configureStore({
+    reducer: { auth: authReducer },
+    preloadedState,
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware().prepend(authListenerMiddleware.middleware),
+  });
 }
 
 describe('auth slice', () => {
@@ -252,16 +258,19 @@ describe('auth slice', () => {
 
   it('refreshSessionThunk skips dispatch when lastSilentRefreshAt was within 30 seconds', async () => {
     (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
+    const stamp = Date.now() - 5000; // 5s ago (< 30s)
     const store = makeStore({
       user: mockUser,
       accessToken: 'tok',
-      lastSilentRefreshAt: Date.now() - 5000, // 5s ago (< 30s)
+      lastSilentRefreshAt: stamp,
     });
 
     const result = await store.dispatch(refreshSessionThunk());
     expect(result.meta.requestStatus).toBe('rejected');
     expect((result.meta as { condition?: boolean }).condition).toBe(true);
     expect(authApiService.refresh).not.toHaveBeenCalled();
+    // A condition abort must not wipe the coalescing window.
+    expect(store.getState().auth.lastSilentRefreshAt).toBe(stamp);
   });
 
   it('clearAuth wipes session registries', () => {

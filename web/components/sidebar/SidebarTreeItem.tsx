@@ -1,6 +1,10 @@
 import { useCallback, useMemo } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { ChevronRight, DocumentText, MoreHorizontal, Plus } from '@/icons';
+import {
+  MAX_PUBLIC_CHILDREN_PAGES,
+  PUBLIC_CHILDREN_PAGE_SIZE,
+} from '@/stores/sharedTree/sharedTree.slice';
 import { useTreeDndOptional } from './SidebarTreeDndContext';
 import type { TreeApi } from './SidebarTreeDndContext';
 import type { DocActionsAnchor, DocActionType } from './types';
@@ -336,7 +340,7 @@ export function SidebarTreeItem({
               className="py-1 text-[13px] text-muted-foreground/50 italic select-none"
               style={{ paddingLeft: `${indentPx + 24}px` }}
             >
-              Showing the first 100 documents
+              Showing the first {MAX_PUBLIC_CHILDREN_PAGES * PUBLIC_CHILDREN_PAGE_SIZE} documents
             </div>
           )}
         </ul>

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   documentService,
+  DocumentServiceApiError,
   type Collaborator,
   type CollaboratorAccessLevel,
   type DocumentAccessLevel,
@@ -20,6 +21,8 @@ import {
   getGeneralModeOptions,
   INVITE_ACCESS_OPTIONS,
   LINK_ACCESS_OPTIONS,
+  type CollaboratorDropdownValue,
+  type GeneralModeDropdownValue,
 } from './share/shareOptions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -56,8 +59,16 @@ export function SharePanel({
   const [isSavingInvite, setIsSavingInvite] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -98,16 +109,35 @@ export function SharePanel({
     if (!isOpen || !isAuthenticated || !accessToken) return;
     let cancelled = false;
 
+    // Reset stale roster state up front: DocToolbar keeps isShareOpen across
+    // documentId changes (no key remount), so without this the previous
+    // document's collaborators briefly render under the new document.
+    setCollaborators([]);
+    setSettings(null);
+    setError(null);
+
     const load = async () => {
       try {
         setIsLoading(true);
         setError(null);
         if (!canManageSharing) {
-          setSettings(null);
-          const cols = await documentService.listCollaborators(documentId, accessToken);
-          if (!cancelled) {
-            setCollaborators(cols);
-            setSettings(null);
+          try {
+            const cols = await documentService.listCollaborators(documentId, accessToken);
+            if (!cancelled) {
+              setCollaborators(cols);
+              setSettings(null);
+            }
+          } catch (e) {
+            // Readers without an identity grant cannot enumerate the roster:
+            // hide the section instead of surfacing an error.
+            if (e instanceof DocumentServiceApiError && (e.status === 403 || e.status === 404)) {
+              if (!cancelled) {
+                setCollaborators([]);
+                setSettings(null);
+              }
+            } else {
+              throw e;
+            }
           }
         } else {
           const [cols, sett] = await Promise.all([
@@ -149,7 +179,7 @@ export function SharePanel({
       }
     };
     const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
     };
     const timer = setTimeout(() => {
       document.addEventListener('mousedown', onOut);
@@ -212,17 +242,22 @@ export function SharePanel({
     }
   };
 
-  const handleCollaboratorAccessSelect = (collab: Collaborator, nextValue: string) => {
+  const handleCollaboratorAccessSelect = (
+    collab: Collaborator,
+    nextValue: CollaboratorDropdownValue
+  ) => {
     if (nextValue === 'INHERIT') {
       void handleRemove(collab.userId);
     } else {
-      void handleAccessChange(collab.userId, nextValue as CollaboratorAccessLevel);
+      void handleAccessChange(collab.userId, nextValue);
     }
   };
 
   // Mode selection mirrors a collaborator row's single dropdown: picking a
   // state writes it (override), and the Inherit option deletes the override.
-  const handleGeneralModeSelect = async (nextValue: string) => {
+  // Driven off the view-model state so dropdown, badges and payloads share
+  // one source of truth instead of re-deriving override/block branches.
+  const handleGeneralModeSelect = async (nextValue: GeneralModeDropdownValue) => {
     if (!accessToken || !settings) return;
     // Restore parent inheritance (mirrors deleting a collaborator override row
     // via its Inherit option).
@@ -243,16 +278,12 @@ export function SharePanel({
       }
       return;
     }
-    const mode = nextValue as DocumentGeneralAccessMode;
+    const mode: DocumentGeneralAccessMode = nextValue;
+    const vm = getGeneralAccessViewModel(settings);
     // Already in this explicit own mode: nothing to write (guards against no-op re-select).
     // An inherited link CAN be re-selected as ANYONE_WITH_LINK to pin it as an own override.
-    if (mode === 'ANYONE_WITH_LINK' && hasOwnPublicLink) return;
-    if (
-      mode === 'RESTRICTED' &&
-      settings.generalAccessMode === 'RESTRICTED' &&
-      !isInheritedPublicLink
-    )
-      return;
+    if (mode === 'ANYONE_WITH_LINK' && vm.state === 'own') return;
+    if (mode === 'RESTRICTED' && (vm.state === 'private' || vm.state === 'blocked')) return;
     try {
       setIsSavingSettings(true);
       setError(null);
@@ -263,11 +294,17 @@ export function SharePanel({
       };
       if (mode === 'ANYONE_WITH_LINK') {
         payload = { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' };
-      } else if (hasOwnPublicLink || isInheritedPublicLink) {
+      } else if (
+        vm.state === 'inherited' ||
+        vm.state === 'blocked' ||
+        (vm.state === 'own' && settings.inheritedFromId)
+      ) {
         // Restricted means the document is private on the link channel. With
-        // an own or inherited link that requires blocking inheritance, or the
-        // ancestor grant would keep it public; dropping only the own link is
-        // the explicit Inherit option instead.
+        // an inherited or blocked link that requires blocking inheritance,
+        // or the ancestor grant would keep it public; dropping only the own
+        // link is the explicit Inherit option instead. Pure-own links with
+        // no ancestor send a bare RESTRICTED so no parentless Inherit
+        // option appears.
         payload = { generalAccessMode: mode, linkInheritBlocked: true };
       } else {
         payload = { generalAccessMode: mode };
@@ -310,9 +347,9 @@ export function SharePanel({
       const url = typeof window !== 'undefined' ? window.location.href : '';
       await navigator.clipboard.writeText(url);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
-      setCopied(false);
       setError('Failed to copy link. Please check clipboard permissions and try again.');
       console.error('Failed to copy share link to clipboard', e);
     }
@@ -430,7 +467,7 @@ export function SharePanel({
                   <AccessDropdown
                     value={inviteAccess}
                     options={INVITE_ACCESS_OPTIONS}
-                    onChange={(v) => setInviteAccess(v as DocumentAccessLevel)}
+                    onChange={setInviteAccess}
                     align="right"
                   />
                   <button
@@ -478,7 +515,7 @@ export function SharePanel({
           ) : (
             <>
               {/* ── People with access ── */}
-              {collaborators.length > 0 && (
+              {activeCollaboratorsCount > 0 && (
                 <section className="pb-3">
                   <p className="mb-2 text-[13.5px] font-medium text-muted-foreground/80 select-none flex items-center gap-1.5">
                     <span>People with access</span>
@@ -557,9 +594,7 @@ export function SharePanel({
                             <AccessDropdown
                               value={settings?.linkAccessLevel ?? 'VIEW'}
                               options={LINK_ACCESS_OPTIONS}
-                              onChange={(v) =>
-                                void handleLinkAccessChange(v as DocumentAccessLevel)
-                              }
+                              onChange={(v) => void handleLinkAccessChange(v)}
                               disabled={isSavingSettings}
                               align="right"
                             />
