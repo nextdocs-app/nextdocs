@@ -64,7 +64,8 @@ describe('Server', () => {
         apiBaseUrl: 'http://localhost:8080',
         corsOrigins: ['http://localhost:3000', 'http://192.168.*.*:3000'],
         logLevel: 'info',
-        trustedProxies: ['127.0.0.1'],
+        // Both hops of the test chains below are proxies in front of the server.
+        trustedProxies: ['127.0.0.1', '10.0.0.1', '192.168.1.1'],
         roomCleanupInterval: 300000,
         roomInactiveTimeout: 3600000,
         accessRevalidationIntervalMs: 5000,
@@ -173,6 +174,17 @@ describe('Server', () => {
       } as any;
 
       expect(getClientIp(req)).toBe('203.0.113.9');
+    });
+
+    it('ignores client-supplied leading hops so a rotating value cannot change the key', () => {
+      const spoof = (claimed: string) =>
+        ({
+          socket: { remoteAddress: '::ffff:127.0.0.1' },
+          headers: { 'x-forwarded-for': `${claimed}, 203.0.113.9` },
+        }) as any;
+
+      expect(getClientIp(spoof('9.9.9.9'))).toBe('203.0.113.9');
+      expect(getClientIp(spoof('8.8.8.8'))).toBe('203.0.113.9');
     });
 
     it('ignores X-Forwarded-For from untrusted peers', () => {
@@ -936,7 +948,7 @@ describe('Server', () => {
       expect(allowedConn.close).not.toHaveBeenCalled();
     });
 
-    it('should use first IP in comma-separated X-Forwarded-For header', async () => {
+    it('should use the rightmost untrusted IP in a comma-separated X-Forwarded-For header', async () => {
       const realIp1 = '10.0.0.7';
       const realIp2 = '10.0.0.8';
       const proxyIp = '192.168.1.1';

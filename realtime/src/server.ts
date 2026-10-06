@@ -210,10 +210,16 @@ export function getClientIp(req: http.IncomingMessage): string {
   const remoteAddr = normalizeIp(req.socket?.remoteAddress || 'unknown');
   const xForwardedFor = req.headers['x-forwarded-for'];
   if (typeof xForwardedFor === 'string' && isTrustedProxy(remoteAddr)) {
-    // The header can contain a comma-separated list of IPs. The first one is the original client.
-    const candidate = normalizeIp(xForwardedFor.split(',')[0].trim());
-    if (candidate.length > 0) {
-      return candidate;
+    // The list is client-supplied until a trusted hop appends the peer address,
+    // so the leftmost entry is spoofable (rotate it for a fresh per-IP budget).
+    // Read it right to left, skipping the hops our own infrastructure appended,
+    // and stop at the first address that is not a trusted proxy.
+    const hops = xForwardedFor.split(',');
+    for (let i = hops.length - 1; i >= 0; i--) {
+      const candidate = normalizeIp(hops[i].trim());
+      if (candidate.length > 0 && !isTrustedProxy(candidate)) {
+        return candidate;
+      }
     }
   }
   return remoteAddr;

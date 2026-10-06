@@ -84,6 +84,10 @@ const config: Config = {
   // header is accepted (e.g. '127.0.0.1,10.0.0.0/8'). IPv6 CIDRs are rejected
   // at startup: matching is IPv4-only, so accepting them would silently ignore
   // the header. Empty by default.
+  //
+  // X-Forwarded-For is read right to left, skipping these proxies, so list only
+  // the proxies in front of this server: a CIDR that also covers real clients
+  // would let those clients spoof the per-IP limits.
   trustedProxies: process.env.TRUSTED_PROXIES
     ? process.env.TRUSTED_PROXIES.split(',')
         .map((s) => s.trim())
