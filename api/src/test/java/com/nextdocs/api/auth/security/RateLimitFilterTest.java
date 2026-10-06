@@ -225,6 +225,127 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void anonymousWrite_withFormContentType_isRejectedBeforeBodyRead() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        // Form bodies are parsed via getParameter/getParts, not the cached byte
+        // stream, so they must not reach the byte-bound read at all.
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", id)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+                        .content("title=" + "x".repeat(16))
+                        .remoteAddress("10.0.2.3"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.success").value(false));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-write:10.0.2.3");
+    }
+
+    @Test
+    void anonymousWrite_withMultipartContentType_isRejectedWithoutBuffering() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+        byte[] body = "x".repeat((int) MAX_TEST_BODY_BYTES + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest(
+                        "PATCH", "/api/v1/documents/" + id + "/public") {
+                    @Override
+                    public long getContentLengthLong() {
+                        return -1L;
+                    }
+                };
+        request.setContentType("multipart/form-data; boundary=----test");
+        request.setContent(body);
+        request.setRemoteAddr("10.0.2.4");
+
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(415);
+        org.mockito.Mockito.verify(chain, org.mockito.Mockito.never())
+                .doFilter(
+                        org.mockito.Mockito.any(jakarta.servlet.ServletRequest.class),
+                        org.mockito.Mockito.any(jakarta.servlet.ServletResponse.class));
+    }
+
+    @Test
+    void anonymousWrite_withJsonCharset_isAllowed() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", id)
+                        .contentType(
+                                org.springframework.http.MediaType.parseMediaType("application/json;charset=UTF-8"))
+                        .content("{}")
+                        .remoteAddress("10.0.2.5"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-write:10.0.2.5");
+    }
+
+    @Test
+    void anonymousWrite_withUnknownLengthBody_isBoundedByActualBytes() throws Exception {
+        // Chunked uploads omit Content-Length, so the declared-length pre-check
+        // passes them through: the byte-bound read must still reject them.
+        String id = "11111111-1111-1111-1111-111111111111";
+        byte[] body = "x".repeat((int) MAX_TEST_BODY_BYTES + 1).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest(
+                        "PATCH", "/api/v1/documents/" + id + "/public") {
+                    @Override
+                    public long getContentLengthLong() {
+                        return -1L;
+                    }
+                };
+        request.setContent(body);
+        request.setRemoteAddr("10.0.2.9");
+
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(413);
+        org.mockito.Mockito.verify(chain, org.mockito.Mockito.never())
+                .doFilter(
+                        org.mockito.Mockito.any(jakarta.servlet.ServletRequest.class),
+                        org.mockito.Mockito.any(jakarta.servlet.ServletResponse.class));
+    }
+
+    @Test
+    void anonymousWrite_withUnknownLengthSmallBody_isReplayedDownstream() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+        byte[] body = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest(
+                        "PATCH", "/api/v1/documents/" + id + "/public") {
+                    @Override
+                    public long getContentLengthLong() {
+                        return -1L;
+                    }
+                };
+        request.setContent(body);
+        request.setRemoteAddr("10.0.2.10");
+
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        org.mockito.ArgumentCaptor<jakarta.servlet.ServletRequest> captor =
+                org.mockito.ArgumentCaptor.forClass(jakarta.servlet.ServletRequest.class);
+        org.mockito.Mockito.verify(chain)
+                .doFilter(captor.capture(), org.mockito.Mockito.any(jakarta.servlet.ServletResponse.class));
+        assertThat(captor.getValue().getInputStream().readAllBytes()).isEqualTo(body);
+    }
+
+    @Test
     void readPaths_areNotSubjectToTheBodyLimit() throws Exception {
         String id = "11111111-1111-1111-1111-111111111111";
 
@@ -309,6 +430,21 @@ class RateLimitFilterTest {
                 .andExpect(status().isOk());
 
         assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.1");
+    }
+
+    @Test
+    void xForwardedForHeader_skipsGarbageHops() throws Exception {
+        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
+        filter.initTrustedProxies();
+
+        // A garbage hop must not become the bucket key: it is skipped and the
+        // rightmost valid untrusted address keys the request.
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Forwarded-For", "evil, 203.0.113.5, 10.0.0.1")
+                        .remoteAddress("10.0.0.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
     }
 
     private static final class StubRateLimiter implements RateLimiter {

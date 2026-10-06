@@ -33,8 +33,10 @@ import tools.jackson.databind.ObjectMapper;
  * - {@code public-read:<ip>} — anonymous reads: GET .../public, /public/path,
  *   /public/children and anonymous GET .../access-check, .../my-access.
  * - {@code public-write:<ip>} — anonymous saves: PATCH .../public, strict budget
- *   plus a declared body-size ceiling (the controller's own snapshot-size guard
- *   runs only after the body has been parsed, so the limit has to be enforced here).
+ *   plus an actual body-size ceiling (the controller's own snapshot-size guard
+ *   runs only after the body has been parsed, so the limit has to be enforced here,
+ *   on bytes read rather than on the declared Content-Length which chunked
+ *   uploads omit).
  *
  * Authenticated access-check/my-access calls (verified UserPrincipal in SecurityContext)
  * are not rate limited here: the caller is identified by JWT and the rest of the
@@ -52,6 +54,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
+    private static final String UNSUPPORTED_MEDIA_TYPE_MSG = "Unsupported Media Type.";
 
     private final RateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
@@ -129,8 +132,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
+        // The anonymous PATCH endpoint only accepts JSON, and the bounded replay
+        // below only replaces the byte stream: form/multipart bodies are parsed
+        // via getParameter/getParts instead, so they would bypass the byte
+        // ceiling. Reject non-JSON before any body is read or parsed.
+        if (verdict.maxBodyBytes() > 0 && !isJsonContentType(request.getContentType())) {
+            log.warn("Rejected non-JSON anonymous write from IP: {}", maskIp(ip));
+            writeError(response, HttpServletResponse.SC_UNSUPPORTED_MEDIA_TYPE, UNSUPPORTED_MEDIA_TYPE_MSG);
+            return;
+        }
+
         // Checked after the budget so oversized requests cannot be used to probe the
-        // endpoint for free, and before the body is read so a declared-oversized
+        // endpoint for free, and before the body is parsed so a declared-oversized
         // payload never reaches the JSON parser or the base64 decoder.
         if (exceedsDeclaredBodyLimit(request, verdict)) {
             log.warn("Rejected oversized anonymous write from IP: {}", maskIp(ip));
@@ -138,13 +151,44 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
+        // The declared length is absent on chunked uploads, so it cannot bound
+        // them: read up to one byte past the ceiling and reject there. Smaller
+        // bodies are replayed downstream from the cache, so the handler still
+        // sees the full payload while no request ever buffers more than the
+        // ceiling plus one byte before parsing.
+        if (verdict.maxBodyBytes() > 0) {
+            HttpServletRequest bounded = readBoundedBody(request, verdict.maxBodyBytes());
+            if (bounded == null) {
+                log.warn("Rejected oversized anonymous write from IP: {}", maskIp(ip));
+                writeError(response, 413, OVER_LIMIT_BODY_MSG);
+                return;
+            }
+            filterChain.doFilter(bounded, response);
+            return;
+        }
+
         filterChain.doFilter(request, response);
     }
 
     /**
+     * The anonymous PATCH endpoint only accepts JSON. A missing content type
+     * is allowed through to the byte-bound read (containers only pre-parse
+     * form bodies when the type says so); a present but non-JSON type is
+     * rejected so form/multipart parsing cannot bypass the body ceiling.
+     */
+    private boolean isJsonContentType(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return true;
+        }
+        String mime = contentType.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return mime.equals(MediaType.APPLICATION_JSON_VALUE)
+                || (mime.startsWith("application/") && mime.endsWith("+json"));
+    }
+
+    /**
      * Content-Length pre-check for the anonymous write bucket. Requests without a
-     * declared length (chunked uploads) pass through here and are still bounded by
-     * the controller's snapshot-size guard.
+     * declared length (chunked uploads) pass through here and are bounded by
+     * {@link #readBoundedBody} below instead.
      */
     private boolean exceedsDeclaredBodyLimit(HttpServletRequest request, Verdict verdict) {
         if (verdict.maxBodyBytes() <= 0) {
@@ -152,6 +196,78 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         long declaredLength = request.getContentLengthLong();
         return declaredLength > verdict.maxBodyBytes();
+    }
+
+    /**
+     * Reads at most {@code maxBodyBytes + 1} bytes of the request body. Returns a
+     * request replaying the cached bytes, or null when the body exceeds the ceiling.
+     */
+    private HttpServletRequest readBoundedBody(HttpServletRequest request, long maxBodyBytes) throws IOException {
+        java.io.InputStream in = request.getInputStream();
+        java.io.ByteArrayOutputStream cached = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            total += read;
+            if (total > maxBodyBytes) {
+                return null;
+            }
+            cached.write(buffer, 0, read);
+        }
+        return new CachedBodyRequest(request, cached.toByteArray());
+    }
+
+    /** Replays a cached request body downstream after bound checking. */
+    private static class CachedBodyRequest extends jakarta.servlet.http.HttpServletRequestWrapper {
+        private final byte[] body;
+
+        CachedBodyRequest(HttpServletRequest request, byte[] body) {
+            super(request);
+            this.body = body;
+        }
+
+        @Override
+        public jakarta.servlet.ServletInputStream getInputStream() {
+            java.io.ByteArrayInputStream bytes = new java.io.ByteArrayInputStream(body);
+            return new jakarta.servlet.ServletInputStream() {
+                @Override
+                public int read() {
+                    return bytes.read();
+                }
+
+                @Override
+                public boolean isFinished() {
+                    return bytes.available() == 0;
+                }
+
+                @Override
+                public boolean isReady() {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(jakarta.servlet.ReadListener listener) {
+                    // Blocking reads only; async IO is not used on this path.
+                }
+            };
+        }
+
+        @Override
+        public java.io.BufferedReader getReader() throws IOException {
+            String encoding = getCharacterEncoding() != null ? getCharacterEncoding() : "UTF-8";
+            return new java.io.BufferedReader(new java.io.InputStreamReader(getInputStream(), encoding));
+        }
+
+        @Override
+        public int getContentLength() {
+            return body.length;
+        }
+
+        @Override
+        public long getContentLengthLong() {
+            return body.length;
+        }
     }
 
     private void writeError(HttpServletResponse response, int status, String message) throws IOException {
@@ -294,7 +410,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String[] hops = forwarded.split(",");
         for (int i = hops.length - 1; i >= 0; i--) {
             String candidate = normalizeIp(hops[i].trim());
-            if (!candidate.isEmpty() && !isTrustedProxy(candidate)) {
+            // A garbage hop must not become the bucket key (or be forwarded):
+            // skip anything that is not an IP literal and fall back to the peer.
+            if (!candidate.isEmpty() && isIpLiteral(candidate) && !isTrustedProxy(candidate)) {
                 return candidate;
             }
         }
@@ -316,6 +434,35 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private boolean isTrustedProxy(String remoteAddr) {
         String normalized = normalizeIp(remoteAddr);
         return trustedProxyMatchers.stream().anyMatch(m -> m.matches(remoteAddr) || m.matches(normalized));
+    }
+
+    /**
+     * True for IPv4 dotted quads and IPv6 literals (which always contain a colon).
+     * Hostnames and garbage never come from a proxy's appended peer address, so
+     * they are skipped rather than keying a rate-limit bucket.
+     */
+    private static boolean isIpLiteral(String candidate) {
+        if (candidate.contains(":")) {
+            return true;
+        }
+        String[] octets = candidate.split("\\.", -1);
+        if (octets.length != 4) {
+            return false;
+        }
+        for (String octet : octets) {
+            if (octet.isEmpty() || octet.length() > 3) {
+                return false;
+            }
+            for (int i = 0; i < octet.length(); i++) {
+                if (!Character.isDigit(octet.charAt(i))) {
+                    return false;
+                }
+            }
+            if (Integer.parseInt(octet) > 255) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static String maskIp(String rawIp) {
