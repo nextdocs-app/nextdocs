@@ -174,4 +174,25 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
                     + ") SELECT id FROM sub",
             nativeQuery = true)
     List<UUID> findSubtreeDocumentIds(@Param("subtreeRootId") UUID subtreeRootId);
+
+    /**
+     * Ancestor ids of a document, closest first, bounded like resolve_effective_access
+     * (100 levels). One recursive query replaces a lazy parent select per level when a
+     * caller needs the whole chain.
+     */
+    @Query(
+            value = "WITH RECURSIVE chain AS ("
+                    + "  SELECT p.id, p.parent_id, 1 AS depth FROM documents d "
+                    + "  JOIN documents p ON d.parent_id = p.id WHERE d.id = :documentId "
+                    + "  UNION ALL "
+                    + "  SELECT p.id, p.parent_id, c.depth + 1 FROM documents p "
+                    + "  JOIN chain c ON p.id = c.parent_id "
+                    + "  WHERE c.depth < 100 "
+                    + ") SELECT id FROM chain ORDER BY depth",
+            nativeQuery = true)
+    List<UUID> findAncestorChainIds(@Param("documentId") UUID documentId);
+
+    /** Batch load for chain/subtree walks: owners are fetched eagerly, parents are not. */
+    @Query("SELECT d FROM Document d JOIN FETCH d.user WHERE d.id IN :documentIds")
+    List<Document> findAllWithUserByIdIn(@Param("documentIds") Collection<UUID> documentIds);
 }

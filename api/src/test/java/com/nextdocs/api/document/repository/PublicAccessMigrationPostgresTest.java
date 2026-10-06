@@ -28,6 +28,7 @@ class PublicAccessMigrationPostgresTest {
 
     private Connection connection;
     private final List<UUID> createdDocIds = new ArrayList<>();
+    private final List<UUID> createdUserIds = new ArrayList<>();
     private UUID testUserId;
 
     @BeforeEach
@@ -53,14 +54,21 @@ class PublicAccessMigrationPostgresTest {
             stmt.execute(loadMigrationSql());
         }
 
-        testUserId = UUID.randomUUID();
+        testUserId = insertUser();
+    }
+
+    /** Inserts a throwaway user and returns its id; removed again in {@link #tearDown()}. */
+    private UUID insertUser() throws SQLException {
+        UUID userId = UUID.randomUUID();
+        createdUserIds.add(userId);
         try (PreparedStatement stmt = connection.prepareStatement(
                 "INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) "
                         + "VALUES (?, ?, 'hash', 'Test User', now(), now()) ON CONFLICT DO NOTHING")) {
-            stmt.setObject(1, testUserId);
-            stmt.setString(2, "pgtest-" + testUserId + "@example.com");
+            stmt.setObject(1, userId);
+            stmt.setString(2, "pgtest-" + userId + "@example.com");
             stmt.executeUpdate();
         }
+        return userId;
     }
 
     @AfterEach
@@ -70,10 +78,11 @@ class PublicAccessMigrationPostgresTest {
         }
         try (Statement stmt = connection.createStatement()) {
             for (UUID docId : createdDocIds) {
+                stmt.execute("DELETE FROM document_collaborators WHERE document_id = '" + docId + "'");
                 stmt.execute("DELETE FROM documents WHERE id = '" + docId + "'");
             }
-            if (testUserId != null) {
-                stmt.execute("DELETE FROM users WHERE id = '" + testUserId + "'");
+            for (UUID userId : createdUserIds) {
+                stmt.execute("DELETE FROM users WHERE id = '" + userId + "'");
             }
         } finally {
             connection.close();
@@ -98,6 +107,17 @@ class PublicAccessMigrationPostgresTest {
             stmt.setBoolean(8, blocked);
             stmt.setString(9, parentId != null ? "a" + id.toString().substring(0, 4) : null);
             stmt.setTimestamp(10, trashed ? Timestamp.from(Instant.now()) : null);
+            stmt.executeUpdate();
+        }
+    }
+
+    private void insertCollaborator(UUID documentId, UUID userId, String accessLevel) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO document_collaborators (document_id, user_id, access_level, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, now(), now())")) {
+            stmt.setObject(1, documentId);
+            stmt.setObject(2, userId);
+            stmt.setString(3, accessLevel);
             stmt.executeUpdate();
         }
     }
@@ -218,6 +238,120 @@ class PublicAccessMigrationPostgresTest {
                     }
                 }
                 assertThat(count).isEqualTo(3);
+            }
+        }
+    }
+
+    /**
+     * Runs {@code DocumentCollaboratorRepository#findCollaboratorUserIdsWithAncestorGrant}
+     * verbatim: the batched ancestor check must agree with the per-row function call it replaced.
+     */
+    @Test
+    void batchedAncestorGrantQuery_agreesWithPerRowFunctionCalls() throws SQLException {
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        UUID grandchild = UUID.randomUUID();
+        UUID grantedUser = insertUser();
+        UUID revokedUser = insertUser();
+
+        insertDoc(root, null, "RESTRICTED", null, false, false);
+        insertDoc(child, root, "RESTRICTED", null, false, false);
+        insertDoc(grandchild, child, "RESTRICTED", null, false, false);
+
+        // Both users collaborate on the grandchild itself; only one still holds a
+        // positive grant further up the tree, the other was broken with NO_ACCESS.
+        insertCollaborator(grandchild, grantedUser, "EDIT");
+        insertCollaborator(grandchild, revokedUser, "EDIT");
+        insertCollaborator(root, grantedUser, "VIEW");
+        insertCollaborator(root, revokedUser, "NO_ACCESS");
+
+        List<UUID> batched = collaboratorUserIdsWithAncestorGrant(grandchild);
+        assertThat(batched).containsExactly(grantedUser);
+
+        List<UUID> perRow = new ArrayList<>();
+        for (UUID collaboratorUserId : collaboratorUserIds(grandchild)) {
+            if (hasPositiveAncestorGrant(collaboratorUserId, grandchild)) {
+                perRow.add(collaboratorUserId);
+            }
+        }
+        assertThat(batched).containsExactlyElementsOf(perRow);
+    }
+
+    /**
+     * Runs {@code DocumentRepository#findAncestorChainIds} verbatim: callers index into the
+     * result by level, so the closest ancestor must come first and a root must yield nothing.
+     */
+    @Test
+    void ancestorChainQuery_returnsClosestAncestorFirst() throws SQLException {
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        UUID grandchild = UUID.randomUUID();
+
+        insertDoc(root, null, "RESTRICTED", null, false, false);
+        insertDoc(child, root, "RESTRICTED", null, false, false);
+        insertDoc(grandchild, child, "RESTRICTED", null, false, false);
+
+        assertThat(ancestorChain(grandchild)).containsExactly(child, root);
+        assertThat(ancestorChain(child)).containsExactly(root);
+        assertThat(ancestorChain(root)).isEmpty();
+    }
+
+    private List<UUID> collaboratorUserIdsWithAncestorGrant(UUID documentId) throws SQLException {
+        String sql = "SELECT c.user_id FROM document_collaborators c "
+                + "WHERE c.document_id = ? AND has_positive_ancestor_grant(c.user_id, ?)";
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setObject(1, documentId);
+            stmt.setObject(2, documentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<UUID> userIds = new ArrayList<>();
+                while (rs.next()) {
+                    userIds.add((UUID) rs.getObject("user_id"));
+                }
+                return userIds;
+            }
+        }
+    }
+
+    private List<UUID> collaboratorUserIds(UUID documentId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "SELECT user_id FROM document_collaborators WHERE document_id = ? ORDER BY created_at")) {
+            stmt.setObject(1, documentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<UUID> userIds = new ArrayList<>();
+                while (rs.next()) {
+                    userIds.add((UUID) rs.getObject("user_id"));
+                }
+                return userIds;
+            }
+        }
+    }
+
+    private boolean hasPositiveAncestorGrant(UUID userId, UUID documentId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT has_positive_ancestor_grant(?, ?)")) {
+            stmt.setObject(1, userId);
+            stmt.setObject(2, documentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() && rs.getBoolean(1);
+            }
+        }
+    }
+
+    private List<UUID> ancestorChain(UUID documentId) throws SQLException {
+        String sql = "WITH RECURSIVE chain AS ("
+                + " SELECT p.id, p.parent_id, 1 AS depth FROM documents d"
+                + " JOIN documents p ON d.parent_id = p.id WHERE d.id = ?"
+                + " UNION ALL"
+                + " SELECT p.id, p.parent_id, c.depth + 1 FROM documents p"
+                + " JOIN chain c ON p.id = c.parent_id WHERE c.depth < 100"
+                + ") SELECT id FROM chain ORDER BY depth";
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setObject(1, documentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<UUID> ids = new ArrayList<>();
+                while (rs.next()) {
+                    ids.add((UUID) rs.getObject("id"));
+                }
+                return ids;
             }
         }
     }

@@ -44,6 +44,29 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
             @org.springframework.data.repository.query.Param("userId") UUID userId,
             @org.springframework.data.repository.query.Param("documentId") UUID documentId);
 
+    /**
+     * The document's own collaborators that still hold a positive ancestor grant, in one
+     * query rather than one recursive CTE per row. Equivalent to calling
+     * {@link #hasPositiveAncestorGrant} for each of the document's collaborator rows, and
+     * only meaningful for rows that exist on the document itself.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            value = "SELECT c.user_id FROM document_collaborators c "
+                    + "WHERE c.document_id = :documentId "
+                    + "AND has_positive_ancestor_grant(c.user_id, :documentId)",
+            nativeQuery = true)
+    List<UUID> findCollaboratorUserIdsWithAncestorGrant(
+            @org.springframework.data.repository.query.Param("documentId") UUID documentId);
+
+    /**
+     * Collaborator rows for several documents in one query, with users fetched eagerly:
+     * an ancestor walk otherwise costs one query per level plus a lazy user load per row.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT c FROM DocumentCollaborator c JOIN FETCH c.user WHERE c.document.id IN :documentIds")
+    List<DocumentCollaborator> findAllByDocument_IdIn(
+            @org.springframework.data.repository.query.Param("documentIds") java.util.Collection<UUID> documentIds);
+
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.data.jpa.repository.Query(
             value = "WITH RECURSIVE sub AS ("

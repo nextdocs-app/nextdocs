@@ -720,7 +720,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
         when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentCollab));
+        stubAncestorChain(child, List.of(parent), List.of(parentCollab));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -773,6 +773,7 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -810,6 +811,7 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -854,6 +856,12 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        // The chain reports the trashed parent and the live grandparent, but resolution
+        // stops at the trash boundary so the grandparent's link grant never applies.
+        when(documentRepository.findAncestorChainIds(childDocId))
+                .thenReturn(List.of(trashedParentDocId, grandparentDocId));
+        when(documentRepository.findAllWithUserByIdIn(List.of(trashedParentDocId, grandparentDocId)))
+                .thenReturn(List.of(trashedParent, grandparent));
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -888,6 +896,7 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -981,6 +990,7 @@ class DocumentSharingServiceTest {
 
         SharingSettingsUpdateRequest request =
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true);
+        stubAncestorChain(child, List.of(parent, grandparent), List.of());
 
         SharingSettingsResponse response = sharingService.updateSharingSettings(actorId, childDocId, request);
 
@@ -1015,6 +1025,7 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -1061,6 +1072,7 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(blockedParent, grandparent), List.of());
 
         SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
 
@@ -1095,6 +1107,7 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         when(documentRepository.save(child)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
 
         SharingSettingsResponse blocked = sharingService.updateSharingSettings(
                 actorId,
@@ -1218,8 +1231,9 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
         when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentCollab));
-        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, childDocId)).thenReturn(true);
+        stubAncestorChain(child, List.of(parent), List.of(parentCollab));
+        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(childDocId))
+                .thenReturn(List.of(bobId));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1279,8 +1293,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
         when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentNoAccess));
-        when(collaboratorRepository.findAllByDocument_Id(grandparentDocId)).thenReturn(List.of(grandparentEdit));
+        stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1341,10 +1354,10 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
         when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directView));
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of(parentNoAccess));
-        when(collaboratorRepository.findAllByDocument_Id(grandparentDocId)).thenReturn(List.of(grandparentEdit));
+        stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
         // has_positive_ancestor_grant ignores intervening breakpoints, matching production SQL.
-        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, childDocId)).thenReturn(true);
+        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(childDocId))
+                .thenReturn(List.of(bobId));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1656,13 +1669,38 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
         when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
+        // The chain reports the trashed parent and the live grandparent, but the trashed
+        // ancestor stops resolution before its rows are ever loaded.
+        when(documentRepository.findAncestorChainIds(childDocId))
+                .thenReturn(List.of(trashedParentId, grandparentDocId));
+        when(documentRepository.findAllWithUserByIdIn(List.of(trashedParentId, grandparentDocId)))
+                .thenReturn(List.of(trashedParent, grandparent));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
         assertEquals(1, result.size());
         assertEquals(ownerId, result.get(0).userId());
         // The walk must stop at the trashed parent instead of surfacing live grandparent grants.
-        verify(collaboratorRepository, never()).findAllByDocument_Id(grandparentDocId);
+        verify(collaboratorRepository, never()).findAllByDocument_IdIn(any());
+    }
+
+    /**
+     * Stubs the batched ancestor load used by the sharing views: the recursive chain query,
+     * the batch document fetch (owner included) and - only when the caller supplies any -
+     * the batch collaborator-row fetch, which just the collaborator list needs.
+     * {@code ancestors} is ordered closest first, as {@code findAncestorChainIds} returns
+     * them, and holds only the ancestors reachable from the target document.
+     */
+    private void stubAncestorChain(Document target, List<Document> ancestors, List<DocumentCollaborator> rows) {
+        List<UUID> ancestorIds = ancestors.stream().map(Document::getId).toList();
+        when(documentRepository.findAncestorChainIds(target.getId())).thenReturn(ancestorIds);
+        if (ancestorIds.isEmpty()) {
+            return;
+        }
+        when(documentRepository.findAllWithUserByIdIn(ancestorIds)).thenReturn(ancestors);
+        if (!rows.isEmpty()) {
+            when(collaboratorRepository.findAllByDocument_IdIn(ancestorIds)).thenReturn(rows);
+        }
     }
 
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {
