@@ -19,6 +19,9 @@ public record SharingSettingsUpdateRequest(
         @Schema(
                 description = "Block share-link inheritance for this document and its descendants. "
                         + "Omit to leave unchanged. Only meaningful with RESTRICTED; setting "
-                        + "ANYONE_WITH_LINK clears the block.",
+                        + "ANYONE_WITH_LINK clears the block. Stored only when it shadows an "
+                        + "ancestor's link grant, so true can come back false: read the returned "
+                        + "linkInheritBlocked as the effective state rather than assuming this "
+                        + "value stuck.",
                 example = "true")
         Boolean linkInheritBlocked) {}

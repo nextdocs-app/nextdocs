@@ -26,7 +26,9 @@ public record SharingSettingsResponse(
 
         @Schema(
                 description = "Whether this document blocks share-link inheritance for itself and "
-                        + "its descendants (general-access analogue of a NO_ACCESS breakpoint)")
+                        + "its descendants (general-access analogue of a NO_ACCESS breakpoint). "
+                        + "This is the effective state, not an echo of the request: a block that "
+                        + "would shadow no ancestor link grant is normalized away and reports false.")
         boolean linkInheritBlocked) {
 
     public SharingSettingsResponse(
