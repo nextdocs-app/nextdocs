@@ -51,10 +51,13 @@ class PublicAccessMigrationPostgresTest {
             return;
         }
 
-        // Apply the real V14 migration file so drift between the SQL and the
-        // @Query/native callers is caught here instead of shipping green.
+        // Apply the real V13 + V14 migration files so drift between the SQL and the
+        // @Query/native callers is caught here instead of shipping green. Both are
+        // needed: the ancestor-grant assertions exercise V13 functions while the
+        // link assertions exercise V14.
         try (Statement stmt = connection.createStatement()) {
-            stmt.execute(loadMigrationSql());
+            stmt.execute(loadMigrationSql("V13__allow_no_access_collaborator.sql"));
+            stmt.execute(loadMigrationSql("V14__public_access_resolution.sql"));
         }
 
         testUserId = insertUser();
@@ -125,16 +128,16 @@ class PublicAccessMigrationPostgresTest {
         }
     }
 
-    private static String loadMigrationSql() throws SQLException {
+    private static String loadMigrationSql(String fileName) throws SQLException {
         try (java.io.InputStream in = PublicAccessMigrationPostgresTest.class
                 .getClassLoader()
-                .getResourceAsStream("db/migration/V14__public_access_resolution.sql")) {
+                .getResourceAsStream("db/migration/" + fileName)) {
             if (in == null) {
-                throw new SQLException("V14__public_access_resolution.sql not found on the test classpath");
+                throw new SQLException(fileName + " not found on the test classpath");
             }
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (java.io.IOException e) {
-            throw new SQLException("Failed to read V14__public_access_resolution.sql", e);
+            throw new SQLException("Failed to read " + fileName, e);
         }
     }
 

@@ -198,4 +198,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     /** Batch load for chain/subtree walks: owners are fetched eagerly, parents are not. */
     @Query("SELECT d FROM Document d JOIN FETCH d.user WHERE d.id IN :documentIds")
     List<Document> findAllWithUserByIdIn(@Param("documentIds") Collection<UUID> documentIds);
+
+    /**
+     * Parent link per document without loading entities: lets subtree walks answer
+     * "has accessible parent" from maps instead of one lazy parent select (plus its
+     * owner and access CTE) per document.
+     */
+    @Query("SELECT d.id, d.parent.id FROM Document d WHERE d.id IN :documentIds")
+    List<Object[]> findParentIdsByIdIn(@Param("documentIds") Collection<UUID> documentIds);
 }

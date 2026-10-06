@@ -210,7 +210,7 @@ public class DocumentService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
-        return toResponse(document, true);
+        return toResponse(document, true, null, publicAccess);
     }
 
     @Transactional(readOnly = true)
@@ -234,6 +234,16 @@ public class DocumentService {
 
         Map<UUID, Long> childCounts = fetchPublicChildCounts(childIds);
         Map<UUID, DocumentAccessLevel> accessLevels = permissionService.resolvePublicAccessBatch(childIds);
+        // Parent links in one query instead of one lazy select per child.
+        Map<UUID, UUID> parentById = new HashMap<>();
+        for (Object[] row : documentRepository.findParentIdsByIdIn(childIds)) {
+            Object rawParent = row[1];
+            parentById.put(
+                    (UUID) row[0],
+                    rawParent instanceof UUID u
+                            ? u
+                            : (rawParent != null ? UUID.fromString(rawParent.toString()) : null));
+        }
 
         return page.map(child -> {
             boolean hasChildren = childCounts.getOrDefault(child.getId(), 0L) > 0;
@@ -247,7 +257,7 @@ public class DocumentService {
                     child.getId(),
                     child.getTitle(),
                     null,
-                    child.getParent() != null ? child.getParent().getId() : null,
+                    parentById.getOrDefault(child.getId(), parentId),
                     child.getSiblingOrderKey(),
                     hasChildren,
                     hasCollaborators,
@@ -333,7 +343,9 @@ public class DocumentService {
             document.setYjsState(state);
         }
 
-        return toResponse(documentRepository.save(document), true);
+        // The EDIT gate above already resolved the public level: reuse it instead
+        // of resolving a second time inside toResponse.
+        return toResponse(documentRepository.save(document), true, null, access);
     }
 
     @Transactional(readOnly = true)
@@ -671,7 +683,11 @@ public class DocumentService {
     }
 
     private DocumentResponse toResponse(Document document, boolean includeState) {
-        return toResponse(document, includeState, null);
+        return toResponse(document, includeState, null, null);
+    }
+
+    private DocumentResponse toResponse(Document document, boolean includeState, UUID callerUserId) {
+        return toResponse(document, includeState, callerUserId, null);
     }
 
     /**
@@ -680,8 +696,12 @@ public class DocumentService {
      * so it MUST be executed within an active @Transactional context. It is intended solely for
      * single-document operations (create, get, update, reorder); batch listings must use batch queries
      * via DocumentListQueryHelper instead.
+     *
+     * @param publicAccessHint already-resolved public level for anonymous single-document
+     *     reads, so callers that resolved it for gating do not pay a second CTE.
      */
-    private DocumentResponse toResponse(Document document, boolean includeState, UUID callerUserId) {
+    private DocumentResponse toResponse(
+            Document document, boolean includeState, UUID callerUserId, DocumentAccessLevel publicAccessHint) {
         OffsetDateTime deletedAt = document.getDeletedAt();
         OffsetDateTime purgeAt = null;
         if (deletedAt != null) {
@@ -723,7 +743,9 @@ public class DocumentService {
         boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(document.getId());
         DocumentAccessLevel accessLevel;
         if (callerUserId == null) {
-            accessLevel = permissionService.resolvePublicAccess(document.getId());
+            accessLevel = publicAccessHint != null
+                    ? publicAccessHint
+                    : permissionService.resolvePublicAccess(document.getId());
         } else if (document.getUser().getId().equals(callerUserId)) {
             accessLevel = DocumentAccessLevel.OWNER;
         } else if (document.getDeletedAt() != null) {

@@ -87,10 +87,15 @@ public class DocumentSharingService {
         Set<UUID> handledAncestorUserIds = new HashSet<>();
         List<CollaboratorResponse> inheritedResponses = new ArrayList<>();
 
+        // Title masking needs the requester's access per ancestor: one batch
+        // query for the whole chain instead of one recursive CTE per level.
+        Map<UUID, DocumentAccessLevel> ancestorAccessById = permissionService.resolveAccessBatch(
+                requesterId,
+                ancestorContext.ancestors().stream().map(Document::getId).toList());
+
         for (Document ancestor : ancestorContext.ancestors()) {
             String ancestorTitle;
-            if (requesterId.equals(ancestor.getUser().getId())
-                    || permissionService.resolveAccess(requesterId, ancestor.getId()) != null) {
+            if (requesterId.equals(ancestor.getUser().getId()) || ancestorAccessById.get(ancestor.getId()) != null) {
                 ancestorTitle = titleOrUntitled(ancestor);
             } else {
                 ancestorTitle = "Parent document";
@@ -278,11 +283,15 @@ public class DocumentSharingService {
         }
 
         if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
+            // Breakpoints shadow identity-channel grants only: hasPositiveAncestorGrant
+            // counts ownership and non-NO_ACCESS collaborator rows (V13) and ignores
+            // link grants, so a NO_ACCESS row is stored only when an ancestor identity
+            // grant exists to shadow. Link-derived access is unaffected by design.
+            // The empty-and-grantless case throws above, so reaching here without a
+            // grant means a direct row exists: delete it instead of storing a breakpoint.
             if (!hasAncestorGrant) {
-                if (collaboratorOpt.isPresent()) {
-                    collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
-                    userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
-                }
+                collaboratorRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
+                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
             } else {
                 DocumentCollaborator collaborator = collaboratorOpt.orElseGet(() -> {
                     User targetUser = userRepository
@@ -586,6 +595,14 @@ public class DocumentSharingService {
         return accessLevel;
     }
 
+    /**
+     * Subtree reconcile works in fixed-size chunks: a collaborator write used to cost
+     * two recursive CTEs plus lazy parent/owner selects per document in the subtree.
+     * Each chunk now costs one id query (shared), one entity load, one parent-link
+     * query and one access batch, whatever the subtree width.
+     */
+    private static final int RECONCILE_CHUNK_SIZE = 500;
+
     private void reconcileSharedRoots(UUID userId, UUID subtreeRootId) {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
@@ -595,7 +612,6 @@ public class DocumentSharingService {
         if (subtreeIds.isEmpty()) {
             return;
         }
-        List<Document> subtreeDocs = documentRepository.findAllById(subtreeIds);
 
         // Decide first, mutate last: UserDocumentOrder deletes clear the persistence context,
         // detaching the subtree documents loaded above. Touching a lazy association afterwards
@@ -603,16 +619,9 @@ public class DocumentSharingService {
         // access resolution has to happen before the first order row is deleted.
         List<Document> documentsToFloat = new ArrayList<>();
         List<UUID> orderRowsToDelete = new ArrayList<>();
-        for (Document doc : subtreeDocs) {
-            if (doc.getUser().getId().equals(userId)) {
-                continue;
-            }
-            DocumentAccessLevel access = permissionService.resolveAccess(userId, doc.getId());
-            if (access != null && !hasAccessibleParent(userId, doc)) {
-                documentsToFloat.add(doc);
-            } else {
-                orderRowsToDelete.add(doc.getId());
-            }
+        for (int start = 0; start < subtreeIds.size(); start += RECONCILE_CHUNK_SIZE) {
+            List<UUID> chunk = subtreeIds.subList(start, Math.min(start + RECONCILE_CHUNK_SIZE, subtreeIds.size()));
+            decideSharedRoots(userId, user, subtreeRootId, chunk, documentsToFloat, orderRowsToDelete);
         }
 
         for (Document doc : documentsToFloat) {
@@ -623,13 +632,62 @@ public class DocumentSharingService {
         }
     }
 
-    private boolean hasAccessibleParent(UUID userId, Document doc) {
-        Document parent = doc.getParent();
-        if (parent == null) {
+    private void decideSharedRoots(
+            UUID userId,
+            User user,
+            UUID subtreeRootId,
+            List<UUID> chunk,
+            List<Document> documentsToFloat,
+            List<UUID> orderRowsToDelete) {
+        Set<UUID> chunkIds = new HashSet<>(chunk);
+        Map<UUID, UUID> parentById = new HashMap<>();
+        for (Object[] row : documentRepository.findParentIdsByIdIn(chunk)) {
+            Object parent = row[1];
+            parentById.put(
+                    (UUID) row[0],
+                    parent instanceof UUID u ? u : (parent != null ? UUID.fromString(parent.toString()) : null));
+        }
+        // The subtree root's parent sits outside the subtree: resolve it alongside
+        // the chunk so the accessible-parent check below never touches a lazy proxy.
+        UUID rootParentId = parentById.get(subtreeRootId);
+        Set<UUID> loadIds = new HashSet<>(chunk);
+        if (rootParentId != null) {
+            loadIds.add(rootParentId);
+        }
+        Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveAccessBatch(userId, loadIds);
+        Map<UUID, UUID> ownerById = new HashMap<>();
+        List<Document> subtreeDocs = new ArrayList<>();
+        for (Document doc : documentRepository.findAllWithUserByIdIn(loadIds)) {
+            ownerById.put(doc.getId(), doc.getUser().getId());
+            if (chunkIds.contains(doc.getId())) {
+                subtreeDocs.add(doc);
+            }
+        }
+
+        for (Document doc : subtreeDocs) {
+            if (userId.equals(ownerById.get(doc.getId()))) {
+                continue;
+            }
+            DocumentAccessLevel access = accessById.get(doc.getId());
+            if (access != null && !hasAccessibleParent(userId, doc.getId(), parentById, ownerById, accessById)) {
+                documentsToFloat.add(doc);
+            } else {
+                orderRowsToDelete.add(doc.getId());
+            }
+        }
+    }
+
+    private boolean hasAccessibleParent(
+            UUID userId,
+            UUID documentId,
+            Map<UUID, UUID> parentById,
+            Map<UUID, UUID> ownerById,
+            Map<UUID, DocumentAccessLevel> accessById) {
+        UUID parentId = parentById.get(documentId);
+        if (parentId == null) {
             return false;
         }
-        return parent.getUser().getId().equals(userId)
-                || permissionService.resolveAccess(userId, parent.getId()) != null;
+        return userId.equals(ownerById.get(parentId)) || accessById.get(parentId) != null;
     }
 
     /**

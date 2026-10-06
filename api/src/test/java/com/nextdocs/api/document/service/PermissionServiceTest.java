@@ -77,6 +77,29 @@ class PermissionServiceTest {
     }
 
     @Test
+    void resolveAccessBatch_skipsNullIdsInsteadOfAbortingBatch() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        when(documentRepository.resolveEffectiveAccessBatch(userId, documentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {documentId, "EDIT"}));
+
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolveAccessBatch(userId, java.util.Arrays.asList(documentId, null));
+
+        assertEquals(java.util.Map.of(documentId, DocumentAccessLevel.EDIT), levels);
+        verify(documentRepository).resolveEffectiveAccessBatch(userId, documentId.toString());
+    }
+
+    @Test
+    void resolveAccessBatch_allNullIds_returnsEmptyWithoutQuerying() {
+        java.util.Map<UUID, DocumentAccessLevel> levels =
+                permissionService.resolveAccessBatch(UUID.randomUUID(), java.util.Arrays.asList(null, null));
+
+        assertTrue(levels.isEmpty());
+        verifyNoInteractions(documentRepository);
+    }
+
+    @Test
     void resolvePublicAccessBatch_skipsNullIdsInsteadOfAbortingBatch() {
         UUID documentId = UUID.randomUUID();
         when(documentRepository.resolvePublicAccessBatch(documentId.toString()))

@@ -102,9 +102,10 @@ class DocumentSharingReconcilePersistenceTest {
 
         when(permissionService.requireSharingAdminAccess(owner.getId(), root.getId()))
                 .thenReturn(root);
-        when(permissionService.resolveAccess(bob.getId(), child.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolveAccess(bob.getId(), root.getId())).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolveAccess(bob.getId(), grandparent.getId())).thenReturn(null);
+        when(permissionService.resolveAccessBatch(
+                        bob.getId(), java.util.Set.of(child.getId(), root.getId(), grandparent.getId())))
+                .thenReturn(java.util.Map.of(
+                        child.getId(), DocumentAccessLevel.VIEW, root.getId(), DocumentAccessLevel.VIEW));
 
         when(collaboratorRepository.hasPositiveAncestorGrant(bob.getId(), root.getId()))
                 .thenReturn(true);
@@ -117,13 +118,25 @@ class DocumentSharingReconcilePersistenceTest {
         // transaction-bound EntityManager so the real proxies take part in the flow.
         doReturn(List.of(child.getId(), root.getId())).when(documentRepository).findSubtreeDocumentIds(root.getId());
         doAnswer(inv -> {
-                    List<UUID> ids = inv.getArgument(0);
+                    java.util.Collection<UUID> ids = inv.getArgument(0);
                     return ids.stream()
                             .map(id -> entityManager.find(Document.class, id))
                             .toList();
                 })
                 .when(documentRepository)
-                .findAllById(any());
+                .findAllWithUserByIdIn(any());
+        doAnswer(inv -> {
+                    java.util.Collection<UUID> ids = inv.getArgument(0);
+                    return ids.stream()
+                            .map(id -> {
+                                Document doc = entityManager.find(Document.class, id);
+                                Document parent = doc.getParent();
+                                return new Object[] {id, parent != null ? parent.getId() : null};
+                            })
+                            .toList();
+                })
+                .when(documentRepository)
+                .findParentIdsByIdIn(any());
 
         sharingService.updateCollaboratorAccess(
                 owner.getId(),

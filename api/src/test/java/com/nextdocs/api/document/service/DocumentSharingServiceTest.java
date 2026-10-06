@@ -1565,6 +1565,43 @@ class DocumentSharingServiceTest {
     }
 
     @Test
+    void updateCollaboratorAccess_withNoAccess_andLinkOnlyGrant_deletesRowWithoutStoringBreakpoint() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        User bob = User.builder().id(bobId).build();
+        DocumentCollaborator existing = DocumentCollaborator.builder()
+                .document(doc)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
+        // Link grants never count as ancestor grants, so even a live link leaves
+        // hasPositiveAncestorGrant false and no breakpoint row is stored.
+        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(false);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(existing));
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
+
+        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(collaboratorRepository, never()).save(any(DocumentCollaborator.class));
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
     void removeCollaborator_withInheritedOnlyUser_throwsNotFound() {
         UUID actorId = UUID.randomUUID();
         UUID ancestorOwnerId = UUID.randomUUID();

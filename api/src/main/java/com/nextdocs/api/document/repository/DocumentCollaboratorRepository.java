@@ -10,7 +10,15 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCollaborator, UUID> {
 
-    List<DocumentCollaborator> findAllByDocument_Id(UUID documentId);
+    /**
+     * Direct collaborators with users fetched eagerly: every caller reads
+     * {@code getUser()} per row, so the derived query's lazy load costs one
+     * select per collaborator.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT c FROM DocumentCollaborator c JOIN FETCH c.user WHERE c.document.id = :documentId")
+    List<DocumentCollaborator> findAllByDocument_Id(
+            @org.springframework.data.repository.query.Param("documentId") UUID documentId);
 
     Optional<DocumentCollaborator> findByDocument_IdAndUser_Id(UUID documentId, UUID userId);
 

@@ -58,6 +58,38 @@ public class PermissionService {
     }
 
     /**
+     * Resolves the effective access level of a user for a batch of documents.
+     * One native query replaces one recursive CTE per document for callers that
+     * already hold the id set (ancestor walks, subtree reconciles).
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Map.of();
+        }
+        // Same null-guard as resolvePublicAccessBatch: one bad entry must not
+        // deny the whole batch.
+        String joined = documentIds.stream()
+                .filter(Objects::nonNull)
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
+        if (joined.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, DocumentAccessLevel> result = new HashMap<>();
+        for (Object[] row : documentRepository.resolveEffectiveAccessBatch(userId, joined)) {
+            if (row[0] != null && row[1] != null) {
+                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
+                DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
+                if (level.allowsRead()) {
+                    result.put(docId, level);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Resolves the effective anonymous access level for a batch of documents.
      */
     @Transactional(readOnly = true)
