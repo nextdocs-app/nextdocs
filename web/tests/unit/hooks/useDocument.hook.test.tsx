@@ -5,7 +5,10 @@ import * as Y from 'yjs';
 import documentReducer from '@/stores/document/document.slice';
 import { useDocument } from '@/hooks/useDocument.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
-import { writeCachedDocumentAccessLevel } from '@/lib/document-access.util';
+import {
+  readCachedDocumentAccessLevel,
+  writeCachedDocumentAccessLevel,
+} from '@/lib/document-access.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
@@ -73,6 +76,7 @@ describe('useDocument', () => {
   let updatePublicMetadataSpy: jest.SpyInstance;
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
+  let checkAccessSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -113,6 +117,9 @@ describe('useDocument', () => {
       .spyOn(documentService, 'restoreCloudDocumentFromTrash')
       .mockImplementation(jest.fn());
     dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    checkAccessSpy = jest
+      .spyOn(documentService, 'checkAccess')
+      .mockRejectedValue(new Error('the guest path should not need an access check'));
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
@@ -139,6 +146,7 @@ describe('useDocument', () => {
     updatePublicMetadataSpy.mockRestore();
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
+    checkAccessSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -207,6 +215,59 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
+  });
+
+  it('takes the guest access level from the public payload without a second access check', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Comment-only Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    // The share link grants comments: enough to read, not to write.
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'COMMENT' });
+
+    const { result } = renderHook(
+      () => useDocument('shared-comment-id', { isSharedDocument: true }),
+      {
+        wrapper: createWrapper(),
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('COMMENT');
+    expect(result.current.isReadOnly).toBe(true);
+    // checkAccess is mocked to fail, so a COMMENT level here can only have come from the
+    // payload - and it is the level kept for an offline reopen.
+    expect(readCachedDocumentAccessLevel('shared-comment-id')).toBe('COMMENT');
+  });
+
+  it('lets a guest write when the share link payload grants edit', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+
+    const { result } = renderHook(() => useDocument('shared-edit-id', { isSharedDocument: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('EDIT');
+    expect(result.current.isReadOnly).toBe(false);
+    // Same again: the failing access check cannot be what made this guest a writer.
+    expect(readCachedDocumentAccessLevel('shared-edit-id')).toBe('EDIT');
   });
 
   it('should load public cloud document for guest direct doc URL when no local copy exists', async () => {

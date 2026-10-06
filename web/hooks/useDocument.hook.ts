@@ -161,10 +161,21 @@ function resolveAuthenticatedFallbackAccessLevel(
   );
 }
 
+/**
+ * Access level for a guest opening a share link.
+ *
+ * The public payload already reports the caller's effective level - the same
+ * resolve_public_access grant the access-check endpoint answers with - so the extra round
+ * trip is only for the paths that arrived without a payload: an offline mirror, or a link
+ * this session remembered but could not re-fetch.
+ */
 async function resolveGuestAccessLevel(
   documentId: string,
-  fallback: DocumentAccessLevel = 'VIEW'
+  options?: { payloadLevel?: DocumentAccessLevel | null; fallback?: DocumentAccessLevel }
 ): Promise<DocumentAccessLevel> {
+  if (options?.payloadLevel) {
+    return options.payloadLevel;
+  }
   try {
     const access = await documentService.checkAccess(documentId);
     if (access.allowed && access.accessLevel) {
@@ -173,7 +184,7 @@ async function resolveGuestAccessLevel(
   } catch {
     // Fall through to cached/fallback level so offline guests keep reading.
   }
-  return readCachedDocumentAccessLevel(documentId) ?? fallback;
+  return readCachedDocumentAccessLevel(documentId) ?? options?.fallback ?? 'VIEW';
 }
 
 async function resolveLocalFallbackDocument(
@@ -441,7 +452,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             try {
               result = await documentService.getPublicDocument(id);
               documentService.notePublicLinkDocument(id);
-              guestAccessLevel = await resolveGuestAccessLevel(id);
+              guestAccessLevel = await resolveGuestAccessLevel(id, {
+                payloadLevel: result.accessLevel,
+              });
             } catch (publicErr) {
               if (
                 publicErr instanceof DocumentServiceApiError &&
@@ -460,7 +473,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               }
 
               result = localResult;
-              guestAccessLevel = await resolveGuestAccessLevel(id, 'VIEW');
+              guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
             }
           } else {
             const localResult = await documentService.loadDocument(id);
@@ -473,12 +486,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               try {
                 result = await documentService.getPublicDocument(id);
                 documentService.notePublicLinkDocument(id);
-                guestAccessLevel = await resolveGuestAccessLevel(id);
+                guestAccessLevel = await resolveGuestAccessLevel(id, {
+                  payloadLevel: result.accessLevel,
+                });
               } catch (publicErr) {
                 if (isConnectivityError(publicErr)) {
                   if (localResult) {
                     result = localResult;
-                    guestAccessLevel = await resolveGuestAccessLevel(id, 'VIEW');
+                    guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
                   } else if (isKnownPublicLink) {
                     // The session remembers this id as a share link, but its local
                     // mirror is gone. Recreating a blank EDIT copy offline would let a

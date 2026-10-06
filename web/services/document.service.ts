@@ -519,6 +519,7 @@ class DocumentService {
       return {
         ydoc,
         meta: this.toDocumentMeta(body),
+        accessLevel: body.accessLevel ?? null,
       };
     });
   }

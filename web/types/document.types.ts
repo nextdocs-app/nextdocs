@@ -1,4 +1,5 @@
 import type { DocumentMeta } from '@/../../realtime/src/types/blocks';
+import type { DocumentAccessLevel } from '@/services/document.service';
 import type * as Y from 'yjs';
 
 export type {
@@ -50,4 +51,10 @@ export interface DocumentLoadResult {
   ydoc: Y.Doc;
   meta: DocumentMeta;
   origin?: StoredDocument['origin'];
+  /**
+   * Effective access level the server reported alongside the payload, when it sent one.
+   * A share-link read carries it, so callers do not need a second access check for a
+   * level the server already resolved.
+   */
+  accessLevel?: DocumentAccessLevel | null;
 }
