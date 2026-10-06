@@ -191,6 +191,8 @@ describe('useDocument', () => {
     expect(result.current.meta).toEqual(meta);
     expect(result.current.error).toBeNull();
     expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('test-id');
+    // A document this device owns is not someone else's share link.
+    expect(result.current.isGuestShareLink).toBe(false);
   });
 
   it('should load shared public document in guest mode as read-only', async () => {
@@ -215,6 +217,7 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.isGuestShareLink).toBe(true);
   });
 
   it('takes the guest access level from the public payload without a second access check', async () => {
@@ -268,6 +271,8 @@ describe('useDocument', () => {
     expect(result.current.isReadOnly).toBe(false);
     // Same again: the failing access check cannot be what made this guest a writer.
     expect(readCachedDocumentAccessLevel('shared-edit-id')).toBe('EDIT');
+    // A writer on someone else's link is still a guest, which the notice needs to know.
+    expect(result.current.isGuestShareLink).toBe(true);
   });
 
   it('should load public cloud document for guest direct doc URL when no local copy exists', async () => {

@@ -664,6 +664,7 @@ describe('Editor Component', () => {
       },
       accessLevel: 'VIEW',
       isReadOnly: true,
+      isGuestShareLink: true,
       isRealtimeConnected: false,
       realtimeProvider: null,
       errorState: null,
@@ -688,6 +689,64 @@ describe('Editor Component', () => {
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
     );
+  });
+
+  it('shows the guest notice to a comment-level share-link guest', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: { ...mockMeta, title: 'Shared Here' },
+      accessLevel: 'COMMENT',
+      isReadOnly: true,
+      isGuestShareLink: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const store = configureStore({
+      reducer: {
+        ui: uiReducer,
+      },
+    });
+
+    render(<Editor />, store);
+
+    // Comment-only guests are still guests: they need the sign-in path as much as
+    // a viewer does, and the notice no longer keys off the access level.
+    expect(screen.getByText(/You are viewing a shared document as a guest\./i)).toBeInTheDocument();
+  });
+
+  it('does not show the guest notice outside a share link', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: { ...mockMeta, title: 'Local Doc' },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isGuestShareLink: false,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const store = configureStore({
+      reducer: {
+        ui: uiReducer,
+      },
+    });
+
+    render(<Editor />, store);
+
+    expect(
+      screen.queryByText(/You are viewing a shared document as a guest\./i)
+    ).not.toBeInTheDocument();
   });
 
   it('shows offline badge when browser is offline even for local guest editing', () => {

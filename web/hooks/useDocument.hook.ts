@@ -221,6 +221,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [accessLevel, setAccessLevel] = useState<DocumentAccessLevel | null>(
     initialFallbackAccessLevel
   );
+  const [isGuestShareLink, setIsGuestShareLink] = useState(isSharedDocument);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
@@ -389,6 +390,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
     accessLevelRef.current = initialLevel;
     setAccessLevel(initialLevel);
+    // Reset before the load decides, so a share-link notice never lingers over the
+    // document this device opened next.
+    setIsGuestShareLink(isSharedDocument);
 
     let cancelled = false;
 
@@ -407,6 +411,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         let result: DocumentLoadResult;
         let guestAccessLevel: DocumentAccessLevel = 'EDIT';
         let loadedFromCloud = false;
+        // True when the bytes are someone else's share link rather than this device's own
+        // document. Kept apart from the access level: an edit-level or comment-level guest
+        // is still a guest, and only viewer-level used to be treated as one.
+        let loadedFromShareLink = false;
         const canAttemptCloudRead = !isCloudReadInBackoff() && !hasPendingSyncForRequestedDoc;
 
         if (isAuthenticated && token) {
@@ -449,6 +457,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           }
         } else {
           if (isSharedDocument) {
+            loadedFromShareLink = true;
             try {
               result = await documentService.getPublicDocument(id);
               documentService.notePublicLinkDocument(id);
@@ -483,9 +492,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             } else {
               const isKnownPublicLink =
                 localResult?.origin === 'public-link' || documentService.isPublicLinkDocument(id);
+              // Reaching this branch means any local copy is a share-link mirror, and a
+              // fresh fetch below is the link's document: neither is this device's own.
+              loadedFromShareLink = localResult !== null || isKnownPublicLink;
               try {
                 result = await documentService.getPublicDocument(id);
                 documentService.notePublicLinkDocument(id);
+                loadedFromShareLink = true;
                 guestAccessLevel = await resolveGuestAccessLevel(id, {
                   payloadLevel: result.accessLevel,
                 });
@@ -538,6 +551,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         }
 
         if (!cancelled) {
+          setIsGuestShareLink(loadedFromShareLink);
           if (
             isAuthenticated &&
             token &&
@@ -1417,6 +1431,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       isReadOnlyAccessLevel(accessLevel) ||
       (isSharedDocument && accessLevel === null) ||
       !!meta?.deletedAt,
+    /**
+     * Whether the open document is someone else's share link. Distinct from the access
+     * level and from `isReadOnly`: an edit-level or comment-level guest edits or comments
+     * on a document that is not theirs, and UI that speaks to that guest keys off this.
+     */
+    isGuestShareLink,
     isRealtimeConnected,
     realtimeProvider,
     errorState,
