@@ -226,8 +226,16 @@ for (const proxy of config.trustedProxies) {
       );
     }
     const [subnet, prefixStr] = parts;
+    if (!/^\d+$/.test(prefixStr)) {
+      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
+    }
     const prefix = parseInt(prefixStr, 10);
-    const ver = net.isIP(subnet);
+    // Normalize before validation so ::ffff:10.0.0.1/8 is judged the same way
+    // isTrustedProxy matches it at runtime (IPv4-mapped IPv6 → IPv4).
+    const normalizedSubnet = subnet.toLowerCase().startsWith('::ffff:')
+      ? subnet.toLowerCase().slice(7)
+      : subnet;
+    const ver = net.isIP(normalizedSubnet);
     if (ver === 0 || Number.isNaN(prefix)) {
       throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
     }

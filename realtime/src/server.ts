@@ -15,6 +15,19 @@ interface RoomData {
   connections: number;
 }
 
+// Revalidation tunables: kept as named constants next to their use so ops can
+// spot them; promote to config.ts only if runtime tuning is needed.
+const MAX_CONSECUTIVE_REVALIDATION_FAILURES = 5;
+const FETCH_FALLBACK_RETRY_AFTER_MS = 30000;
+const RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC = 60;
+const RATE_LIMIT_MAX_RETRY_AFTER_SEC = 300;
+const MAX_XFF_HOPS_SCANNED = 16;
+// Anonymous cooldown is shared by every guest behind one NAT IP for the same
+// room, so a single denied probe must not block other guests. Only enforce
+// the no-API-check fast path after repeated denials; every denial below the
+// threshold still closes its own connection with 1008.
+const ANONYMOUS_COOLDOWN_DENIAL_THRESHOLD = 3;
+
 const rooms = new Map<string, RoomData>();
 
 function escapeRegExp(value: string): string {
@@ -142,6 +155,7 @@ interface UnauthorizedCooldownState {
   denyUntil: number;
   lastWarnAt: number;
   suppressedAttempts: number;
+  consecutiveDenials: number;
 }
 
 interface UnauthorizedCooldownExpiryEntry {
@@ -164,9 +178,9 @@ interface ApiEnvelope<T> {
 export function normalizeIp(ip: string): string {
   const lower = ip.toLowerCase();
   if (lower.startsWith('::ffff:')) {
-    return ip.slice(7);
+    return lower.slice(7);
   }
-  return ip;
+  return lower;
 }
 
 function ipToLong(ip: string): number | null {
@@ -177,7 +191,7 @@ function ipToLong(ip: string): number | null {
     if (!/^\d{1,3}$/.test(octet)) return null;
     const n = parseInt(octet, 10);
     if (n < 0 || n > 255) return null;
-    acc = (acc << 8) + n;
+    acc = acc * 256 + n;
   }
   return acc >>> 0;
 }
@@ -193,7 +207,11 @@ export function isTrustedProxy(rawRemoteAddr: string): boolean {
     if (!trimmed) continue;
 
     if (trimmed.includes('/')) {
-      const [subnet, prefixStr] = trimmed.split('/');
+      const parts = trimmed.split('/');
+      if (parts.length !== 2 || !/^\d+$/.test(parts[1])) {
+        continue;
+      }
+      const [subnet, prefixStr] = parts;
       const prefix = parseInt(prefixStr, 10);
       const normSubnet = normalizeIp(subnet);
 
@@ -234,8 +252,12 @@ export function getClientIp(req: http.IncomingMessage): string {
     // Read it right to left, skipping the hops our own infrastructure appended,
     // and stop at the first address that is not a trusted proxy.
     const hops = xForwardedFor.split(',');
-    for (let i = hops.length - 1; i >= 0; i--) {
-      const candidate = normalizeIp(hops[i].trim());
+    // Bound CPU on an attacker-controlled header: only the closest hops can
+    // affect the rightmost-untrusted decision, so scan at most 16.
+    const recentHops =
+      hops.length > MAX_XFF_HOPS_SCANNED ? hops.slice(-MAX_XFF_HOPS_SCANNED) : hops;
+    for (let i = recentHops.length - 1; i >= 0; i--) {
+      const candidate = normalizeIp(recentHops[i].trim());
       if (candidate.length === 0 || net.isIP(candidate) === 0) {
         continue;
       }
@@ -269,6 +291,17 @@ function extractToken(req: http.IncomingMessage, url: URL): string | null {
 
 function isValidRoomId(roomId: string): boolean {
   return ROOM_ID_PATTERN.test(roomId);
+}
+
+// Never log raw request URLs: ?token= carries a live credential and
+// intermediaries already log query strings. Log pathname only.
+function redactUrlForLog(rawUrl: string | undefined | null): string {
+  if (!rawUrl) {
+    return '/';
+  }
+  const queryIndex = rawUrl.indexOf('?');
+  const pathname = queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : rawUrl;
+  return pathname.length > 0 ? pathname : '/';
 }
 
 function getTokenFingerprint(token: string): string {
@@ -413,21 +446,34 @@ function getUnauthorizedCooldownState(key: string, now: number): UnauthorizedCoo
     return null;
   }
 
+  // Anonymous keys are shared across a NAT IP: don't fast-reject other
+  // guests on the same IP until repeated probes prove abuse.
+  if (
+    key.endsWith(':anonymous') &&
+    existingState.consecutiveDenials < ANONYMOUS_COOLDOWN_DENIAL_THRESHOLD
+  ) {
+    return null;
+  }
+
   return existingState;
 }
 
 function trackUnauthorizedAccess(key: string, now: number): UnauthorizedCooldownState {
-  const existingState = getUnauthorizedCooldownState(key, now);
-  if (existingState) {
-    existingState.denyUntil = now + config.unauthorizedAccessCooldownMs;
-    pushUnauthorizedCooldownExpiration({ key, denyUntil: existingState.denyUntil });
-    return existingState;
+  // Count denials even while below the anonymous threshold: look the raw
+  // entry up directly instead of the filtered cooldown-state lookup.
+  const rawExisting = unauthorizedAccessCooldown.get(key);
+  if (rawExisting && rawExisting.denyUntil > now) {
+    rawExisting.consecutiveDenials += 1;
+    rawExisting.denyUntil = now + config.unauthorizedAccessCooldownMs;
+    pushUnauthorizedCooldownExpiration({ key, denyUntil: rawExisting.denyUntil });
+    return rawExisting;
   }
 
   const nextState: UnauthorizedCooldownState = {
     denyUntil: now + config.unauthorizedAccessCooldownMs,
     lastWarnAt: 0,
     suppressedAttempts: 0,
+    consecutiveDenials: 1,
   };
 
   unauthorizedAccessCooldown.set(key, nextState);
@@ -549,17 +595,27 @@ export async function fetchAccess(
 
     if (res.status === 429) {
       const retryAfterHeader = res.headers.get('retry-after');
-      const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 60;
+      const parsed = retryAfterHeader
+        ? parseInt(retryAfterHeader, 10)
+        : RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC;
+      const retryAfterSec =
+        !Number.isNaN(parsed) && parsed > 0
+          ? Math.min(parsed, RATE_LIMIT_MAX_RETRY_AFTER_SEC)
+          : RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC;
       return {
         status: 'rate_limited',
-        retryAfterMs:
-          (!Number.isNaN(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec : 60) * 1000,
+        retryAfterMs: retryAfterSec * 1000,
       };
     }
 
     // Every remaining 4xx is a definitive answer (401/403/404 access, 400/422
     // malformed or unknown document): retrying cannot succeed, so deny instead
     // of reporting a transient error the revalidation loop would tolerate.
+    // 408 Request Timeout is the exception: the API never sends it today, but
+    // if it ever does it is transient, so treat it as an error to retry.
+    if (res.status === 408) {
+      return { status: 'error' };
+    }
     if (res.status >= 400 && res.status < 500) {
       return { status: 'denied' };
     }
@@ -687,7 +743,7 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     } catch (err) {
       logger.warn('Connection rejected: failed to parse URL', {
         ip: clientIp,
-        url: req.url,
+        url: redactUrlForLog(req.url),
         error: (err as Error).message,
       });
       conn.close(1008, 'Invalid request URL');
@@ -698,7 +754,7 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     if (!roomId) {
       logger.warn('Connection rejected: missing room ID', {
         ip: clientIp,
-        url: req.url,
+        url: redactUrlForLog(req.url),
       });
       conn.close(1008, 'Room ID required');
 
@@ -801,10 +857,9 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
     const revalidationIntervalMs = token
       ? config.accessRevalidationIntervalMs
       : config.anonymousAccessRevalidationIntervalMs;
-    const MAX_CONSECUTIVE_REVALIDATION_FAILURES = 5;
     let consecutiveRevalidationFailures = 0;
 
-    revalidateAccessInterval = setInterval(async () => {
+    revalidateAccessInterval = setInterval(() => {
       if (conn.readyState !== WebSocket.OPEN || isRevalidating) {
         return;
       }
@@ -815,65 +870,74 @@ wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
       }
 
       isRevalidating = true;
-      try {
-        const latestAccess = await fetchAccess(token, roomId, clientIp);
-        if (latestAccess.status === 'denied') {
-          logger.info('Connection closed after access revalidation denial', {
-            roomId,
-            ip: clientIp,
-          });
-          conn.close(1008, 'Access revoked');
-          return;
-        }
+      fetchAccess(token, roomId, clientIp)
+        .then((latestAccess) => {
+          if (latestAccess.status === 'denied') {
+            logger.info('Connection closed after access revalidation denial', {
+              roomId,
+              ip: clientIp,
+            });
+            conn.close(1008, 'Access revoked');
+            return;
+          }
 
-        if (latestAccess.status === 'rate_limited') {
-          consecutiveRevalidationFailures++;
-          logger.warn('Access check rate limited during revalidation; backing off', {
-            roomId,
-            ip: clientIp,
-            consecutiveRevalidationFailures,
-          });
-          if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
-            logger.warn('Connection closed after consecutive revalidation rate limits', {
+          if (latestAccess.status === 'rate_limited') {
+            consecutiveRevalidationFailures++;
+            logger.warn('Access check rate limited during revalidation; backing off', {
               roomId,
               ip: clientIp,
               consecutiveRevalidationFailures,
             });
-            conn.close(1008, 'Rate limit exceeded');
+            if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
+              logger.warn('Connection closed after consecutive revalidation rate limits', {
+                roomId,
+                ip: clientIp,
+                consecutiveRevalidationFailures,
+              });
+              conn.close(1008, 'Rate limit exceeded');
+              return;
+            }
+            nextBackoffUntil =
+              Date.now() + (latestAccess.retryAfterMs ?? FETCH_FALLBACK_RETRY_AFTER_MS);
             return;
           }
-          nextBackoffUntil = Date.now() + (latestAccess.retryAfterMs ?? 30000);
-          return;
-        }
 
-        if (latestAccess.status === 'error') {
-          consecutiveRevalidationFailures++;
-          logger.debug('Transient failure during revalidation; retrying next cycle', {
-            roomId,
-            ip: clientIp,
-            consecutiveRevalidationFailures,
-          });
-          if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
-            logger.error('Connection closed after consecutive revalidation errors', {
+          if (latestAccess.status === 'error') {
+            consecutiveRevalidationFailures++;
+            logger.debug('Transient failure during revalidation; retrying next cycle', {
               roomId,
               ip: clientIp,
               consecutiveRevalidationFailures,
             });
-            conn.close(1011, 'Access check failed');
+            if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
+              logger.error('Connection closed after consecutive revalidation errors', {
+                roomId,
+                ip: clientIp,
+                consecutiveRevalidationFailures,
+              });
+              conn.close(1011, 'Access check failed');
+              return;
+            }
             return;
           }
-          return;
-        }
 
-        if (latestAccess.status === 'allowed') {
-          consecutiveRevalidationFailures = 0;
-          if (latestAccess.data?.accessLevel) {
-            updateConnectionAccessLevel(conn, roomId, latestAccess.data.accessLevel);
+          if (latestAccess.status === 'allowed') {
+            consecutiveRevalidationFailures = 0;
+            if (latestAccess.data?.accessLevel) {
+              updateConnectionAccessLevel(conn, roomId, latestAccess.data.accessLevel);
+            }
           }
-        }
-      } finally {
-        isRevalidating = false;
-      }
+        })
+        .catch((error) => {
+          logger.error('Unexpected revalidation failure', {
+            roomId,
+            ip: clientIp,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          isRevalidating = false;
+        });
     }, revalidationIntervalMs);
     revalidateAccessInterval.unref();
 

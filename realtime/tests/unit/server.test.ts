@@ -219,6 +219,119 @@ describe('Server', () => {
 
       expect(getClientIp(req)).toBe('127.0.0.1');
     });
+
+    it('matches trusted proxies case-insensitively for IPv6 literals', async () => {
+      const serverModule = await import('../../src/server.js');
+
+      expect(serverModule.normalizeIp('FE80::1')).toBe('fe80::1');
+      expect(serverModule.normalizeIp('::FFFF:10.0.0.1')).toBe('10.0.0.1');
+    });
+
+    it('ignores malformed CIDR prefixes instead of trusting them', async () => {
+      jest.resetModules();
+      await jest.unstable_mockModule('../../src/config.js', () => ({
+        __esModule: true,
+        default: {
+          port: 1234,
+          host: '0.0.0.0',
+          apiBaseUrl: 'http://localhost:8080',
+          corsOrigins: [],
+          logLevel: 'info',
+          trustedProxies: ['10.0.0.0/8abc', '10.0.0.0/8x', '10.0.0.0/a/b'],
+          roomCleanupInterval: 300000,
+          roomInactiveTimeout: 3600000,
+          accessRevalidationIntervalMs: 5000,
+          anonymousAccessRevalidationIntervalMs: 30000,
+          fetchTimeoutMs: 5000,
+          unauthorizedAccessCooldownMs: 15000,
+          unauthorizedAccessWarnIntervalMs: 10000,
+          enforceMemoryThreshold: false,
+          limits: {
+            maxPayload: 5 * 1024 * 1024,
+            maxConnsPerIp: 200,
+            maxGlobalConns: 10000,
+            maxConnRatePerMin: 100,
+            maxMsgRatePerSec: 100,
+            memoryThreshold: 0.95,
+          },
+        },
+      }));
+      const serverModule = await import('../../src/server.js');
+
+      expect(serverModule.isTrustedProxy('10.0.0.5')).toBe(false);
+    });
+
+    it('matches CIDR ranges including boundaries', async () => {
+      jest.resetModules();
+      await jest.unstable_mockModule('../../src/config.js', () => ({
+        __esModule: true,
+        default: {
+          port: 1234,
+          host: '0.0.0.0',
+          apiBaseUrl: 'http://localhost:8080',
+          corsOrigins: [],
+          logLevel: 'info',
+          trustedProxies: ['10.0.0.0/8', '192.168.1.5/32', '0.0.0.0/0'],
+          roomCleanupInterval: 300000,
+          roomInactiveTimeout: 3600000,
+          accessRevalidationIntervalMs: 5000,
+          anonymousAccessRevalidationIntervalMs: 30000,
+          fetchTimeoutMs: 5000,
+          unauthorizedAccessCooldownMs: 15000,
+          unauthorizedAccessWarnIntervalMs: 10000,
+          enforceMemoryThreshold: false,
+          limits: {
+            maxPayload: 5 * 1024 * 1024,
+            maxConnsPerIp: 200,
+            maxGlobalConns: 10000,
+            maxConnRatePerMin: 100,
+            maxMsgRatePerSec: 100,
+            memoryThreshold: 0.95,
+          },
+        },
+      }));
+      const serverModule = await import('../../src/server.js');
+
+      expect(serverModule.isTrustedProxy('10.0.0.5')).toBe(true);
+      expect(serverModule.isTrustedProxy('10.255.255.255')).toBe(true);
+      expect(serverModule.isTrustedProxy('192.168.1.5')).toBe(true);
+      expect(serverModule.isTrustedProxy('192.168.1.6')).toBe(true); // via 0.0.0.0/0
+    });
+
+    it('rejects addresses outside a CIDR range', async () => {
+      jest.resetModules();
+      await jest.unstable_mockModule('../../src/config.js', () => ({
+        __esModule: true,
+        default: {
+          port: 1234,
+          host: '0.0.0.0',
+          apiBaseUrl: 'http://localhost:8080',
+          corsOrigins: [],
+          logLevel: 'info',
+          trustedProxies: ['10.0.0.0/8', '192.168.1.5/32'],
+          roomCleanupInterval: 300000,
+          roomInactiveTimeout: 3600000,
+          accessRevalidationIntervalMs: 5000,
+          anonymousAccessRevalidationIntervalMs: 30000,
+          fetchTimeoutMs: 5000,
+          unauthorizedAccessCooldownMs: 15000,
+          unauthorizedAccessWarnIntervalMs: 10000,
+          enforceMemoryThreshold: false,
+          limits: {
+            maxPayload: 5 * 1024 * 1024,
+            maxConnsPerIp: 200,
+            maxGlobalConns: 10000,
+            maxConnRatePerMin: 100,
+            maxMsgRatePerSec: 100,
+            memoryThreshold: 0.95,
+          },
+        },
+      }));
+      const serverModule = await import('../../src/server.js');
+
+      expect(serverModule.isTrustedProxy('11.0.0.1')).toBe(false);
+      expect(serverModule.isTrustedProxy('192.168.1.6')).toBe(false);
+    });
   });
 
   describe('fetchAccess', () => {
@@ -274,6 +387,16 @@ describe('Server', () => {
           retryAfterMs: 60000,
         });
       }
+    });
+
+    it('clamps huge Retry-After values to five minutes', async () => {
+      const headers = new Headers();
+      headers.set('retry-after', '99999999');
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 429, headers } as Response);
+      await expect(fetchAccess(null, VALID_ROOM_ID, '203.0.113.9')).resolves.toEqual({
+        status: 'rate_limited',
+        retryAfterMs: 300000,
+      });
     });
   });
 
@@ -1047,6 +1170,70 @@ describe('Server', () => {
       wss.emit('connection', rejectedConn, mockReq);
       await waitForConnectionProcessing();
       expect(rejectedConn.close).toHaveBeenCalledWith(1008, 'Rate limit exceeded');
+    });
+
+    it('should never log raw query tokens on rejected connections', async () => {
+      const { default: logger } = await import('../../src/logger.js');
+      (logger.warn as jest.Mock).mockClear();
+
+      mockReq.url = `/?token=super-secret-live-token`;
+      mockReq.headers = { host: 'localhost:1234' };
+      wss.emit('connection', mockConn, mockReq);
+      await waitForConnectionProcessing();
+
+      expect(mockConn.close).toHaveBeenCalledWith(1008, expect.stringContaining('Room ID'));
+      const loggedPayloads = (logger.warn as jest.Mock).mock.calls.map((c) => JSON.stringify(c));
+      expect(loggedPayloads.join(' ')).not.toContain('super-secret-live-token');
+    });
+
+    it('should not fast-reject anonymous guests on the first denial behind shared NAT', async () => {
+      jest.useFakeTimers();
+      try {
+        fetchMock.mockReset();
+        fetchMock.mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { allowed: false, accessLevel: null, owner: false },
+            error: null,
+          }),
+        } as Response);
+
+        const anonUrl = `/${VALID_ROOM_ID}`;
+        const connectAnon = async () => {
+          const conn: any = new EventEmitter();
+          conn.close = jest.fn();
+          conn.readyState = WS_OPEN;
+          const req: any = {
+            url: anonUrl,
+            headers: { host: 'localhost:1234' },
+            socket: { remoteAddress: '127.0.0.1' },
+          };
+          wss.emit('connection', conn, req);
+          await waitForConnectionProcessing();
+          return conn;
+        };
+
+        const first = await connectAnon();
+        expect(first.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const second = await connectAnon();
+        expect(second.close).toHaveBeenCalledWith(1008, 'Access denied');
+        // Still calls the API: no shared-NAT fast path yet.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        const third = await connectAnon();
+        expect(third.close).toHaveBeenCalledWith(1008, 'Access denied');
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        const fourth = await connectAnon();
+        expect(fourth.close).toHaveBeenCalledWith(1008, 'Access denied');
+        // After repeated denials the cooldown fast path engages.
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });
