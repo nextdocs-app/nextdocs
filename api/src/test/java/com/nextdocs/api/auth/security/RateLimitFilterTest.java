@@ -262,17 +262,51 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void xForwardedForHeader_usesFirstIp_whenRemoteAddressIsTrustedProxy() throws Exception {
+    void xForwardedForHeader_usesRightmostUntrustedHop_whenRemoteAddressIsTrustedProxy() throws Exception {
         // Configure 10.0.0.1 as a trusted proxy so X-Forwarded-For is honoured
         ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
         filter.initTrustedProxies();
 
+        // Typical chain: the client, then the trusted hop that appended its own address.
         mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Forwarded-For", "203.0.113.5, 10.0.0.1")
                         .remoteAddress("10.0.0.1"))
                 .andExpect(status().isOk());
 
         assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
+    }
+
+    @Test
+    void xForwardedForHeader_ignoresClientSuppliedLeadingEntries() throws Exception {
+        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
+        filter.initTrustedProxies();
+
+        // The caller prepended 9.9.9.9; the trusted hop appended the real peer address.
+        // Rotating the spoofed entry must not hand out a fresh budget per request.
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Forwarded-For", "9.9.9.9, 203.0.113.5")
+                        .remoteAddress("10.0.0.1"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Forwarded-For", "8.8.8.8, 203.0.113.5")
+                        .remoteAddress("10.0.0.1"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:203.0.113.5");
+    }
+
+    @Test
+    void xForwardedForHeader_fallsBackToPeer_whenEveryHopIsATrustedProxy() throws Exception {
+        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1, 10.0.0.2");
+        filter.initTrustedProxies();
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Forwarded-For", "10.0.0.2, 10.0.0.1")
+                        .remoteAddress("10.0.0.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.1");
     }
 
     private static final class StubRateLimiter implements RateLimiter {

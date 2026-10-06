@@ -267,17 +267,31 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * Client address used as the rate-limit bucket key.
+     *
+     * X-Forwarded-For is client-supplied until a trusted hop appends the peer address
+     * to it, so the leftmost entry is spoofable: rotating it would hand every request a
+     * fresh budget. Read the list right to left instead - skipping the hops our own
+     * infrastructure appended (the trusted proxies) - and use the first address that is
+     * not a trusted proxy. The trusted list must only contain proxies; a CIDR that also
+     * covers real clients would let those clients spoof the entry we stop at.
+     */
     private String resolveClientIp(HttpServletRequest request) {
         String remoteAddr = normalizeIp(request.getRemoteAddr());
         String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank() && isTrustedProxy(request.getRemoteAddr())) {
-            for (String token : forwarded.split(",")) {
-                String candidate = normalizeIp(token.trim());
-                if (!candidate.isEmpty()) {
-                    return candidate;
-                }
+        if (forwarded == null || forwarded.isBlank() || !isTrustedProxy(request.getRemoteAddr())) {
+            return remoteAddr;
+        }
+
+        String[] hops = forwarded.split(",");
+        for (int i = hops.length - 1; i >= 0; i--) {
+            String candidate = normalizeIp(hops[i].trim());
+            if (!candidate.isEmpty() && !isTrustedProxy(candidate)) {
+                return candidate;
             }
         }
+        // Every hop was a trusted proxy (or the header was empty): key on the peer.
         return remoteAddr;
     }
 
