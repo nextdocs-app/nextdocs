@@ -26,7 +26,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Document Sharing", description = "Document collaboration and sharing endpoints")
@@ -90,8 +89,7 @@ public class DocumentSharingController {
     @Operation(
             summary = "Update collaborator access level",
             description = "Updates an existing collaborator's access level for the specified document or creates "
-                    + "an override, and returns the recalculated collaborator list. Accepted on both verbs "
-                    + "because the body is a partial update that older clients sent as PUT.",
+                    + "an override, and returns the recalculated collaborator list.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
@@ -109,9 +107,7 @@ public class DocumentSharingController {
                         responseCode = "409",
                         description = "Self-lockout or owner access conflict")
             })
-    @RequestMapping(
-            value = "/{id}/collaborators/{userId}",
-            method = {RequestMethod.PATCH, RequestMethod.PUT})
+    @PatchMapping("/{id}/collaborators/{userId}")
     public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> updateCollaboratorAccess(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,

@@ -691,7 +691,8 @@ class DocumentService {
     const body = await this.fetchApi<ApiCollaborator[]>(
       `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators/${encodeURIComponent(userId)}`,
       {
-        method: 'PUT',
+        // PATCH, not PUT: the body updates one field and leaves the rest alone.
+        method: 'PATCH',
         accessToken,
         body: JSON.stringify({ accessLevel }),
       }

@@ -143,7 +143,7 @@ class DocumentSharingControllerTest {
     }
 
     @Test
-    void updateCollaboratorAccess_success_returnsTheList_forPatchAndPut() throws Exception {
+    void updateCollaboratorAccess_success_returnsTheList_butRejectsPut() throws Exception {
         doNothing()
                 .when(sharingService)
                 .updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any());
@@ -170,6 +170,8 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].accessLevel").value("VIEW"));
 
+        // The body changes one field, so only the partial-update verb is mapped: a
+        // broadened mapping would silently accept a full-replacement PUT as well.
         mockMvc.perform(put("/api/v1/documents/{id}/collaborators/{collaboratorUserId}", documentId, collaboratorUserId)
                         .with(user(principal))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -178,8 +180,7 @@ class DocumentSharingControllerTest {
                           "accessLevel": "VIEW"
                         }
                         """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[0].accessLevel").value("VIEW"));
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test
