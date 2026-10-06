@@ -1850,6 +1850,29 @@ class DocumentServiceTest {
     }
 
     @Test
+    void updatePublic_malformedOversizedState_rejectsOnSizeBeforeDecoding() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        // Not valid base64, so a decode-first implementation would report "must be valid
+        // base64" instead of the size violation. The size message proves the oversized
+        // payload was rejected without ever being decoded.
+        String oversizedGarbage = "!".repeat(DocumentService.MAX_PUBLIC_STATE_ENCODED_LENGTH + 1);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentService.updatePublic(
+                        docId, new DocumentUpdateRequest("Too big", oversizedGarbage, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("exceeds the maximum size"));
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
     void updatePublic_viewLink_throwsForbidden() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);

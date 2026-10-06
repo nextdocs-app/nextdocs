@@ -32,7 +32,9 @@ import tools.jackson.databind.ObjectMapper;
  * - {@code auth:<ip>} — /api/v1/auth/* (login/signup/refresh), strict default budget.
  * - {@code public-read:<ip>} — anonymous reads: GET .../public, /public/path,
  *   /public/children and anonymous GET .../access-check, .../my-access.
- * - {@code public-write:<ip>} — anonymous saves: PATCH .../public, strict budget.
+ * - {@code public-write:<ip>} — anonymous saves: PATCH .../public, strict budget
+ *   plus a declared body-size ceiling (the controller's own snapshot-size guard
+ *   runs only after the body has been parsed, so the limit has to be enforced here).
  *
  * Authenticated access-check/my-access calls (verified UserPrincipal in SecurityContext)
  * are not rate limited here: the caller is identified by JWT and the rest of the
@@ -45,6 +47,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
+    private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
 
     private final RateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
@@ -52,6 +55,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final Duration publicReadWindow;
     private final int publicWriteMaxRequests;
     private final Duration publicWriteWindow;
+    private final long publicWriteMaxBodyBytes;
 
     public RateLimitFilter(
             RateLimiter rateLimiter,
@@ -59,13 +63,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.public-read-max-requests:120}") int publicReadMaxRequests,
             @Value("${app.rate-limit.public-read-window-seconds:60}") long publicReadWindowSeconds,
             @Value("${app.rate-limit.public-write-max-requests:20}") int publicWriteMaxRequests,
-            @Value("${app.rate-limit.public-write-window-seconds:60}") long publicWriteWindowSeconds) {
+            @Value("${app.rate-limit.public-write-window-seconds:60}") long publicWriteWindowSeconds,
+            @Value("${app.rate-limit.public-write-max-body-bytes:5242880}") long publicWriteMaxBodyBytes) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
         this.publicReadMaxRequests = publicReadMaxRequests;
         this.publicReadWindow = Duration.ofSeconds(publicReadWindowSeconds);
         this.publicWriteMaxRequests = publicWriteMaxRequests;
         this.publicWriteWindow = Duration.ofSeconds(publicWriteWindowSeconds);
+        this.publicWriteMaxBodyBytes = publicWriteMaxBodyBytes;
     }
 
     /**
@@ -111,16 +117,40 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (!allowed) {
             String maskedIp = maskIp(ip);
             log.warn("Rate limit exceeded for IP: {}", maskedIp);
-            response.setStatus(429);
             response.setHeader("Retry-After", String.valueOf(verdict.window().getSeconds()));
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.getWriter()
-                    .write(objectMapper.writeValueAsString(
-                            ApiResponse.error(ErrorCode.RATE_LIMIT_EXCEEDED.defaultMessage())));
+            writeError(response, 429, ErrorCode.RATE_LIMIT_EXCEEDED.defaultMessage());
+            return;
+        }
+
+        // Checked after the budget so oversized requests cannot be used to probe the
+        // endpoint for free, and before the body is read so a declared-oversized
+        // payload never reaches the JSON parser or the base64 decoder.
+        if (exceedsDeclaredBodyLimit(request, verdict)) {
+            log.warn("Rejected oversized anonymous write from IP: {}", maskIp(ip));
+            writeError(response, 413, OVER_LIMIT_BODY_MSG);
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Content-Length pre-check for the anonymous write bucket. Requests without a
+     * declared length (chunked uploads) pass through here and are still bounded by
+     * the controller's snapshot-size guard.
+     */
+    private boolean exceedsDeclaredBodyLimit(HttpServletRequest request, Verdict verdict) {
+        if (verdict.maxBodyBytes() <= 0) {
+            return false;
+        }
+        long declaredLength = request.getContentLengthLong();
+        return declaredLength > verdict.maxBodyBytes();
+    }
+
+    private void writeError(HttpServletResponse response, int status, String message) throws IOException {
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.getWriter().write(objectMapper.writeValueAsString(ApiResponse.error(message)));
     }
 
     /**
@@ -164,7 +194,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // Match /api/v1/documents/{id}/public for reads (GET) and
             // anonymous share-link saves (PATCH).
             if ("PATCH".equalsIgnoreCase(method)) {
-                return Verdict.customBudget("public-write:", publicWriteMaxRequests, publicWriteWindow);
+                return Verdict.anonymousWriteBudget(
+                        "public-write:", publicWriteMaxRequests, publicWriteWindow, publicWriteMaxBodyBytes);
             }
             if ("GET".equalsIgnoreCase(method)) {
                 return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
@@ -212,17 +243,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
      * behavior (auth endpoints); custom budgets are configured per category.
      */
     private record Verdict(
-            boolean limited, String bucketPrefix, boolean useDefaultBudget, int maxRequests, Duration window) {
+            boolean limited,
+            String bucketPrefix,
+            boolean useDefaultBudget,
+            int maxRequests,
+            Duration window,
+            long maxBodyBytes) {
         static Verdict unlimited() {
-            return new Verdict(false, "", true, 0, Duration.ZERO);
+            return new Verdict(false, "", true, 0, Duration.ZERO, 0);
         }
 
         static Verdict defaultBudget(String bucketPrefix) {
-            return new Verdict(true, bucketPrefix, true, RateLimiter.DEFAULT_MAX_REQUESTS, RateLimiter.DEFAULT_WINDOW);
+            return new Verdict(
+                    true, bucketPrefix, true, RateLimiter.DEFAULT_MAX_REQUESTS, RateLimiter.DEFAULT_WINDOW, 0);
         }
 
         static Verdict customBudget(String bucketPrefix, int maxRequests, Duration window) {
-            return new Verdict(true, bucketPrefix, false, maxRequests, window);
+            return new Verdict(true, bucketPrefix, false, maxRequests, window, 0);
+        }
+
+        static Verdict anonymousWriteBudget(String bucketPrefix, int maxRequests, Duration window, long maxBodyBytes) {
+            return new Verdict(true, bucketPrefix, false, maxRequests, window, maxBodyBytes);
         }
     }
 

@@ -58,6 +58,13 @@ public class DocumentService {
     // burn bandwidth and storage on data that could never sync.
     static final int MAX_PUBLIC_STATE_BYTES = 5 * 1024 * 1024;
 
+    // Base64 turns 3 bytes into 4 characters, so this bounds what a caller can make the
+    // decoder allocate. Deliberately a little generous (the 3-byte encoding quantum
+    // hides up to two extra bytes) and only a pre-filter: MAX_PUBLIC_STATE_BYTES stays
+    // the exact rule. Rejecting on length first means an unauthenticated caller cannot
+    // make the API materialise an arbitrarily large snapshot before the size check.
+    static final int MAX_PUBLIC_STATE_ENCODED_LENGTH = ((MAX_PUBLIC_STATE_BYTES + 2) / 3) * 4 + 4;
+
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
@@ -316,11 +323,12 @@ public class DocumentService {
         }
 
         if (request.yjsState() != null) {
+            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
+                throw publicStateTooLarge();
+            }
             byte[] state = decodeBase64State(request.yjsState());
             if (state.length > MAX_PUBLIC_STATE_BYTES) {
-                throw new ApiException(
-                        ErrorCode.VALIDATION_FAILED,
-                        "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
+                throw publicStateTooLarge();
             }
             document.setYjsState(state);
         }
@@ -642,6 +650,12 @@ public class DocumentService {
 
     private static String formatBreadcrumbTitle(String title) {
         return (title == null || title.isBlank()) ? "Untitled" : title.strip();
+    }
+
+    private static ApiException publicStateTooLarge() {
+        return new ApiException(
+                ErrorCode.VALIDATION_FAILED,
+                "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
     }
 
     private static byte[] decodeBase64State(String yjsState) {

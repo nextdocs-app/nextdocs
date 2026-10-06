@@ -29,6 +29,9 @@ import tools.jackson.databind.ObjectMapper;
 
 class RateLimitFilterTest {
 
+    /** Small ceiling so body-limit tests stay cheap; the production default is 5 MB. */
+    private static final long MAX_TEST_BODY_BYTES = 1024;
+
     private MockMvc mockMvc;
     private StubRateLimiter rateLimiter;
     private RateLimitFilter filter;
@@ -36,7 +39,7 @@ class RateLimitFilterTest {
     @BeforeEach
     void setUp() {
         rateLimiter = new StubRateLimiter();
-        filter = new RateLimitFilter(rateLimiter, new ObjectMapper(), 120, 60, 20, 60);
+        filter = new RateLimitFilter(rateLimiter, new ObjectMapper(), 120, 60, 20, 60, MAX_TEST_BODY_BYTES);
         mockMvc = MockMvcBuilders.standaloneSetup(new StubController())
                 .addFilters(filter)
                 .build();
@@ -200,6 +203,33 @@ class RateLimitFilterTest {
 
         mockMvc.perform(get("/api/v1/documents/" + id + "/public/children/").remoteAddress("10.0.1.8"));
         assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.1.8");
+    }
+
+    @Test
+    void anonymousWrite_withOversizedBody_isRejectedBeforeParsing() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", id)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("x".repeat((int) MAX_TEST_BODY_BYTES + 1))
+                        .remoteAddress("10.0.2.1"))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.success").value(false));
+
+        // The budget is consumed first, so oversized bodies cannot be used to probe
+        // the endpoint for free.
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-write:10.0.2.1");
+    }
+
+    @Test
+    void readPaths_areNotSubjectToTheBodyLimit() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public", id).remoteAddress("10.0.2.2"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.2.2");
     }
 
     @Test
