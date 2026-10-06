@@ -18,6 +18,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 /**
  * Migration & native query test against real PostgreSQL.
@@ -297,19 +300,7 @@ class PublicAccessMigrationPostgresTest {
     }
 
     private List<UUID> collaboratorUserIdsWithAncestorGrant(UUID documentId) throws SQLException {
-        String sql = "SELECT c.user_id FROM document_collaborators c "
-                + "WHERE c.document_id = ? AND has_positive_ancestor_grant(c.user_id, ?)";
-        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            stmt.setObject(1, documentId);
-            stmt.setObject(2, documentId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                List<UUID> userIds = new ArrayList<>();
-                while (rs.next()) {
-                    userIds.add((UUID) rs.getObject("user_id"));
-                }
-                return userIds;
-            }
-        }
+        return namedQuery(DocumentCollaboratorRepository.COLLABORATOR_ANCESTOR_GRANT_SQL, documentId, "user_id");
     }
 
     private List<UUID> collaboratorUserIds(UUID documentId) throws SQLException {
@@ -337,23 +328,22 @@ class PublicAccessMigrationPostgresTest {
     }
 
     private List<UUID> ancestorChain(UUID documentId) throws SQLException {
-        String sql = "WITH RECURSIVE chain AS ("
-                + " SELECT p.id, p.parent_id, 1 AS depth FROM documents d"
-                + " JOIN documents p ON d.parent_id = p.id WHERE d.id = ?"
-                + " UNION ALL"
-                + " SELECT p.id, p.parent_id, c.depth + 1 FROM documents p"
-                + " JOIN chain c ON p.id = c.parent_id WHERE c.depth < 100"
-                + ") SELECT id FROM chain ORDER BY depth";
-        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            stmt.setObject(1, documentId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                List<UUID> ids = new ArrayList<>();
-                while (rs.next()) {
-                    ids.add((UUID) rs.getObject("id"));
-                }
-                return ids;
-            }
-        }
+        return namedQuery(DocumentRepository.ANCESTOR_CHAIN_SQL, documentId, "id");
+    }
+
+    /**
+     * Runs one of the repositories' own SQL strings, binding and reading one column.
+     *
+     * The query is taken from the repository constant rather than copied here: a copy
+     * would keep passing after the shipped query changed, which is exactly the drift
+     * these tests exist to catch. Named parameters are bound by name, so a renamed
+     * placeholder fails here too.
+     */
+    private List<UUID> namedQuery(String sql, UUID documentId, String column) throws SQLException {
+        MapSqlParameterSource params = new MapSqlParameterSource("documentId", documentId);
+        NamedParameterJdbcTemplate jdbc =
+                new NamedParameterJdbcTemplate(new SingleConnectionDataSource(connection, true));
+        return jdbc.queryForList(sql, params, UUID.class);
     }
 
     @Test

@@ -179,17 +179,20 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
      * Ancestor ids of a document, closest first, bounded like resolve_effective_access
      * (100 levels). One recursive query replaces a lazy parent select per level when a
      * caller needs the whole chain.
+     *
+     * A constant rather than an inline literal so the PostgreSQL test runs this exact
+     * text: a test that copies the query cannot see the query change.
      */
-    @Query(
-            value = "WITH RECURSIVE chain AS ("
-                    + "  SELECT p.id, p.parent_id, 1 AS depth FROM documents d "
-                    + "  JOIN documents p ON d.parent_id = p.id WHERE d.id = :documentId "
-                    + "  UNION ALL "
-                    + "  SELECT p.id, p.parent_id, c.depth + 1 FROM documents p "
-                    + "  JOIN chain c ON p.id = c.parent_id "
-                    + "  WHERE c.depth < 100 "
-                    + ") SELECT id FROM chain ORDER BY depth",
-            nativeQuery = true)
+    String ANCESTOR_CHAIN_SQL = "WITH RECURSIVE chain AS ("
+            + "  SELECT p.id, p.parent_id, 1 AS depth FROM documents d "
+            + "  JOIN documents p ON d.parent_id = p.id WHERE d.id = :documentId "
+            + "  UNION ALL "
+            + "  SELECT p.id, p.parent_id, c.depth + 1 FROM documents p "
+            + "  JOIN chain c ON p.id = c.parent_id "
+            + "  WHERE c.depth < 100 "
+            + ") SELECT id FROM chain ORDER BY depth";
+
+    @Query(value = ANCESTOR_CHAIN_SQL, nativeQuery = true)
     List<UUID> findAncestorChainIds(@Param("documentId") UUID documentId);
 
     /** Batch load for chain/subtree walks: owners are fetched eagerly, parents are not. */

@@ -50,11 +50,11 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
      * {@link #hasPositiveAncestorGrant} for each of the document's collaborator rows, and
      * only meaningful for rows that exist on the document itself.
      */
-    @org.springframework.data.jpa.repository.Query(
-            value = "SELECT c.user_id FROM document_collaborators c "
-                    + "WHERE c.document_id = :documentId "
-                    + "AND has_positive_ancestor_grant(c.user_id, :documentId)",
-            nativeQuery = true)
+    String COLLABORATOR_ANCESTOR_GRANT_SQL = "SELECT c.user_id FROM document_collaborators c "
+            + "WHERE c.document_id = :documentId "
+            + "AND has_positive_ancestor_grant(c.user_id, :documentId)";
+
+    @org.springframework.data.jpa.repository.Query(value = COLLABORATOR_ANCESTOR_GRANT_SQL, nativeQuery = true)
     List<UUID> findCollaboratorUserIdsWithAncestorGrant(
             @org.springframework.data.repository.query.Param("documentId") UUID documentId);
 
