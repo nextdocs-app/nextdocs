@@ -59,11 +59,13 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Add or update a collaborator",
-            description = "Creates or updates collaborator access for the specified document by email.",
+            description = "Creates or updates collaborator access for the specified document by email "
+                    + "and returns the recalculated collaborator list, so a client never has to "
+                    + "follow the write with a read to see inherited rows appear or disappear.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "201",
-                        description = "Collaborator saved"),
+                        description = "Collaborator saved, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
                         description = "Invalid request payload"),
@@ -75,21 +77,23 @@ public class DocumentSharingController {
                         description = "Document or user not found")
             })
     @PostMapping("/{id}/collaborators")
-    public ResponseEntity<ApiResponse<CollaboratorResponse>> upsertCollaborator(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> upsertCollaborator(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @Valid @RequestBody CollaboratorUpsertRequest request) {
-        CollaboratorResponse response = sharingService.upsertCollaborator(principal.getId(), id, request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Collaborator saved."));
+        sharingService.upsertCollaborator(principal.getId(), id, request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id), "Collaborator saved."));
     }
 
     @Operation(
             summary = "Update collaborator access level",
-            description = "Updates an existing collaborator's access level for the specified document.",
+            description = "Updates an existing collaborator's access level for the specified document or creates "
+                    + "an override, and returns the recalculated collaborator list.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
-                        description = "Collaborator access updated"),
+                        description = "Collaborator access updated, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
                         description = "Invalid request payload"),
@@ -98,25 +102,29 @@ public class DocumentSharingController {
                         description = "Authentication required"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "404",
-                        description = "Document or collaborator not found")
+                        description = "Document or collaborator not found"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "409",
+                        description = "Self-lockout or owner access conflict")
             })
     @PatchMapping("/{id}/collaborators/{userId}")
-    public ResponseEntity<ApiResponse<CollaboratorResponse>> updateCollaboratorAccess(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> updateCollaboratorAccess(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @PathVariable UUID userId,
             @Valid @RequestBody CollaboratorAccessUpdateRequest request) {
-        return ResponseEntity.ok(
-                ApiResponse.ok(sharingService.updateCollaboratorAccess(principal.getId(), id, userId, request)));
+        sharingService.updateCollaboratorAccess(principal.getId(), id, userId, request);
+        return ResponseEntity.ok(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id)));
     }
 
     @Operation(
             summary = "Remove a collaborator",
-            description = "Removes collaborator access from the specified document.",
+            description = "Removes collaborator access from the specified document and returns the recalculated "
+                    + "collaborator list: dropping a direct row can surface an inherited one.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "204",
-                        description = "Collaborator removed"),
+                        responseCode = "200",
+                        description = "Collaborator removed, collaborator list returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "401",
                         description = "Authentication required"),
@@ -125,10 +133,10 @@ public class DocumentSharingController {
                         description = "Document or collaborator not found")
             })
     @DeleteMapping("/{id}/collaborators/{userId}")
-    public ResponseEntity<Void> removeCollaborator(
+    public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> removeCollaborator(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id, @PathVariable UUID userId) {
         sharingService.removeCollaborator(principal.getId(), id, userId);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(ApiResponse.ok(sharingService.listCollaborators(principal.getId(), id)));
     }
 
     @Operation(
@@ -199,35 +207,38 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Get my effective access",
-            description = "Returns the authenticated user's effective access level for the specified document.",
+            description = "Returns the caller's effective access level for the specified document. "
+                    + "Unauthenticated callers receive the anonymous share-link access (if any).",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
-                        description = "Access returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
+                        description = "Access returned")
             })
     @GetMapping("/{id}/my-access")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> myAccess(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        if (principal == null) {
+            return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
+        }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.getMyAccess(principal.getId(), id)));
     }
 
     @Operation(
             summary = "Check effective access",
-            description = "Returns whether the authenticated user can access the specified document and at what level.",
+            description = "Returns whether the caller can access the specified document and at what level. "
+                    + "Unauthenticated callers are evaluated against share-link (general access) grants, "
+                    + "including inherited ancestor links, so guest realtime connections can be gated here.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
-                        description = "Access check returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Authentication required")
+                        description = "Access check returned")
             })
     @GetMapping("/{id}/access-check")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> accessCheck(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        if (principal == null) {
+            return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
+        }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheck(principal.getId(), id)));
     }
 }

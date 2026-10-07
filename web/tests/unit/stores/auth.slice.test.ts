@@ -6,6 +6,7 @@ import authReducer, {
   logoutThunk,
   clearAuth,
   setAuthFromResponse,
+  authListenerMiddleware,
   AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
@@ -33,8 +34,15 @@ jest.mock('../../../services/indexed-db.service', () => ({
   },
 }));
 
+jest.mock('../../../services/document.service', () => ({
+  documentService: {
+    clearSessionRegistries: jest.fn(),
+  },
+}));
+
 import { clearLocalUserData } from '../../../lib/idb-isolation.util';
 import { indexedDBService } from '../../../services/indexed-db.service';
+import { documentService } from '../../../services/document.service';
 
 const mockUser = {
   id: 'user-1',
@@ -59,6 +67,7 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           accessToken: null,
           expiresAt: null,
           lastAuthAction: null,
+          lastSilentRefreshAt: null,
           isLoading: false,
           isInitializing: true,
           error: null,
@@ -66,7 +75,12 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
         },
       }
     : undefined;
-  return configureStore({ reducer: { auth: authReducer }, preloadedState });
+  return configureStore({
+    reducer: { auth: authReducer },
+    preloadedState,
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware().prepend(authListenerMiddleware.middleware),
+  });
 }
 
 describe('auth slice', () => {
@@ -154,11 +168,29 @@ describe('auth slice', () => {
     expect(store.getState().auth.error).toBe('Email already exists');
   });
 
-  it('refreshSessionThunk/pending has no handler — isLoading stays false during session restore', () => {
+  it('refreshSessionThunk/pending leaves isLoading false and defers the throttle stamp', () => {
     (authApiService.refresh as jest.Mock).mockImplementation(() => new Promise(() => {}));
     const store = makeStore();
     store.dispatch(refreshSessionThunk());
     expect(store.getState().auth.isLoading).toBe(false);
+    // An in-flight attempt is not a completed one: the window opens on success.
+    expect(store.getState().auth.lastSilentRefreshAt).toBeNull();
+  });
+
+  it('refreshSessionThunk retries a generic failure instead of throttling it', async () => {
+    (authApiService.refresh as jest.Mock)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce(mockAuthResponse);
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const failed = await store.dispatch(refreshSessionThunk());
+    expect(failed.meta.requestStatus).toBe('rejected');
+    expect(store.getState().auth.lastSilentRefreshAt).toBeNull();
+
+    const retried = await store.dispatch(refreshSessionThunk());
+    expect(retried.meta.requestStatus).toBe('fulfilled');
+    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
+    expect(store.getState().auth.lastSilentRefreshAt).not.toBeNull();
   });
 
   it('refreshSessionThunk/fulfilled marks initializing complete and restores session', async () => {
@@ -221,6 +253,36 @@ describe('auth slice', () => {
     expect(authApiService.logout).toHaveBeenCalledWith('tok-logout');
     // Security: local user data must always be wiped on logout.
     expect(clearLocalUserData).toHaveBeenCalledTimes(1);
+    expect(documentService.clearSessionRegistries).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshSessionThunk skips dispatch when lastSilentRefreshAt was within 30 seconds', async () => {
+    (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
+    const stamp = Date.now() - 5000; // 5s ago (< 30s)
+    const store = makeStore({
+      user: mockUser,
+      accessToken: 'tok',
+      lastSilentRefreshAt: stamp,
+    });
+
+    const result = await store.dispatch(refreshSessionThunk());
+    expect(result.meta.requestStatus).toBe('rejected');
+    expect((result.meta as { condition?: boolean }).condition).toBe(true);
+    expect(authApiService.refresh).not.toHaveBeenCalled();
+    // A condition abort must not wipe the coalescing window.
+    expect(store.getState().auth.lastSilentRefreshAt).toBe(stamp);
+  });
+
+  it('clearAuth wipes session registries', () => {
+    const store = makeStore({ user: mockUser, accessToken: 'tok' });
+    store.dispatch(clearAuth());
+    expect(documentService.clearSessionRegistries).toHaveBeenCalled();
+  });
+
+  it('setAuthFromResponse wipes guest session registries on login', () => {
+    const store = makeStore();
+    store.dispatch(setAuthFromResponse(mockAuthResponse));
+    expect(documentService.clearSessionRegistries).toHaveBeenCalledTimes(1);
   });
 
   describe('persistence', () => {

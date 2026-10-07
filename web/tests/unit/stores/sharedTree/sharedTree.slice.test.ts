@@ -1,6 +1,9 @@
-import type { DocumentAccessLevel } from '@/services/document.service';
+import { documentService, type DocumentAccessLevel } from '@/services/document.service';
+import type { RootState } from '@/stores/store';
 import sharedTreeReducer, {
+  fetchPublicChildrenThunk,
   syncSharedRoots,
+  syncPublicRoots,
   updateNodeMeta,
   type SharedTreeState,
 } from '@/stores/sharedTree/sharedTree.slice';
@@ -748,5 +751,253 @@ describe('sharedTree.slice moveDocumentThunk.fulfilled', () => {
     );
 
     expect(state.nodes['collab-1'].orderKey).toBe('a1');
+  });
+});
+
+describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
+  const initialState: SharedTreeState = { nodes: {}, rootIds: [] };
+  const node = (
+    id: string,
+    parentId: string | null,
+    title = id,
+    effectiveAccessLevel: DocumentAccessLevel | null = 'VIEW'
+  ) => ({
+    id,
+    title,
+    parentId,
+    orderKey: `public:${id}`,
+    hasChildren: false,
+    effectiveAccessLevel,
+    createdAt: '',
+    updatedAt: '',
+  });
+
+  it('links a public breadcrumb chain and keeps inherited children reachable', () => {
+    const state = sharedTreeReducer(
+      initialState,
+      syncPublicRoots([
+        node('public-root', null, 'Public Wiki'),
+        node('child', 'public-root', 'Inherited Task'),
+      ])
+    );
+
+    expect(state.rootIds).toEqual(['public-root']);
+    expect(state.nodes['public-root'].children).toContain('child');
+    expect(state.nodes['child'].parentId).toBe('public-root');
+  });
+
+  it('floats entries whose parent is not in the payload as roots', () => {
+    const state = sharedTreeReducer(
+      initialState,
+      syncPublicRoots([
+        // Deep link whose parent chain is private: the server reports the real
+        // parentId but the parent node itself never ships.
+        node('deep-doc', 'private-parent', 'Deep Task'),
+      ])
+    );
+
+    expect(state.rootIds).toEqual(['deep-doc']);
+    expect(state.nodes['deep-doc']).toMatchObject({
+      parentId: null,
+      effectiveAccessLevel: 'VIEW',
+    });
+  });
+
+  it('preserves expansion state across re-syncs', () => {
+    const expanded: SharedTreeState = {
+      nodes: {
+        'public-root': {
+          id: 'public-root',
+          title: 'Public Wiki',
+          parentId: null,
+          orderKey: 'public:public-root',
+          hasChildren: true,
+          effectiveAccessLevel: 'VIEW',
+          isExpanded: true,
+          isLoading: false,
+          children: ['child'],
+          childrenLoaded: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+        child: {
+          id: 'child',
+          title: 'Inherited Task',
+          parentId: 'public-root',
+          orderKey: 'public:child',
+          hasChildren: false,
+          effectiveAccessLevel: 'VIEW',
+          isExpanded: false,
+          isLoading: false,
+          children: [],
+          childrenLoaded: false,
+          createdAt: '',
+          updatedAt: '',
+        },
+      },
+      rootIds: ['public-root'],
+    };
+
+    const state = sharedTreeReducer(
+      expanded,
+      syncPublicRoots([
+        node('public-root', null, 'Public Wiki'),
+        node('child', 'public-root', 'Inherited Task'),
+      ])
+    );
+
+    expect(state.nodes['public-root'].isExpanded).toBe(true);
+    expect(state.nodes['public-root'].children).toContain('child');
+  });
+
+  it('merges fetchPublicChildrenThunk.fulfilled children with effective levels', () => {
+    const synced = sharedTreeReducer(initialState, syncPublicRoots([node('public-root', null)]));
+    const state = sharedTreeReducer(
+      synced,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('override-child', 'public-root', 'Override', 'EDIT')],
+          truncated: false,
+        },
+        'request-id',
+        { parentId: 'public-root' }
+      )
+    );
+
+    expect(state.nodes['public-root'].hasChildren).toBe(true);
+    expect(state.nodes['override-child']).toMatchObject({
+      parentId: 'public-root',
+      effectiveAccessLevel: 'EDIT',
+    });
+  });
+
+  it('paginates multiple pages when hasMore is true', async () => {
+    const listSpy = jest
+      .spyOn(documentService, 'listPublicChildren')
+      .mockResolvedValueOnce({
+        items: [node('child-1', 'public-root', 'Child 1')],
+        page: 0,
+        size: 50,
+        totalElements: 2,
+        totalPages: 2,
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        items: [node('child-2', 'public-root', 'Child 2')],
+        page: 1,
+        size: 50,
+        totalElements: 2,
+        totalPages: 2,
+        hasMore: false,
+      });
+
+    const dispatch = jest.fn();
+    const getState = () => ({ auth: { accessToken: null } }) as unknown as RootState;
+
+    const result = await fetchPublicChildrenThunk({ parentId: 'public-root' })(
+      dispatch,
+      getState,
+      undefined
+    );
+
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(listSpy).toHaveBeenNthCalledWith(1, 'public-root', 0, 50);
+    expect(listSpy).toHaveBeenNthCalledWith(2, 'public-root', 1, 50);
+    expect(result.payload).toEqual({
+      parentId: 'public-root',
+      children: [
+        node('child-1', 'public-root', 'Child 1'),
+        node('child-2', 'public-root', 'Child 2'),
+      ],
+      truncated: false,
+    });
+
+    listSpy.mockRestore();
+  });
+
+  it('stops paginating at the page cap even when the server reports more', async () => {
+    const listSpy = jest.spyOn(documentService, 'listPublicChildren').mockResolvedValue({
+      items: [node('child-x', 'public-root', 'Child X')],
+      page: 0,
+      size: 50,
+      totalElements: 500,
+      totalPages: 10,
+      hasMore: true,
+    });
+
+    const dispatch = jest.fn();
+    const getState = () => ({ auth: { accessToken: null } }) as unknown as RootState;
+
+    const result = await fetchPublicChildrenThunk({ parentId: 'public-root' })(
+      dispatch,
+      getState,
+      undefined
+    );
+
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(listSpy).toHaveBeenNthCalledWith(1, 'public-root', 0, 50);
+    expect(listSpy).toHaveBeenNthCalledWith(2, 'public-root', 1, 50);
+    expect(result.payload).toMatchObject({ parentId: 'public-root', truncated: true });
+
+    listSpy.mockRestore();
+  });
+
+  it('marks the parent truncated when the page cap hides children', () => {
+    const synced = sharedTreeReducer(initialState, syncPublicRoots([node('public-root', null)]));
+    const state = sharedTreeReducer(
+      synced,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: true,
+        },
+        'request-id',
+        { parentId: 'public-root' }
+      )
+    );
+
+    expect(state.nodes['public-root'].childrenLoaded).toBe(true);
+    expect(state.nodes['public-root'].childrenTruncated).toBe(true);
+  });
+
+  it('preserves a known child truncation hint across parent refetches', () => {
+    const synced = sharedTreeReducer(initialState, syncPublicRoots([node('public-root', null)]));
+    const first = sharedTreeReducer(
+      synced,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: false,
+        },
+        'request-id-1',
+        { parentId: 'public-root' }
+      )
+    );
+    const truncatedChild = {
+      ...first.nodes['child-1'],
+      childrenTruncated: true,
+    };
+    const withHint = {
+      ...first,
+      nodes: { ...first.nodes, 'child-1': truncatedChild },
+    };
+
+    const second = sharedTreeReducer(
+      withHint,
+      fetchPublicChildrenThunk.fulfilled(
+        {
+          parentId: 'public-root',
+          children: [node('child-1', 'public-root', 'Child 1')],
+          truncated: false,
+        },
+        'request-id-2',
+        { parentId: 'public-root' }
+      )
+    );
+
+    expect(second.nodes['child-1'].childrenTruncated).toBe(true);
   });
 });

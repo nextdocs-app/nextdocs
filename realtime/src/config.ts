@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import net from 'net';
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
@@ -26,9 +27,11 @@ interface Config {
   apiBaseUrl: string;
   corsOrigins: string[];
   logLevel: LogLevel;
+  trustedProxies: string[];
   roomCleanupInterval: number;
   roomInactiveTimeout: number;
   accessRevalidationIntervalMs: number;
+  anonymousAccessRevalidationIntervalMs: number;
   fetchTimeoutMs: number;
   unauthorizedAccessCooldownMs: number;
   unauthorizedAccessWarnIntervalMs: number;
@@ -77,9 +80,30 @@ const config: Config = {
 
   logLevel: parseLogLevel(process.env.LOG_LEVEL),
 
+  // Comma-separated list of trusted proxy IPs or IPv4 CIDRs whose X-Forwarded-For
+  // header is accepted (e.g. '127.0.0.1,10.0.0.0/8'). IPv6 CIDRs are rejected
+  // at startup: matching is IPv4-only, so accepting them would silently ignore
+  // the header. Empty by default.
+  //
+  // X-Forwarded-For is read right to left, skipping these proxies, so list only
+  // the proxies in front of this server: a CIDR that also covers real clients
+  // would let those clients spoof the per-IP limits.
+  trustedProxies: process.env.TRUSTED_PROXIES
+    ? process.env.TRUSTED_PROXIES.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [],
+
   roomCleanupInterval: parseInt(process.env.ROOM_CLEANUP_INTERVAL || '300000', 10),
   roomInactiveTimeout: parseInt(process.env.ROOM_INACTIVE_TIMEOUT || '3600000', 10),
   accessRevalidationIntervalMs: parseInt(process.env.ACCESS_REVALIDATION_INTERVAL_MS || '5000', 10),
+  // Anonymous share-link rooms revalidate lazily: link revocation is enforced
+  // on every (re)connect, and guests share one API rate-limit budget per IP,
+  // so a 5s cadence per room would starve page loads on multi-tab/NAT setups.
+  anonymousAccessRevalidationIntervalMs: parseInt(
+    process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS || '30000',
+    10
+  ),
   fetchTimeoutMs: parseInt(process.env.FETCH_TIMEOUT_MS || '5000', 10),
   unauthorizedAccessCooldownMs: parseInt(
     process.env.UNAUTHORIZED_ACCESS_COOLDOWN_MS || '15000',
@@ -120,6 +144,15 @@ if (Number.isNaN(config.roomInactiveTimeout) || config.roomInactiveTimeout <= 0)
 if (Number.isNaN(config.accessRevalidationIntervalMs) || config.accessRevalidationIntervalMs <= 0) {
   throw new Error(
     `Invalid ACCESS_REVALIDATION_INTERVAL_MS: ${process.env.ACCESS_REVALIDATION_INTERVAL_MS}. Must be a positive number (milliseconds).`
+  );
+}
+
+if (
+  Number.isNaN(config.anonymousAccessRevalidationIntervalMs) ||
+  config.anonymousAccessRevalidationIntervalMs <= 0
+) {
+  throw new Error(
+    `Invalid ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS: ${process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS}. Must be a positive number (milliseconds).`
   );
 }
 
@@ -180,6 +213,47 @@ if (
   throw new Error(
     `Invalid MEMORY_THRESHOLD: ${process.env.MEMORY_THRESHOLD}. Must be between 0 and 1.`
   );
+}
+
+for (const proxy of config.trustedProxies) {
+  const trimmed = proxy.trim();
+  if (!trimmed) continue;
+  if (trimmed.includes('/')) {
+    const parts = trimmed.split('/');
+    if (parts.length !== 2) {
+      throw new Error(
+        `Invalid TRUSTED_PROXIES entry: "${proxy}". Expected IP or CIDR (e.g. 10.0.0.0/8).`
+      );
+    }
+    const [subnet, prefixStr] = parts;
+    if (!/^\d+$/.test(prefixStr)) {
+      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
+    }
+    const prefix = parseInt(prefixStr, 10);
+    // Normalize before validation so ::ffff:10.0.0.1/8 is judged the same way
+    // isTrustedProxy matches it at runtime (IPv4-mapped IPv6 → IPv4).
+    const normalizedSubnet = subnet.toLowerCase().startsWith('::ffff:')
+      ? subnet.toLowerCase().slice(7)
+      : subnet;
+    const ver = net.isIP(normalizedSubnet);
+    if (ver === 0 || Number.isNaN(prefix)) {
+      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
+    }
+    if (ver === 4 && (prefix < 0 || prefix > 32)) {
+      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". IPv4 prefix must be 0-32.`);
+    }
+    if (ver === 6) {
+      // isTrustedProxy only implements IPv4 CIDR matching; accepting an IPv6
+      // CIDR would force the X-Forwarded-For header to be ignored silently.
+      throw new Error(
+        `Invalid TRUSTED_PROXIES entry: "${proxy}". IPv6 CIDR is not supported; use a plain IPv6 address for exact matches.`
+      );
+    }
+  } else {
+    if (net.isIP(trimmed) === 0) {
+      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Must be a valid IP or CIDR.`);
+    }
+  }
 }
 
 export default config;

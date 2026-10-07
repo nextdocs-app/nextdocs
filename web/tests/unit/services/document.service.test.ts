@@ -371,6 +371,14 @@ describe('document.service', () => {
 
       expect(fetchMock.mock.calls[0][1]?.body).toContain('"title":"Hello"');
     });
+
+    it('should keep the blank-title invariant on the anonymous PATCH too', async () => {
+      const fetchMock = mockOkFetch();
+
+      await documentService.updatePublicMetadata('id-1', { title: '   ' });
+
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"title":"Untitled"');
+    });
   });
 
   describe('promoteGuestDocumentsToAccount', () => {
@@ -490,6 +498,241 @@ describe('document.service', () => {
     });
   });
 
+  describe('checkAccess', () => {
+    it('should call access-check without an Authorization header for guests', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            documentId: 'doc-123',
+            allowed: true,
+            accessLevel: 'EDIT',
+            owner: false,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.checkAccess('doc-123');
+
+      expect(access.accessLevel).toBe('EDIT');
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc-123/access-check'),
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+    });
+
+    it('should attach the bearer token when provided', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { documentId: 'doc-123', allowed: false, accessLevel: null, owner: false },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.checkAccess('doc-123', 'tok');
+
+      expect(access.allowed).toBe(false);
+      expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+        Authorization: 'Bearer tok',
+      });
+    });
+
+    it('should map a malformed access level to null instead of trusting it', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            documentId: 'doc-123',
+            allowed: true,
+            accessLevel: 'SUPERADMIN',
+            owner: false,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.checkAccess('doc-123');
+
+      expect(access.accessLevel).toBeNull();
+    });
+  });
+
+  describe('listPublicChildren', () => {
+    it('should map public children without an Authorization header', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            content: [
+              {
+                id: 'child-1',
+                title: 'Inherited Task',
+                parentId: 'parent-1',
+                orderKey: 'a0',
+                hasChildren: false,
+                accessLevel: 'VIEW',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+              },
+            ],
+            totalElements: 1,
+            totalPages: 1,
+            size: 50,
+            number: 0,
+            first: true,
+            last: true,
+          },
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const page = await documentService.listPublicChildren('parent-1');
+
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({
+        id: 'child-1',
+        title: 'Inherited Task',
+        parentId: 'parent-1',
+        effectiveAccessLevel: 'VIEW',
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/parent-1/public/children'),
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+    });
+
+    it('should fall back to VIEW for a malformed child access level', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            content: [
+              {
+                id: 'child-9',
+                title: 'Odd',
+                parentId: 'parent-1',
+                orderKey: 'a0',
+                hasChildren: false,
+                accessLevel: 'SUPERADMIN',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+              },
+            ],
+            totalElements: 1,
+            totalPages: 1,
+            size: 50,
+            number: 0,
+            first: true,
+            last: true,
+          },
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const page = await documentService.listPublicChildren('parent-1');
+
+      expect(page.items[0].effectiveAccessLevel).toBe('VIEW');
+    });
+  });
+
+  describe('listCollaborators', () => {
+    it('should fall back malformed collaborator levels instead of trusting them', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              userId: 'u-1',
+              email: 'a@example.com',
+              displayName: 'A',
+              accessLevel: 'SUPERADMIN',
+              addedAt: '2024-01-01T00:00:00.000Z',
+              inheritedAccessLevel: 'SUPERPOWER',
+            },
+          ],
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const rows = await documentService.listCollaborators('doc-1', 'tok');
+
+      expect(rows[0].accessLevel).toBe('VIEW');
+      expect(rows[0].inheritedAccessLevel).toBeNull();
+    });
+  });
+
+  describe('getSharingSettings', () => {
+    it('should fall back malformed sharing mode and level', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            generalAccessMode: 'EVERYONE',
+            linkAccessLevel: 'SUPERADMIN',
+            hasActiveLink: true,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const settings = await documentService.getSharingSettings('doc-1', 'tok');
+
+      expect(settings.generalAccessMode).toBe('RESTRICTED');
+      expect(settings.linkAccessLevel).toBe('VIEW');
+    });
+  });
+
+  describe('savePublicDocument', () => {
+    it('should PATCH the public endpoint without an Authorization header', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'doc-123',
+            title: 'Guest edit',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const { ydoc } = await documentService.createDocument('Guest edit');
+      await documentService.savePublicDocument('doc-123', ydoc, {
+        title: 'Guest edit',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-02T00:00:00.000Z',
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc-123/public'),
+        expect.objectContaining({ method: 'PATCH' })
+      );
+      expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('Guest edit');
+    });
+  });
+
   describe('getCloudDocument', () => {
     it('should not append includeTrashed query param by default', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
@@ -604,6 +847,145 @@ describe('document.service', () => {
       await expect(documentService.getCloudDocument('doc-123', 'access-token')).rejects.toThrow(
         'Validation failed'
       );
+    });
+  });
+
+  describe('request coalescing', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    it('should coalesce concurrent identical breadcrumb fetches into one request', async () => {
+      let resolveJson!: (v: unknown) => void;
+      const jsonPromise = new Promise((resolve) => {
+        resolveJson = resolve;
+      });
+      const fetchMock = jest.fn().mockReturnValue(
+        Promise.resolve({
+          ok: true,
+          json: () => jsonPromise,
+        })
+      );
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const first = documentService.getDocumentBreadcrumbs('doc-1');
+      const second = documentService.getDocumentBreadcrumbs('doc-1');
+      resolveJson({
+        success: true,
+        data: [{ id: 'doc-1', title: 'Doc', parentId: null }],
+        error: null,
+      });
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(a).toEqual(b);
+    });
+
+    it('should not share in-flight requests across different documents', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [], error: null }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await Promise.all([
+        documentService.getDocumentBreadcrumbs('doc-1'),
+        documentService.getDocumentBreadcrumbs('doc-2'),
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('should attach Retry-After milliseconds on 429 errors', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        headers: { get: (name: string) => (name === 'Retry-After' ? '60' : null) },
+        json: async () => ({ success: false, data: null, error: 'Too many requests' }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const err = await documentService.checkAccess('doc-1').catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.status).toBe(429);
+      expect(err.retryAfterMs).toBe(60_000);
+    });
+  });
+
+  describe('public-link origin tagging', () => {
+    it('should persist and preserve the origin across re-saves', async () => {
+      const { ydoc, meta } = await documentService.createDocument('Linked');
+      await documentService.saveDocument('link-1', ydoc, meta, { origin: 'public-link' });
+
+      const loaded = await documentService.loadDocument('link-1');
+      expect(loaded?.origin).toBe('public-link');
+
+      await documentService.saveDocument('link-1', ydoc, { ...meta, title: 'Renamed' });
+      expect((await documentService.loadDocument('link-1'))?.origin).toBe('public-link');
+    });
+
+    it('should exclude public-link mirrors from private listings', async () => {
+      const linked = await documentService.createDocument('Linked');
+      await documentService.saveDocument('link-1', linked.ydoc, linked.meta, {
+        origin: 'public-link',
+      });
+      const mine = await documentService.createDocument('Mine');
+      await documentService.saveDocument('mine-1', mine.ydoc, mine.meta);
+
+      const allMeta = await documentService.getAllDocumentsMeta();
+      expect(allMeta.map((d) => d.id)).toEqual(['mine-1']);
+    });
+
+    it('should exclude public-link mirrors from login promotion', async () => {
+      const linked = await documentService.createDocument('Linked');
+      await documentService.saveDocument('link-1', linked.ydoc, linked.meta, {
+        origin: 'public-link',
+      });
+
+      expect(await documentService.getAllGuestDocuments()).toEqual([]);
+    });
+
+    it('should tag link-session documents created offline', async () => {
+      const result = await documentService.getOrCreateDocument('link-2', undefined, {
+        origin: 'public-link',
+      });
+      expect(result.origin).toBe('public-link');
+      expect((await documentService.loadDocument('link-2'))?.origin).toBe('public-link');
+    });
+
+    it('should cap publicLinkSessionIds to 500 entries with FIFO eviction', () => {
+      for (let i = 0; i < 505; i++) {
+        documentService.notePublicLinkDocument(`doc-${i}`);
+      }
+
+      // Oldest entries 0..4 should have been evicted
+      expect(documentService.isPublicLinkDocument('doc-0')).toBe(false);
+      expect(documentService.isPublicLinkDocument('doc-4')).toBe(false);
+      // Newer entries 5..504 should still be present
+      expect(documentService.isPublicLinkDocument('doc-5')).toBe(true);
+      expect(documentService.isPublicLinkDocument('doc-504')).toBe(true);
+    });
+
+    it('should clear session registries with clearSessionRegistries', () => {
+      documentService.notePublicLinkDocument('link-test');
+      expect(documentService.isPublicLinkDocument('link-test')).toBe(true);
+
+      documentService.clearSessionRegistries();
+      expect(documentService.isPublicLinkDocument('link-test')).toBe(false);
+    });
+
+    it('should not query IndexedDB on saveDocument to look up origin', async () => {
+      const { ydoc, meta } = await documentService.createDocument('No DB Read');
+      const getSpy = jest.spyOn(indexedDBService, 'getDocument');
+
+      await documentService.saveDocument('no-read-doc', ydoc, meta);
+      expect(getSpy).not.toHaveBeenCalled();
+      getSpy.mockRestore();
     });
   });
 });

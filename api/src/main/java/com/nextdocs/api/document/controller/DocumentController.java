@@ -171,6 +171,50 @@ public class DocumentController {
     }
 
     @Operation(
+            summary = "List public child documents",
+            description = "Returns direct children of a publicly accessible document that are themselves "
+                    + "effectively public (own link or inherited). No authentication required. "
+                    + "Used by guest sidebar navigation for share links.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Public children returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found or not shared publicly")
+            })
+    @SecurityRequirements({})
+    @GetMapping("/{id}/public/children")
+    public ResponseEntity<ApiResponse<PagedResponse<DocumentResponse>>> listPublicChildren(
+            @PathVariable UUID id, @PageableDefault(size = 50) Pageable pageable) {
+        Page<DocumentResponse> page = documentService.listPublicChildren(id, pageable);
+        return ResponseEntity.ok(ApiResponse.ok(PagedResponse.from(page)));
+    }
+
+    @Operation(
+            summary = "Update a document publicly (general access)",
+            description = "Persists title/content without authentication when the document's effective "
+                    + "share-link access (own or inherited) allows editing. Comment-only and view-only "
+                    + "links are rejected; collaborators management still requires sign-in.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Public document updated"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Share link does not allow editing"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found or not shared publicly")
+            })
+    @SecurityRequirements({})
+    @PatchMapping("/{id}/public")
+    public ResponseEntity<ApiResponse<DocumentResponse>> updatePublic(
+            @PathVariable UUID id, @Valid @RequestBody DocumentUpdateRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(documentService.updatePublic(id, request)));
+    }
+
+    @Operation(
             summary = "Update a document",
             description = "Updates metadata and/or Yjs state for an active document owned by the authenticated user. "
                     + "Documents in trash cannot be updated.",

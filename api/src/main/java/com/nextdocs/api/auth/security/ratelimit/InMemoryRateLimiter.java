@@ -14,9 +14,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class InMemoryRateLimiter implements RateLimiter {
 
-    private static final int MAX_REQUESTS = 20;
-    private static final Duration WINDOW = Duration.ofMinutes(1);
-
     private final CacheStore<String, Bucket> bucketCache;
 
     public InMemoryRateLimiter(CacheStore<String, Bucket> bucketCache) {
@@ -24,14 +21,30 @@ public class InMemoryRateLimiter implements RateLimiter {
     }
 
     @Override
-    public boolean allowRequest(String key) {
-        Bucket bucket = bucketCache.get(key, ignoredKey -> newBucket());
-        return bucket.tryConsume(1);
+    public Decision allowRequest(String key) {
+        return allowRequest(key, DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW);
     }
 
-    private Bucket newBucket() {
+    @Override
+    public Decision allowRequest(String key, int maxRequests, Duration window) {
+        // Budgets are part of the cache key so a reconfigured limit (or two
+        // callers sharing one IP with different budgets) never reuses a stale
+        // bucket minted under another budget.
+        String bucketKey = key + "|" + maxRequests + "|" + window.toNanos();
+        Bucket bucket = bucketCache.get(bucketKey, ignoredKey -> newBucket(maxRequests, window));
+        if (bucket.tryConsume(1)) {
+            return Decision.allow();
+        }
+        // tryConsume is the atomic admission decision; only a refusal pays for the
+        // extra probe, which is what makes Retry-After honest: the limit refills
+        // greedily, so the next token can arrive long before the window ends.
+        long nanosToRefill = bucket.estimateAbilityToConsume(1).getNanosToWaitForRefill();
+        return Decision.deny(nanosToRefill > 0 ? Duration.ofNanos(nanosToRefill) : Duration.ZERO);
+    }
+
+    private Bucket newBucket(int maxRequests, Duration window) {
         return Bucket.builder()
-                .addLimit(limit -> limit.capacity(MAX_REQUESTS).refillGreedy(MAX_REQUESTS, WINDOW))
+                .addLimit(limit -> limit.capacity(maxRequests).refillGreedy(maxRequests, window))
                 .build();
     }
 }

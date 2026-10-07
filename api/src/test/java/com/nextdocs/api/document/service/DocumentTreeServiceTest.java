@@ -562,6 +562,9 @@ class DocumentTreeServiceTest {
         assertTrue(saved.stream()
                 .filter(o -> o.getUser().getId().equals(collaboratorId))
                 .allMatch(o -> o.getOrderKey().compareTo("a7") < 0));
+
+        // Un-parenting removes the ancestor chain that justified any NO_ACCESS breakpoints.
+        verify(collaboratorRepository).pruneOrphanedBreakpoints(docId);
     }
 
     @Test

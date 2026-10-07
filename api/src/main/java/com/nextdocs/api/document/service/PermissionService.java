@@ -5,7 +5,14 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,7 +39,97 @@ public class PermissionService {
         if (raw == null) {
             return null;
         }
-        return DocumentAccessLevel.valueOf(raw);
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
+    }
+
+    /**
+     * Resolves the effective anonymous (share-link) access level of a document.
+     * Walks up the ancestor chain (closest-ancestor-wins); per-document
+     * ANYONE_WITH_LINK contributes its link_access_level, RESTRICTED inherits
+     * through. Returns null when no ancestor grants public access.
+     */
+    @Transactional(readOnly = true)
+    public DocumentAccessLevel resolvePublicAccess(UUID documentId) {
+        String raw = documentRepository.resolvePublicAccess(documentId);
+        if (raw == null) {
+            return null;
+        }
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
+    }
+
+    /**
+     * Resolves the effective access level of a user for a batch of documents.
+     * One native query replaces one recursive CTE per document for callers that
+     * already hold the id set (ancestor walks, subtree reconciles).
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolveEffectiveAccessBatch(userId, joined);
+        });
+    }
+
+    /**
+     * Resolves the effective anonymous access level for a batch of documents.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolvePublicAccessBatch(Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolvePublicAccessBatch(joined);
+        });
+    }
+
+    /**
+     * Resolves trash-scope access for a batch of documents.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveTrashAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolveTrashAccessBatch(userId, joined);
+        });
+    }
+
+    /**
+     * Shared batch loop: one bad entry must not deny the whole batch, and the
+     * allowsRead gate must stay in one place so a future edit cannot drop it
+     * on a single path and leak NO_ACCESS/BLOCKED as a level.
+     */
+    private Map<UUID, DocumentAccessLevel> resolveBatch(Collection<UUID> documentIds, Supplier<List<Object[]>> query) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Map.of();
+        }
+        // The native batch query joins ids into a comma-separated string and casts each
+        // token with ::uuid; a single null element would either NPE the join or abort the
+        // whole batch cast. Skip nulls so one bad caller entry cannot deny every document.
+        List<Object[]> rows = query.get();
+        Map<UUID, DocumentAccessLevel> result = new HashMap<>();
+        for (Object[] row : rows) {
+            if (row[0] != null && row[1] != null) {
+                UUID docId = toUuid(row[0]);
+                DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
+                if (level.allowsRead()) {
+                    result.put(docId, level);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static String joinIds(Collection<UUID> documentIds) {
+        String joined = documentIds.stream()
+                .filter(Objects::nonNull)
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
+        return joined.isEmpty() ? null : joined;
+    }
+
+    private static UUID toUuid(Object raw) {
+        return raw instanceof UUID u ? u : UUID.fromString(raw.toString());
     }
 
     /**
@@ -151,7 +248,8 @@ public class PermissionService {
         if (raw == null) {
             return null;
         }
-        return DocumentAccessLevel.valueOf(raw);
+        DocumentAccessLevel level = DocumentAccessLevel.valueOf(raw);
+        return level.allowsRead() ? level : null;
     }
 
     /**

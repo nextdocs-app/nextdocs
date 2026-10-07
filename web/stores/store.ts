@@ -1,6 +1,6 @@
 import { configureStore } from '@reduxjs/toolkit';
 import documentReducer from './document/document.slice';
-import authReducer from './auth/auth.slice';
+import authReducer, { authListenerMiddleware } from './auth/auth.slice';
 import documentListReducer from './documentList/documentList.slice';
 import sidebarReducer from './sidebar/sidebar.slice';
 import sidebarTreeReducer from './sidebarTree/sidebarTree.slice';
@@ -28,7 +28,7 @@ export const store = configureStore({
         ignoredActionPaths: ['payload.localDocsToPromote', 'meta.arg.cacheSyncInFlight'],
         ignoredPaths: ['ui.localDocsToPromote'],
       },
-    }),
+    }).prepend(authListenerMiddleware.middleware),
 });
 
 export type RootState = ReturnType<typeof store.getState>;

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
+import { useGuestSharedTree } from '@/hooks/useGuestSharedTree.hook';
 import { documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
@@ -62,6 +63,7 @@ import {
 } from '@/stores/sidebarTree/sidebarTree.slice';
 import {
   fetchChildrenThunk as fetchSharedChildrenThunk,
+  fetchPublicChildrenThunk,
   syncSharedRoots,
   removeNode as sharedRemoveNode,
   toggleExpanded as sharedToggleExpanded,
@@ -82,10 +84,17 @@ import {
   type TreeApi,
 } from './SidebarTreeDndContext';
 
+import type { SharedDocumentEntry } from '@/stores/documentList/documentList.types';
 import type { DocActionType, SidebarSectionDocument } from './types';
 
 const emptySubscribe = () => () => {};
 const SIDEBAR_COLLAPSE_HOVER_GUARD_MS = 260;
+
+// Stable empty list for the guest Shared section (guests have no document
+// list); a fresh literal per render would re-run the roots sync effect.
+const EMPTY_SHARED_DOCUMENTS: SharedDocumentEntry[] = [];
+const guestNoop = () => {};
+const guestResolveActionType = () => 'move-to-trash' as const;
 
 function Sidebar() {
   const router = useRouter();
@@ -161,6 +170,7 @@ function Sidebar() {
   const [isSidebarCollapseHoverGuard, setIsSidebarCollapseHoverGuard] = useState(false);
 
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
+  const { isGuestSharedLoading } = useGuestSharedTree(isAuthenticated ? '' : activeDocId);
   const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const accountMenuPopupRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -276,11 +286,18 @@ function Sidebar() {
    */
   const handleSidebarTreeMove = useCallback(
     (args: MoveDocumentArgs) => {
-      const route = resolveSidebarMoveRoute(args, {
-        draggedIsShared: Object.hasOwn(sharedTreeNodes, args.documentId),
-        targetParentIdIsShared:
-          args.newParentId != null && Object.hasOwn(sharedTreeNodes, args.newParentId),
-      });
+      const draggedIsShared = Object.hasOwn(sharedTreeNodes, args.documentId);
+      const targetParentIdIsShared =
+        args.newParentId != null && Object.hasOwn(sharedTreeNodes, args.newParentId);
+
+      // Guests hold no identity in someone else's tree and every move endpoint
+      // requires a token, so a shared drop could only throw and raise an error
+      // toast. Drops inside their own local documents still route below.
+      if (!isAuthenticated && (draggedIsShared || targetParentIdIsShared)) {
+        return;
+      }
+
+      const route = resolveSidebarMoveRoute(args, { draggedIsShared, targetParentIdIsShared });
 
       if (route.kind === 'shared-reorder') {
         void dispatch(sharedMoveDocumentThunk(args))
@@ -340,7 +357,7 @@ function Sidebar() {
         })
       );
     },
-    [dispatch, sharedTreeNodes, refresh]
+    [dispatch, sharedTreeNodes, refresh, isAuthenticated]
   );
 
   /**
@@ -358,12 +375,20 @@ function Sidebar() {
         isSharedNode(nodeId) ? sharedTreeRootIds : visiblePrivateRootIds,
       toggleExpanded: (id) =>
         dispatch(isSharedNode(id) ? sharedToggleExpanded(id) : privateToggleExpanded(id)),
-      fetchChildren: (parentId) =>
+      fetchChildren: (parentId) => {
+        if (!isSharedNode(parentId)) {
+          void dispatch(fetchChildrenThunk({ parentId }));
+          return;
+        }
+        // One shared section, two child sources: guests have no token, so their
+        // children come from the anonymous endpoint that resolves the link's
+        // effective access instead of the authenticated children endpoint.
         void dispatch(
-          isSharedNode(parentId)
+          isAuthenticated
             ? fetchSharedChildrenThunk({ parentId })
-            : fetchChildrenThunk({ parentId })
-        ),
+            : fetchPublicChildrenThunk({ parentId })
+        );
+      },
       canPlaceAtRoot: (draggedId) =>
         isSharedNode(draggedId) ? mergedNodes[draggedId]?.parentId == null : true,
       resolveDrop: (draggedId, { nodeId, zone }) =>
@@ -384,6 +409,7 @@ function Sidebar() {
     excludedNodeIds,
     dispatch,
     handleSidebarTreeMove,
+    isAuthenticated,
   ]);
 
   // Search-filtered tree: a node is visible when its title matches or when any
@@ -1058,6 +1084,29 @@ function Sidebar() {
                   onToggleDocumentActions={handleToggleDocumentActions}
                   resolveActionType={resolveSharedTreeActionType}
                   onShowAll={openSharedDocumentsPanel}
+                />
+              )}
+
+              {/* Guests keep the section mounted while the roots load: the
+                  section renders its skeleton rows from isLoading, which a
+                  roots-empty gate would hide for the whole first request. */}
+              {!isAuthenticated && (sharedTreeRootIds.length > 0 || isGuestSharedLoading) && (
+                <SharedTree
+                  className="mt-1"
+                  isOpen={isSharedOpen}
+                  onToggle={() => dispatch(toggleSharedOpen())}
+                  documents={EMPTY_SHARED_DOCUMENTS}
+                  isLoading={isGuestSharedLoading}
+                  activeDocId={activeDocId}
+                  onSelectDocument={(docId) => {
+                    dispatch(setDocActionsAnchor(null));
+                    handleSelectDocument(docId);
+                  }}
+                  onCreateChild={guestNoop}
+                  isActionsEnabled={false}
+                  docActionsAnchor={null}
+                  onToggleDocumentActions={guestNoop}
+                  resolveActionType={guestResolveActionType}
                 />
               )}
             </SidebarTreeDndContext>

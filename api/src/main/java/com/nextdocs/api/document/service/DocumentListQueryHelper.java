@@ -423,29 +423,12 @@ public class DocumentListQueryHelper {
     }
 
     private Map<UUID, DocumentAccessLevel> fetchAccessLevels(UUID userId, Collection<UUID> docIds) {
-        if (docIds.isEmpty()) return Map.of();
-        Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
-        String joinedIds = docIds.stream().map(UUID::toString).collect(Collectors.joining(","));
-        for (Object[] row : documentRepository.resolveEffectiveAccessBatch(userId, joinedIds)) {
-            if (row[0] != null && row[1] != null) {
-                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
-                accessLevels.put(docId, DocumentAccessLevel.valueOf(row[1].toString()));
-            }
-        }
-        return accessLevels;
+        // Single canonical batch resolver (null-safe, allowsRead-gated).
+        return permissionService.resolveAccessBatch(userId, docIds);
     }
 
     private Map<UUID, DocumentAccessLevel> fetchTrashAccessLevels(UUID userId, Collection<UUID> docIds) {
-        if (docIds.isEmpty()) return Map.of();
-        Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
-        String joinedIds = docIds.stream().map(UUID::toString).collect(Collectors.joining(","));
-        for (Object[] row : documentRepository.resolveTrashAccessBatch(userId, joinedIds)) {
-            if (row[0] != null && row[1] != null) {
-                UUID docId = row[0] instanceof UUID u ? u : UUID.fromString(row[0].toString());
-                accessLevels.put(docId, DocumentAccessLevel.valueOf(row[1].toString()));
-            }
-        }
-        return accessLevels;
+        return permissionService.resolveTrashAccessBatch(userId, docIds);
     }
 
     private Map<UUID, String> fetchUserOrderKeys(UUID userId, Collection<UUID> docIds) {

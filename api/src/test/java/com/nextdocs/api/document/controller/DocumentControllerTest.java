@@ -3,6 +3,8 @@ package com.nextdocs.api.document.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -340,6 +342,18 @@ class DocumentControllerTest {
     }
 
     @Test
+    void update_titleLongerThanTheColumn_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/documents/{id}", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"" + "t".repeat(256) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(documentService, never()).update(eq(userId), eq(documentId), any());
+    }
+
+    @Test
     void delete_success_returns204() throws Exception {
         doNothing().when(documentService).delete(userId, documentId, false);
 
@@ -436,6 +450,104 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data[0].id").value(documentId.toString()))
                 .andExpect(jsonPath("$.data[0].title").value("Public Doc"));
+    }
+
+    @Test
+    void listPublicChildren_success_returns200() throws Exception {
+        DocumentResponse child = new DocumentResponse(
+                UUID.randomUUID(),
+                "Public Child",
+                null,
+                documentId,
+                "a0",
+                false,
+                false,
+                DocumentAccessLevel.VIEW,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+        Page<DocumentResponse> page = new PageImpl<>(List.of(child));
+
+        when(documentService.listPublicChildren(eq(documentId), any())).thenReturn(page);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public/children", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content[0].title").value("Public Child"));
+    }
+
+    @Test
+    void updatePublic_success_returns200() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Guest edit",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.EDIT,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null);
+
+        when(documentService.updatePublic(eq(documentId), any())).thenReturn(response);
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Guest edit"
+                        }
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.title").value("Guest edit"));
+    }
+
+    @Test
+    void updatePublic_titleLongerThanTheColumn_returns400() throws Exception {
+        // Reachable without an account: the bound has to answer 400 here rather than
+        // letting the anonymous write reach the database's VARCHAR(255).
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"" + "t".repeat(256) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(documentService, never()).updatePublic(eq(documentId), any());
+    }
+
+    @Test
+    void updatePublic_privateDoc_returns404() throws Exception {
+        when(documentService.updatePublic(eq(documentId), any())).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Nope"
+                        }
+                        """))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void updatePublic_commentLink_returns403() throws Exception {
+        when(documentService.updatePublic(eq(documentId), any())).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/public", documentId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "title": "Nope"
+                        }
+                        """))
+                .andExpect(status().isForbidden());
     }
 
     @Test

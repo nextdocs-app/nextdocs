@@ -37,6 +37,12 @@ export interface SidebarTreeNode {
   isLoading: boolean;
   children: string[];
   childrenLoaded: boolean;
+  /**
+   * True when the child list was capped client-side (guest public children
+   * stop after MAX_PUBLIC_CHILDREN_PAGES) while the server reports more.
+   * The list looks complete otherwise, so the tree renders a hint.
+   */
+  childrenTruncated?: boolean;
   createdAt: string;
   updatedAt: string;
 }

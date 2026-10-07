@@ -33,6 +33,7 @@ import tools.jackson.databind.ObjectMapper;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RateLimitFilter rateLimitFilter;
     private final ObjectMapper objectMapper;
 
     @Value("${app.cors.allowed-origins}")
@@ -45,6 +46,9 @@ public class SecurityConfig {
         "/api/v1/auth/refresh",
         "/api/v1/documents/*/public",
         "/api/v1/documents/*/public/path",
+        "/api/v1/documents/*/public/children",
+        "/api/v1/documents/*/access-check",
+        "/api/v1/documents/*/my-access",
         // OpenAPI / Swagger UI
         "/v3/api-docs/**",
         "/swagger-ui/**",
@@ -69,7 +73,16 @@ public class SecurityConfig {
                                 (req, res, e) -> writeError(res, 401, "Authentication required."))
                         .accessDeniedHandler((req, res, e) -> writeError(res, 403, "Access denied.")))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class)
                 .build();
+    }
+
+    @Bean
+    public org.springframework.boot.web.servlet.FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(
+            RateLimitFilter filter) {
+        var registration = new org.springframework.boot.web.servlet.FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     @Bean

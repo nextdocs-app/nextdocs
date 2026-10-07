@@ -53,6 +53,14 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void unsupportedMethod_returns405InsteadOf500() throws Exception {
+        mockMvc.perform(post("/test/api-exception"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("Method not allowed for this endpoint."));
+    }
+
+    @Test
     void unexpectedException_returns500() throws Exception {
         mockMvc.perform(get("/test/unexpected"))
                 .andExpect(status().isInternalServerError())

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nextdocs.api.common.cache.CaffeineCacheStore;
 import io.github.bucket4j.Bucket;
+import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,26 +21,66 @@ class InMemoryRateLimiterTest {
     @Test
     void requestBelowLimit_isAllowed() {
         for (int i = 0; i < 20; i++) {
-            assertThat(rateLimiter.allowRequest("10.0.0.1")).isTrue();
+            assertThat(rateLimiter.allowRequest("10.0.0.1").allowed()).isTrue();
         }
     }
 
     @Test
     void twentyFirstRequest_isRejected() {
         for (int i = 0; i < 20; i++) {
-            assertThat(rateLimiter.allowRequest("10.0.0.2")).isTrue();
+            assertThat(rateLimiter.allowRequest("10.0.0.2").allowed()).isTrue();
         }
 
-        assertThat(rateLimiter.allowRequest("10.0.0.2")).isFalse();
+        assertThat(rateLimiter.allowRequest("10.0.0.2").allowed()).isFalse();
+    }
+
+    @Test
+    void customBudget_allowsConfiguredRequests() {
+        for (int i = 0; i < 120; i++) {
+            assertThat(rateLimiter
+                            .allowRequest("public-read:10.0.0.9", 120, Duration.ofMinutes(1))
+                            .allowed())
+                    .isTrue();
+        }
+
+        assertThat(rateLimiter
+                        .allowRequest("public-read:10.0.0.9", 120, Duration.ofMinutes(1))
+                        .allowed())
+                .isFalse();
+    }
+
+    @Test
+    void rejection_reportsRefillWaitInsteadOfTheWholeWindow() {
+        for (int i = 0; i < 20; i++) {
+            assertThat(rateLimiter.allowRequest("10.0.0.7").allowed()).isTrue();
+        }
+
+        RateLimiter.Decision decision = rateLimiter.allowRequest("10.0.0.7");
+
+        assertThat(decision.allowed()).isFalse();
+        // Greedy refill returns one of twenty tokens every three seconds, so the honest
+        // wait is a few seconds. Reporting the 60s window would idle a client that is
+        // already allowed to retry, and 0 would invite a tight retry loop.
+        assertThat(decision.retryAfterSeconds()).isBetween(1L, 4L);
+    }
+
+    @Test
+    void allowedRequest_neverAdvertisesAZeroWait() {
+        RateLimiter.Decision decision = rateLimiter.allowRequest("10.0.0.8");
+
+        assertThat(decision.allowed()).isTrue();
+        // Only refusals carry a wait of their own; the one-second floor keeps any
+        // formatted value from inviting an immediate retry.
+        assertThat(decision.retryAfterSeconds()).isEqualTo(1L);
     }
 
     @Test
     void differentKeys_haveIndependentBuckets() {
         for (int i = 0; i < 20; i++) {
-            assertThat(rateLimiter.allowRequest("192.168.1.1")).isTrue();
+            assertThat(rateLimiter.allowRequest("192.168.1.1").allowed()).isTrue();
         }
 
-        assertThat(rateLimiter.allowRequest("192.168.1.2")).isTrue();
+        assertThat(rateLimiter.allowRequest("192.168.1.2").allowed()).isTrue();
     }
 
     @Test
@@ -59,7 +100,7 @@ class InMemoryRateLimiterTest {
         // the limiter still works correctly after many keys have been evicted.
 
         // Request from a recent key should work
-        assertThat(rateLimiter.allowRequest("user-14999")).isTrue();
+        assertThat(rateLimiter.allowRequest("user-14999").allowed()).isTrue();
 
         // Even after many requests, memory should be bounded by MAX_CACHE_SIZE (10000)
         // Create 100 more keys to ensure no memory leak
@@ -68,6 +109,6 @@ class InMemoryRateLimiterTest {
         }
 
         // Verify new keys still work and don't cause issues
-        assertThat(rateLimiter.allowRequest("user-15099")).isTrue();
+        assertThat(rateLimiter.allowRequest("user-15099").allowed()).isTrue();
     }
 }

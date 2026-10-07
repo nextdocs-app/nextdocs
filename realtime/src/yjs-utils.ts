@@ -12,6 +12,7 @@ const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
 const MESSAGE_ACCESS_LEVEL = 2;
 
+const SYNC_MESSAGE_STEP_1 = syncProtocol.messageYjsSyncStep1;
 const SYNC_MESSAGE_STEP_2 = syncProtocol.messageYjsSyncStep2;
 const SYNC_MESSAGE_UPDATE = syncProtocol.messageYjsUpdate;
 
@@ -19,8 +20,12 @@ const docs = new Map<string, WSSharedDoc>();
 
 export type RealtimeAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
 
-// Levels that cannot write to document content
-const DOCUMENT_WRITE_BLOCKED = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT']);
+// Levels that are permitted to write to document content
+const DOCUMENT_WRITE_ALLOWED = new Set<RealtimeAccessLevel>(['EDIT', 'OWNER']);
+// Known levels that may read document content (every level except an unknown one).
+// Sync step 1 only asks for the document state; denying it to VIEW connections
+// deadlocks standard y-protocols clients, which never receive the document.
+const DOCUMENT_READ_ALLOWED = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT', 'EDIT', 'OWNER']);
 // Levels that cannot send awareness (cursor presence)
 const NO_AWARENESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW']);
 // Yjs root keys a COMMENT connection may write. The shared `meta` map
@@ -33,8 +38,8 @@ interface ConnectionState {
   accessLevel: RealtimeAccessLevel;
 }
 
-function canWriteDocument(level: RealtimeAccessLevel): boolean {
-  return !DOCUMENT_WRITE_BLOCKED.has(level);
+export function canWriteDocument(level: string | undefined): boolean {
+  return DOCUMENT_WRITE_ALLOWED.has(level as RealtimeAccessLevel);
 }
 
 function canSendAwareness(level: RealtimeAccessLevel): boolean {
@@ -136,7 +141,7 @@ function getYDoc(docName: string): WSSharedDoc {
   });
 }
 
-function shouldRejectSyncMessage(
+export function shouldRejectSyncMessage(
   doc: WSSharedDoc,
   conn: WebSocket,
   syncMessageType: number,
@@ -145,6 +150,12 @@ function shouldRejectSyncMessage(
   const state = doc.conns.get(conn);
   if (!state) {
     return true;
+  }
+
+  // Sync step 1 is a read (state vector request): every known access level may
+  // negotiate it so VIEW/COMMENT clients still receive the current document.
+  if (syncMessageType === SYNC_MESSAGE_STEP_1) {
+    return !DOCUMENT_READ_ALLOWED.has(state.accessLevel);
   }
 
   // Only EDIT/OWNER can write document content
@@ -174,14 +185,13 @@ function shouldRejectSyncMessage(
         }
       }
 
-      // Any other sync messages (like sync step 1) are allowed since they don't perform writes
-      return false;
-    }
-
-    // VIEW users cannot send any sync messages
-    if (state.accessLevel === 'VIEW') {
+      // Fail closed for any other sync message type: only step 2 and updates
+      // carrying comment-thread changes are allowed through.
       return true;
     }
+
+    // Default deny for all other non-writing access levels (VIEW, unknown, undefined)
+    return true;
   }
 
   return false;

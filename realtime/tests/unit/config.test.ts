@@ -20,6 +20,7 @@ describe('Config', () => {
     delete process.env.ROOM_CLEANUP_INTERVAL;
     delete process.env.ROOM_INACTIVE_TIMEOUT;
     delete process.env.ACCESS_REVALIDATION_INTERVAL_MS;
+    delete process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS;
 
     const config = (await import('../../src/config.js')).default;
 
@@ -36,6 +37,7 @@ describe('Config', () => {
     expect(config.roomCleanupInterval).toBe(300000);
     expect(config.roomInactiveTimeout).toBe(3600000);
     expect(config.accessRevalidationIntervalMs).toBe(5000);
+    expect(config.anonymousAccessRevalidationIntervalMs).toBe(30000);
   });
 
   it('should restrict default CORS origins to localhost:3000 in production', async () => {
@@ -54,6 +56,7 @@ describe('Config', () => {
     process.env.ROOM_CLEANUP_INTERVAL = '60000';
     process.env.ROOM_INACTIVE_TIMEOUT = '120000';
     process.env.ACCESS_REVALIDATION_INTERVAL_MS = '15000';
+    process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS = '45000';
 
     const config = (await import('../../src/config.js')).default;
 
@@ -64,6 +67,7 @@ describe('Config', () => {
     expect(config.roomCleanupInterval).toBe(60000);
     expect(config.roomInactiveTimeout).toBe(120000);
     expect(config.accessRevalidationIntervalMs).toBe(15000);
+    expect(config.anonymousAccessRevalidationIntervalMs).toBe(45000);
   });
 
   it('should trim CORS origins', async () => {
@@ -142,6 +146,27 @@ describe('Config', () => {
   it('should throw error for invalid MEMORY_THRESHOLD', async () => {
     process.env.MEMORY_THRESHOLD = 'invalid';
     await expect(import('../../src/config.js')).rejects.toThrow('Invalid MEMORY_THRESHOLD');
+  });
+
+  it('should parse valid trusted proxies', async () => {
+    process.env.TRUSTED_PROXIES = '127.0.0.1, 10.0.0.0/8, ::1';
+    const config = (await import('../../src/config.js')).default;
+    expect(config.trustedProxies).toEqual(['127.0.0.1', '10.0.0.0/8', '::1']);
+  });
+
+  it('should throw error for invalid TRUSTED_PROXIES', async () => {
+    process.env.TRUSTED_PROXIES = 'not-an-ip';
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid TRUSTED_PROXIES');
+
+    resetEnv();
+    process.env.TRUSTED_PROXIES = '10.0.0.0/99';
+    await expect(import('../../src/config.js')).rejects.toThrow('Invalid TRUSTED_PROXIES');
+  });
+
+  it('should reject IPv6 CIDR entries because matching is IPv4-only', async () => {
+    process.env.TRUSTED_PROXIES = '2001:db8::/32';
+
+    await expect(import('../../src/config.js')).rejects.toThrow('IPv6 CIDR is not supported');
   });
 
   function resetEnv() {

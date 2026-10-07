@@ -1,4 +1,9 @@
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  createSlice,
+  createAsyncThunk,
+  createListenerMiddleware,
+  type PayloadAction,
+} from '@reduxjs/toolkit';
 import type {
   AuthState,
   LoginCredentials,
@@ -8,8 +13,10 @@ import type {
 import { authApiService, ApiError } from '@/services/auth.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
 import { indexedDBService } from '@/services/indexed-db.service';
+import { documentService } from '@/services/document.service';
 
 export const AUTH_SESSION_STORAGE_KEY = 'nextdocs.auth.session';
+export const SILENT_REFRESH_MIN_INTERVAL_MS = 30_000;
 
 interface PersistedAuthSnapshot {
   user: AuthState['user'];
@@ -83,6 +90,7 @@ const initialState: AuthState = {
   accessToken: persistedAuth?.accessToken ?? null,
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastAuthAction: null,
+  lastSilentRefreshAt: null,
   isLoading: false,
   isInitializing: true,
   error: null,
@@ -116,7 +124,11 @@ export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentia
   }
 );
 
-export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
+export const refreshSessionThunk = createAsyncThunk<
+  AuthApiResponse,
+  void,
+  { state: { auth: AuthState } }
+>(
   'auth/refresh',
   async (_, { rejectWithValue }) => {
     try {
@@ -131,6 +143,18 @@ export const refreshSessionThunk = createAsyncThunk<AuthApiResponse>(
       }
       return rejectWithValue('failed');
     }
+  },
+  {
+    condition: (_, { getState }) => {
+      const { auth } = getState();
+      if (
+        auth.lastSilentRefreshAt != null &&
+        Date.now() - auth.lastSilentRefreshAt < SILENT_REFRESH_MIN_INTERVAL_MS
+      ) {
+        return false;
+      }
+      return true;
+    },
   }
 );
 
@@ -147,6 +171,7 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
     }
     await clearLocalUserData();
     indexedDBService.setUserId(null);
+    documentService.clearSessionRegistries();
   }
 );
 
@@ -161,15 +186,14 @@ const authSlice = createSlice({
       state.expiresAt = Date.now() + expiresIn * 1000;
       state.lastAuthAction = null;
       state.error = null;
-      persistAuthSnapshot(state);
     },
     clearAuth(state) {
       state.user = null;
       state.accessToken = null;
       state.expiresAt = null;
       state.lastAuthAction = null;
+      state.lastSilentRefreshAt = null;
       state.error = null;
-      clearPersistedAuthSnapshot();
     },
     clearError(state) {
       state.error = null;
@@ -191,7 +215,6 @@ const authSlice = createSlice({
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = 'login';
         state.error = null;
-        persistAuthSnapshot(state);
       })
       .addCase(loginThunk.rejected, (state, action) => {
         state.isLoading = false;
@@ -210,7 +233,6 @@ const authSlice = createSlice({
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = 'register';
         state.error = null;
-        persistAuthSnapshot(state);
       })
       .addCase(registerThunk.rejected, (state, action) => {
         state.isLoading = false;
@@ -226,18 +248,28 @@ const authSlice = createSlice({
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
         state.lastAuthAction = null;
-        persistAuthSnapshot(state);
+        // Stamp the coalescing window on success only: a failed attempt must
+        // stay retryable, or a transient error would leave the session expired
+        // for the rest of the interval.
+        state.lastSilentRefreshAt = Date.now();
         if (state.isInitializing) {
           state.isInitializing = false;
         }
       })
       .addCase(refreshSessionThunk.rejected, (state, action) => {
+        // A `condition` abort is not a failed refresh: the throttle window
+        // stays intact so the next dispatch outside the interval still
+        // coalesces correctly instead of firing on every-other call.
+        if (action.meta?.condition) {
+          return;
+        }
+        state.lastSilentRefreshAt = null;
         if (action.payload === 'unauthorized') {
           state.user = null;
           state.accessToken = null;
           state.expiresAt = null;
           state.lastAuthAction = null;
-          clearPersistedAuthSnapshot();
+          state.lastSilentRefreshAt = null;
         }
         if (state.isInitializing) {
           state.isInitializing = false;
@@ -249,11 +281,47 @@ const authSlice = createSlice({
       state.accessToken = null;
       state.expiresAt = null;
       state.lastAuthAction = null;
+      state.lastSilentRefreshAt = null;
       state.error = null;
-      clearPersistedAuthSnapshot();
     });
   },
 });
 
 export const { setAuthFromResponse, clearAuth, clearError, setInitializing } = authSlice.actions;
 export default authSlice.reducer;
+
+// Session side effects live here, not in reducers: guest link mirrors must
+// not leak into the signed-in session, and snapshots belong in storage.
+export const authListenerMiddleware = createListenerMiddleware();
+authListenerMiddleware.startListening({
+  actionCreator: setAuthFromResponse,
+  effect: async (_action, listenerApi) => {
+    documentService.clearSessionRegistries();
+    persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
+  },
+});
+authListenerMiddleware.startListening({
+  actionCreator: clearAuth,
+  effect: async () => {
+    clearPersistedAuthSnapshot();
+    documentService.clearSessionRegistries();
+  },
+});
+authListenerMiddleware.startListening({
+  predicate: (action) =>
+    loginThunk.fulfilled.match(action) ||
+    registerThunk.fulfilled.match(action) ||
+    refreshSessionThunk.fulfilled.match(action),
+  effect: async (_action, listenerApi) => {
+    documentService.clearSessionRegistries();
+    persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
+  },
+});
+authListenerMiddleware.startListening({
+  predicate: (action) =>
+    logoutThunk.fulfilled.match(action) ||
+    (refreshSessionThunk.rejected.match(action) && action.payload === 'unauthorized'),
+  effect: async () => {
+    clearPersistedAuthSnapshot();
+  },
+});

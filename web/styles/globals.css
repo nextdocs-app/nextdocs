@@ -38,6 +38,10 @@
   --nd-comments-rail-width: 22rem;
   --nd-sidebar-width: 256px;
 
+  /* NextDocs Brand Accent (matching NextDocs logo icon) */
+  --nd-brand: #e78f80;
+  --nd-brand-hover: #de8273;
+
   /* Comments Panel & Toolbar Tokens */
   --nd-comments-panel-bg: #f4f4f6;
   --nd-comments-panel-border: rgba(0, 0, 0, 0.08);
@@ -119,6 +123,10 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* NextDocs Brand Accent (matching NextDocs logo icon) */
+  --nd-brand: #e78f80;
+  --nd-brand-hover: #de8273;
 
   /* Comments Panel & Toolbar Dark Tokens */
   --nd-comments-panel-bg: #181816;

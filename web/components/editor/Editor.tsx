@@ -39,6 +39,7 @@ export default function Editor() {
     meta,
     accessLevel,
     isReadOnly,
+    isGuestShareLink,
     realtimeProvider,
     errorState,
     isLoading,
@@ -53,7 +54,9 @@ export default function Editor() {
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
     Record<string, CommentThreadStats>
   >({});
-  const isGuestSharedView = !isAuthenticated && accessLevel === 'VIEW';
+  // The notice is about who is looking, not about what they may do, so a guest holding
+  // an edit or comment link sees it too. Editability stays with the access level alone.
+  const showGuestNotice = !isAuthenticated && isGuestShareLink;
   const isOffline = !isOnline;
   const isTrashedDocument = !!meta?.deletedAt;
   // Only EDIT holders and owners may restore/purge; viewers and commenters get the
@@ -63,8 +66,9 @@ export default function Editor() {
     documentId,
     ydoc,
     meta,
-    isReadOnly || isGuestSharedView,
-    !(isReadOnly || isGuestSharedView)
+    isReadOnly,
+    !isReadOnly,
+    accessLevel
   );
 
   const dispatch = useAppDispatch();
@@ -224,7 +228,7 @@ export default function Editor() {
         updatedAt={meta.updatedAt}
         isOffline={isOffline}
         pendingEdits={pendingEdits}
-        showGuestNotice={isGuestSharedView}
+        showGuestNotice={showGuestNotice}
         onGuestNoticeCtaClick={openAuthModal}
         showTrashNotice={isTrashedDocument}
         canManageTrash={canManageTrash}
@@ -242,7 +246,7 @@ export default function Editor() {
         awareness={awareness}
         meta={meta}
         updateMeta={updateMeta}
-        isReadOnly={isReadOnly || isGuestSharedView}
+        isReadOnly={isReadOnly}
         accessLevel={accessLevel}
         realtimeProvider={realtimeProvider}
         user={user}

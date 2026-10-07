@@ -14,6 +14,9 @@ public class SharingSettingsValidator
     private static final String MUST_BE_OMITTED_MSG =
             "linkAccessLevel must be omitted unless generalAccessMode is ANYONE_WITH_LINK.";
 
+    private static final String BLOCKED_WITH_LINK_MSG =
+            "linkInheritBlocked must be omitted or false when generalAccessMode is ANYONE_WITH_LINK.";
+
     @Override
     public boolean isValid(SharingSettingsUpdateRequest request, ConstraintValidatorContext context) {
         if (request == null) {
@@ -36,6 +39,18 @@ public class SharingSettingsValidator
             context.disableDefaultConstraintViolation();
             context.buildConstraintViolationWithTemplate(MUST_BE_OMITTED_MSG)
                     .addPropertyNode("linkAccessLevel")
+                    .addConstraintViolation();
+            return false;
+        }
+
+        // A block is only meaningful on a RESTRICTED document: an own link
+        // always wins by closest-ancestor-wins, so combining the two would
+        // store dead state. The service auto-clears the flag when a link is
+        // created; the validator rejects explicitly contradictory payloads.
+        if (isAnyoneWithLink && Boolean.TRUE.equals(request.linkInheritBlocked())) {
+            context.disableDefaultConstraintViolation();
+            context.buildConstraintViolationWithTemplate(BLOCKED_WITH_LINK_MSG)
+                    .addPropertyNode("linkInheritBlocked")
                     .addConstraintViolation();
             return false;
         }

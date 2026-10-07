@@ -13,7 +13,7 @@ class SecurityConfigTest {
     @Test
     @DisplayName("CORS checkOrigin allows exact matches and valid IPv4 LAN origins while rejecting evil domains")
     void corsConfigurationSource_validatesOriginsCorrectly() {
-        SecurityConfig config = new SecurityConfig(null, null);
+        SecurityConfig config = new SecurityConfig(null, null, null);
         org.springframework.test.util.ReflectionTestUtils.setField(
                 config,
                 "allowedOrigins",

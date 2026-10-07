@@ -19,8 +19,12 @@ export interface SidebarSectionProps {
   skeletonKeyPrefix: string;
   /** Accessible name for the "Show More" row. */
   showAllAriaLabel: string;
-  /** Called when "Show More" is clicked (opens the section's full documents panel). */
-  onShowAll: () => void;
+  /**
+   * Called when "Show More" is clicked (opens the section's full documents panel).
+   * Omit it for sections without a full panel (e.g. the guest shared tree) so
+   * the row is not rendered as dead UI.
+   */
+  onShowAll?: () => void;
   className?: string;
   children: React.ReactNode;
 }
@@ -106,7 +110,7 @@ export function SidebarSection({
             children
           )}
 
-          {showMore && (
+          {showMore && onShowAll && (
             <ul className="flex flex-col gap-px mt-0.5">
               <li>
                 <button

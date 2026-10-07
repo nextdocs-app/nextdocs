@@ -1,4 +1,5 @@
 import type { DocumentMeta } from '@/../../realtime/src/types/blocks';
+import type { DocumentAccessLevel } from '@/services/document.service';
 import type * as Y from 'yjs';
 
 export type {
@@ -36,10 +37,24 @@ export interface StoredDocument {
   meta: DocumentMeta;
   yjsState: Uint8Array;
   version: number;
+  /**
+   * Provenance of the cached bytes. Documents mirrored from an anonymous
+   * share-link view are tagged 'public-link' so private listings (sidebar,
+   * panels, login promotion) can exclude someone else's shared content.
+   * Absent on records written before this tag existed — treated as local.
+   */
+  origin?: 'local' | 'public-link';
 }
 
 // Format we use when passing loaded documents to components
 export interface DocumentLoadResult {
   ydoc: Y.Doc;
   meta: DocumentMeta;
+  origin?: StoredDocument['origin'];
+  /**
+   * Effective access level the server reported alongside the payload, when it sent one.
+   * A share-link read carries it, so callers do not need a second access check for a
+   * level the server already resolved.
+   */
+  accessLevel?: DocumentAccessLevel | null;
 }

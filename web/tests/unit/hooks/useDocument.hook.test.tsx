@@ -5,7 +5,10 @@ import * as Y from 'yjs';
 import documentReducer from '@/stores/document/document.slice';
 import { useDocument } from '@/hooks/useDocument.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
-import { writeCachedDocumentAccessLevel } from '@/lib/document-access.util';
+import {
+  readCachedDocumentAccessLevel,
+  writeCachedDocumentAccessLevel,
+} from '@/lib/document-access.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
@@ -70,8 +73,10 @@ describe('useDocument', () => {
   let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
+  let updatePublicMetadataSpy: jest.SpyInstance;
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
+  let checkAccessSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -105,10 +110,16 @@ describe('useDocument', () => {
     updateCloudMetadataSpy = jest
       .spyOn(documentService, 'updateCloudMetadata')
       .mockImplementation(jest.fn());
+    updatePublicMetadataSpy = jest
+      .spyOn(documentService, 'updatePublicMetadata')
+      .mockImplementation(jest.fn());
     restoreCloudDocumentFromTrashSpy = jest
       .spyOn(documentService, 'restoreCloudDocumentFromTrash')
       .mockImplementation(jest.fn());
     dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+    checkAccessSpy = jest
+      .spyOn(documentService, 'checkAccess')
+      .mockRejectedValue(new Error('the guest path should not need an access check'));
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
@@ -132,8 +143,10 @@ describe('useDocument', () => {
     saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
+    updatePublicMetadataSpy.mockRestore();
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
+    checkAccessSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -178,6 +191,8 @@ describe('useDocument', () => {
     expect(result.current.meta).toEqual(meta);
     expect(result.current.error).toBeNull();
     expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('test-id');
+    // A document this device owns is not someone else's share link.
+    expect(result.current.isGuestShareLink).toBe(false);
   });
 
   it('should load shared public document in guest mode as read-only', async () => {
@@ -202,6 +217,62 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
+    expect(result.current.isGuestShareLink).toBe(true);
+  });
+
+  it('takes the guest access level from the public payload without a second access check', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Comment-only Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    // The share link grants comments: enough to read, not to write.
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'COMMENT' });
+
+    const { result } = renderHook(
+      () => useDocument('shared-comment-id', { isSharedDocument: true }),
+      {
+        wrapper: createWrapper(),
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('COMMENT');
+    expect(result.current.isReadOnly).toBe(true);
+    // checkAccess is mocked to fail, so a COMMENT level here can only have come from the
+    // payload - and it is the level kept for an offline reopen.
+    expect(readCachedDocumentAccessLevel('shared-comment-id')).toBe('COMMENT');
+  });
+
+  it('lets a guest write when the share link payload grants edit', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+
+    const { result } = renderHook(() => useDocument('shared-edit-id', { isSharedDocument: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('EDIT');
+    expect(result.current.isReadOnly).toBe(false);
+    // Same again: the failing access check cannot be what made this guest a writer.
+    expect(readCachedDocumentAccessLevel('shared-edit-id')).toBe('EDIT');
+    // A writer on someone else's link is still a guest, which the notice needs to know.
+    expect(result.current.isGuestShareLink).toBe(true);
   });
 
   it('should load public cloud document for guest direct doc URL when no local copy exists', async () => {
@@ -228,6 +299,66 @@ describe('useDocument', () => {
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
+  });
+
+  it('should revalidate a cached share-link mirror instead of trusting it as local', async () => {
+    const staleYdoc = new Y.Doc();
+    const staleMeta = {
+      title: 'Stale Mirror',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const freshYdoc = new Y.Doc();
+    const freshMeta = {
+      title: 'Live Public Doc',
+      createdAt: '2024-01-02T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValueOnce({
+      ydoc: staleYdoc,
+      meta: staleMeta,
+      origin: 'public-link',
+    });
+    getPublicDocumentSpy.mockResolvedValueOnce({ ydoc: freshYdoc, meta: freshMeta });
+
+    const { result } = renderHook(() => useDocument('mirror-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getPublicDocumentSpy).toHaveBeenCalledWith('mirror-id');
+    expect(result.current.ydoc).toBe(freshYdoc);
+    expect(result.current.meta).toEqual(freshMeta);
+  });
+
+  it('should not invent a writable blank doc for a known share link opened offline', async () => {
+    const isPublicLinkSpy = jest
+      .spyOn(documentService, 'isPublicLinkDocument')
+      .mockReturnValue(true);
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: false, isOffline: true });
+    loadDocumentSpy.mockResolvedValueOnce(null);
+    getPublicDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const { result } = renderHook(() => useDocument('known-link-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(result.current.meta).toBeNull();
+    expect(result.current.errorState).toMatchObject({ title: 'Document unavailable offline' });
+
+    isPublicLinkSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
 
   it('should handle load errors', async () => {
@@ -365,6 +496,44 @@ describe('useDocument', () => {
     expect(ydoc.getMap('meta').get('title')).toBe('Updated Title');
   });
 
+  it('should not fan out a second title event for its own Yjs echo', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Typed Title' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Typed Title');
+    });
+
+    // The map write runs synchronously inside updateMeta, so the observer sees
+    // the echo before metaRef commits; only the local edit's own event belongs here.
+    const titleEvents = dispatchEventSpy.mock.calls.filter(
+      ([event]) => (event as Event).type === 'document-meta-updated'
+    );
+    expect(titleEvents).toHaveLength(1);
+  });
+
   it('should apply remote Yjs title updates to the editor without re-persisting REST', async () => {
     const ydoc = new Y.Doc();
     const meta = {
@@ -474,6 +643,7 @@ describe('useDocument', () => {
     });
     expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, {
       touchUpdatedAt: false,
+      origin: 'local',
     });
     expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
   });
@@ -873,6 +1043,52 @@ describe('useDocument', () => {
     );
   });
 
+  it('should send Untitled from a guest that clears the title on a share link', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+    updatePublicMetadataSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => useDocument('shared-blank-id', { isSharedDocument: true }),
+      {
+        wrapper: createWrapper(),
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The anonymous PATCH travels without a token, so it cannot lean on the
+    // authenticated path's normalization: the cache and the server have to see
+    // the same Untitled the reducer already renders.
+    await act(async () => {
+      result.current.updateMeta({ title: '  ' });
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('shared-blank-id', {
+        title: 'Untitled',
+      });
+    });
+
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'shared-blank-id',
+      expect.objectContaining({ title: 'Untitled' })
+    );
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Untitled');
+    });
+  });
+
   it('should not roll back a newer title when an older metadata write fails', async () => {
     const ydoc = new Y.Doc();
     const meta = {
@@ -1096,7 +1312,7 @@ describe('useDocument', () => {
       });
 
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(15000);
         await Promise.resolve();
       });
 
@@ -1561,10 +1777,10 @@ describe('useDocument', () => {
         registeredStatusHandler!({ status: 'connected' });
       });
 
-      // Advance timers by 5000ms. Since isRealtimeConnected is true, polling should be skipped.
+      // Advance timers by 15000ms. Since isRealtimeConnected is true, polling should be skipped.
       getMyAccessSpy.mockClear();
       await act(async () => {
-        jest.advanceTimersByTime(5000);
+        jest.advanceTimersByTime(15000);
         await Promise.resolve();
       });
 

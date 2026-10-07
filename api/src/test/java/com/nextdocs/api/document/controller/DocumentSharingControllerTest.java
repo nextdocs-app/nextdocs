@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -89,8 +90,8 @@ class DocumentSharingControllerTest {
     }
 
     @Test
-    void upsertCollaborator_success_returns201() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
+    void upsertCollaborator_success_returns201WithRecalculatedList() throws Exception {
+        CollaboratorResponse saved = new CollaboratorResponse(
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
@@ -99,7 +100,8 @@ class DocumentSharingControllerTest {
                 false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
-                .thenReturn(response);
+                .thenReturn(saved);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(saved));
 
         mockMvc.perform(post("/api/v1/documents/{id}/collaborators", documentId)
                         .with(user(principal))
@@ -112,16 +114,17 @@ class DocumentSharingControllerTest {
                         """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.email").value("alice@example.com"));
+                .andExpect(jsonPath("$.data[0].email").value("alice@example.com"));
     }
 
     @Test
     void upsertCollaborator_ownerPayload_success_returns201() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
+        CollaboratorResponse saved = new CollaboratorResponse(
                 collaboratorUserId, "bob@example.com", "Bob", DocumentAccessLevel.OWNER, OffsetDateTime.now(), false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
-                .thenReturn(response);
+                .thenReturn(saved);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(saved));
 
         mockMvc.perform(post("/api/v1/documents/{id}/collaborators", documentId)
                         .with(user(principal))
@@ -134,23 +137,24 @@ class DocumentSharingControllerTest {
                         """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.email").value("bob@example.com"))
-                .andExpect(jsonPath("$.data.accessLevel").value("OWNER"))
-                .andExpect(jsonPath("$.data.owner").value(false));
+                .andExpect(jsonPath("$.data[0].email").value("bob@example.com"))
+                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
+                .andExpect(jsonPath("$.data[0].owner").value(false));
     }
 
     @Test
-    void updateCollaboratorAccess_success_returns200() throws Exception {
-        CollaboratorResponse response = new CollaboratorResponse(
+    void updateCollaboratorAccess_success_returnsTheList_butRejectsPut() throws Exception {
+        doNothing()
+                .when(sharingService)
+                .updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any());
+        CollaboratorResponse updated = new CollaboratorResponse(
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
                 DocumentAccessLevel.VIEW,
                 OffsetDateTime.now(),
                 false);
-
-        when(sharingService.updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any()))
-                .thenReturn(response);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(updated));
 
         mockMvc.perform(patch(
                                 "/api/v1/documents/{id}/collaborators/{collaboratorUserId}",
@@ -164,20 +168,45 @@ class DocumentSharingControllerTest {
                         }
                         """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.accessLevel").value("VIEW"));
+                .andExpect(jsonPath("$.data[0].accessLevel").value("VIEW"));
+
+        // The body changes one field, so only the partial-update verb is mapped: a
+        // broadened mapping would silently accept a full-replacement PUT as well.
+        mockMvc.perform(put("/api/v1/documents/{id}/collaborators/{collaboratorUserId}", documentId, collaboratorUserId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "accessLevel": "VIEW"
+                        }
+                        """))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     @Test
-    void removeCollaborator_success_returns204() throws Exception {
+    void removeCollaborator_success_returns200WithRecalculatedList() throws Exception {
         doNothing().when(sharingService).removeCollaborator(userId, documentId, collaboratorUserId);
+        CollaboratorResponse inherited = new CollaboratorResponse(
+                collaboratorUserId,
+                "alice@example.com",
+                "Alice",
+                DocumentAccessLevel.VIEW,
+                OffsetDateTime.now(),
+                false,
+                true,
+                UUID.randomUUID(),
+                "Parent Wiki",
+                DocumentAccessLevel.VIEW);
+        when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(inherited));
 
         mockMvc.perform(delete(
                                 "/api/v1/documents/{id}/collaborators/{collaboratorUserId}",
                                 documentId,
                                 collaboratorUserId)
                         .with(user(principal)))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].inherited").value(true))
+                .andExpect(jsonPath("$.data[0].inheritedFromTitle").value("Parent Wiki"));
     }
 
     @Test
@@ -264,6 +293,29 @@ class DocumentSharingControllerTest {
     }
 
     @Test
+    void updateSharingSettings_anyoneWithLink_withBlockedTrue_returns400() throws Exception {
+        mockMvc.perform(patch("/api/v1/documents/{id}/sharing", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                                                                                {
+                                                                                                        "generalAccessMode": "ANYONE_WITH_LINK",
+                                                                                                        "linkAccessLevel": "VIEW",
+                                                                                                        "linkInheritBlocked": true
+                                                                                                }
+                                                                                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(
+                        jsonPath("$.message")
+                                .value(
+                                        org.hamcrest.Matchers.containsString(
+                                                "linkInheritBlocked must be omitted or false when generalAccessMode is ANYONE_WITH_LINK.")));
+
+        verifyNoInteractions(sharingService);
+    }
+
+    @Test
     void accessCheck_success_returns200() throws Exception {
         DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.EDIT, false);
 
@@ -273,6 +325,31 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.allowed").value(true))
+                .andExpect(jsonPath("$.data.accessLevel").value("EDIT"));
+    }
+
+    @Test
+    void accessCheck_withoutAuthentication_returnsPublicAccess() throws Exception {
+        DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.VIEW, false);
+
+        when(sharingService.accessCheckPublic(documentId)).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/access-check", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.allowed").value(true))
+                .andExpect(jsonPath("$.data.accessLevel").value("VIEW"));
+    }
+
+    @Test
+    void myAccess_withoutAuthentication_returnsPublicAccess() throws Exception {
+        DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.EDIT, false);
+
+        when(sharingService.accessCheckPublic(documentId)).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/my-access", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.accessLevel").value("EDIT"));
     }
 

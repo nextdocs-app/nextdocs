@@ -29,11 +29,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             value = "SELECT d FROM Document d "
                     + "LEFT JOIN FETCH d.parent "
                     + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL "
+                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS "
                     + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC",
-            countQuery = "SELECT count(d) FROM Document d "
-                    + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL")
+            countQuery =
+                    "SELECT count(d) FROM Document d "
+                            + "JOIN DocumentCollaborator c ON c.document.id = d.id "
+                            + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS")
     Page<Document> findSharedWithUserId(@Param("userId") UUID userId, Pageable pageable);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.
@@ -46,7 +47,7 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
-            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id) "
+            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
@@ -61,8 +62,8 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.deletedAt IS NULL "
-            + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId) "
-            + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id))) "
+            + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
+            + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS))) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
@@ -115,6 +116,40 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query(value = "SELECT resolve_effective_access(:userId, :documentId)", nativeQuery = true)
     String resolveEffectiveAccess(@Param("userId") UUID userId, @Param("documentId") UUID documentId);
 
+    @Query(value = "SELECT resolve_public_access(:documentId)", nativeQuery = true)
+    String resolvePublicAccess(@Param("documentId") UUID documentId);
+
+    // Public access level per document, for batch public tree listing
+    @Query(
+            value = "SELECT u.id::uuid AS document_id, resolve_public_access(u.id::uuid) AS access_level "
+                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
+            nativeQuery = true)
+    List<Object[]> resolvePublicAccessBatch(@Param("ids") String ids);
+
+    // Public child listing gates on the levels a reader can actually open (every level
+    // DocumentAccessLevel#allowsRead accepts that resolve_public_access can return), pinned
+    // explicitly instead of leaning on V5's CHECK constraint to keep the set narrow. Extracted
+    // as a constant so the Postgres test runs the shipped string instead of a copy.
+    String PUBLIC_CHILDREN_SQL = "SELECT * FROM documents d "
+            + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT') "
+            + "ORDER BY d.sibling_order_key ASC NULLS LAST, d.created_at ASC, d.id ASC";
+
+    String PUBLIC_CHILDREN_COUNT_SQL = "SELECT COUNT(*) FROM documents d "
+            + "WHERE d.parent_id = :parentId AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT')";
+
+    @Query(value = PUBLIC_CHILDREN_SQL, countQuery = PUBLIC_CHILDREN_COUNT_SQL, nativeQuery = true)
+    Page<Document> findPublicChildren(@Param("parentId") UUID parentId, Pageable pageable);
+
+    String PUBLIC_CHILD_COUNTS_SQL = "SELECT d.parent_id, COUNT(d.id) FROM documents d "
+            + "WHERE d.parent_id IN (:parentIds) AND d.deleted_at IS NULL "
+            + "AND resolve_public_access(d.id) IN ('VIEW', 'COMMENT', 'EDIT') "
+            + "GROUP BY d.parent_id";
+
+    @Query(value = PUBLIC_CHILD_COUNTS_SQL, nativeQuery = true)
+    List<Object[]> countPublicChildrenByParentIds(@Param("parentIds") Collection<UUID> parentIds);
+
     // Effective access level including trashed documents: resolves against the trash bundle
     // root (topmost contiguous trashed ancestor, or the document itself).
     @Query(value = "SELECT resolve_trash_access(:userId, :documentId)", nativeQuery = true)
@@ -133,4 +168,46 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "WHERE d.deletedAt IS NOT NULL "
             + "AND FUNCTION('resolve_trash_access', :userId, d.id) IN ('EDIT', 'OWNER')")
     Page<Document> findAccessibleTrashedDocuments(@Param("userId") UUID userId, Pageable pageable);
+
+    @Query(
+            value = "WITH RECURSIVE sub AS ("
+                    + "  SELECT id, 1 AS depth FROM documents WHERE id = :subtreeRootId AND deleted_at IS NULL "
+                    + "  UNION ALL "
+                    + "  SELECT d.id, s.depth + 1 FROM documents d JOIN sub s ON d.parent_id = s.id "
+                    + "  WHERE d.deleted_at IS NULL AND s.depth < 100 "
+                    + ") SELECT id FROM sub",
+            nativeQuery = true)
+    List<UUID> findSubtreeDocumentIds(@Param("subtreeRootId") UUID subtreeRootId);
+
+    /**
+     * Ancestor ids of a document, closest first, bounded like resolve_effective_access
+     * (100 levels). One recursive query replaces a lazy parent select per level when a
+     * caller needs the whole chain.
+     *
+     * A constant rather than an inline literal so the PostgreSQL test runs this exact
+     * text: a test that copies the query cannot see the query change.
+     */
+    String ANCESTOR_CHAIN_SQL = "WITH RECURSIVE chain AS ("
+            + "  SELECT p.id, p.parent_id, 1 AS depth FROM documents d "
+            + "  JOIN documents p ON d.parent_id = p.id WHERE d.id = :documentId "
+            + "  UNION ALL "
+            + "  SELECT p.id, p.parent_id, c.depth + 1 FROM documents p "
+            + "  JOIN chain c ON p.id = c.parent_id "
+            + "  WHERE c.depth < 100 "
+            + ") SELECT id FROM chain ORDER BY depth";
+
+    @Query(value = ANCESTOR_CHAIN_SQL, nativeQuery = true)
+    List<UUID> findAncestorChainIds(@Param("documentId") UUID documentId);
+
+    /** Batch load for chain/subtree walks: owners are fetched eagerly, parents are not. */
+    @Query("SELECT d FROM Document d JOIN FETCH d.user WHERE d.id IN :documentIds")
+    List<Document> findAllWithUserByIdIn(@Param("documentIds") Collection<UUID> documentIds);
+
+    /**
+     * Parent link per document without loading entities: lets subtree walks answer
+     * "has accessible parent" from maps instead of one lazy parent select (plus its
+     * owner and access CTE) per document.
+     */
+    @Query("SELECT d.id, d.parent.id FROM Document d WHERE d.id IN :documentIds")
+    List<Object[]> findParentIdsByIdIn(@Param("documentIds") Collection<UUID> documentIds);
 }
