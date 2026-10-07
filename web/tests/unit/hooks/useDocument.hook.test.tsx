@@ -496,6 +496,44 @@ describe('useDocument', () => {
     expect(ydoc.getMap('meta').get('title')).toBe('Updated Title');
   });
 
+  it('should not fan out a second title event for its own Yjs echo', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Typed Title' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Typed Title');
+    });
+
+    // The map write runs synchronously inside updateMeta, so the observer sees
+    // the echo before metaRef commits; only the local edit's own event belongs here.
+    const titleEvents = dispatchEventSpy.mock.calls.filter(
+      ([event]) => (event as Event).type === 'document-meta-updated'
+    );
+    expect(titleEvents).toHaveLength(1);
+  });
+
   it('should apply remote Yjs title updates to the editor without re-persisting REST', async () => {
     const ydoc = new Y.Doc();
     const meta = {

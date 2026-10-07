@@ -24,7 +24,15 @@ export function useSharedTreeRootSync(documents: SharedDocumentEntry[]) {
       return;
     }
 
-    const signature = documents.map((doc) => `${doc.id}:${doc.meta.updatedAt}`).join('|');
+    // Signature covers permission/relationship/order changes too: an
+    // access-only change arrives with unchanged updatedAt but must still
+    // refresh effectiveAccessLevel affordances in the tree.
+    const signature = documents
+      .map(
+        (doc) =>
+          `${doc.id}:${doc.meta.updatedAt}:${doc.accessLevel ?? ''}:${doc.relationship}:${doc.orderKey ?? ''}`
+      )
+      .join('|');
     if (signature === lastSyncRef.current) {
       return;
     }

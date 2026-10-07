@@ -82,4 +82,33 @@ describe('useSharedTreeRootSync', () => {
     expect(store.getState().sharedTree.rootIds).toEqual([]);
     expect(store.getState().sharedTree.nodes).toEqual({});
   });
+
+  it('re-syncs when only the access level changes at a constant updatedAt', async () => {
+    const store = createStore();
+    (useAuth as jest.Mock).mockReturnValue({ isAuthenticated: true });
+
+    const documents = [sharedDocument('doc-1')];
+    const { rerender } = renderHook(
+      ({ docs }: { docs: SharedDocumentEntry[] }) => useSharedTreeRootSync(docs),
+      {
+        wrapper: createWrapper(store),
+        initialProps: { docs: documents },
+      }
+    );
+
+    await waitFor(() => {
+      expect(store.getState().sharedTree.nodes['doc-1']).toMatchObject({
+        effectiveAccessLevel: 'EDIT',
+      });
+    });
+
+    const downgraded = [{ ...sharedDocument('doc-1'), accessLevel: 'VIEW' as const }];
+    rerender({ docs: downgraded });
+
+    await waitFor(() => {
+      expect(store.getState().sharedTree.nodes['doc-1']).toMatchObject({
+        effectiveAccessLevel: 'VIEW',
+      });
+    });
+  });
 });

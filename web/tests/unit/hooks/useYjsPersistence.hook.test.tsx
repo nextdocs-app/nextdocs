@@ -2,7 +2,10 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import * as Y from 'yjs';
-import documentReducer from '@/stores/document/document.slice';
+import documentReducer, {
+  setCurrentDocument,
+  updateMeta as updateMetaAction,
+} from '@/stores/document/document.slice';
 import type { DocumentMeta } from '@/types/document.types';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
 import { documentService } from '@/services/document.service';
@@ -71,6 +74,19 @@ describe('useYjsPersistence', () => {
   function wrapper({ children }: { children: React.ReactNode }) {
     const store = createTestStore();
     return <Provider store={store}>{children}</Provider>;
+  }
+
+  // Title edits change the store's meta on every keystroke; these tests need the
+  // store they assert on, so they build the provider around a fixed store.
+  function createControlledStore(meta: DocumentMeta) {
+    const store = createTestStore();
+    store.dispatch(setCurrentDocument({ id: 'title-doc', meta }));
+    return {
+      store,
+      controlledWrapper: ({ children }: { children: React.ReactNode }) => (
+        <Provider store={store}>{children}</Provider>
+      ),
+    };
   }
 
   it('should save document after debounce when ydoc updates', async () => {
@@ -195,6 +211,42 @@ describe('useYjsPersistence', () => {
       saveDocumentSpy.mockResolvedValue(undefined);
 
       renderHook(() => useYjsPersistence('view-link-id', ydoc, meta, false, true, 'VIEW'), {
+        wrapper,
+      });
+
+      const fragment = ydoc.getXmlFragment('blocknote');
+      fragment.push([new Y.XmlElement('paragraph')]);
+
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+
+      await waitFor(() => {
+        expect(saveDocumentSpy).toHaveBeenCalled();
+      });
+      expect(savePublicDocumentSpy).not.toHaveBeenCalled();
+    } finally {
+      savePublicDocumentSpy.mockRestore();
+    }
+  });
+
+  it('should skip the public endpoint for local-only guest docs with EDIT', async () => {
+    const savePublicDocumentSpy = jest
+      .spyOn(documentService, 'savePublicDocument')
+      .mockResolvedValue(undefined);
+    // Never noted via notePublicLinkDocument: a signed-out open of a
+    // non-shared local id must stay local-only.
+    try {
+      const ydoc = new Y.Doc();
+      const meta: DocumentMeta = {
+        title: 'Local only',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      saveDocumentSpy.mockResolvedValue(undefined);
+
+      renderHook(() => useYjsPersistence('local-only-guest-doc', ydoc, meta, false, true, 'EDIT'), {
         wrapper,
       });
 
@@ -538,6 +590,122 @@ describe('useYjsPersistence', () => {
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(0);
       expect(result.current.hasPendingSync).toBe(false);
+    });
+  });
+
+  it('should debounce title keystrokes into one save carrying the whole title', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    saveCloudDocumentSpy.mockResolvedValue(undefined);
+
+    const base: DocumentMeta = {
+      title: 'Untitled',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const ydoc = new Y.Doc();
+    const { store, controlledWrapper } = createControlledStore(base);
+
+    const { rerender } = renderHook(
+      (props: { meta: DocumentMeta }) =>
+        useYjsPersistence('title-doc', ydoc, props.meta, false, true, 'OWNER'),
+      { wrapper: controlledWrapper, initialProps: { meta: base } }
+    );
+
+    // Each keystroke commits the new title to the store and mirrors it into the
+    // shared title map, exactly like useDocument.updateMeta does.
+    for (const title of ['Doc', 'Docu', 'Document']) {
+      const nextMeta: DocumentMeta = { ...base, title };
+      act(() => {
+        store.dispatch(updateMetaAction({ title, updatedAt: nextMeta.updatedAt }));
+        ydoc.getMap('meta').set('title', title);
+        rerender({ meta: nextMeta });
+      });
+    }
+
+    // Still inside the debounce window: the burst must not have hit the cloud yet.
+    expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
+      expect(saveCloudDocumentSpy).toHaveBeenCalledWith(
+        'title-doc',
+        ydoc,
+        expect.objectContaining({ title: 'Document' }),
+        'token-1'
+      );
+    });
+    expect(store.getState().document.meta?.title).toBe('Document');
+  });
+
+  it('should keep newer title keystrokes when an older save resolves late', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    let releaseSave: () => void = () => {};
+    saveCloudDocumentSpy.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+
+    const base: DocumentMeta = {
+      title: 'Meeting',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const ydoc = new Y.Doc();
+    const { store, controlledWrapper } = createControlledStore(base);
+
+    const { rerender } = renderHook(
+      (props: { meta: DocumentMeta }) =>
+        useYjsPersistence('title-doc', ydoc, props.meta, false, true, 'OWNER'),
+      { wrapper: controlledWrapper, initialProps: { meta: base } }
+    );
+
+    act(() => {
+      ydoc.getMap('meta').set('title', base.title);
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
+
+    // The user keeps typing while that PATCH is still in flight.
+    const typedMeta: DocumentMeta = { ...base, title: 'Meeting Notes' };
+    act(() => {
+      store.dispatch(updateMetaAction({ title: typedMeta.title, updatedAt: typedMeta.updatedAt }));
+      ydoc.getMap('meta').set('title', typedMeta.title);
+      rerender({ meta: typedMeta });
+    });
+
+    await act(async () => {
+      releaseSave();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The save's snapshot must not roll the editor back to "Meeting".
+    expect(store.getState().document.meta?.title).toBe('Meeting Notes');
+
+    // Drain the follow-up save the last keystroke scheduled, so the unmount
+    // flush does not run it against the real service.
+    await act(async () => {
+      saveCloudDocumentSpy.mockResolvedValue(undefined);
+      jest.advanceTimersByTime(500);
+      await Promise.resolve();
     });
   });
 });

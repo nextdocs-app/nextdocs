@@ -225,6 +225,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // Latest committed meta for the Yjs title observer (avoids stale closures
   // without re-subscribing on every keystroke).
   const metaRef = useRef(meta);
+  // Last title this client wrote into the shared Yjs map. Yjs fires map
+  // observers synchronously inside `set`, before the metaRef effect commits,
+  // so the echo guard cannot rely on metaRef alone.
+  const lastLocalTitleRef = useRef<string | null>(null);
   const resolvedDocumentIdRef = useRef(resolvedDocumentId);
   const {
     isInBackoff: isCloudReadInBackoff,
@@ -501,17 +505,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                   if (localResult) {
                     result = localResult;
                     guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
-                  } else if (isKnownPublicLink) {
-                    // The session remembers this id as a share link, but its local
-                    // mirror is gone. Recreating a blank EDIT copy offline would let a
-                    // guest fabricate writes that later hit the public endpoint, so
-                    // deny the opening instead of inventing an editable document.
+                  } else {
+                    // No local mirror, known link or not: recreating a blank
+                    // EDIT copy offline would let a guest fabricate writes
+                    // that later hit the public endpoint, so deny the opening
+                    // instead of inventing an editable document.
                     throw new OfflineDocumentUnavailableError(
                       'This shared document has not been opened on this device yet.'
                     );
-                  } else {
-                    result = await documentService.getOrCreateDocument(id);
-                    guestAccessLevel = 'EDIT';
                   }
                 } else if (
                   publicErr instanceof DocumentServiceApiError &&
@@ -1112,7 +1113,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isOnline,
     resolvedDocumentId,
     currentDocumentId,
-    meta,
+    // Only the trash transition matters here: depending on whole `meta`
+    // re-created the interval and fired an immediate checkAccess on every
+    // title keystroke/save while realtime was down, coupling API load to
+    // typing cadence.
+    meta?.deletedAt,
     dispatch,
     isCloudReadInBackoff,
     refresh,
@@ -1156,11 +1161,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       dispatchDocumentMetaUpdated(resolvedDocumentId, updatedMeta);
 
       // Mirror title into the shared Yjs map for instant cross-client sync.
-      // The map observer below ignores this echo (titles already equal), and
-      // remote applies never write back, so no loop is possible. REST PATCH
-      // below remains the durable persist for lists/trees.
+      // The map observer below ignores this echo, and remote applies never
+      // write back, so no loop is possible. REST PATCH below remains the
+      // durable persist for lists/trees.
       if (normalizedUpdates.title !== undefined && ydocRef.current) {
         try {
+          lastLocalTitleRef.current = normalizedUpdates.title;
           const metaMap = ydocRef.current.getMap<string>(YJS_META_MAP_KEY);
           if (metaMap.get(YJS_META_TITLE_KEY) !== normalizedUpdates.title) {
             metaMap.set(YJS_META_TITLE_KEY, normalizedUpdates.title);
@@ -1320,14 +1326,18 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // Untitled invariant as local edits and the API.
       const normalizedTitle = normalizeDocumentTitle(yjsTitle);
       const localTitle = metaRef.current?.title;
-      // Local echo (our own updateMeta wrote the map after committing Redux)
-      // or duplicate delivery: already applied, nothing to do.
-      if (normalizedTitle === localTitle) {
+      // Local echo (our own updateMeta wrote the map) or duplicate delivery:
+      // already applied, nothing to do. The last-written title is checked as
+      // well because the observer runs before metaRef observes the render.
+      if (normalizedTitle === localTitle || normalizedTitle === lastLocalTitleRef.current) {
         return;
       }
       if (!metaRef.current) {
         return;
       }
+      // The remote value won: drop the echo guard so a later remote revert
+      // to our old title is applied instead of mistaken for our own echo.
+      lastLocalTitleRef.current = null;
       const updatedAt = new Date().toISOString();
       const nextMeta = { ...metaRef.current, title: normalizedTitle, updatedAt };
       dispatch(updateMetaAction({ title: normalizedTitle, updatedAt }));

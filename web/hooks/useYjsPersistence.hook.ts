@@ -9,7 +9,7 @@ import {
   setSaving,
   setLastSaved,
   setError,
-  setCurrentDocument,
+  updateMeta as updateMetaAction,
 } from '@/stores/document/document.slice';
 import type { DocumentMeta } from '@/types/document.types';
 import {
@@ -43,6 +43,21 @@ export function useYjsPersistence(
 
   // We use a ref to avoid recreating the timeout handler when meta changes
   const metaRef = useRef(meta);
+  // Meta starts null while the document loads and only ever becomes non-null
+  // once for a mounted document; depending on this instead of `meta` keeps the
+  // save effect (and its debounced timer) alive across keystrokes.
+  const hasMeta = meta !== null;
+
+  // A save snapshots meta before its network round-trip, and a title keystroke
+  // can land while that write is in flight. Restoring the whole snapshot would
+  // roll the editor back to an older prefix of the title, so only the saved
+  // timestamp is merged into the live meta.
+  const reconcileSavedMeta = useCallback(
+    (savedMeta: DocumentMeta) => {
+      dispatch(updateMetaAction({ updatedAt: savedMeta.updatedAt }));
+    },
+    [dispatch]
+  );
 
   useEffect(() => {
     metaRef.current = meta;
@@ -114,12 +129,7 @@ export function useYjsPersistence(
         // same id must not keep hiding the document from Private listings.
         origin: 'local',
       });
-      dispatch(
-        setCurrentDocument({
-          id: documentId,
-          meta: sourceMeta,
-        })
-      );
+      reconcileSavedMeta(sourceMeta);
 
       clearPendingSyncEdits(documentId);
       pendingEditsRef.current = 0;
@@ -152,6 +162,7 @@ export function useYjsPersistence(
     clearBackoff,
     isInBackoff,
     triggerBackoff,
+    reconcileSavedMeta,
   ]);
 
   useEffect(() => {
@@ -159,7 +170,7 @@ export function useYjsPersistence(
   }, [flushPendingEditsToCloud, pendingEdits]);
 
   useEffect(() => {
-    if (!ydoc || !meta || isReadOnly) {
+    if (!ydoc || !hasMeta || isReadOnly) {
       return;
     }
 
@@ -193,12 +204,7 @@ export function useYjsPersistence(
           linkOrigin ? { origin: linkOrigin.origin } : undefined
         );
         documentService.emitLocalDocumentsChanged();
-        dispatch(
-          setCurrentDocument({
-            id: documentId,
-            meta: savedMeta,
-          })
-        );
+        reconcileSavedMeta(savedMeta);
       };
 
       try {
@@ -211,9 +217,18 @@ export function useYjsPersistence(
         // endpoint (the link is the capability). View/comment links stay
         // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
         // prevents unexpected write attempts from guests without edit rights.
+        // Local-only guest docs (never opened via a share link) must not hit
+        // the public endpoint: mirror updateMeta's link gate so doomed
+        // 404 PUTs don't spend the shared per-IP budget.
         const canPublicEdit = accessLevel === 'EDIT' || accessLevel === 'OWNER';
+        const isKnownPublicLink = documentService.isPublicLinkDocument(documentId);
         const canAttemptPublicSave =
-          !isAuthenticated && canPersistCloud && isOnline && !isInBackoff() && canPublicEdit;
+          !isAuthenticated &&
+          canPersistCloud &&
+          isOnline &&
+          !isInBackoff() &&
+          canPublicEdit &&
+          isKnownPublicLink;
         const shouldQueuePendingSync = isAuthenticated && !!accessToken && canPersistCloud;
 
         if (canAttemptCloudSave) {
@@ -226,12 +241,7 @@ export function useYjsPersistence(
           } catch (cacheErr) {
             console.warn('Failed to mirror cloud save into local cache:', cacheErr);
           }
-          dispatch(
-            setCurrentDocument({
-              id: documentId,
-              meta: savedMeta,
-            })
-          );
+          reconcileSavedMeta(savedMeta);
           clearBackoff();
           clearPendingSyncEdits(documentId);
           pendingEditsRef.current = 0;
@@ -249,12 +259,7 @@ export function useYjsPersistence(
             } catch (cacheErr) {
               console.warn('Failed to mirror public save into local cache:', cacheErr);
             }
-            dispatch(
-              setCurrentDocument({
-                id: documentId,
-                meta: savedMeta,
-              })
-            );
+            reconcileSavedMeta(savedMeta);
             clearBackoff();
           } catch (publicErr) {
             if (isConnectivityError(publicErr)) {
@@ -331,7 +336,7 @@ export function useYjsPersistence(
   }, [
     documentId,
     ydoc,
-    meta,
+    hasMeta,
     dispatch,
     isAuthenticated,
     accessToken,
@@ -342,6 +347,7 @@ export function useYjsPersistence(
     clearBackoff,
     isInBackoff,
     triggerBackoff,
+    reconcileSavedMeta,
   ]);
 
   return {
