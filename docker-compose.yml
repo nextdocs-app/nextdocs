@@ -22,10 +22,25 @@ services:
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Set COOKIE_SECURE=true behind HTTPS in production
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      # Uploaded files live on the attachments_data volume (back up with the database)
+      - ATTACHMENT_STORAGE_PATH=/app/data/attachments
+      - ATTACHMENT_MAX_FILE_SIZE=${ATTACHMENT_MAX_FILE_SIZE:-25MB}
+      # Per-user storage cap; -1 disables it while still tracking usage.
+      - ATTACHMENT_MAX_STORAGE_PER_USER=${ATTACHMENT_MAX_STORAGE_PER_USER:-2GB}
+      # Multipart request limit; keep at or above ATTACHMENT_MAX_FILE_SIZE, and at or below
+      # any reverse proxy's own request ceiling.
+      - ATTACHMENT_MAX_REQUEST_SIZE=${ATTACHMENT_MAX_REQUEST_SIZE:-30MB}
+      # Signed-URL lifetime, and an optional HMAC key (>= 32 bytes) that falls back to
+      # JWT_SECRET with a startup warning when unset.
+      - ATTACHMENT_URL_TTL=${ATTACHMENT_URL_TTL:-20m}
+      - ATTACHMENT_SIGNING_SECRET=${ATTACHMENT_SIGNING_SECRET:-}
+      # Optional: absolute base URL when files are served from a CDN or another origin.
+      - ATTACHMENT_PUBLIC_BASE_URL=${ATTACHMENT_PUBLIC_BASE_URL:-}
     volumes:
       - ./api:/app
       - /app/target
       - maven_data:/root/.m2
+      - attachments_data:/app/data/attachments
     depends_on:
       - postgres
     networks:
@@ -89,3 +104,4 @@ networks:
 volumes:
   postgres_data:
   maven_data:
+  attachments_data:

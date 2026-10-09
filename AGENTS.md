@@ -15,7 +15,7 @@ Ports: web `3000`, API `8080`, realtime `1234`.
 
 - **web** — App Router under `web/app` (`/` and `/doc/[id]`); shell is `components/AppShell.tsx`, editor is `components/editor` (BlockNote, loaded client-only). Redux Toolkit slices in `stores/`, API/IndexedDB access in `services/`, Yjs + offline glue in `lib/` and `hooks/`. Alias `@/*` → `web/*`.
 - **realtime** — `src/main.ts` → `src/server.ts`. Rooms are document ids. Token comes from `?token=` or the `Authorization` header; access is re-checked against `GET {API_BASE_URL}/api/v1/documents/{id}/access-check`. `GET /health`, `GET /metrics`.
-- **api** — package `com.nextdocs.api` with parallel `auth/` and `document/` packages (controller / service / repository / dto / entity), `/api/v1/...`, uniform response envelope `{success, data, error, message, timestamp}` (`common/response/ApiResponse`), nulls omitted from JSON.
+- **api** — package `com.nextdocs.api` with parallel `auth/`, `document/`, and `attachment/` packages (controller / service / repository / dto / entity), `/api/v1/...`, uniform response envelope `{success, data, error, message, timestamp}` (`common/response/ApiResponse`), nulls omitted from JSON. Attachments are stored on the local filesystem (`app.attachments.storage-path`) and downloaded via short-lived HMAC-signed URLs, because browser media tags cannot send Authorization headers.
 
 ## Commands
 
