@@ -1815,7 +1815,7 @@ describe('Editor Component', () => {
       );
     });
 
-    it('portals TooltipContent, DropdownMenuContent, and PopoverContent to document.body', async () => {
+    it('portals TooltipContent to document.body but keeps Popover/Dropdown in the editor portal', async () => {
       const { customShadCNComponents } = await import('@/components/editor/EditorContent');
       const { ShadCNDefaultComponents } = await import('@blocknote/shadcn');
 
@@ -1850,7 +1850,8 @@ describe('Editor Component', () => {
 
       const dummyElement = document.createElement('div');
 
-      // Even if BlockNote passes container={editor.portalElement}, it should be redirected to document.body
+      // The tooltip holds no focusable content, so escaping the editor's portal element
+      // is safe and keeps it above fixed panels like the comments sidebar.
       render(<TooltipContent container={dummyElement}>Tooltip text</TooltipContent>);
       expect(mockTooltipContent.mock.lastCall?.[0]).toEqual(
         expect.objectContaining({
@@ -1858,14 +1859,33 @@ describe('Editor Component', () => {
         })
       );
 
+      // File rename/caption/replace popovers (and dropdown menus) must stay in
+      // BlockNote's registered portal element so focusing their inputs still
+      // counts as within the editor; forcing document.body blurs the editor
+      // and closes the toolbar that opened them.
       render(<DropdownMenuContent container={dummyElement}>Menu text</DropdownMenuContent>);
+      expect(mockDropdownMenuContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: dummyElement,
+        })
+      );
+
+      render(<PopoverContent container={dummyElement}>Popover text</PopoverContent>);
+      expect(mockPopoverContent.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({
+          container: dummyElement,
+        })
+      );
+
+      // Before the editor mounts (container null) fall back to the body.
+      render(<DropdownMenuContent container={null}>Menu text</DropdownMenuContent>);
       expect(mockDropdownMenuContent.mock.lastCall?.[0]).toEqual(
         expect.objectContaining({
           container: document.body,
         })
       );
 
-      render(<PopoverContent container={dummyElement}>Popover text</PopoverContent>);
+      render(<PopoverContent container={null}>Popover text</PopoverContent>);
       expect(mockPopoverContent.mock.lastCall?.[0]).toEqual(
         expect.objectContaining({
           container: document.body,

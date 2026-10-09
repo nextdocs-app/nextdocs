@@ -226,7 +226,15 @@ export const customShadCNComponents: Partial<ShadCNComponents> = {
       container,
       ...props
     }: React.ComponentProps<typeof ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent>) => {
-      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      // Respect BlockNote's portal element (a themed `.bn-root` child of the
+      // body created by `PortalElementOverride` and registered with
+      // `editor.registerPortalElement`, so focus inside still counts as within
+      // the editor). Forcing `document.body` here drops that registration, so
+      // focusing the popup blurs the editor and the formatting toolbar that
+      // opened it unmounts. Fall back to the body only before the editor has
+      // mounted (container is null) or during SSR.
+      const portalContainer =
+        container ?? (typeof document !== 'undefined' ? document.body : container);
       return (
         <ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent
           container={portalContainer}
@@ -250,7 +258,15 @@ export const customShadCNComponents: Partial<ShadCNComponents> = {
       container,
       ...props
     }: React.ComponentProps<typeof ShadCNDefaultComponents.Popover.PopoverContent>) => {
-      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      // Same as DropdownMenuContent above: the incoming container is already a
+      // body-level, editor-registered root (see `DEFAULT_PORTAL_ELEMENTS`), so
+      // it escapes the editor's stacking context without leaving the editor's
+      // focus tracking. File rename/caption/replace popovers render their
+      // inputs here — portaling them to raw `document.body` makes the input
+      // count as outside the editor, so the toolbar closes as soon as the
+      // input is focused and the buttons appear broken.
+      const portalContainer =
+        container ?? (typeof document !== 'undefined' ? document.body : container);
       return (
         <ShadCNDefaultComponents.Popover.PopoverContent container={portalContainer} {...props} />
       );
