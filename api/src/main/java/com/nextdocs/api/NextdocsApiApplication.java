@@ -1,5 +1,6 @@
 package com.nextdocs.api;
 
+import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.document.config.DocumentProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -8,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties(DocumentProperties.class)
+@EnableConfigurationProperties({DocumentProperties.class, AttachmentProperties.class})
 public class NextdocsApiApplication {
 
     public static void main(String[] args) {

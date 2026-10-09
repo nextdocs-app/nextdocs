@@ -10,6 +10,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 class GlobalExceptionHandlerTest {
 
@@ -66,6 +68,15 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error").value(ErrorCode.INTERNAL_ERROR.defaultMessage()));
+    }
+
+    @Test
+    @DisplayName("MaxUploadSizeExceededException returns 413 with the size-limit message")
+    void maxUploadSizeExceeded_returns413() throws Exception {
+        mockMvc.perform(post("/test/max-upload-size"))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.PAYLOAD_TOO_LARGE.defaultMessage()));
     }
 
     @Test
@@ -138,6 +149,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/type-mismatch/{id}")
         ResponseEntity<ApiResponse<String>> typeMismatch(@PathVariable UUID id) {
             return ResponseEntity.ok(ApiResponse.ok(id.toString()));
+        }
+
+        @PostMapping("/max-upload-size")
+        ResponseEntity<ApiResponse<Void>> maxUploadSize() {
+            throw new MaxUploadSizeExceededException(1024L);
         }
 
         record ValidatedBody(
