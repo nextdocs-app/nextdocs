@@ -4,6 +4,7 @@ import type {
   RegisterCredentials,
 } from '@/stores/auth/auth.types';
 import { getApiBaseUrl } from '@/lib/api-url.util';
+import { parseApiEnvelope } from '@/services/api-envelope';
 
 export class ApiError extends Error {
   constructor(
@@ -13,13 +14,6 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
-}
-
-interface ApiEnvelope<T> {
-  success: boolean;
-  data: T | null;
-  error: string | null;
-  message: string | null;
 }
 
 interface RequestOptions {
@@ -45,11 +39,9 @@ async function request<T>(
   }
 
   const responseClone = res.clone();
-  let body: ApiEnvelope<T>;
-
-  try {
-    body = (await res.json()) as ApiEnvelope<T>;
-  } catch (error: unknown) {
+  // Auth keeps its raw-body parse diagnostics: a broken login response is undebuggable
+  // without the payload, so the shared parser reports the failure back here.
+  const body = await parseApiEnvelope<T>(res, async (error: unknown) => {
     if (error instanceof SyntaxError || error instanceof TypeError) {
       const rawBody = await responseClone.text();
       const status = `${res.status} ${res.statusText}`.trim();
@@ -60,10 +52,10 @@ async function request<T>(
     }
 
     throw error;
-  }
+  });
 
-  if (!res.ok || !body.success) {
-    throw new ApiError(body.error ?? `Request failed with status ${res.status}`, res.status);
+  if (!res.ok || !body?.success) {
+    throw new ApiError(body?.error ?? `Request failed with status ${res.status}`, res.status);
   }
 
   const data = body.data;
