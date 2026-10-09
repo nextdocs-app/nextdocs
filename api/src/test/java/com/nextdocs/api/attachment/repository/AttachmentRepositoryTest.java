@@ -8,6 +8,7 @@ import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -39,6 +40,9 @@ class AttachmentRepositoryTest {
 
     @Autowired
     private AttachmentRepository attachmentRepository;
+
+    @Autowired
+    private EntityManager entityManager;
 
     private User user;
     private Document active;
@@ -75,57 +79,49 @@ class AttachmentRepositoryTest {
     }
 
     @Test
-    void findStorageKeysForExpiredTrash_returnsOnlyDocsPastTheCutoff() {
-        Attachment freshTrash = save(trashed);
-        Document recentlyTrashed = documentRepository.saveAndFlush(Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Recently trashed")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
-                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC).minusDays(5))
-                .build());
-        Attachment recentAttachment = save(recentlyTrashed);
+    void sumSizeBytesByUploader_groupsOnlyTheRequestedDocuments() {
+        Attachment activeAttachment = save(active);
+        save(trashed);
 
-        OffsetDateTime cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(30);
+        List<AttachmentRepository.UploaderUsage> rows =
+                attachmentRepository.sumSizeBytesByUploader(List.of(active.getId()));
 
-        assertThat(attachmentRepository.findStorageKeysForExpiredTrash(cutoff))
-                .containsExactly(freshTrash.getStorageKey())
-                .doesNotContain(recentAttachment.getStorageKey());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getUploaderId()).isEqualTo(user.getId());
+        assertThat(rows.get(0).getTotalBytes()).isEqualTo(activeAttachment.getSizeBytes());
     }
 
     @Test
-    void findStorageKeysForExpiredTrash_excludesActiveDocuments() {
-        save(active);
+    void sumSizeBytesByUploader_sumsAcrossDocumentsForTheSameUploader() {
+        Attachment first = save(active);
+        Attachment second = save(trashed);
 
-        assertThat(attachmentRepository.findStorageKeysForExpiredTrash(OffsetDateTime.now(ZoneOffset.UTC)))
+        List<AttachmentRepository.UploaderUsage> rows =
+                attachmentRepository.sumSizeBytesByUploader(List.of(active.getId(), trashed.getId()));
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getTotalBytes()).isEqualTo(first.getSizeBytes() + second.getSizeBytes());
+    }
+
+    @Test
+    void sumSizeBytesByUploader_withNoAttachments_returnsNoRows() {
+        assertThat(attachmentRepository.sumSizeBytesByUploader(List.of(active.getId())))
                 .isEmpty();
     }
 
     @Test
-    void deleteForExpiredTrash_removesOnlyExpiredRows() {
-        save(trashed);
-        Document recentlyTrashed = documentRepository.saveAndFlush(Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Recently trashed")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
-                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC).minusDays(5))
-                .build());
-        Attachment recentAttachment = save(recentlyTrashed);
-
-        OffsetDateTime cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(30);
-
-        assertEquals(1, attachmentRepository.deleteForExpiredTrash(cutoff));
-        assertThat(attachmentRepository.findById(recentAttachment.getId())).isPresent();
-    }
-
-    @Test
     void deleteByDocumentIds_removesRowsAndReturnsCount() {
-        save(active);
+        Attachment activeAttachment = save(active);
         save(trashed);
 
         assertEquals(1, attachmentRepository.deleteByDocumentIds(List.of(active.getId())));
         assertEquals(0, attachmentRepository.deleteByDocumentIds(List.of(active.getId())));
+        // The bulk delete must not detach already-loaded entities: the document purge
+        // deletes Document rows right after this call and must find them still managed.
+        assertThat(entityManager.contains(active)).isTrue();
+        // Same persistence-context caveat as above: observe the database, not the cache.
+        entityManager.clear();
+        assertThat(attachmentRepository.findById(activeAttachment.getId())).isEmpty();
     }
 
     private Attachment save(Document document) {

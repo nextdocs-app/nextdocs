@@ -43,6 +43,13 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // All direct children for a collection of parents, including trashed
     List<Document> findAllByParent_IdIn(Collection<UUID> parentIds);
 
+    /**
+     * Id-only child lookup for delete walks: loading the entities would pull every
+     * descendant's yjsState into heap just to find the next level.
+     */
+    @Query("SELECT d.id FROM Document d WHERE d.parent.id IN :parentIds")
+    List<UUID> findIdsByParent_IdIn(@Param("parentIds") Collection<UUID> parentIds);
+
     // Private root documents owned by userId without collaborators with personal navigation order
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
@@ -109,9 +116,20 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             nativeQuery = true)
     List<Object[]> resolveEffectiveAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
 
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("DELETE FROM Document d WHERE d.deletedAt IS NOT NULL AND d.deletedAt < :cutoff")
-    int deleteExpiredTrash(@Param("cutoff") OffsetDateTime cutoff);
+    /**
+     * Topmost documents whose trash retention has elapsed. Roots, not every expired row:
+     * purging a root removes its (also trashed) subtree, so batch transactions can never
+     * split a parent from its children.
+     */
+    @Query("SELECT d.id FROM Document d LEFT JOIN d.parent p "
+            + "WHERE d.deletedAt < :cutoff "
+            + "AND (p IS NULL OR p.deletedAt IS NULL OR p.deletedAt >= :cutoff) "
+            + "ORDER BY d.id")
+    List<UUID> findExpiredTrashRoots(@Param("cutoff") OffsetDateTime cutoff, Pageable pageable);
+
+    @Modifying(flushAutomatically = true)
+    @Query("DELETE FROM Document d WHERE d.id IN :ids")
+    int deleteByIdIn(@Param("ids") Collection<UUID> ids);
 
     @Query(value = "SELECT resolve_effective_access(:userId, :documentId)", nativeQuery = true)
     String resolveEffectiveAccess(@Param("userId") UUID userId, @Param("documentId") UUID documentId);

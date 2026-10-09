@@ -1,5 +1,6 @@
 package com.nextdocs.api.document.service;
 
+import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -24,10 +25,13 @@ import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -37,6 +41,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DocumentService {
@@ -45,6 +50,10 @@ public class DocumentService {
 
     private static final int MAX_CREATE_ATTEMPTS = 3;
     private static final int MAX_RESTORE_ATTEMPTS = 3;
+
+    // Expired-trash roots purged per transaction. Bounds the attachment key list and the
+    // tree walk held in memory during one purge run; each batch commits independently.
+    private static final int PURGE_ROOTS_PER_BATCH = 100;
 
     // Mirrors the depth cap of resolve_effective_access / resolve_trash_access in the DB.
     private static final int MAX_TREE_DEPTH = 100;
@@ -75,6 +84,7 @@ public class DocumentService {
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
     private final DocumentListQueryHelper queryHelper;
+    private final AttachmentService attachmentService;
 
     @Autowired
     @Lazy
@@ -554,18 +564,7 @@ public class DocumentService {
                         "Cannot permanently delete a child of a trashed document directly. Delete the parent document instead.");
             }
 
-            List<Document> descendants = collectAllDescendants(documentId);
-            // Delete in reverse hierarchy order (leaves first)
-            Collections.reverse(descendants);
-            for (Document descendant : descendants) {
-                collaboratorRepository.deleteByDocument_Id(descendant.getId());
-                userDocumentOrderRepository.deleteByDocument_Id(descendant.getId());
-                documentRepository.delete(descendant);
-            }
-
-            collaboratorRepository.deleteByDocument_Id(documentId);
-            userDocumentOrderRepository.deleteByDocument_Id(documentId);
-            documentRepository.delete(document);
+            purgeSubtrees(List.of(documentId));
             return;
         }
 
@@ -680,19 +679,116 @@ public class DocumentService {
         return toResponse(savedRoot, true, userId);
     }
 
-    @Transactional
+    /**
+     * Purges documents whose trash retention has elapsed, one bounded page of expired roots
+     * per transaction. Roots are re-read from the front each round: a purged root is gone,
+     * so the query advances instead of paging by offset through a shrinking table.
+     */
     public int purgeExpiredTrash(OffsetDateTime asOfUtc) {
         int days = documentProperties.getTrashRetentionDays();
         OffsetDateTime cutoff = asOfUtc.minusDays(days);
-        return documentRepository.deleteExpiredTrash(cutoff);
+
+        int purged = 0;
+        Set<UUID> skipped = new HashSet<>();
+        while (true) {
+            List<UUID> fetched = documentRepository.findExpiredTrashRoots(
+                    cutoff, PageRequest.of(0, PURGE_ROOTS_PER_BATCH + skipped.size()));
+            List<UUID> roots = fetched.stream()
+                    .filter(id -> !skipped.contains(id))
+                    .limit(PURGE_ROOTS_PER_BATCH)
+                    .toList();
+            if (roots.isEmpty()) {
+                break;
+            }
+            try {
+                int before = purged;
+                purged += (selfProxy != null ? selfProxy : this).purgeSubtrees(roots);
+                if (purged == before) {
+                    // The query still returns rows but nothing was removed. Skip instead of
+                    // spinning on roots that cannot be deleted (e.g. foreign-key stragglers).
+                    log.warn("Trash purge made no progress for {} root document(s); skipping them.", roots.size());
+                    skipped.addAll(roots);
+                }
+            } catch (RuntimeException batchFailure) {
+                log.warn(
+                        "Trash purge batch failed for {} root document(s); retrying individually.",
+                        roots.size(),
+                        batchFailure);
+                for (UUID root : roots) {
+                    try {
+                        purged += (selfProxy != null ? selfProxy : this).purgeSubtrees(List.of(root));
+                    } catch (RuntimeException rootFailure) {
+                        log.warn("Skipping trash purge for root {} after failure.", root, rootFailure);
+                        skipped.add(root);
+                    }
+                }
+            }
+        }
+        return purged;
     }
 
     public int purgeExpiredTrash() {
-        OffsetDateTime nowUtc = OffsetDateTime.now(ZoneOffset.UTC);
-        if (selfProxy != null) {
-            return selfProxy.purgeExpiredTrash(nowUtc);
+        return purgeExpiredTrash(OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Permanently removes the given roots, all of their descendants, their collaborator and
+     * ordering rows, and their attachment rows; stored files follow once the transaction
+     * commits.
+     *
+     * <p>Descendants are walked by id only: loading {@link Document} entities would pull
+     * every descendant's {@code yjsState} (megabytes each) into heap just to delete it.
+     * Levels are removed deepest-first, so no row ever loses its children implicitly.
+     */
+    @Transactional
+    public int purgeSubtrees(Collection<UUID> rootIds) {
+        if (rootIds == null || rootIds.isEmpty()) {
+            return 0;
         }
-        return purgeExpiredTrash(nowUtc);
+        List<UUID> roots = List.copyOf(rootIds);
+
+        List<List<UUID>> levels = new ArrayList<>();
+        List<UUID> frontier = roots;
+        int depth = 0;
+        while (!frontier.isEmpty()) {
+            if (depth++ >= MAX_TREE_DEPTH) {
+                throw new ApiException(ErrorCode.VALIDATION_FAILED, "Document tree is too deep or contains a cycle.");
+            }
+            List<UUID> children = documentRepository.findIdsByParent_IdIn(frontier);
+            if (children.isEmpty()) {
+                break;
+            }
+            levels.add(children);
+            frontier = children;
+        }
+
+        List<UUID> allIds = new ArrayList<>(roots);
+        for (List<UUID> level : levels) {
+            allIds.addAll(level);
+        }
+
+        // Attachment rows reference their document, so they must be removed before it;
+        // keys and per-user sizes must be read while the rows still exist.
+        List<String> attachmentStorageKeys = attachmentService.findStorageKeysForDocuments(allIds);
+        attachmentService.releaseQuotaForDocuments(allIds);
+        attachmentService.deleteForDocuments(allIds);
+
+        for (int i = levels.size() - 1; i >= 0; i--) {
+            deleteDocumentLevel(levels.get(i));
+        }
+        deleteDocumentLevel(roots);
+
+        attachmentService.deleteStoredFilesAfterCommit(attachmentStorageKeys);
+        return allIds.size();
+    }
+
+    private void deleteDocumentLevel(List<UUID> documentIds) {
+        if (documentIds.isEmpty()) {
+            return;
+        }
+        collaboratorRepository.deleteByDocument_IdIn(documentIds);
+        userDocumentOrderRepository.deleteByDocument_IdIn(documentIds);
+        documentRepository.deleteByIdIn(documentIds);
     }
 
     /**
