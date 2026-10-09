@@ -10,6 +10,7 @@ import authReducer, {
   AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
+import { attachmentService } from '../../../services/attachment.service';
 import type { AuthApiResponse, AuthState } from '../../../stores/auth/auth.types';
 
 jest.mock('../../../services/auth.service', () => ({
@@ -242,6 +243,161 @@ describe('auth slice', () => {
     // Security: local user data must be wiped even when the API call fails.
     expect(clearLocalUserData).toHaveBeenCalledTimes(1);
     expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
+  });
+
+  it('loginThunk/fulfilled clears signed attachment URLs cached by a previous session', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.login as jest.Mock).mockResolvedValue(mockAuthResponse);
+    const store = makeStore();
+
+    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('registerThunk/fulfilled clears cached signed attachment URLs', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.register as jest.Mock).mockResolvedValue(mockAuthResponse);
+    const store = makeStore();
+
+    await store.dispatch(registerThunk({ email: 'a@b.com', displayName: 'Alice', password: 'pw' }));
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('setAuthFromResponse clears cached signed attachment URLs for the new identity', () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    const store = makeStore();
+
+    store.dispatch(setAuthFromResponse(mockAuthResponse));
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('clearAuth clears cached signed attachment URLs', () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    const store = makeStore({ user: mockUser, accessToken: 'tok', expiresAt: 99999 });
+
+    store.dispatch(clearAuth());
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('refreshSessionThunk/rejected clears cached attachment URLs when unauthorized', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('No session', 401));
+    const store = makeStore({ user: mockUser, accessToken: 'stale' });
+
+    await store.dispatch(refreshSessionThunk());
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('refreshSessionThunk/rejected with a non-401 error keeps the cache', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('Server error', 500));
+    const store = makeStore({ user: mockUser, accessToken: 'stale' });
+
+    const result = await store.dispatch(refreshSessionThunk());
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(resetSpy).not.toHaveBeenCalled();
+    resetSpy.mockRestore();
+  });
+
+  it('refreshSessionThunk/fulfilled rotates the token without clearing the cache', async () => {
+    // Token rotation is the same identity: per-identity cache keys keep the old
+    // entries unreachable, so no invalidation (and no re-mint storm) is needed.
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.refresh as jest.Mock).mockResolvedValue({
+      ...mockAuthResponse,
+      accessToken: 'rotated-token',
+    });
+    const store = makeStore({ user: mockUser, accessToken: 'stale' });
+
+    const result = await store.dispatch(refreshSessionThunk());
+
+    expect(refreshSessionThunk.fulfilled.match(result)).toBe(true);
+    expect(store.getState().auth.accessToken).toBe('rotated-token');
+    expect(resetSpy).not.toHaveBeenCalled();
+    resetSpy.mockRestore();
+  });
+
+  it('loginThunk/rejected does not clear the cache', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.login as jest.Mock).mockRejectedValue(new ApiError('Bad credentials', 401));
+    const store = makeStore();
+
+    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'wrong' }));
+
+    expect(resetSpy).not.toHaveBeenCalled();
+    resetSpy.mockRestore();
+  });
+
+  it('logoutThunk still clears the cache when the backend logout fails', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.logout as jest.Mock).mockRejectedValue(new Error('network down'));
+    const store = makeStore({ user: mockUser, accessToken: 'tok', expiresAt: 99999 });
+
+    await store.dispatch(logoutThunk());
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
+  });
+
+  it('a login never serves the previous session’s minted URL', async () => {
+    const storedUrl = '/api/v1/attachments/11111111-2222-4333-8444-555555555555';
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: { url: `${storedUrl}/file?exp=4102444800&sig=aaa`, expiresAt: 4102444800 },
+          error: null,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: { url: `${storedUrl}/file?exp=4102444800&sig=bbb`, expiresAt: 4102444800 },
+          error: null,
+        }),
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    attachmentService.resetAttachmentUrlCache();
+    (authApiService.login as jest.Mock).mockResolvedValue({
+      ...mockAuthResponse,
+      accessToken: 'token-b',
+    });
+    const store = makeStore();
+
+    const first = await attachmentService.resolveAttachmentUrl(storedUrl, 'token-a');
+    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
+    const second = await attachmentService.resolveAttachmentUrl(storedUrl, 'token-b');
+
+    expect(first).toContain('sig=aaa');
+    expect(second).toContain('sig=bbb');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('logoutThunk clears cached signed attachment URLs', async () => {
+    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+    const store = makeStore({ user: mockUser, accessToken: 'tok', expiresAt: 99999 });
+
+    await store.dispatch(logoutThunk());
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+    resetSpy.mockRestore();
   });
 
   it('logoutThunk sends current access token to backend logout endpoint', async () => {

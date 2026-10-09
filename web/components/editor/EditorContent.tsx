@@ -91,6 +91,8 @@ import {
   buildFallbackAvatar,
 } from './comment.utils';
 import type { SharedCommentUserProfile } from './comment.utils';
+import { useAttachmentHandlers } from './useAttachmentHandlers';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 
 type CodeLanguageInfo = {
   name: string;
@@ -356,6 +358,7 @@ export function EditorContent({
   const { resolvedTheme } = useTheme();
   const isTouchInput = useIsTouchInput();
   const documentToolbarInset = useDocumentToolbarInset();
+  const { isOnline } = useNetworkStatus();
 
   // Bounds the floating thread card; see `createCommentThreadFloatingOptions`.
   // Rebuilt when the toolbar's height changes, which is also the signal that a
@@ -421,6 +424,17 @@ export function EditorContent({
 
   const commentRoleRef = useRef(commentRole);
   commentRoleRef.current = commentRole;
+
+  // File-block uploads and signed-URL resolution live in a dedicated hook so this
+  // component stays out of the auth-retry and toast-throttling details.
+  const { uploadFile, resolveFileUrl } = useAttachmentHandlers({
+    documentId,
+    isAuthenticated,
+    accessToken,
+    isOnline,
+    accessLevel,
+    deletedAt: meta.deletedAt,
+  });
 
   const sharedCommentUsers = useMemo(() => ydoc.getMap<string>(COMMENT_USERS_MAP_KEY), [ydoc]);
 
@@ -615,9 +629,14 @@ export function EditorContent({
       },
       dictionary: commentsDictionary,
       extensions: editorExtensions,
+      // The API keys uploads by document, not by block; BlockNote still passes the target id.
+      uploadFile: (file) => uploadFile(file),
+      resolveFileUrl: (url) => resolveFileUrl(url),
     }),
     // The editor is created strictly once per document mount. Keyed by documentId at parent.
-    [documentId, ydoc]
+    // uploadFile/resolveFileUrl are effect events with stable identity, so listing them
+    // keeps exhaustive-deps honest without ever rebuilding the editor.
+    [documentId, ydoc, uploadFile, resolveFileUrl]
   );
 
   const getSlashMenuItems = useCallback(
