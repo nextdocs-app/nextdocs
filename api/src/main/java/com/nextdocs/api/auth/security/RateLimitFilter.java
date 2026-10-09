@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +21,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.util.matcher.IpAddressMatcher;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.UriUtils;
 import tools.jackson.databind.ObjectMapper;
@@ -37,11 +39,26 @@ import tools.jackson.databind.ObjectMapper;
  *   runs only after the body has been parsed, so the limit has to be enforced here,
  *   on bytes read rather than on the declared Content-Length which chunked
  *   uploads omit).
+ * - {@code upload-ip:<ip>} + {@code upload:<userId>} — authenticated attachment uploads
+ *   (POST .../attachments). Consumes both buckets so neither one account nor one
+ *   egress address can queue disk-filling requests. A declared body over the multipart
+ *   ceiling is rejected before the container buffers it, and because the multipart
+ *   parser reads the same stream the filter would consume, uploads without a declared
+ *   Content-Length are rejected outright rather than bounded by a byte-counting read.
+ * - {@code download:<ip>} — attachment downloads (GET|HEAD .../attachments/{id}/file),
+ *   including every range seek, plus anonymous signed-URL mints (GET|HEAD
+ *   .../attachments/{id}/url). A single document open fans out across many files
+ *   and media seeking multiplies that, so mints and downloads get their own larger
+ *   per-address budget instead of starving browsing. Reads stay on
+ *   {@code public-read:<ip>}.
  *
- * Authenticated access-check/my-access calls (verified UserPrincipal in SecurityContext)
- * are not rate limited here: the caller is identified by JWT and the rest of the
- * API is unthrottled, so throttling them would only starve guests sharing the
- * same egress IP (same office, same NAT, adjacent browser tabs).
+ * Authenticated access-check/my-access calls and signed-URL minting (GET
+ * .../attachments/{id}/url, verified UserPrincipal in SecurityContext) are not rate
+ * limited here: the caller is identified by JWT and the rest of the API is
+ * unthrottled, so throttling them would only starve guests sharing the
+ * same egress IP (same office, same NAT, adjacent browser tabs). Anonymous mints join
+ * the download budget for the same fan-out reason: media tags cannot send an
+ * Authorization header, so a downloader is anonymous to the server by construction.
  *
  * A 429 carries the wait until the bucket's next token, not the length of its
  * window: with greedy refill those differ by an order of magnitude at the default
@@ -53,7 +70,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
+    private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
+    private static final String MISSING_UPLOAD_LENGTH_MSG = "Uploads must declare a Content-Length.";
     private static final String UNSUPPORTED_MEDIA_TYPE_MSG = "Unsupported Media Type.";
 
     private final RateLimiter rateLimiter;
@@ -63,6 +82,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final int publicWriteMaxRequests;
     private final Duration publicWriteWindow;
     private final long publicWriteMaxBodyBytes;
+    private final int uploadMaxRequests;
+    private final Duration uploadWindow;
+    private final long uploadMaxDeclaredBytes;
+    private final int downloadMaxRequests;
+    private final Duration downloadWindow;
 
     public RateLimitFilter(
             RateLimiter rateLimiter,
@@ -71,7 +95,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.public-read-window-seconds:60}") long publicReadWindowSeconds,
             @Value("${app.rate-limit.public-write-max-requests:20}") int publicWriteMaxRequests,
             @Value("${app.rate-limit.public-write-window-seconds:60}") long publicWriteWindowSeconds,
-            @Value("${app.rate-limit.public-write-max-body-bytes:5242880}") long publicWriteMaxBodyBytes) {
+            @Value("${app.rate-limit.public-write-max-body-bytes:5242880}") long publicWriteMaxBodyBytes,
+            @Value("${app.rate-limit.upload-max-requests:20}") int uploadMaxRequests,
+            @Value("${app.rate-limit.upload-window-seconds:60}") long uploadWindowSeconds,
+            @Value("${app.rate-limit.download-max-requests:600}") int downloadMaxRequests,
+            @Value("${app.rate-limit.download-window-seconds:60}") long downloadWindowSeconds,
+            @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
         this.publicReadMaxRequests = publicReadMaxRequests;
@@ -79,6 +108,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.publicWriteMaxRequests = publicWriteMaxRequests;
         this.publicWriteWindow = Duration.ofSeconds(publicWriteWindowSeconds);
         this.publicWriteMaxBodyBytes = publicWriteMaxBodyBytes;
+        this.uploadMaxRequests = uploadMaxRequests;
+        this.uploadWindow = Duration.ofSeconds(uploadWindowSeconds);
+        this.downloadMaxRequests = downloadMaxRequests;
+        this.downloadWindow = Duration.ofSeconds(downloadWindowSeconds);
+        // Same ceiling the multipart parser enforces, derived rather than duplicated: a
+        // self-hoster who raises ATTACHMENT_MAX_REQUEST_SIZE must not silently hit a second,
+        // stale limit in the filter.
+        this.uploadMaxDeclaredBytes = DataSize.parse(maxRequestSize).toBytes();
     }
 
     /**
@@ -115,11 +152,23 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         String ip = resolveClientIp(request);
-        String key = verdict.bucketPrefix() + ip;
 
-        RateLimiter.Decision decision = verdict.useDefaultBudget()
-                ? rateLimiter.allowRequest(key)
-                : rateLimiter.allowRequest(key, verdict.maxRequests(), verdict.window());
+        RateLimiter.Decision decision;
+        if (verdict.perCaller()) {
+            // Uploads consume two budgets: the address (shared NAT) and the identified
+            // caller (one account). Either refusing refuses the request.
+            RateLimiter.Decision ipDecision =
+                    rateLimiter.allowRequest(verdict.bucketPrefix() + ip, verdict.maxRequests(), verdict.window());
+            UUID callerId = authenticatedCallerId();
+            RateLimiter.Decision callerDecision = callerId == null
+                    ? ipDecision
+                    : rateLimiter.allowRequest("upload:" + callerId, verdict.maxRequests(), verdict.window());
+            decision = ipDecision.allowed() ? callerDecision : ipDecision;
+        } else if (verdict.useDefaultBudget()) {
+            decision = rateLimiter.allowRequest(verdict.bucketPrefix() + ip);
+        } else {
+            decision = rateLimiter.allowRequest(verdict.bucketPrefix() + ip, verdict.maxRequests(), verdict.window());
+        }
 
         if (!decision.allowed()) {
             String maskedIp = maskIp(ip);
@@ -144,10 +193,33 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
         // Checked after the budget so oversized requests cannot be used to probe the
         // endpoint for free, and before the body is parsed so a declared-oversized
-        // payload never reaches the JSON parser or the base64 decoder.
+        // payload never reaches the JSON parser, the base64 decoder, or the multipart
+        // parser that would otherwise buffer it to disk.
         if (exceedsDeclaredBodyLimit(request, verdict)) {
-            log.warn("Rejected oversized anonymous write from IP: {}", maskIp(ip));
-            writeError(response, 413, OVER_LIMIT_BODY_MSG);
+            log.warn(
+                    "Rejected oversized {} from IP: {}",
+                    verdict.perCaller() ? "upload" : "anonymous write",
+                    maskIp(ip));
+            // An oversized upload is the same event the multipart ceiling reports, so it
+            // carries the same message; an anonymous write is a JSON snapshot, not a file.
+            writeError(
+                    response,
+                    413,
+                    verdict.perCaller() ? ErrorCode.PAYLOAD_TOO_LARGE.defaultMessage() : OVER_LIMIT_BODY_MSG);
+            return;
+        }
+
+        // A multipart upload cannot be bounded by reading the stream: the parser consumes the
+        // same body through request.getParts(), off the original request, so a filter read
+        // would leave it nothing to parse. A missing declared length can only come from a
+        // non-browser client (FormData always sets Content-Length), so reject it before the
+        // container spools an unbounded chunked body to temp files. Non-multipart bodies
+        // cannot be spooled this way and fall through to their own handling.
+        if (verdict.perCaller()
+                && request.getContentLengthLong() < 0
+                && isMultipartContentType(request.getContentType())) {
+            log.warn("Rejected upload without a declared Content-Length from IP: {}", maskIp(ip));
+            writeError(response, 413, MISSING_UPLOAD_LENGTH_MSG);
             return;
         }
 
@@ -186,16 +258,28 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     /**
-     * Content-Length pre-check for the anonymous write bucket. Requests without a
-     * declared length (chunked uploads) pass through here and are bounded by
-     * {@link #readBoundedBody} below instead.
+     * Content-Length pre-check: for anonymous writes it mirrors the buffering ceiling; for
+     * uploads it mirrors the multipart request limit, so a body that large is refused
+     * before the container spills it to a temp file. A request without a declared length
+     * (chunked) is bounded by {@link #readBoundedBody} for anonymous writes; uploads reject
+     * it outright, since the multipart parser cannot read a filter-consumed stream.
      */
+    /** True for the only content type the container spools to disk: multipart form uploads. */
+    private static boolean isMultipartContentType(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String mime = contentType.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return mime.equals(MediaType.MULTIPART_FORM_DATA_VALUE);
+    }
+
     private boolean exceedsDeclaredBodyLimit(HttpServletRequest request, Verdict verdict) {
-        if (verdict.maxBodyBytes() <= 0) {
+        long limit = verdict.declaredLimitBytes();
+        if (limit <= 0) {
             return false;
         }
         long declaredLength = request.getContentLengthLong();
-        return declaredLength > verdict.maxBodyBytes();
+        return declaredLength > limit;
     }
 
     /**
@@ -286,6 +370,28 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return Verdict.defaultBudget("auth:");
         }
 
+        // Signed-URL issuance and the signed download are reachable anonymously, so they
+        // must not fall through to `unlimited` (the document-path check below).
+        if (uri.startsWith(ATTACHMENT_PATH_PREFIX)) {
+            // Downloads (including every range seek) and anonymous mints share a larger
+            // bucket so one document open - a hundred-image doc mints ~100 URLs in a ~2s
+            // burst - or a video scrub cannot exhaust the read budget that also serves
+            // share-link browsing. Two tabs behind one NAT double that burst.
+            if (isSignedDownload(request)) {
+                return Verdict.customBudget("download:", downloadMaxRequests, downloadWindow);
+            }
+            if (isSignedUrlMint(request)) {
+                // Minting is permission-checked and, for a verified caller, as cheap to
+                // trust as access-check below; anonymous mints join the download budget
+                // because browser media tags cannot send an Authorization header.
+                if (isAuthenticatedCaller()) {
+                    return Verdict.unlimited();
+                }
+                return Verdict.customBudget("download:", downloadMaxRequests, downloadWindow);
+            }
+            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
+        }
+
         if (!uri.startsWith(PUBLIC_DOCUMENT_PATH_PREFIX)) {
             return Verdict.unlimited();
         }
@@ -326,6 +432,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return Verdict.unlimited();
         }
 
+        // Match exactly POST /api/v1/documents/{id}/attachments. This is the one
+        // authenticated write that can consume unbounded disk, so it is throttled per
+        // caller and per address instead of falling through to unlimited.
+        if ("POST".equalsIgnoreCase(method)
+                && parts.length == 2
+                && !parts[0].isBlank()
+                && parts[1].equals("attachments")) {
+            return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
+        }
+
         if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
             return Verdict.unlimited();
         }
@@ -355,9 +471,37 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return Verdict.unlimited();
     }
 
+    /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/file}, no nested or trailing segments. */
+    private static boolean isSignedDownload(HttpServletRequest request) {
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
+            return false;
+        }
+        String remainder = request.getRequestURI().substring(ATTACHMENT_PATH_PREFIX.length());
+        return remainder.endsWith("/file") && remainder.indexOf('/') == remainder.length() - 5;
+    }
+
+    /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/url}, no nested or trailing segments. */
+    private static boolean isSignedUrlMint(HttpServletRequest request) {
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
+            return false;
+        }
+        String remainder = request.getRequestURI().substring(ATTACHMENT_PATH_PREFIX.length());
+        return remainder.endsWith("/url") && remainder.indexOf('/') == remainder.length() - 4;
+    }
+
     private boolean isAuthenticatedCaller() {
+        return authenticatedCallerId() != null;
+    }
+
+    /** Id of the verified JWT principal, or null when the request is anonymous. */
+    private UUID authenticatedCallerId() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth != null && auth.isAuthenticated() && auth.getPrincipal() instanceof UserPrincipal;
+        if (auth == null || !auth.isAuthenticated() || !(auth.getPrincipal() instanceof UserPrincipal principal)) {
+            return null;
+        }
+        return principal.getId();
     }
 
     /**
@@ -371,22 +515,36 @@ public class RateLimitFilter extends OncePerRequestFilter {
             boolean useDefaultBudget,
             int maxRequests,
             Duration window,
-            long maxBodyBytes) {
+            long maxBodyBytes,
+            long declaredLimitBytes,
+            boolean perCaller) {
         static Verdict unlimited() {
-            return new Verdict(false, "", true, 0, Duration.ZERO, 0);
+            return new Verdict(false, "", true, 0, Duration.ZERO, 0, 0, false);
         }
 
         static Verdict defaultBudget(String bucketPrefix) {
             return new Verdict(
-                    true, bucketPrefix, true, RateLimiter.DEFAULT_MAX_REQUESTS, RateLimiter.DEFAULT_WINDOW, 0);
+                    true,
+                    bucketPrefix,
+                    true,
+                    RateLimiter.DEFAULT_MAX_REQUESTS,
+                    RateLimiter.DEFAULT_WINDOW,
+                    0,
+                    0,
+                    false);
         }
 
         static Verdict customBudget(String bucketPrefix, int maxRequests, Duration window) {
-            return new Verdict(true, bucketPrefix, false, maxRequests, window, 0);
+            return new Verdict(true, bucketPrefix, false, maxRequests, window, 0, 0, false);
         }
 
         static Verdict anonymousWriteBudget(String bucketPrefix, int maxRequests, Duration window, long maxBodyBytes) {
-            return new Verdict(true, bucketPrefix, false, maxRequests, window, maxBodyBytes);
+            return new Verdict(true, bucketPrefix, false, maxRequests, window, maxBodyBytes, maxBodyBytes, false);
+        }
+
+        /** Declared-size ceiling only: the body is never read or buffered by the filter. */
+        static Verdict uploadBudget(int maxRequests, Duration window, long declaredLimitBytes) {
+            return new Verdict(true, "upload-ip:", false, maxRequests, window, 0, declaredLimitBytes, true);
         }
     }
 

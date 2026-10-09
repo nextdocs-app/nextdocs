@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -57,6 +58,14 @@ public class SecurityConfig {
         "/actuator/health"
     };
 
+    /**
+     * Attachment endpoints authorized by a signed query string (downloads) or by their own
+     * document access check (signed-URL issuance, allowing anonymous ANYONE_WITH_LINK
+     * viewers). Only the media methods are public: a method-agnostic permitAll would also
+     * open POST/PUT/DELETE on these shapes.
+     */
+    private static final String[] PUBLIC_ATTACHMENT_PATHS = {"/api/v1/attachments/*/url", "/api/v1/attachments/*/file"};
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
@@ -64,7 +73,11 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth.requestMatchers(PUBLIC_PATHS)
+                .authorizeHttpRequests(auth -> auth.requestMatchers(HttpMethod.GET, PUBLIC_ATTACHMENT_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.HEAD, PUBLIC_ATTACHMENT_PATHS)
+                        .permitAll()
+                        .requestMatchers(PUBLIC_PATHS)
                         .permitAll()
                         .anyRequest()
                         .authenticated())
@@ -127,9 +140,11 @@ public class SecurityConfig {
             }
         };
         config.setAllowedOriginPatterns(allowedOriginPatterns);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
-        config.setExposedHeaders(List.of("Authorization"));
+        config.setAllowedMethods(List.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Range must be allowed so cross-origin <video>/<audio> can seek; the server's
+        // range responses are then readable only if Accept-Ranges/Content-Range are exposed.
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With", "Range"));
+        config.setExposedHeaders(List.of("Authorization", "Accept-Ranges", "Content-Range"));
         config.setAllowCredentials(true); // required for HTTP-only cookie refresh token
         config.setMaxAge(3600L);
 
