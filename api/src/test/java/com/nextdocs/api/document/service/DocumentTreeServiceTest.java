@@ -24,7 +24,10 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -471,6 +474,78 @@ class DocumentTreeServiceTest {
         ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertTrue(ex.getMessage().contains("Ancestor chain is too deep"));
+    }
+
+    @Test
+    void move_newParentAtDepthLimit_throwsValidationFailed() {
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+
+        // A closed 100-node chain: the moved leaf would land on a 101-node chain.
+        Map<UUID, Document> chain = closedAncestorChain(100);
+        UUID newParentId = chain.keySet().iterator().next();
+        DocumentMoveRequest request = new DocumentMoveRequest(newParentId, null, null);
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.findByIdAndDeletedAtIsNull(any()))
+                .thenAnswer(invocation -> Optional.ofNullable(chain.get(invocation.getArgument(0))));
+
+        ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("100 levels deep"));
+        verify(documentRepository, never()).findIdsByParent_IdIn(any());
+    }
+
+    @Test
+    void move_subtreeExceedsDepthLimit_throwsValidationFailed() {
+        UUID docId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+        UUID grandchildId = UUID.randomUUID();
+        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+
+        // New parent 98 nodes deep leaves room for one level; the moved document's
+        // grandchild would land on a 101-node chain.
+        Map<UUID, Document> chain = closedAncestorChain(98);
+        UUID newParentId = chain.keySet().iterator().next();
+        DocumentMoveRequest request = new DocumentMoveRequest(newParentId, null, null);
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.findByIdAndDeletedAtIsNull(any()))
+                .thenAnswer(invocation -> Optional.ofNullable(chain.get(invocation.getArgument(0))));
+        when(documentRepository.findIdsByParent_IdIn(List.of(docId))).thenReturn(List.of(childId));
+        when(documentRepository.findIdsByParent_IdIn(List.of(childId))).thenReturn(List.of(grandchildId));
+
+        ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("100 levels deep"));
+    }
+
+    /**
+     * Builds a closed chain of {@code length} documents for ancestor-walk stubbing. The
+     * map iterates deepest-first, so its first key is the node to use as the new parent,
+     * and its last node is a root.
+     */
+    private Map<UUID, Document> closedAncestorChain(int length) {
+        List<UUID> ids = new ArrayList<>();
+        for (int i = 0; i < length; i++) {
+            ids.add(UUID.randomUUID());
+        }
+        Map<UUID, Document> chain = new LinkedHashMap<>();
+        for (int i = 0; i < length; i++) {
+            Document ancestor = Document.builder()
+                    .id(ids.get(i))
+                    .user(user)
+                    .title("Ancestor " + i)
+                    .parent(
+                            i + 1 < length
+                                    ? Document.builder().id(ids.get(i + 1)).build()
+                                    : null)
+                    .build();
+            chain.put(ids.get(i), ancestor);
+        }
+        return chain;
     }
 
     @Test

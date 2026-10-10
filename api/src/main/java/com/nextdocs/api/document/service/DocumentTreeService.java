@@ -1,5 +1,7 @@
 package com.nextdocs.api.document.service;
 
+import static com.nextdocs.api.document.config.DocumentProperties.MAX_TREE_DEPTH;
+
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -35,8 +37,6 @@ public class DocumentTreeService {
     private static final int MAX_MOVE_ATTEMPTS = 3;
 
     private static final int REINDEX_GAP = 8;
-
-    private static final int MAX_TREE_DEPTH = 100;
 
     private final DocumentRepository documentRepository;
     private final DocumentCollaboratorRepository collaboratorRepository;
@@ -76,7 +76,8 @@ public class DocumentTreeService {
         Document doc;
         if (request.newParentId() != null) {
             doc = permissionService.requireEditAccess(userId, documentId);
-            validateNoCycle(documentId, request.newParentId());
+            int newParentChainNodes = validateNoCycle(documentId, request.newParentId());
+            validateSubtreeFitsDepth(documentId, newParentChainNodes);
             Document newParent = permissionService.requireEditAccess(userId, request.newParentId());
 
             if (rebuildFirst) {
@@ -441,7 +442,12 @@ public class DocumentTreeService {
         return udo.getOrderKey();
     }
 
-    private void validateNoCycle(UUID documentId, UUID newParentId) {
+    /**
+     * Rejects moves that would cycle the tree, and returns the new parent's root-to-node
+     * chain length so the caller can cap the moved subtree's resulting depth without
+     * re-walking those ancestors.
+     */
+    private int validateNoCycle(UUID documentId, UUID newParentId) {
         UUID cursor = newParentId;
         int depth = 0;
         while (cursor != null) {
@@ -460,5 +466,36 @@ public class DocumentTreeService {
             cursor = ancestor.getParent() != null ? ancestor.getParent().getId() : null;
             depth++;
         }
+        return depth;
+    }
+
+    /**
+     * Enforces the shared nesting cap on moves: the moved document lands at 0-based depth
+     * {@code newParentChainNodes}, so its subtree may extend at most {@code MAX_TREE_DEPTH
+     * - 1 - newParentChainNodes} further levels. Walks down id-only with early exit, so a
+     * shallow move pays one query per level it actually has.
+     */
+    private void validateSubtreeFitsDepth(UUID documentId, int newParentChainNodes) {
+        int allowedHeight = MAX_TREE_DEPTH - 1 - newParentChainNodes;
+        if (allowedHeight < 0) {
+            throw tooDeep();
+        }
+        List<UUID> frontier = List.of(documentId);
+        for (int level = 1; level <= allowedHeight + 1; level++) {
+            List<UUID> children = documentRepository.findIdsByParent_IdIn(frontier);
+            if (children.isEmpty()) {
+                return;
+            }
+            if (level > allowedHeight) {
+                throw tooDeep();
+            }
+            frontier = children;
+        }
+    }
+
+    private static ApiException tooDeep() {
+        return new ApiException(
+                ErrorCode.VALIDATION_FAILED,
+                "Documents cannot be nested more than " + MAX_TREE_DEPTH + " levels deep.");
     }
 }

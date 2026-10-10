@@ -39,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -857,6 +858,48 @@ class DocumentServiceTest {
         assertEquals("Jerry", captor.getValue().getCreatedBy());
         // Nested docs get no personal navigation row.
         verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
+    }
+
+    @Test
+    void create_nestedUnderTooDeepParent_throwsValidationFailed() {
+        UUID creatorId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User creator = User.builder().id(creatorId).build();
+        Document parent = Document.builder().id(parentId).user(creator).build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
+        // A parent with 99 ancestors would put the new document on a 101-node chain,
+        // past every reader's 100-node bound.
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(Collections.nCopies(99, UUID.randomUUID()));
+
+        ApiException exception = assertThrows(ApiException.class, () -> documentService.create(creatorId, request));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
+        assertTrue(exception.getMessage().contains("100 levels deep"));
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void create_nestedAtDepthLimit_succeeds() {
+        UUID creatorId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User creator = User.builder().id(creatorId).build();
+        Document parent = Document.builder().id(parentId).user(creator).build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
+        // 98 ancestors put the new document on exactly a 100-node chain: allowed.
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(Collections.nCopies(98, UUID.randomUUID()));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DocumentService.CreateDocumentResult result = documentService.create(creatorId, request);
+
+        assertTrue(result.created());
     }
 
     @Test

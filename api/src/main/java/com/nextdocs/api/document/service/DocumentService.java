@@ -1,5 +1,7 @@
 package com.nextdocs.api.document.service;
 
+import static com.nextdocs.api.document.config.DocumentProperties.MAX_TREE_DEPTH;
+
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
@@ -54,9 +56,6 @@ public class DocumentService {
     // Expired-trash roots purged per transaction. Bounds the attachment key list and the
     // tree walk held in memory during one purge run; each batch commits independently.
     private static final int PURGE_ROOTS_PER_BATCH = 100;
-
-    // Mirrors the depth cap of resolve_effective_access / resolve_trash_access in the DB.
-    private static final int MAX_TREE_DEPTH = 100;
 
     // Anonymous public child listings fan out to per-row resolve_public_access CTEs;
     // an unauthenticated caller must not be able to ask for thousands of rows per request.
@@ -148,6 +147,14 @@ public class DocumentService {
         String siblingOrderKey = null;
         if (request.parentId() != null) {
             parent = permissionService.requireEditAccess(userId, request.parentId());
+            // The purge walk, breadcrumbs, and access resolution all assume chains of
+            // at most MAX_TREE_DEPTH documents; reject the nesting here instead of
+            // letting an over-deep subtree wedge the nightly trash purge.
+            int parentAncestors =
+                    documentRepository.findAncestorChainIds(parent.getId()).size();
+            if (parentAncestors >= MAX_TREE_DEPTH - 1) {
+                throw tooDeep();
+            }
             siblingOrderKey = resolveInitialSiblingOrderKey(
                     request.parentId(), request.prevSiblingId(), request.nextSiblingId(), documentId);
         }
@@ -816,6 +823,12 @@ public class DocumentService {
         return new ApiException(
                 ErrorCode.VALIDATION_FAILED,
                 "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
+    }
+
+    private static ApiException tooDeep() {
+        return new ApiException(
+                ErrorCode.VALIDATION_FAILED,
+                "Documents cannot be nested more than " + MAX_TREE_DEPTH + " levels deep.");
     }
 
     private static byte[] decodeBase64State(String yjsState) {
