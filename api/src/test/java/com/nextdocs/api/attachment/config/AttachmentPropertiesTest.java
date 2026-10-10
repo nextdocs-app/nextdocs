@@ -29,6 +29,20 @@ class AttachmentPropertiesTest {
     }
 
     @Test
+    void parseMaxStoragePerUser_negativeValue_failsTheContextStart() {
+        // A negative limit other than -1 would read as "no limit" in the reserve
+        // check (limit >= 0), silently disabling quota enforcement and risking disk-fill.
+        AttachmentProperties properties = new AttachmentProperties();
+        properties.setMaxStoragePerUser("-5MB");
+
+        assertThatThrownBy(properties::parseMaxStoragePerUser).isInstanceOf(IllegalArgumentException.class);
+
+        properties.setMaxStoragePerUser("-2GB");
+
+        assertThatThrownBy(properties::parseMaxStoragePerUser).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void parseMaxStoragePerUser_malformedValue_failsTheContextStart() {
         // Spring runs this parse as a @PostConstruct, so a typo in the config must throw
         // during startup rather than turning into a 500 on the first upload.

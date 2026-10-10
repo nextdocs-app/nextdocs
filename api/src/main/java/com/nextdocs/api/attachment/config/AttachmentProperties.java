@@ -34,6 +34,8 @@ public class AttachmentProperties {
      * Maximum attachment bytes one user may store across all documents, e.g. {@code 2GB}.
      * {@code -1} or {@code unlimited} disables enforcement while usage is still tracked,
      * so lowering the limit later applies to files that were uploaded before it existed.
+     * Any other negative value (e.g. {@code -5MB}) fails startup: it would otherwise
+     * read as "no limit" in the reserve check and silently turn quota enforcement off.
      */
     private String maxStoragePerUser = "2GB";
 
@@ -74,6 +76,12 @@ public class AttachmentProperties {
         if (value.isEmpty() || value.equals("-1") || value.equalsIgnoreCase("unlimited")) {
             return -1L;
         }
-        return DataSize.parse(value).toBytes();
+        long bytes = DataSize.parse(value).toBytes();
+        if (bytes < -1L) {
+            throw new IllegalArgumentException(
+                    "app.attachments.max-storage-per-user must be a non-negative size, -1, or unlimited, got: "
+                            + maxStoragePerUser);
+        }
+        return bytes;
     }
 }
