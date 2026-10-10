@@ -3,9 +3,9 @@ package com.nextdocs.api.attachment.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nextdocs.api.PostgresTestSupport;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -35,20 +34,13 @@ class AttachmentMigrationPostgresTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        String url = System.getProperty(
-                "spring.datasource.url",
-                System.getenv().getOrDefault("SPRING_DATASOURCE_URL", "jdbc:postgresql://localhost:5433/nextdocs"));
-        String username = System.getProperty(
-                "spring.datasource.username", System.getenv().getOrDefault("SPRING_DATASOURCE_USERNAME", "nextdocs"));
-        String password = System.getProperty(
-                "spring.datasource.password", System.getenv().getOrDefault("SPRING_DATASOURCE_PASSWORD", "nextdocs"));
+        String url = PostgresTestSupport.resolveUrl();
+        String username = PostgresTestSupport.resolveUsername();
+        String password = PostgresTestSupport.resolvePassword();
 
-        try {
-            connection = DriverManager.getConnection(url, username, password);
-        } catch (SQLException e) {
-            Assumptions.assumeTrue(false, "PostgreSQL not reachable at " + url + ": " + e.getMessage());
-            return;
-        }
+        // No skip path: an unreachable database fails this test. The migration DDL
+        // runs nowhere else, so a skip would be a hole in coverage.
+        connection = PostgresTestSupport.connect(url, username, password);
 
         schema = "attachpg_" + UUID.randomUUID().toString().replace("-", "");
         Flyway.configure()
