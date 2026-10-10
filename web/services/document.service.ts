@@ -9,15 +9,9 @@ import {
 import type { DocumentMeta, DocumentLoadResult, StoredDocument } from '@/types/document.types';
 import type { TreeNode, TreeNodePage, MoveDocumentRequest } from '@/types/tree.types';
 import { getApiBaseUrl } from '@/lib/api-url.util';
+import { parseApiEnvelope } from '@/services/api-envelope';
 
 const CURRENT_SCHEMA_VERSION = 1;
-
-interface ApiEnvelope<T> {
-  success: boolean;
-  data: T | null;
-  error: string | null;
-  message?: string | null;
-}
 
 interface ApiPage<T> {
   content: T[];
@@ -1154,12 +1148,7 @@ class DocumentService {
       return undefined;
     }
 
-    let body: ApiEnvelope<T> | null = null;
-    try {
-      body = (await res.json()) as ApiEnvelope<T>;
-    } catch {
-      body = null;
-    }
+    const body = await parseApiEnvelope<T>(res);
 
     if (!res.ok || !body?.success || body.data == null) {
       throw new DocumentServiceApiError(

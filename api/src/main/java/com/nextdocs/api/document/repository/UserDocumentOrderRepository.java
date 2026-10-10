@@ -28,6 +28,10 @@ public interface UserDocumentOrderRepository extends JpaRepository<UserDocumentO
     @Query("DELETE FROM UserDocumentOrder udo WHERE udo.document.id = :documentId")
     void deleteByDocument_Id(@Param("documentId") UUID documentId);
 
+    @Modifying(flushAutomatically = true)
+    @Query("DELETE FROM UserDocumentOrder udo WHERE udo.document.id IN :documentIds")
+    void deleteByDocument_IdIn(@Param("documentIds") Collection<UUID> documentIds);
+
     @Query("SELECT MAX(udo.orderKey) FROM UserDocumentOrder udo "
             + "WHERE udo.user.id = :userId AND udo.document.deletedAt IS NULL AND udo.document.id <> :excludeDocId")
     Optional<String> findMaxOrderKeyByUserId(@Param("userId") UUID userId, @Param("excludeDocId") UUID excludeDocId);

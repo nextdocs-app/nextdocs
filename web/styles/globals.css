@@ -41,6 +41,9 @@
   /* NextDocs Brand Accent (matching NextDocs logo icon) */
   --nd-brand: #e78f80;
   --nd-brand-hover: #de8273;
+  --nd-brand-active: #d57768;
+  --nd-brand-ring: #d7897f;
+  --nd-brand-foreground: #1c1917;
 
   /* Comments Panel & Toolbar Tokens */
   --nd-comments-panel-bg: #f4f4f6;
@@ -127,6 +130,9 @@
   /* NextDocs Brand Accent (matching NextDocs logo icon) */
   --nd-brand: #e78f80;
   --nd-brand-hover: #de8273;
+  --nd-brand-active: #d57768;
+  --nd-brand-ring: #d7897f;
+  --nd-brand-foreground: #1c1917;
 
   /* Comments Panel & Toolbar Dark Tokens */
   --nd-comments-panel-bg: #181816;
@@ -3699,4 +3705,232 @@ div[role='presentation']:has([data-slot='popover-content']) {
 
 .dark .bn-suggestion-menu-item [data-position='right'] * {
   background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Media blocks (image/video/audio/file) — data-file-block sits on the
+   .bn-block-content element itself (BlockNote sets both attributes on one
+   node), so no :has() descendant lookup and no per-type list needed. */
+.bn-block-content[data-file-block] {
+  padding-block: 9px !important;
+}
+
+/* File block hover / selection color */
+.bn-editor[contenteditable='true'] [data-file-block] .bn-file-name-with-icon:hover,
+.ProseMirror-selectednode .bn-file-name-with-icon {
+  background-color: var(--sidebar-accent) !important;
+}
+
+/* Audio block theming (matches code block background) */
+[data-file-block] .bn-audio {
+  color-scheme: light;
+  background-color: #f7f7f6 !important;
+  border-radius: 8px !important;
+}
+
+[data-file-block] .bn-audio::-webkit-media-controls-panel,
+[data-file-block] .bn-audio::-webkit-media-controls-enclosure {
+  background-color: #f7f7f6 !important;
+}
+
+.dark [data-file-block] .bn-audio,
+.bn-root[data-color-scheme='dark'] [data-file-block] .bn-audio,
+.bn-container[data-color-scheme='dark'] [data-file-block] .bn-audio {
+  color-scheme: dark;
+  background-color: #21211f !important;
+}
+
+.dark [data-file-block] .bn-audio::-webkit-media-controls-panel,
+.bn-root[data-color-scheme='dark'] [data-file-block] .bn-audio::-webkit-media-controls-panel,
+.bn-container[data-color-scheme='dark'] [data-file-block] .bn-audio::-webkit-media-controls-panel,
+.dark [data-file-block] .bn-audio::-webkit-media-controls-enclosure,
+.bn-root[data-color-scheme='dark'] [data-file-block] .bn-audio::-webkit-media-controls-enclosure,
+.bn-container[data-color-scheme='dark']
+  [data-file-block]
+  .bn-audio::-webkit-media-controls-enclosure {
+  background-color: #21211f !important;
+}
+
+/* Empty / add-file state colors */
+[data-file-block] .bn-add-file-button {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  color: var(--muted-foreground) !important;
+}
+
+.dark [data-file-block] .bn-add-file-button,
+.bn-root[data-color-scheme='dark'] [data-file-block] .bn-add-file-button,
+.bn-container[data-color-scheme='dark'] [data-file-block] .bn-add-file-button {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+.bn-editor[contenteditable='true'] [data-file-block] .bn-add-file-button:hover {
+  background-color: var(--sidebar-accent) !important;
+}
+
+[data-file-block] .bn-file-caption {
+  color: var(--muted-foreground) !important;
+}
+
+@media (pointer: coarse) {
+  [data-file-block] .bn-resize-handle {
+    display: none !important;
+  }
+
+  /* Touch targets: the 340px panel keeps its width, but tabs, buttons, and the
+     file picker grow to a comfortable tap size instead of 13px desktop targets. */
+  .bn-panel [data-slot='tabs-trigger'] {
+    padding: 12px 14px !important;
+    font-size: 14px !important;
+  }
+
+  .bn-panel .bn-button[data-slot='button'] {
+    min-height: 44px !important;
+  }
+
+  .bn-panel .bn-file-input::file-selector-button {
+    padding: 8px 14px !important;
+  }
+}
+
+/* File panel (upload/embed popover) */
+[data-slot='popover-content']:has(.bn-panel) {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.bn-panel[data-slot='tabs'] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 6px !important;
+  width: 340px !important;
+  max-width: calc(100vw - 3rem) !important;
+}
+
+.bn-panel [data-slot='tabs-list'] {
+  background: transparent !important;
+  border-bottom: 1px solid var(--sidebar-border) !important;
+  border-radius: 0 !important;
+  padding: 0 4px !important;
+  gap: 2px !important;
+  width: 100% !important;
+}
+
+.bn-panel [data-slot='tabs-trigger'] {
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.6 !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  padding: 8px 10px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.bn-panel [data-slot='tabs-trigger']:hover {
+  opacity: 1 !important;
+}
+
+.bn-panel [data-slot='tabs-trigger']:focus-visible {
+  opacity: 1 !important;
+  outline: 2px solid var(--nd-brand-ring) !important;
+  outline-offset: -2px !important;
+}
+
+.bn-panel [data-slot='tabs-trigger'][data-active] {
+  opacity: 1 !important;
+  font-weight: 600 !important;
+  box-shadow: inset 0 -2px 0 var(--nd-brand) !important;
+}
+
+.bn-panel [data-slot='tabs-content'] {
+  padding-top: 8px !important;
+}
+
+.bn-panel [data-slot='card'],
+.bn-panel [data-slot='card-content'] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.bn-panel .bn-tab-panel {
+  padding-inline: 8px !important;
+}
+
+.bn-panel .bn-form {
+  display: flex !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+.bn-form-popover .bn-form input:focus {
+  box-shadow: none !important;
+}
+
+.bn-panel .bn-text-input {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.bn-panel .bn-text-input,
+.bn-panel .bn-file-input {
+  border-radius: var(--editor-dropdown-radius) !important;
+  border: 1px solid var(--border) !important;
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  color: var(--foreground) !important;
+}
+
+.dark .bn-panel .bn-text-input,
+.dark .bn-panel .bn-file-input {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Inset from the edges so the input itself reads as the rectangle. */
+.bn-panel .bn-file-input {
+  width: 100% !important;
+  padding: 4px 10px 4px 4px !important;
+}
+
+.bn-panel .bn-text-input:focus,
+.bn-panel .bn-file-input:focus {
+  border-color: var(--nd-brand-ring) !important;
+  box-shadow: none !important;
+}
+
+.bn-panel .bn-file-input::file-selector-button {
+  flex-shrink: 0 !important;
+  margin: 0 8px 0 0 !important;
+  padding: 4px 12px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-foreground) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+}
+
+.bn-panel .bn-button[data-slot='button'] {
+  padding: 0 14px !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  background-color: var(--nd-brand) !important;
+  color: var(--nd-brand-foreground) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+
+.bn-panel .bn-button[data-slot='button']:hover {
+  background-color: var(--nd-brand-hover) !important;
+}
+
+.bn-panel .bn-button[data-slot='button']:active {
+  background-color: var(--nd-brand-active) !important;
 }

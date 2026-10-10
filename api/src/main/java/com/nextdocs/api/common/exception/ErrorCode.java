@@ -12,6 +12,9 @@ public enum ErrorCode {
     TOKEN_MISSING(HttpStatus.UNAUTHORIZED, "Authentication token is required."),
     REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "Refresh token is invalid or expired."),
 
+    // Attachments
+    PAYLOAD_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "The uploaded file exceeds the configured size limit."),
+
     // General
     VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "Request validation failed."),
     NOT_FOUND(HttpStatus.NOT_FOUND, "The requested resource was not found."),

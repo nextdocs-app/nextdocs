@@ -39,6 +39,12 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
             "DELETE FROM DocumentCollaborator c WHERE c.document.id = :documentId")
     void deleteByDocument_Id(@org.springframework.data.repository.query.Param("documentId") UUID documentId);
 
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query(
+            "DELETE FROM DocumentCollaborator c WHERE c.document.id IN :documentIds")
+    void deleteByDocument_IdIn(
+            @org.springframework.data.repository.query.Param("documentIds") java.util.Collection<UUID> documentIds);
+
     @org.springframework.data.jpa.repository.Query(
             "SELECT DISTINCT c.document.id FROM DocumentCollaborator c "
                     + "WHERE c.document.id IN :documentIds AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS")

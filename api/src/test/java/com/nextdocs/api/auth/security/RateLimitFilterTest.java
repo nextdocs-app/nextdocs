@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.auth.security.ratelimit.RateLimiter;
+import com.nextdocs.api.common.exception.ErrorCode;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -33,6 +34,11 @@ class RateLimitFilterTest {
     /** Small ceiling so body-limit tests stay cheap; the production default is 5 MB. */
     private static final long MAX_TEST_BODY_BYTES = 1024;
 
+    /** Small multipart request ceiling so the declared-size test does not need a 30 MB body. */
+    private static final String MAX_TEST_UPLOAD_REQUEST_SIZE = "2KB";
+
+    private static final long MAX_TEST_UPLOAD_DECLARED_BYTES = 2048;
+
     private MockMvc mockMvc;
     private StubRateLimiter rateLimiter;
     private RateLimitFilter filter;
@@ -40,10 +46,38 @@ class RateLimitFilterTest {
     @BeforeEach
     void setUp() {
         rateLimiter = new StubRateLimiter();
-        filter = new RateLimitFilter(rateLimiter, new ObjectMapper(), 120, 60, 20, 60, MAX_TEST_BODY_BYTES);
+        filter = new RateLimitFilter(
+                rateLimiter,
+                new ObjectMapper(),
+                120,
+                60,
+                20,
+                60,
+                MAX_TEST_BODY_BYTES,
+                20,
+                60,
+                600,
+                60,
+                MAX_TEST_UPLOAD_REQUEST_SIZE);
         mockMvc = MockMvcBuilders.standaloneSetup(new StubController())
                 .addFilters(filter)
                 .build();
+    }
+
+    private static final String DOCUMENT_ID = "11111111-1111-1111-1111-111111111111";
+
+    private static UUID authenticate() {
+        com.nextdocs.api.auth.entity.User user = com.nextdocs.api.auth.entity.User.builder()
+                .id(UUID.randomUUID())
+                .email("user@example.com")
+                .displayName("Test User")
+                .passwordHash("hash")
+                .active(true)
+                .build();
+        UserPrincipal principal = UserPrincipal.from(user);
+        SecurityContextHolder.getContext()
+                .setAuthentication(new UsernamePasswordAuthenticationToken(principal, null, List.of()));
+        return principal.getId();
     }
 
     @AfterEach
@@ -141,6 +175,258 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void attachmentMintAndDownload_shareDownloadBudget() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        // Anonymous mints fan out like downloads (a hundred-image doc mints ~100 URLs in a
+        // ~2s burst), so both share the larger bucket instead of starving browsing.
+        mockMvc.perform(get("/api/v1/attachments/{id}/url", id).remoteAddress("10.0.4.1"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.4.1");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(600);
+
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", id)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.4.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(2);
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.4.1");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(600);
+    }
+
+    @Test
+    void attachmentPath_whenRejected_returnsTooManyRequests() throws Exception {
+        rateLimiter.allowed = false;
+
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", "11111111-1111-1111-1111-111111111111")
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.4.2"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.success").value(false));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.4.2");
+    }
+
+    @Test
+    void uploadPath_consumesCallerAndAddressBuckets() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post("/api/v1/documents/{id}/attachments", DOCUMENT_ID).remoteAddress("10.0.5.1"))
+                .andExpect(status().isOk());
+
+        // Both budgets are charged: one account cannot queue disk-filling uploads, and one
+        // shared egress address cannot either.
+        assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.5.1", "upload:" + callerId);
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void uploadPath_whenCallerBucketIsExhausted_returnsTooManyRequests() throws Exception {
+        UUID callerId = authenticate();
+        rateLimiter.deniedKeys.add("upload:" + callerId);
+
+        mockMvc.perform(post("/api/v1/documents/{id}/attachments", DOCUMENT_ID).remoteAddress("10.0.5.2"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void uploadPath_whenAddressBucketIsExhausted_returnsTooManyRequests() throws Exception {
+        authenticate();
+        rateLimiter.deniedKeys.add("upload-ip:10.0.5.5");
+
+        // Either budget refusing refuses the request: returning only the caller decision
+        // would let a denied address through here.
+        mockMvc.perform(post("/api/v1/documents/{id}/attachments", DOCUMENT_ID).remoteAddress("10.0.5.5"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.success").value(false));
+
+        assertThat(rateLimiter.keys).contains("upload-ip:10.0.5.5");
+    }
+
+    @Test
+    void uploadPath_withOversizedDeclaredBody_isRejectedBeforeBuffering() throws Exception {
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest(
+                        "POST", "/api/v1/documents/" + DOCUMENT_ID + "/attachments") {
+                    @Override
+                    public long getContentLengthLong() {
+                        return MAX_TEST_UPLOAD_DECLARED_BYTES + 1;
+                    }
+                };
+        request.setContentType("multipart/form-data; boundary=----test");
+        request.setRemoteAddr("10.0.5.3");
+
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(413);
+        // An oversized upload is the same event the multipart ceiling reports, so it
+        // carries the same message (not the anonymous-write wording below).
+        assertThat(response.getContentAsString()).contains(ErrorCode.PAYLOAD_TOO_LARGE.defaultMessage());
+        org.mockito.Mockito.verify(chain, org.mockito.Mockito.never())
+                .doFilter(
+                        org.mockito.Mockito.any(jakarta.servlet.ServletRequest.class),
+                        org.mockito.Mockito.any(jakarta.servlet.ServletResponse.class));
+    }
+
+    @Test
+    void uploadPath_withoutDeclaredLength_isRejectedBeforeTheChain() throws Exception {
+        authenticate();
+
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest(
+                        "POST", "/api/v1/documents/" + DOCUMENT_ID + "/attachments") {
+                    @Override
+                    public long getContentLengthLong() {
+                        return -1L;
+                    }
+                };
+        request.setContentType("multipart/form-data; boundary=----test");
+        request.setRemoteAddr("10.0.5.4");
+
+        org.springframework.mock.web.MockHttpServletResponse response =
+                new org.springframework.mock.web.MockHttpServletResponse();
+        jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(413);
+        org.mockito.Mockito.verify(chain, org.mockito.Mockito.never())
+                .doFilter(
+                        org.mockito.Mockito.any(jakarta.servlet.ServletRequest.class),
+                        org.mockito.Mockito.any(jakarta.servlet.ServletResponse.class));
+    }
+
+    @Test
+    void downloadPath_usesItsOwnLargerBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.1");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(600);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void downloadRangeSeek_chargesTheDownloadBucketNotTheReadBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .header("Range", "bytes=0-1")
+                        .remoteAddress("10.0.6.2"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.2");
+        assertThat(rateLimiter.keys).doesNotContain("public-read:10.0.6.2");
+    }
+
+    @Test
+    void anonymousMint_usesDownloadBucketNotReadBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/attachments/{id}/url", DOCUMENT_ID).remoteAddress("10.0.6.3"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.3");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(600);
+
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.3"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.3");
+    }
+
+    @Test
+    void attachmentFile_withTrailingSlashOrExtraSegment_usesPublicReadBucket() throws Exception {
+        // Exact-shape matching: a contains("/file") check would pull these into the
+        // download bucket and let malformed paths share the fan-out budget.
+        mockMvc.perform(get("/api/v1/attachments/{id}/file/", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.4"))
+                .andReturn();
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.6.4");
+
+        mockMvc.perform(get("/api/v1/attachments/{id}/file/extra", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.4"))
+                .andReturn();
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.6.4");
+    }
+
+    @Test
+    void attachmentFile_withPostMethod_usesPublicReadBucket() throws Exception {
+        // Only GET|HEAD are downloads: a POST must not consume the download budget.
+        mockMvc.perform(post("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.5"))
+                .andReturn();
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.6.5");
+    }
+
+    @Test
+    void attachmentMint_withPostMethodOrTrailingSlash_usesPublicReadBucket() throws Exception {
+        mockMvc.perform(post("/api/v1/attachments/{id}/url", DOCUMENT_ID).remoteAddress("10.0.6.6"))
+                .andReturn();
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.6.6");
+
+        mockMvc.perform(get("/api/v1/attachments/{id}/url/", DOCUMENT_ID).remoteAddress("10.0.6.6"))
+                .andReturn();
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.6.6");
+    }
+
+    @Test
+    void headOnSignedDownload_usesDownloadBucket() throws Exception {
+        mockMvc.perform(head("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.7"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.7");
+    }
+
+    @Test
+    void signedUrlMint_whenAuthenticated_isNotRateLimited() throws Exception {
+        authenticate();
+
+        // Minting re-runs the permission check; throttling an identified caller here would
+        // only starve guests sharing the same egress IP.
+        mockMvc.perform(get("/api/v1/attachments/{id}/url", DOCUMENT_ID).remoteAddress("10.0.6.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
+    void attachmentDownload_whenAuthenticated_stillUsesTheDownloadBudget() throws Exception {
+        authenticate();
+
+        // Browser media tags cannot send an Authorization header, so a download keys on the
+        // address even when its viewer is signed in - and pays the download budget, not the
+        // read one.
+        mockMvc.perform(get("/api/v1/attachments/{id}/file", DOCUMENT_ID)
+                        .param("exp", "4102444800")
+                        .param("sig", "probe")
+                        .remoteAddress("10.0.6.2"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.6.2");
+    }
+
+    @Test
     void publicReadPaths_shareOneReadBucket() throws Exception {
         String id = "11111111-1111-1111-1111-111111111111";
 
@@ -229,7 +515,10 @@ class RateLimitFilterTest {
                         .content("x".repeat((int) MAX_TEST_BODY_BYTES + 1))
                         .remoteAddress("10.0.2.1"))
                 .andExpect(status().isPayloadTooLarge())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                // A JSON snapshot write is not a file upload, so it keeps the generic
+                // wording rather than the multipart size-limit message.
+                .andExpect(jsonPath("$.error").value("Request payload is too large."));
 
         // The budget is consumed first, so oversized bodies cannot be used to probe
         // the endpoint for free.
@@ -488,12 +777,15 @@ class RateLimitFilterTest {
         private int lastMaxRequests;
         private Duration lastWindow;
         private int invocationCount;
+        private final List<String> keys = new java.util.ArrayList<>();
+        private final java.util.Set<String> deniedKeys = new java.util.HashSet<>();
 
         @Override
         public RateLimiter.Decision allowRequest(String key) {
             invocationCount++;
             lastKey = key;
-            return decision();
+            keys.add(key);
+            return decision(key);
         }
 
         @Override
@@ -502,11 +794,14 @@ class RateLimitFilterTest {
             lastKey = key;
             lastMaxRequests = maxRequests;
             lastWindow = window;
-            return decision();
+            keys.add(key);
+            return decision(key);
         }
 
-        private RateLimiter.Decision decision() {
-            return allowed ? RateLimiter.Decision.allow() : RateLimiter.Decision.deny(retryAfter);
+        private RateLimiter.Decision decision(String key) {
+            return allowed && !deniedKeys.contains(key)
+                    ? RateLimiter.Decision.allow()
+                    : RateLimiter.Decision.deny(retryAfter);
         }
     }
 
@@ -549,6 +844,21 @@ class RateLimitFilterTest {
 
         @GetMapping("/api/v1/documents/{id}/my-access")
         ResponseEntity<String> myAccess(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/attachments/{id}/url")
+        ResponseEntity<String> attachmentUrl(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/attachments/{id}/file")
+        ResponseEntity<String> attachmentFile(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @PostMapping("/api/v1/documents/{id}/attachments")
+        ResponseEntity<String> uploadAttachment(@PathVariable String id) {
             return ResponseEntity.ok("ok");
         }
     }

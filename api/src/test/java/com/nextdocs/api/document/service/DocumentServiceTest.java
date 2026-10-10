@@ -7,14 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -35,6 +38,8 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +48,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -70,6 +76,9 @@ class DocumentServiceTest {
     @Mock
     private DocumentListQueryHelper queryHelper;
 
+    @Mock
+    private AttachmentService attachmentService;
+
     private DocumentProperties documentProperties;
 
     private DocumentService documentService;
@@ -85,20 +94,220 @@ class DocumentServiceTest {
                 userRepository,
                 documentProperties,
                 permissionService,
-                queryHelper);
+                queryHelper,
+                attachmentService);
     }
 
     @Test
-    void purgeExpiredTrash_deletesRowsOlderThanRetentionCutoff() {
+    void purgeExpiredTrash_purgesExpiredSubtreesBatchByBatch() {
         OffsetDateTime asOf = OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC);
-        when(documentRepository.deleteExpiredTrash(any())).thenReturn(2);
+        UUID rootId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+        when(documentRepository.findExpiredTrashRoots(any(), any())).thenReturn(List.of(rootId), List.of());
+        when(documentRepository.findIdsByParent_IdIn(List.of(rootId))).thenReturn(List.of(childId));
+        when(documentRepository.findIdsByParent_IdIn(List.of(childId))).thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(anyCollection())).thenReturn(List.of("doc/file"));
 
         int purged = documentService.purgeExpiredTrash(asOf);
 
+        // The whole subtree counts, not just the expired root.
         assertEquals(2, purged);
         ArgumentCaptor<OffsetDateTime> cutoff = ArgumentCaptor.forClass(OffsetDateTime.class);
-        verify(documentRepository).deleteExpiredTrash(cutoff.capture());
+        verify(documentRepository, atLeastOnce()).findExpiredTrashRoots(cutoff.capture(), any());
         assertEquals(OffsetDateTime.of(2025, 5, 16, 12, 0, 0, 0, ZoneOffset.UTC), cutoff.getValue());
+    }
+
+    @Test
+    void purgeExpiredTrash_removesAttachmentRowsAndSchedulesFileCleanupInOrder() {
+        OffsetDateTime asOf = OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC);
+        UUID rootId = UUID.randomUUID();
+        when(documentRepository.findExpiredTrashRoots(any(), any())).thenReturn(List.of(rootId), List.of());
+        when(documentRepository.findIdsByParent_IdIn(List.of(rootId))).thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(anyCollection())).thenReturn(List.of("doc/file"));
+
+        int purged = documentService.purgeExpiredTrash(asOf);
+
+        assertEquals(1, purged);
+        // Keys and per-user sizes must be read before the rows disappear, and the stored
+        // bytes only once the transaction that removed their rows has committed.
+        InOrder inOrder = inOrder(attachmentService, documentRepository);
+        inOrder.verify(attachmentService).findStorageKeysForDocuments(anyCollection());
+        inOrder.verify(attachmentService).releaseQuotaForDocuments(anyCollection());
+        inOrder.verify(attachmentService).deleteForDocuments(anyCollection());
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(rootId));
+        inOrder.verify(attachmentService).deleteStoredFilesAfterCommit(List.of("doc/file"));
+    }
+
+    @Test
+    void purgeExpiredTrash_batchFailure_retriesIndividuallyAndSkipsFailingRoot() {
+        OffsetDateTime asOf = OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC);
+        UUID failingRoot = UUID.randomUUID();
+        UUID healthyRoot = UUID.randomUUID();
+        // Second fetch still returns the skipped root, proving the filter breaks the loop
+        // instead of spinning on a root that cannot be deleted.
+        when(documentRepository.findExpiredTrashRoots(any(), any()))
+                .thenReturn(List.of(failingRoot, healthyRoot), List.of(failingRoot));
+        when(documentRepository.findIdsByParent_IdIn(any())).thenAnswer(invocation -> {
+            Collection<UUID> ids = invocation.getArgument(0);
+            if (ids.contains(failingRoot)) {
+                throw new RuntimeException("walk failed");
+            }
+            return List.of();
+        });
+        when(attachmentService.findStorageKeysForDocuments(anyCollection())).thenReturn(List.of());
+
+        int purged = documentService.purgeExpiredTrash(asOf);
+
+        assertEquals(1, purged);
+        verify(documentRepository).deleteByIdIn(List.of(healthyRoot));
+        verify(documentRepository, never()).deleteByIdIn(List.of(failingRoot));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void delete_permanent_removesAttachmentsForDocumentAndDescendants() {
+        UUID ownerId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document parentDoc = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Doc")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        Document childDoc = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parentDoc)
+                .title("Child Doc")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireTrashEditAccess(ownerId, parentDocId)).thenReturn(parentDoc);
+        when(documentRepository.findIdsByParent_IdIn(List.of(parentDocId))).thenReturn(List.of(childDocId));
+        when(documentRepository.findIdsByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(anyCollection()))
+                .thenReturn(List.of("parent/file", "child/file"));
+
+        documentService.delete(ownerId, parentDocId, true);
+
+        ArgumentCaptor<Collection<UUID>> documentsCaptor = ArgumentCaptor.forClass(Collection.class);
+        // Collect keys and sizes, delete the attachment rows, then drop the documents
+        // leaves-first — files only after the transaction commits.
+        InOrder inOrder = inOrder(attachmentService, documentRepository);
+        inOrder.verify(attachmentService).findStorageKeysForDocuments(documentsCaptor.capture());
+        assertTrue(documentsCaptor.getValue().containsAll(List.of(parentDocId, childDocId)));
+        inOrder.verify(attachmentService).releaseQuotaForDocuments(documentsCaptor.capture());
+        assertTrue(documentsCaptor.getValue().containsAll(List.of(parentDocId, childDocId)));
+        inOrder.verify(attachmentService).deleteForDocuments(documentsCaptor.capture());
+        assertTrue(documentsCaptor.getValue().containsAll(List.of(parentDocId, childDocId)));
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(childDocId));
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(parentDocId));
+        inOrder.verify(attachmentService).deleteStoredFilesAfterCommit(List.of("parent/file", "child/file"));
+    }
+
+    @Test
+    void delete_permanent_leafDocumentWithoutChildren_collectsOnlyItsOwnAttachments() {
+        UUID ownerId = UUID.randomUUID();
+        UUID leafId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document leaf = Document.builder()
+                .id(leafId)
+                .user(owner)
+                .title("Leaf")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireTrashEditAccess(ownerId, leafId)).thenReturn(leaf);
+        when(documentRepository.findIdsByParent_IdIn(List.of(leafId))).thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(List.of(leafId))).thenReturn(List.of());
+
+        documentService.delete(ownerId, leafId, true);
+
+        InOrder inOrder = inOrder(attachmentService, documentRepository);
+        inOrder.verify(attachmentService).findStorageKeysForDocuments(List.of(leafId));
+        inOrder.verify(attachmentService).deleteForDocuments(List.of(leafId));
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(leafId));
+        // Zero keys must still flow through the after-commit cleanup, which no-ops on empty.
+        inOrder.verify(attachmentService).deleteStoredFilesAfterCommit(List.of());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void delete_permanent_threeLevelNesting_collectsEveryLevelBeforeDeleting() {
+        UUID ownerId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document root = trashedDoc(owner, UUID.randomUUID(), "Root", null);
+        Document child = trashedDoc(owner, UUID.randomUUID(), "Child", root);
+        Document grandchild = trashedDoc(owner, UUID.randomUUID(), "Grandchild", child);
+
+        when(permissionService.requireTrashEditAccess(ownerId, root.getId())).thenReturn(root);
+        when(documentRepository.findIdsByParent_IdIn(List.of(root.getId()))).thenReturn(List.of(child.getId()));
+        when(documentRepository.findIdsByParent_IdIn(List.of(child.getId()))).thenReturn(List.of(grandchild.getId()));
+        when(documentRepository.findIdsByParent_IdIn(List.of(grandchild.getId())))
+                .thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(anyCollection())).thenReturn(List.of("root/f"));
+
+        documentService.delete(ownerId, root.getId(), true);
+
+        ArgumentCaptor<Collection<UUID>> documentsCaptor = ArgumentCaptor.forClass(Collection.class);
+        verify(attachmentService).findStorageKeysForDocuments(documentsCaptor.capture());
+        assertTrue(documentsCaptor.getValue().containsAll(List.of(root.getId(), child.getId(), grandchild.getId())));
+        // Leaves first: the grandchild row goes before its ancestors.
+        InOrder inOrder = inOrder(documentRepository);
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(grandchild.getId()));
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(child.getId()));
+        inOrder.verify(documentRepository).deleteByIdIn(List.of(root.getId()));
+    }
+
+    @Test
+    void delete_permanent_attachmentRowDeleteFails_abortsBeforeRemovingDocuments() {
+        UUID ownerId = UUID.randomUUID();
+        UUID leafId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document leaf = Document.builder()
+                .id(leafId)
+                .user(owner)
+                .title("Leaf")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireTrashEditAccess(ownerId, leafId)).thenReturn(leaf);
+        when(documentRepository.findIdsByParent_IdIn(List.of(leafId))).thenReturn(List.of());
+        when(attachmentService.findStorageKeysForDocuments(List.of(leafId))).thenReturn(List.of("leaf/f"));
+        doThrow(new RuntimeException("attachment delete failed"))
+                .when(attachmentService)
+                .deleteForDocuments(List.of(leafId));
+
+        assertThrows(RuntimeException.class, () -> documentService.delete(ownerId, leafId, true));
+
+        // Fail closed: document rows must survive so a retry still finds them, and the
+        // collected file keys must not be scheduled for deletion either.
+        verify(documentRepository, never()).deleteByIdIn(any());
+        verify(attachmentService, never()).deleteStoredFilesAfterCommit(any());
+    }
+
+    @Test
+    void purgeExpiredTrash_withNoExpiredRoots_doesNothing() {
+        OffsetDateTime asOf = OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC);
+        when(documentRepository.findExpiredTrashRoots(any(), any())).thenReturn(List.of());
+
+        assertEquals(0, documentService.purgeExpiredTrash(asOf));
+
+        verify(documentRepository).findExpiredTrashRoots(any(), any());
+        verify(documentRepository, never()).deleteByIdIn(any());
+        verify(attachmentService, never()).findStorageKeysForDocuments(any());
+    }
+
+    private static Document trashedDoc(User owner, UUID id, String title, Document parent) {
+        return Document.builder()
+                .id(id)
+                .user(owner)
+                .title(title)
+                .parent(parent)
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
     }
 
     @Test
@@ -598,8 +807,8 @@ class DocumentServiceTest {
 
         documentService.delete(ownerId, documentId, true);
 
-        verify(userDocumentOrderRepository).deleteByDocument_Id(documentId);
-        verify(documentRepository).delete(trashedDoc);
+        verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(documentId));
+        verify(documentRepository).deleteByIdIn(List.of(documentId));
     }
 
     @Test
@@ -649,6 +858,48 @@ class DocumentServiceTest {
         assertEquals("Jerry", captor.getValue().getCreatedBy());
         // Nested docs get no personal navigation row.
         verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
+    }
+
+    @Test
+    void create_nestedUnderTooDeepParent_throwsValidationFailed() {
+        UUID creatorId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User creator = User.builder().id(creatorId).build();
+        Document parent = Document.builder().id(parentId).user(creator).build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
+        // A parent with 99 ancestors would put the new document on a 101-node chain,
+        // past every reader's 100-node bound.
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(Collections.nCopies(99, UUID.randomUUID()));
+
+        ApiException exception = assertThrows(ApiException.class, () -> documentService.create(creatorId, request));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
+        assertTrue(exception.getMessage().contains("100 levels deep"));
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void create_nestedAtDepthLimit_succeeds() {
+        UUID creatorId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User creator = User.builder().id(creatorId).build();
+        Document parent = Document.builder().id(parentId).user(creator).build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
+        // 98 ancestors put the new document on exactly a 100-node chain: allowed.
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(Collections.nCopies(98, UUID.randomUUID()));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DocumentService.CreateDocumentResult result = documentService.create(creatorId, request);
+
+        assertTrue(result.created());
     }
 
     @Test
@@ -817,18 +1068,18 @@ class DocumentServiceTest {
                 .build();
 
         when(permissionService.requireTrashEditAccess(ownerId, parentDocId)).thenReturn(parentDoc);
-        when(documentRepository.findAllByParent_IdIn(List.of(parentDocId))).thenReturn(List.of(childDoc));
-        when(documentRepository.findAllByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
+        when(documentRepository.findIdsByParent_IdIn(List.of(parentDocId))).thenReturn(List.of(childDocId));
+        when(documentRepository.findIdsByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
 
         documentService.delete(ownerId, parentDocId, true);
 
-        verify(collaboratorRepository).deleteByDocument_Id(childDocId);
-        verify(userDocumentOrderRepository).deleteByDocument_Id(childDocId);
-        verify(documentRepository).delete(childDoc);
+        verify(collaboratorRepository).deleteByDocument_IdIn(List.of(childDocId));
+        verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(childDocId));
+        verify(documentRepository).deleteByIdIn(List.of(childDocId));
 
-        verify(collaboratorRepository).deleteByDocument_Id(parentDocId);
-        verify(userDocumentOrderRepository).deleteByDocument_Id(parentDocId);
-        verify(documentRepository).delete(parentDoc);
+        verify(collaboratorRepository).deleteByDocument_IdIn(List.of(parentDocId));
+        verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(parentDocId));
+        verify(documentRepository).deleteByIdIn(List.of(parentDocId));
     }
 
     @Test
@@ -1230,8 +1481,8 @@ class DocumentServiceTest {
 
         documentService.delete(editorId, documentId, true);
 
-        verify(userDocumentOrderRepository).deleteByDocument_Id(documentId);
-        verify(documentRepository).delete(trashedDoc);
+        verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(documentId));
+        verify(documentRepository).deleteByIdIn(List.of(documentId));
     }
 
     @Test
@@ -1247,7 +1498,7 @@ class DocumentServiceTest {
                 assertThrows(ApiException.class, () -> documentService.delete(strangerId, documentId, true));
 
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
-        verify(documentRepository, never()).delete(any());
+        verify(documentRepository, never()).deleteByIdIn(any());
     }
 
     @Test

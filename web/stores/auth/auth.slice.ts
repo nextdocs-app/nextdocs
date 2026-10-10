@@ -11,6 +11,7 @@ import type {
   AuthApiResponse,
 } from './auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
+import { attachmentService } from '@/services/attachment.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
 import { indexedDBService } from '@/services/indexed-db.service';
 import { documentService } from '@/services/document.service';
@@ -101,6 +102,8 @@ export const loginThunk = createAsyncThunk<AuthApiResponse, LoginCredentials>(
   async (credentials, { rejectWithValue }) => {
     try {
       const response = await authApiService.login(credentials);
+      // A signed URL cached for a previous session must never leak into this one.
+      attachmentService.resetAttachmentUrlCache();
       indexedDBService.setUserId(response.user.id);
       return response;
     } catch (err: unknown) {
@@ -115,6 +118,8 @@ export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentia
   async (credentials, { rejectWithValue }) => {
     try {
       const response = await authApiService.register(credentials);
+      // A signed URL cached for a previous session must never leak into this one.
+      attachmentService.resetAttachmentUrlCache();
       indexedDBService.setUserId(response.user.id);
       return response;
     } catch (err: unknown) {
@@ -137,6 +142,7 @@ export const refreshSessionThunk = createAsyncThunk<
       return response;
     } catch (err: unknown) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        attachmentService.resetAttachmentUrlCache();
         await clearLocalUserData();
         indexedDBService.setUserId(null);
         return rejectWithValue('unauthorized');
@@ -169,6 +175,7 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
     } catch {
       // ignore
     }
+    attachmentService.resetAttachmentUrlCache();
     await clearLocalUserData();
     indexedDBService.setUserId(null);
     documentService.clearSessionRegistries();
@@ -296,6 +303,8 @@ export const authListenerMiddleware = createListenerMiddleware();
 authListenerMiddleware.startListening({
   actionCreator: setAuthFromResponse,
   effect: async (_action, listenerApi) => {
+    // A guest link signing in is an identity switch too, not just the thunks below.
+    attachmentService.resetAttachmentUrlCache();
     documentService.clearSessionRegistries();
     persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
   },
@@ -303,6 +312,7 @@ authListenerMiddleware.startListening({
 authListenerMiddleware.startListening({
   actionCreator: clearAuth,
   effect: async () => {
+    attachmentService.resetAttachmentUrlCache();
     clearPersistedAuthSnapshot();
     documentService.clearSessionRegistries();
   },

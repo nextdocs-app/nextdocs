@@ -91,6 +91,8 @@ import {
   buildFallbackAvatar,
 } from './comment.utils';
 import type { SharedCommentUserProfile } from './comment.utils';
+import { useAttachmentHandlers } from './useAttachmentHandlers';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 
 type CodeLanguageInfo = {
   name: string;
@@ -224,7 +226,15 @@ export const customShadCNComponents: Partial<ShadCNComponents> = {
       container,
       ...props
     }: React.ComponentProps<typeof ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent>) => {
-      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      // Respect BlockNote's portal element (a themed `.bn-root` child of the
+      // body created by `PortalElementOverride` and registered with
+      // `editor.registerPortalElement`, so focus inside still counts as within
+      // the editor). Forcing `document.body` here drops that registration, so
+      // focusing the popup blurs the editor and the formatting toolbar that
+      // opened it unmounts. Fall back to the body only before the editor has
+      // mounted (container is null) or during SSR.
+      const portalContainer =
+        container ?? (typeof document !== 'undefined' ? document.body : container);
       return (
         <ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent
           container={portalContainer}
@@ -248,7 +258,15 @@ export const customShadCNComponents: Partial<ShadCNComponents> = {
       container,
       ...props
     }: React.ComponentProps<typeof ShadCNDefaultComponents.Popover.PopoverContent>) => {
-      const portalContainer = typeof document !== 'undefined' ? document.body : container;
+      // Same as DropdownMenuContent above: the incoming container is already a
+      // body-level, editor-registered root (see `DEFAULT_PORTAL_ELEMENTS`), so
+      // it escapes the editor's stacking context without leaving the editor's
+      // focus tracking. File rename/caption/replace popovers render their
+      // inputs here — portaling them to raw `document.body` makes the input
+      // count as outside the editor, so the toolbar closes as soon as the
+      // input is focused and the buttons appear broken.
+      const portalContainer =
+        container ?? (typeof document !== 'undefined' ? document.body : container);
       return (
         <ShadCNDefaultComponents.Popover.PopoverContent container={portalContainer} {...props} />
       );
@@ -356,6 +374,7 @@ export function EditorContent({
   const { resolvedTheme } = useTheme();
   const isTouchInput = useIsTouchInput();
   const documentToolbarInset = useDocumentToolbarInset();
+  const { isOnline } = useNetworkStatus();
 
   // Bounds the floating thread card; see `createCommentThreadFloatingOptions`.
   // Rebuilt when the toolbar's height changes, which is also the signal that a
@@ -421,6 +440,17 @@ export function EditorContent({
 
   const commentRoleRef = useRef(commentRole);
   commentRoleRef.current = commentRole;
+
+  // File-block uploads and signed-URL resolution live in a dedicated hook so this
+  // component stays out of the auth-retry and toast-throttling details.
+  const { uploadFile, resolveFileUrl } = useAttachmentHandlers({
+    documentId,
+    isAuthenticated,
+    accessToken,
+    isOnline,
+    accessLevel,
+    deletedAt: meta.deletedAt,
+  });
 
   const sharedCommentUsers = useMemo(() => ydoc.getMap<string>(COMMENT_USERS_MAP_KEY), [ydoc]);
 
@@ -615,9 +645,14 @@ export function EditorContent({
       },
       dictionary: commentsDictionary,
       extensions: editorExtensions,
+      // The API keys uploads by document, not by block; BlockNote still passes the target id.
+      uploadFile: (file) => uploadFile(file),
+      resolveFileUrl: (url) => resolveFileUrl(url),
     }),
     // The editor is created strictly once per document mount. Keyed by documentId at parent.
-    [documentId, ydoc]
+    // uploadFile/resolveFileUrl are effect events with stable identity, so listing them
+    // keeps exhaustive-deps honest without ever rebuilding the editor.
+    [documentId, ydoc, uploadFile, resolveFileUrl]
   );
 
   const getSlashMenuItems = useCallback(
