@@ -1,0 +1,398 @@
+/* Floating comment thread cards, their editors and action buttons. */
+
+/* ─── BlockNote Comments Floating Popups & Threads ─── */
+
+/* The floating thread card. Its popup is capped to the room between the document
+   toolbar and the bottom of the screen by floating-ui's `size()` middleware (see
+   createCommentThreadFloatingOptions), so the card has to be able to give way to
+   that cap and scroll what is left: without `min-height: 0` it keeps its content
+   height as a flex item and the popup's cap clips the composer instead. */
+.nd-comment-thread .bn-thread {
+  min-height: 0;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+/* Container focus reset to prevent unwanted outline/rings without stripping accessible keyboard focus from children */
+.bn-threads-sidebar,
+.bn-thread {
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+
+.bn-threads-sidebar:focus:not(:focus-visible),
+.bn-thread:focus:not(:focus-visible) {
+  outline: none !important;
+}
+
+/* ─── Sidebar Threads Container ─── */
+.bn-threads-sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+}
+
+/* Base Thread Card (Floating popups) */
+.bn-thread {
+  width: 320px !important;
+  max-width: min(340px, calc(100vw - 24px)) !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  background-color: #ffffff !important;
+  color: var(--card-foreground) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow:
+    0 10px 30px -4px rgba(0, 0, 0, 0.12),
+    0 2px 8px -2px rgba(0, 0, 0, 0.06) !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  font-family: inherit !important;
+  outline: none !important;
+}
+
+.dark .bn-thread {
+  background-color: #242422 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow:
+    0 12px 36px -4px rgba(0, 0, 0, 0.55),
+    0 4px 12px -2px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* Sidebar Thread Card (Full width in sidebar rail - Google Docs / Linear style) */
+.bn-threads-sidebar .bn-thread {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.03) !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease !important;
+}
+
+.bn-threads-sidebar .bn-thread:hover {
+  background-color: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.14) !important;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+.dark .bn-threads-sidebar .bn-thread {
+  background-color: #242422 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+  outline: none !important;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease !important;
+}
+
+.dark .bn-threads-sidebar .bn-thread:hover {
+  background-color: #282826 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+}
+
+.nd-comments-sidebar .bn-thread,
+.nd-comments-sidebar .bn-thread:hover,
+.nd-comments-sidebar .bn-thread.selected {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+
+/* Selected state: elevated card */
+.bn-thread.bg-accent,
+.bn-thread[data-selected='true'],
+.bn-thread.selected,
+.bn-threads-sidebar .bn-thread.selected,
+.bn-threads-sidebar .bn-thread[data-selected='true'],
+.bn-threads-sidebar .bn-thread.bg-accent,
+.bn-threads-sidebar .bn-thread:has(.bn-thread-composer) {
+  background-color: #ffffff !important;
+  color: var(--card-foreground) !important;
+  border-color: rgba(0, 0, 0, 0.16) !important;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.04) !important;
+  outline: none !important;
+  cursor: default !important;
+}
+
+.dark .bn-thread.bg-accent,
+.dark .bn-thread[data-selected='true'],
+.dark .bn-thread.selected,
+.dark .bn-threads-sidebar .bn-thread.selected,
+.dark .bn-threads-sidebar .bn-thread[data-selected='true'],
+.dark .bn-threads-sidebar .bn-thread.bg-accent,
+.dark .bn-threads-sidebar .bn-thread:has(.bn-thread-composer) {
+  background-color: #242422 !important;
+  color: #f2f2f2 !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+  outline: none !important;
+  cursor: default !important;
+}
+
+/* Expanded thread in sidebar */
+.bn-threads-sidebar .bn-thread.selected:hover,
+.bn-threads-sidebar .bn-thread[data-selected='true']:hover,
+.bn-threads-sidebar .bn-thread.bg-accent:hover,
+.bn-threads-sidebar .bn-thread:has(.bn-thread-composer):hover {
+  cursor: default !important;
+}
+
+/* Ensure interactive controls inside expanded thread retain pointer cursor */
+.bn-threads-sidebar .bn-thread button,
+.bn-threads-sidebar .bn-thread [role='button'],
+.bn-threads-sidebar .bn-thread a,
+.bn-threads-sidebar .bn-thread .bn-badge {
+  cursor: pointer !important;
+}
+
+.bn-threads-sidebar .bn-thread button:disabled,
+.bn-threads-sidebar .bn-thread button[disabled] {
+  cursor: not-allowed !important;
+}
+
+.bn-threads-sidebar .bn-thread .bn-editor {
+  cursor: text !important;
+}
+
+/* Header Reference Text */
+.bn-thread > .text-sm.italic,
+.bn-thread .bn-header-text {
+  max-height: 48px !important;
+  margin: 10px 12px 2px !important;
+  padding: 6px 10px !important;
+  border: none !important;
+  border-left: 3px solid #e59a90 !important;
+  border-radius: 0 4px 4px 0 !important;
+  font-size: 13px !important;
+  font-style: italic !important;
+  line-height: 1.4 !important;
+  color: var(--muted-foreground) !important;
+  background-color: var(--sidebar-accent) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  outline: none !important;
+}
+
+.dark .bn-thread > .text-sm.italic,
+.dark .bn-thread .bn-header-text {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border-left: 2.5px solid #e59a90 !important;
+}
+
+/* Orphaned thread reference text (text deleted in document) */
+.bn-thread.bn-thread-orphaned > .text-sm.italic,
+.bn-thread.bn-thread-orphaned .bn-header-text {
+  text-decoration: line-through !important;
+  opacity: 0.7 !important;
+  border: none !important;
+  border-left: none !important;
+}
+
+/* Comment Editor inside Composer & Floating Popup */
+
+.bn-thread > .bn-comment-editor {
+  padding: 12px 14px 4px !important;
+  width: 100% !important;
+}
+
+.bn-thread > .bn-comment-editor .bn-container,
+.bn-thread > .bn-comment-editor .bn-editor {
+  min-height: 40px !important;
+  max-height: 160px !important;
+  overflow-y: auto !important;
+}
+
+.bn-comment-editor .bn-container,
+.bn-comment-editor .bn-editor {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--card-foreground) !important;
+  padding: 0 !important;
+  font-size: 14px !important;
+  line-height: 1.45 !important;
+}
+
+/* Collapse and hide BlockNote portal element inside comment editor so it takes zero space */
+.bn-comment-editor .bn-root:not(.bn-container) {
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  overflow: visible !important;
+  line-height: 0 !important;
+  font-size: 0 !important;
+  pointer-events: none !important;
+}
+
+.bn-comment-editor .bn-root:not(.bn-container) > * {
+  pointer-events: auto !important;
+}
+
+.bn-comment-editor .bn-root:not(.bn-container):empty {
+  display: none !important;
+}
+
+.dark .bn-comment-editor .bn-editor {
+  color: #f2f2f2 !important;
+}
+
+.bn-comment-editor .bn-editor p {
+  margin: 0 !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+/* Placeholder styling inside comment editor */
+.bn-comment-editor [data-content-type='paragraph'] .bn-inline-content:empty::before,
+.bn-comment-editor .bn-block-content:has(.ProseMirror-trailingBreak:only-child):after {
+  color: var(--muted-foreground) !important;
+  opacity: 0.65 !important;
+  font-style: normal !important;
+  font-size: 13.5px !important;
+}
+
+/* ─── Actions Wrapper & Save / Cancel Buttons ─── */
+
+.bn-comment-actions-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding: 4px 14px 10px !important;
+  border-top: none !important;
+}
+
+/* Neutralize the floating toolbar bubble container from @blocknote/shadcn */
+.bn-comment-actions-wrapper .bn-comment-actions,
+.bn-comment-actions-wrapper .bn-action-toolbar {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  margin-left: auto !important;
+  width: auto !important;
+  max-width: fit-content !important;
+}
+
+.dark .bn-comment-actions-wrapper .bn-comment-actions,
+.dark .bn-comment-actions-wrapper .bn-action-toolbar {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Base styling for all comment action buttons (Save / Cancel / Comment) */
+.bn-comment-actions-wrapper .bn-comment-actions button,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot='button'],
+.bn-comment-actions-wrapper .bn-action-toolbar button,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot='button'],
+.bn-comment-actions-wrapper button[data-slot='button'],
+.bn-comment-actions-wrapper .bn-button {
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  width: auto !important;
+  min-width: 54px !important;
+  max-width: none !important;
+  padding: 0 12px !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.01em !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  box-sizing: border-box !important;
+  outline: none !important;
+  transition:
+    opacity 0.12s ease,
+    background-color 0.12s ease,
+    border-color 0.12s ease !important;
+}
+
+/* Primary Submit / Save button */
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot='button']:first-child,
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot='button']:first-child,
+.bn-comment-actions-wrapper > button,
+.bn-comment-actions-wrapper > [data-slot='button'] {
+  background-color: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper
+  .bn-comment-actions
+  [data-slot='button']:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child:hover:not(:disabled),
+.bn-comment-actions-wrapper
+  .bn-action-toolbar
+  [data-slot='button']:first-child:hover:not(:disabled) {
+  opacity: 0.9 !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:first-child:disabled,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot='button']:first-child:disabled,
+.bn-comment-actions-wrapper .bn-action-toolbar button:first-child:disabled,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot='button']:first-child:disabled,
+.bn-comment-actions-wrapper button[data-slot='button']:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+  background-color: var(--muted) !important;
+  color: var(--muted-foreground) !important;
+  box-shadow: none !important;
+}
+
+/* Secondary Cancel button (second child in edit mode) */
+.bn-comment-actions-wrapper .bn-comment-actions button:not(:first-child),
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot='button']:not(:first-child),
+.bn-comment-actions-wrapper .bn-action-toolbar button:not(:first-child),
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot='button']:not(:first-child) {
+  background-color: transparent !important;
+  color: var(--muted-foreground) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+  order: -1 !important;
+}
+
+.bn-comment-actions-wrapper .bn-comment-actions button:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-comment-actions [data-slot='button']:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-action-toolbar button:not(:first-child):hover,
+.bn-comment-actions-wrapper .bn-action-toolbar [data-slot='button']:not(:first-child):hover {
+  background-color: var(--muted) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}

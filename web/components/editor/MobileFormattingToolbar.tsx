@@ -194,7 +194,7 @@ export function MobileFormattingToolbarController({
   return (
     // `bn-mobile-formatting-toolbar` keeps BlockNote's contract for the bar:
     // fixed to the visual viewport via `--bn-vv-*`, full width, horizontally
-    // scrollable, and themed by the mobile rules in `styles/globals.css`. No
+    // scrollable, and themed by the mobile rules in `styles/layout-responsive.css`. No
     // `bottom` offset is set here: BlockNote 0.55 positions the bar purely from
     // the transform in its stylesheet, and an inline `bottom` would lose to its
     // `top: 0` while leaving the off-screen transform in place.

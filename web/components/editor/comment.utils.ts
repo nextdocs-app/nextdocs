@@ -23,7 +23,7 @@ const COMMENT_THREAD_OFFSET_PX = 10;
  * So the boundary here is the viewport *minus the toolbar* (shared with the
  * formatting toolbar's popups, see `createViewportBounds`), and the card is
  * capped to the room left on the side it was placed on. A thread that does not
- * fit scrolls inside its own card (`overflow-y` in `styles/globals.css`) instead
+ * fit scrolls inside its own card (`overflow-y` in `styles/comments-threads.css`) instead
  * of spilling past the edges.
  *
  * `toolbarInset` is measured (see `useDocumentToolbarInset`): the toolbar's

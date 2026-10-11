@@ -7,7 +7,7 @@ import { useCallback, useSyncExternalStore } from 'react';
  * navigation rail becomes an off-canvas drawer and the toolbars reflow.
  *
  * Kept as a single source of truth because it must match the `767px` media
- * queries in `styles/globals.css` (Tailwind's `md` breakpoint starts at 768px).
+ * queries in `styles/layout-responsive.css` (Tailwind's `md` breakpoint starts at 768px).
  * Editor chrome is decided by `TOUCH_INPUT_QUERY` instead, not by width.
  */
 export const MOBILE_LAYOUT_QUERY = '(max-width: 767px)';

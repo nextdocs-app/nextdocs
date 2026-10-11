@@ -1,0 +1,404 @@
+/* Block-level editor styling: source previews, math, spacing, tables, checklist. */
+
+@layer components {
+  /*
+     BlockNote Source-With-Preview Blocks (Math, Diagram, etc.)
+     Shared styling for blocks with live previews and edit popups.
+     - Spacing: 8px vertical block margins
+     - Outlines only on hover / selection (no thick overlays or solid fills)
+     - Empty-state placeholder with dashed border and centered label
+     - Themed OK button for source code editor popup
+     To support a new source-with-preview block, add its data-content-type
+     to the selector list below.
+  */
+  /* Block-level source-with-preview block spacing */
+  .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']) {
+    margin-block: 8px !important;
+  }
+
+  /* Reset popup wrapper padding */
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-with-source-popup {
+    padding: 0 !important;
+  }
+
+  /* Shared container defaults for block-level previews */
+  .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram'])
+    .bn-preview-container {
+    border-radius: var(--editor-dropdown-radius, 8px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    min-height: 46px;
+  }
+
+  /* Shared empty-state placeholder */
+  .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram'])
+    .bn-preview-placeholder {
+    border-radius: var(--editor-dropdown-radius, 8px) !important;
+    border: 1px dashed var(--border) !important;
+    background-color: transparent !important;
+    color: var(--muted-foreground) !important;
+    cursor: pointer !important;
+    font-size: var(--editor-dropdown-item-font-size, 14px) !important;
+    padding: 12px 18px !important;
+    gap: 10px !important;
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Shared padding when preview has rendered content */
+  .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram'])
+    .bn-preview-container:not(:has(.bn-preview-placeholder)) {
+    padding: 10px 16px;
+  }
+
+  /* 1. Suppress thick ProseMirror selection overlay on source-with-preview elements */
+  .bn-block-content:is(
+      [data-content-type='mathBlock'],
+      [data-content-type='diagram']
+    ).ProseMirror-selectednode
+    > *::after,
+  .ProseMirror-selectednode
+    > .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram'])
+    > *::after,
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-with-source-popup.ProseMirror-selectednode::after,
+  .bn-inline-content-section[data-inline-content-type='math'].ProseMirror-selectednode::after {
+    content: none !important;
+    display: none !important;
+  }
+
+  /* 2. Hover: only the designed outline, never a background fill.
+     The outline lives on the container, not the placeholder, so it is
+     never clipped by the container's overflow: hidden. */
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-container:hover {
+    outline: 1px solid var(--border) !important;
+    outline-offset: 1px !important;
+    background-color: transparent !important;
+  }
+
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-container:hover
+    .bn-preview-placeholder {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    color: var(--foreground) !important;
+  }
+
+  /* 3. Selected / open source popup: blue outline on container, transparent background */
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open='true'])
+    .bn-preview-container,
+  :is(
+      .bn-block-content:is(
+          [data-content-type='mathBlock'],
+          [data-content-type='diagram']
+        ).ProseMirror-selectednode,
+      .bn-block.ProseMirror-selectednode
+        .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .ProseMirror-selectednode
+        > .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math'].ProseMirror-selectednode
+    )
+    .bn-preview-container {
+    outline: 1.5px solid #64a0ff !important;
+    outline-offset: 1px !important;
+    background-color: transparent !important;
+  }
+
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-preview-with-source-popup:is(.ProseMirror-selectednode, [data-open='true'])
+    .bn-preview-placeholder,
+  :is(
+      .bn-block-content:is(
+          [data-content-type='mathBlock'],
+          [data-content-type='diagram']
+        ).ProseMirror-selectednode,
+      .bn-block.ProseMirror-selectednode
+        .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .ProseMirror-selectednode
+        > .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math'].ProseMirror-selectednode
+    )
+    .bn-preview-placeholder {
+    background-color: transparent !important;
+    border-color: transparent !important;
+    color: var(--foreground) !important;
+  }
+
+  /* 4. OK button theming for source editor popups */
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-code-block-source-popup-ok-button {
+    background-color: var(--primary) !important;
+    color: var(--primary-foreground) !important;
+    border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    padding: 4px 10px !important;
+    gap: 5px !important;
+    cursor: pointer !important;
+  }
+
+  :is(
+      .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']),
+      .bn-inline-content-section[data-inline-content-type='math']
+    )
+    .bn-code-block-source-popup-ok-button:hover {
+    opacity: 0.9 !important;
+  }
+
+  /* Math Block: flex-centered layout for KaTeX equations */
+  .bn-block-content[data-content-type='mathBlock'] .bn-preview-container {
+    display: flex;
+    justify-content: center;
+    justify-content: safe center;
+    align-items: center;
+  }
+
+  /* Inline Math: inline-flex presentation */
+  .bn-inline-content-section[data-inline-content-type='math'],
+  .bn-inline-content-section[data-inline-content-type='math'] .bn-preview-with-source-popup {
+    display: inline-flex !important;
+    vertical-align: middle;
+    padding: 0 !important;
+    margin-inline: 2px;
+  }
+
+  .bn-inline-content-section[data-inline-content-type='math'] .bn-preview-container {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .bn-inline-content-section[data-inline-content-type='math'] .bn-preview-placeholder {
+    display: inline-flex !important;
+    vertical-align: middle !important;
+    align-items: center !important;
+    padding: 1px 6px !important;
+    gap: 4px !important;
+    border-radius: 4px !important;
+    font-size: 12.5px !important;
+    line-height: 1.25 !important;
+    border: 1px dashed var(--border) !important;
+    background-color: transparent !important;
+    color: var(--muted-foreground) !important;
+    cursor: pointer !important;
+  }
+
+  .bn-inline-content-section[data-inline-content-type='math']
+    .bn-preview-container:not(:has(.bn-preview-placeholder)) {
+    padding: 1px 4px;
+  }
+
+  /* Paragraph Spacing */
+  .bn-block-content[data-content-type='paragraph'],
+  .bn-block-content[data-content-type='quote'],
+  .bn-block-content[data-content-type='alert'] {
+    padding-block: 8px !important;
+  }
+
+  /* List items stay a little tighter than paragraphs: the marker/checkbox
+     column already adds air, so BlockNote's 3px default only needs a nudge. */
+  .bn-block-content[data-content-type='bulletListItem'],
+  .bn-block-content[data-content-type='numberedListItem'] {
+    padding-block: 4px !important;
+  }
+
+  /* BlockNote Divider / Separator Line */
+  .bn-block-content[data-content-type='divider'] {
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+    padding-block: 12px !important;
+    min-height: 17px !important;
+    cursor: default !important;
+    user-select: none !important;
+  }
+
+  .bn-block-content[data-content-type='divider'] hr {
+    border: none !important;
+    height: 1px !important;
+    width: 100% !important;
+    flex: 1 1 auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: var(--editor-divider-color) !important;
+    border-radius: 9999px !important;
+    box-sizing: border-box !important;
+    transition:
+      background-color 0.15s ease,
+      opacity 0.15s ease !important;
+  }
+
+  /* BlockNote Nested Block Group — Indentation */
+  .bn-block-group
+    .bn-block:not(:has(.bn-toggle-wrapper))
+    .bn-block-group
+    .bn-block-outer:not([data-prev-depth-changed]):before {
+    border-left: 1px solid var(--editor-divider-color) !important;
+    transition: border-color 0.15s ease !important;
+  }
+
+  /* BlockNote Table */
+  .bn-editor [data-content-type='table'] table,
+  [data-content-type='table'] table {
+    border-collapse: collapse !important;
+    border: 1px solid var(--editor-divider-color) !important;
+  }
+
+  .bn-editor [data-content-type='table'] th,
+  .bn-editor [data-content-type='table'] td,
+  [data-content-type='table'] th,
+  [data-content-type='table'] td {
+    border: 1px solid var(--editor-divider-color) !important;
+    padding: 7px 12px !important;
+    transition:
+      border-color 0.15s ease,
+      background-color 0.15s ease !important;
+  }
+
+  .bn-editor [data-content-type='table'] th,
+  [data-content-type='table'] th {
+    background-color: var(--editor-table-header-bg) !important;
+    font-weight: 600 !important;
+  }
+
+  /* Table column resize handle & selection matching editor accents */
+  .ProseMirror .column-resize-handle {
+    background-color: #64a0ff !important;
+    width: 2px !important;
+  }
+
+  .ProseMirror .selectedCell:after {
+    background-color: rgb(100 160 255 / 0.15) !important;
+  }
+
+  /* BlockNote Multi-Column Separator & Resize Handle */
+  .bn-editor[contenteditable='true'] .bn-column-list-hovered > .bn-block-column:not(:last-child),
+  .bn-editor[contenteditable='true']
+    .bn-column-list-hovered
+    > .bn-block-column:not(:last-child):where(.dark, .dark *),
+  .bn-column-list-hovered > .bn-block-column:not(:last-child) {
+    box-shadow: 1px 0 0 var(--editor-divider-color) !important;
+    transition: box-shadow 0.2s ease 0.15s !important;
+  }
+
+  .bn-editor[contenteditable='true']
+    .bn-column-list-hovered
+    > .bn-block-column.bn-column-resize-border,
+  .bn-editor[contenteditable='true']
+    .bn-column-list-hovered
+    > .bn-block-column.bn-column-resize-border:where(.dark, .dark *),
+  .bn-column-list-hovered > .bn-block-column.bn-column-resize-border {
+    box-shadow: 2px 0 0 #64a0ff !important;
+    cursor: col-resize !important;
+    transition: box-shadow 0.15s ease !important;
+  }
+
+  .bn-editor[contenteditable='true'] .bn-block-column.bn-column-resize-border + .bn-block-column,
+  .bn-column-list-hovered > .bn-block-column.bn-column-resize-border + .bn-block-column {
+    cursor: col-resize !important;
+  }
+
+  /* BlockNote Checklist Item — Modern Style */
+  .bn-block-content[data-content-type='checkListItem'] {
+    align-items: flex-start !important;
+    padding-block: 4px !important;
+  }
+
+  /* Checkbox container alignment */
+  .bn-block-content[data-content-type='checkListItem']
+    > :is(div[contenteditable='false'], div:has(> input)) {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    margin-right: 4px !important;
+    flex-shrink: 0 !important;
+    user-select: none !important;
+  }
+
+  /* Custom Modern Checkbox Input */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox'] {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    width: 16px !important;
+    height: 16px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    cursor: pointer !important;
+    border-radius: 3px !important;
+    border: 1.5px solid currentColor !important;
+    background-color: transparent !important;
+    box-sizing: border-box !important;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      transform 0.1s ease !important;
+  }
+
+  /* Hover state when unchecked */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox']:hover:not(:checked) {
+    background-color: var(--checkbox-hover-bg) !important;
+  }
+
+  /* Active press effect */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox']:active {
+    transform: scale(0.92) !important;
+  }
+
+  /* Focus visible outline */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox']:focus-visible {
+    outline: 2px solid rgb(100 160 255 / 0.5) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Checked state with custom SVG checkmark */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox']:checked {
+    background: var(--checkbox-checked-bg) var(--checkbox-checked-icon) no-repeat center / 11px 11px !important;
+    border-color: var(--checkbox-checked-bg) !important;
+  }
+
+  /* Disabled state */
+  .bn-block-content[data-content-type='checkListItem'] input[type='checkbox']:disabled {
+    cursor: default !important;
+    opacity: 0.75 !important;
+  }
+
+  /* Checked task text styling */
+  .bn-block-content[data-content-type='checkListItem'] .bn-inline-content {
+    transition:
+      opacity 0.15s ease,
+      color 0.15s ease !important;
+  }
+
+  .bn-block-content[data-content-type='checkListItem'][data-checked='true'] .bn-inline-content {
+    text-decoration: line-through !important;
+    color: var(--muted-foreground) !important;
+    opacity: 0.9 !important;
+  }
+}

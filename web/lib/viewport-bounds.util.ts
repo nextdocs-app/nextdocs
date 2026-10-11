@@ -6,7 +6,7 @@
  * positions itself against the viewport — BlockNote's floating comment thread
  * (floating-ui middleware, see `comment.utils.ts`) and the formatting toolbar's
  * Base UI popups (block-type select, colour menu, positioned by Base UI's
- * `Positioner` and capped in `styles/globals.css`) — has to treat "the
+ * `Positioner` and capped in `styles/editor-menus.css`) — has to treat "the
  * viewport minus the toolbar" as its usable area. Both consumers read from
  * here so the inset, the margins, and the CSS variable name stay in sync:
  *
@@ -33,7 +33,7 @@ export const FLOATING_VIEWPORT_MARGIN_PX = 12;
 /**
  * Custom property carrying the measured toolbar inset (toolbar's lowest edge
  * plus the gap) for CSS-positioned popups. The `44px` fallback used in
- * `styles/globals.css` mirrors `DOCUMENT_TOOLBAR_INSET_FALLBACK_PX`.
+ * `styles/editor-menus.css` mirrors `DOCUMENT_TOOLBAR_INSET_FALLBACK_PX`.
  */
 export const DOC_TOOLBAR_INSET_CSS_VAR = '--nd-doc-toolbar-inset';
 

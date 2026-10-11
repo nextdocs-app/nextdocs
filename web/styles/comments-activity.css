@@ -1,0 +1,575 @@
+/* Comment list, reactions, resolved states, highlight marks, comment dropdowns. */
+
+/* ─── Comments Section in Thread ─── */
+
+.bn-thread-comments {
+  padding: 10px 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  border-bottom: none !important;
+}
+
+/* Floating thread popups keep max-height scroll */
+.bn-thread:not(.bn-threads-sidebar .bn-thread) .bn-thread-comments {
+  max-height: 360px !important;
+  overflow-y: auto !important;
+}
+
+/* Sidebar threads expand naturally with no internal scroll */
+.bn-threads-sidebar .bn-thread .bn-thread-comments {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.bn-thread-comment {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  width: 100% !important;
+}
+
+/* Subtle separator line between comments */
+.bn-thread-comment:not(:first-child),
+.bn-thread-comment + .bn-thread-comment {
+  padding-top: 10px !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.08) !important;
+}
+
+.dark .bn-thread-comment:not(:first-child),
+.dark .bn-thread-comment + .bn-thread-comment {
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Author header row: Avatar + Name + Time */
+.bn-thread-comment > div:not(.absolute):not(.bn-comment-editor):not(.bn-comment-actions-wrapper) {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-height: 24px !important;
+  width: 100% !important;
+  padding-right: 76px !important;
+}
+
+.bn-thread-comment [data-slot='avatar'] {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  border-radius: 9999px !important;
+  flex-shrink: 0 !important;
+  overflow: hidden !important;
+}
+
+.bn-thread-comment [data-slot='avatar'] img,
+.bn-thread-comment [data-slot='avatar-image'] {
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 9999px !important;
+  object-fit: cover !important;
+}
+
+.bn-thread-comment [data-slot='avatar-fallback'] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  background-color: rgba(0, 0, 0, 0.08) !important;
+  color: var(--foreground) !important;
+  text-transform: uppercase !important;
+}
+
+.dark .bn-thread-comment [data-slot='avatar-fallback'] {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #f2f2f2 !important;
+}
+
+.bn-thread-comment
+  > div:not(.absolute):not(.bn-comment-editor):not(.bn-comment-actions-wrapper)
+  > div {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 6px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+.bn-thread-comment .text-sm.font-bold {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+  color: var(--foreground) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.bn-thread-comment .text-xs {
+  font-size: 12px !important;
+  color: var(--muted-foreground) !important;
+  opacity: 0.75 !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+
+/* Comment text naturally left-aligned under header */
+.bn-thread-comment .bn-comment-editor {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.bn-thread-comment .bn-comment-editor .bn-container,
+.bn-thread-comment .bn-comment-editor .bn-editor {
+  min-height: unset !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 13.5px !important;
+  line-height: 1.45 !important;
+  color: var(--foreground) !important;
+}
+
+.dark .bn-thread-comment .bn-comment-editor .bn-editor {
+  color: #ededed !important;
+}
+
+.bn-thread-comment .bn-comment-editor .bn-editor p,
+.bn-thread-comment .bn-comment-editor .bn-block-outer,
+.bn-thread-comment .bn-comment-editor .bn-block,
+.bn-thread-comment .bn-comment-editor .bn-block-content {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: unset !important;
+  font-size: 14px !important;
+  line-height: 1.45 !important;
+  word-break: break-word !important;
+}
+
+/* ─── Comment Hover Actions (Resolve, More, Reaction) ─── */
+
+.bn-thread-comment .absolute.top-0.right-0,
+.bn-thread-comment > .absolute {
+  position: absolute !important;
+  top: -2px !important;
+  right: 0 !important;
+  left: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  max-width: fit-content !important;
+  height: auto !important;
+  z-index: 20 !important;
+  display: block !important;
+  pointer-events: auto !important;
+}
+
+/* For replies (which have 10px padding-top from separator line), align toolbar straight with author row */
+.bn-thread-comment:not(:first-child) > .absolute,
+.bn-thread-comment:not(:first-child) .absolute.top-0.right-0,
+.bn-thread-comment + .bn-thread-comment > .absolute,
+.bn-thread-comment + .bn-thread-comment .absolute.top-0.right-0 {
+  top: 8px !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  width: auto !important;
+  max-width: fit-content !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  padding: 1px !important;
+  gap: 1px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+}
+
+.dark .bn-thread-comment > .absolute .bn-action-toolbar,
+.dark .bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar {
+  background-color: #282826 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45) !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar button,
+.bn-thread-comment > .absolute .bn-action-toolbar [data-slot='button'],
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar [data-slot='button'] {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  max-width: 22px !important;
+  padding: 0 !important;
+  border-radius: calc(var(--editor-dropdown-item-radius, 6px) - 2px) !important;
+  color: var(--muted-foreground) !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition:
+    color 0.12s ease,
+    background-color 0.12s ease !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar button:hover,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button:hover {
+  background-color: rgba(0, 0, 0, 0.06) !important;
+  color: var(--foreground) !important;
+}
+
+.dark .bn-thread-comment > .absolute .bn-action-toolbar button:hover,
+.dark .bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar button:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+.bn-thread-comment > .absolute .bn-action-toolbar svg,
+.bn-thread-comment .absolute.top-0.right-0 .bn-action-toolbar svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0 !important;
+}
+
+/* ─── Comment Reactions & Badges ─── */
+
+.bn-thread-comment .bn-comment-actions-wrapper {
+  padding: 0 !important;
+  margin: 0 !important;
+  border-top: none !important;
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+.bn-thread-comment .bn-comment-actions-wrapper:has(.bn-comment-actions) {
+  justify-content: flex-end !important;
+  padding-top: 8px !important;
+  padding-bottom: 2px !important;
+}
+
+.bn-thread-comment .bn-comment-reactions {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+  margin-top: 4px !important;
+  padding: 0 !important;
+}
+
+.bn-thread-comment .bn-comment-reactions > div,
+.bn-thread-comment .bn-comment-reactions [data-slot='popover-trigger'] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  max-height: 22px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.bn-thread-comment .bn-badge {
+  height: 23px !important;
+  min-height: 23px !important;
+  max-height: 23px !important;
+  padding: 0 8px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  border-radius: 9999px !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  background-color: #f4f4f6 !important;
+  color: var(--foreground) !important;
+  gap: 4px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  box-shadow: none !important;
+  transition: background-color 0.12s ease !important;
+}
+
+.bn-thread-comment .bn-badge:hover {
+  background-color: #e5e7eb !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+.dark .bn-thread-comment .bn-badge {
+  background-color: rgba(255, 255, 255, 0.07) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  color: #ededed !important;
+}
+
+.dark .bn-thread-comment .bn-badge:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.bn-thread-comment .bn-badge span {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+}
+
+.bn-thread-comment .bn-badge svg {
+  width: 16px !important;
+  height: 16px !important;
+  flex-shrink: 0 !important;
+  display: block !important;
+}
+
+.bn-thread-comment .bn-badge.bn-comment-add-reaction {
+  padding: 0 8px !important;
+  color: var(--muted-foreground) !important;
+}
+
+/* Resolved thread indicator banner */
+.bn-thread-comment:has(.bn-resolved-text) {
+  padding: 6px 10px !important;
+  border-radius: 6px !important;
+  background-color: rgba(34, 197, 94, 0.08) !important;
+  border: none !important;
+}
+
+.bn-thread-comment .bn-resolved-text {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: #16a34a !important;
+}
+
+.dark .bn-thread-comment:has(.bn-resolved-text) {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  border: none !important;
+}
+
+.dark .bn-thread-comment .bn-resolved-text {
+  color: #4ade80 !important;
+}
+
+/* Dim resolved threads slightly when unselected in sidebar for quick visual hierarchy */
+.bn-threads-sidebar .bn-thread:has(.bn-resolved-text):not(.selected):not(:hover) {
+  opacity: 0.85;
+}
+
+.bn-thread-expand-prompt {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 4px 8px !important;
+  border: none !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--muted-foreground) !important;
+  background-color: var(--sidebar-accent) !important;
+  box-shadow: none !important;
+  outline: none !important;
+  cursor: pointer !important;
+  text-decoration: none !important;
+  width: fit-content !important;
+  margin: 2px 0 !important;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease !important;
+}
+
+.bn-thread-expand-prompt:hover {
+  background-color: #e5e7eb !important;
+  color: var(--foreground) !important;
+  text-decoration: none !important;
+  border: none !important;
+  outline: none !important;
+}
+
+.dark .bn-thread-expand-prompt {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  color: #a3a3a3 !important;
+}
+
+.dark .bn-thread-expand-prompt:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+/* ─── Reply Composer in Thread ─── */
+
+.bn-thread-composer {
+  padding: 10px 12px !important;
+  background-color: var(--nd-comments-surface) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.dark .bn-thread-composer {
+  background-color: var(--nd-comments-surface) !important;
+  border-top-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.bn-thread-composer .bn-comment-editor {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.dark .bn-thread-composer .bn-comment-editor {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.bn-thread-composer .bn-comment-editor:focus,
+.bn-thread-composer .bn-comment-editor:focus-within {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.bn-thread-composer .bn-comment-editor .bn-container,
+.bn-thread-composer .bn-comment-editor .bn-editor {
+  min-height: 24px !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  font-size: 13.5px !important;
+  line-height: 1.45 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-top: none !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper .bn-comment-actions,
+.bn-thread-composer .bn-comment-actions-wrapper .bn-action-toolbar {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper button,
+.bn-thread-composer .bn-comment-actions-wrapper button[data-slot='button'],
+.bn-thread-composer .bn-comment-actions-wrapper .bn-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 52px !important;
+  height: 26px !important;
+  padding: 0 10px !important;
+  border: none !important;
+  border-radius: var(--editor-dropdown-item-radius, 6px) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--primary-foreground) !important;
+  background-color: var(--primary) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+  cursor: pointer !important;
+  transition: opacity 0.12s ease !important;
+}
+
+.bn-thread-composer .bn-comment-actions-wrapper button:disabled,
+.bn-thread-composer .bn-comment-actions-wrapper button[disabled] {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+/* ─── Document Comment Highlight Marks ─── */
+
+.bn-thread-mark:not([data-orphan='true']):not([data-resolved='true']) {
+  border-bottom: 1.75px solid var(--nd-comment-mark-border) !important;
+  border-radius: 2px !important;
+  background-color: var(--nd-comment-mark-bg) !important;
+  cursor: pointer !important;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease !important;
+}
+
+.bn-thread-mark:not([data-orphan='true']):not([data-resolved='true']):hover {
+  border-bottom-color: var(--nd-comment-mark-border-hover) !important;
+  background-color: var(--nd-comment-mark-bg-hover) !important;
+}
+
+.bn-thread-mark[data-selected='true']:not([data-orphan='true']):not([data-resolved='true']),
+.bn-thread-mark.selected:not([data-orphan='true']):not([data-resolved='true']) {
+  border-bottom: 2.25px solid var(--nd-comment-mark-border-selected) !important;
+  background-color: var(--nd-comment-mark-bg-selected) !important;
+}
+
+/* Resolved / orphaned comment marks: completely transparent with no hover background, border, or pointer */
+.bn-thread-mark[data-orphan='true'],
+.bn-thread-mark[data-orphan='true']:hover,
+.bn-thread-mark[data-resolved='true'],
+.bn-thread-mark[data-resolved='true']:hover,
+.dark .bn-thread-mark[data-orphan='true'],
+.dark .bn-thread-mark[data-orphan='true']:hover,
+.dark .bn-thread-mark[data-resolved='true'],
+.dark .bn-thread-mark[data-resolved='true']:hover {
+  background-color: transparent !important;
+  border-bottom: none !important;
+  cursor: inherit !important;
+}
+
+/* ─── Comment Dropdown Menus ─── */
+
+[data-slot='dropdown-menu-content'].bn-menu-dropdown {
+  background-color: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--editor-dropdown-radius, 8px) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14) !important;
+  padding: 4px !important;
+  min-width: 140px !important;
+}
+
+.dark [data-slot='dropdown-menu-content'].bn-menu-dropdown {
+  background-color: var(--card) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+}

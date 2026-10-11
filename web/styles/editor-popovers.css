@@ -1,0 +1,168 @@
+/* BlockNote link/form popovers and the slash suggestion menu. */
+
+/* BlockNote Link Popover & Form Popovers Redesign
+   (bn-form-popover class is merged onto the same element as data-slot by
+   BlockNote shadcn, so the data-slot selector suffices) */
+[data-slot='popover-content'] {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 6px !important;
+  z-index: 60 !important;
+}
+
+.bn-form-popover input {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 5px 8px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  outline: none !important;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease !important;
+}
+
+.dark .bn-form-popover input {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+
+.bn-form-popover input:focus {
+  border-color: #d7897f !important;
+  box-shadow: 0 0 0 2px rgba(215, 137, 127, 0.25) !important;
+}
+
+.dark .bn-form-popover input:focus {
+  border-color: #d7897f !important;
+  box-shadow: 0 0 0 2px rgba(215, 137, 127, 0.3) !important;
+}
+
+/* Slash / Suggestion Command Menu matching sidebar theme */
+.bn-suggestion-menu {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-dropdown-shadow) !important;
+  padding: 4px !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  max-height: min(450px, 80vh) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Category headers inside suggestion menu */
+.bn-suggestion-menu-label {
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.55 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-weight: 700 !important;
+  padding: 8px 10px 4px !important;
+}
+
+/* Divider separating sections in suggestion menu if any label other than first */
+.bn-suggestion-menu-label:not(:first-of-type) {
+  border-top: var(--editor-dropdown-divider) !important;
+  margin-top: 6px !important;
+  padding-top: 12px !important;
+}
+
+/* Suggestion items - Compact spacing */
+.bn-suggestion-menu-item {
+  color: var(--sidebar-foreground) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 4px 8px !important;
+  margin: 1px 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease !important;
+  gap: 10px !important;
+}
+
+/* Hover / Focus / Selected states matching sidebar accents */
+.bn-suggestion-menu-item:hover,
+.bn-suggestion-menu-item:focus,
+.bn-suggestion-menu-item[aria-selected='true'] {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+/* Suggestion icon container styling - Theme borders */
+.bn-suggestion-menu-item div[data-position='left'] {
+  padding: 4px !important;
+  border-radius: 4px !important;
+  border: 1px solid var(--sidebar-border) !important;
+  background-color: rgba(0, 0, 0, 0.02) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: var(--editor-dropdown-icon-container-size) !important;
+  height: var(--editor-dropdown-icon-container-size) !important;
+  flex-shrink: 0 !important;
+}
+
+.dark .bn-suggestion-menu-item div[data-position='left'] {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* Align and scale internal SVGs */
+.bn-suggestion-menu-item div[data-position='left'] svg {
+  width: var(--editor-dropdown-icon-size) !important;
+  height: var(--editor-dropdown-icon-size) !important;
+  color: inherit !important;
+  opacity: 1 !important;
+}
+
+/* Item Title - Cleaner typography */
+.bn-suggestion-menu-item .text-base,
+.bn-suggestion-menu-item .text-sm {
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 550 !important;
+  line-height: 1.25 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* Item Description (subtext) - Always visible, compact, and clean */
+.bn-suggestion-menu-item .text-xs {
+  display: block !important;
+  color: inherit !important;
+  opacity: 0.75 !important;
+  font-size: var(--editor-dropdown-label-font-size) !important;
+  margin-top: -1px !important;
+  line-height: 1.25 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* Keyboard Shortcut/Badge - Keycap-style badges */
+.bn-suggestion-menu-item [data-position='right'] {
+  flex-shrink: 0 !important;
+}
+
+.bn-suggestion-menu-item [data-position='right'] * {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  padding: 1px 4px !important;
+  height: auto !important;
+  line-height: 1.2 !important;
+  border-radius: 3px !important;
+  background-color: rgba(0, 0, 0, 0.05) !important;
+  color: inherit !important;
+  border: 1px solid var(--sidebar-border) !important;
+  opacity: 1 !important;
+}
+
+.dark .bn-suggestion-menu-item [data-position='right'] * {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}

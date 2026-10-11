@@ -979,7 +979,7 @@ export function EditorContent({
               The block side menu is a mouse affordance: hover-driven handles
               smaller than a fingertip. Touch devices get no handles at all, and
               the gutter they would have reserved goes back to the text (see
-              the `(pointer: coarse)` rules in `styles/globals.css`).
+              the `(pointer: coarse)` rules in `styles/layout-responsive.css`).
             */}
             {!isViewer && !isTouchInput && (
               <SideMenuController
