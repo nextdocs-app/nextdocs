@@ -266,7 +266,6 @@
 
 /* Placeholder styling inside comment editor */
 .bn-comment-editor [data-content-type='paragraph'] .bn-inline-content:empty::before,
-.bn-comment-editor .ProseMirror p.is-editor-empty:first-child::before,
 .bn-comment-editor .bn-block-content:has(.ProseMirror-trailingBreak:only-child):after {
   color: var(--muted-foreground) !important;
   opacity: 0.65 !important;

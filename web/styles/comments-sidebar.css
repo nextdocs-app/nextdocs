@@ -282,19 +282,3 @@
 #doc-comments-btn[aria-pressed='true'] {
   border-color: var(--ring);
 }
-
-.nd-toolbar-comments-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  margin-left: 4px;
-  border-radius: 9999px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--primary-foreground);
-  background: var(--primary);
-}
