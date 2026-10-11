@@ -1,0 +1,118 @@
+/* Base layer defaults, scrollbar styling, and drag & drop cursors. */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+
+  /* While sidebar is being resized, keep breadcrumbs/toolbar fixed to sidebar edge without lag */
+  body.nd-sidebar-resizing .nd-doc-toolbar-left,
+  html.nd-sidebar-resizing .nd-doc-toolbar-left {
+    transition: none !important;
+  }
+  body.nd-sidebar-resizing,
+  html.nd-sidebar-resizing {
+    cursor: col-resize !important;
+  }
+}
+
+/* Scrollbars Style */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme='light']):not([data-theme='dark']) * {
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  }
+}
+
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+html[data-theme='light'] * {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Webkit dark – system preference */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme='light']):not([data-theme='dark']) ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  html:not([data-theme='light']):not([data-theme='dark']) ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+}
+
+/* Webkit dark – explicit override */
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Webkit light – explicit override */
+html[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+html[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Sidebar tree drag & drop indicators.
+   Reorder line and reparent highlight use the same blue as the block editor
+   (block selection outline / drop cursor) in both light and dark modes. */
+.nd-tree-drop-line {
+  background-color: rgb(100 160 255 / 0.5);
+}
+
+.nd-tree-drop-highlight {
+  background-color: rgb(100 160 255 / 0.2) !important;
+}
+
+/* Grabbing hand cursor while a sidebar tree drag is in progress */
+body.nd-is-dragging,
+body.nd-is-dragging * {
+  cursor: grabbing !important;
+}
+
+/* Block editor & table drag drop cursor: same blue as the sidebar tree indicators and block DnD.
+   BlockNote sets the background color inline on blocks and defaults to #adf on tables, so !important is required. */
+.prosemirror-dropcursor-block,
+.prosemirror-dropcursor-block-horizontal,
+.prosemirror-dropcursor-block-vertical-left,
+.prosemirror-dropcursor-block-vertical-right,
+.prosemirror-dropcursor-inline,
+.prosemirror-dropcursor-vertical,
+.bn-table-drop-cursor,
+.bn-shadcn .bn-table-drop-cursor,
+div.bn-table-drop-cursor {
+  background-color: rgb(100 160 255 / 0.5) !important;
+}

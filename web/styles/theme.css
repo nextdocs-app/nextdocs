@@ -1,0 +1,216 @@
+/* Tailwind directives and the design tokens (light + dark) every surface reads. */
+
+/* Code needed for ShadCN with BlockNote - from official example */
+@source "../../node_modules/@blocknote/shadcn";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0% 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.905 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --nd-comments-rail-width: 22rem;
+  --nd-sidebar-width: 256px;
+
+  /* NextDocs Brand Accent (matching NextDocs logo icon) */
+  --nd-brand: #e78f80;
+  --nd-brand-hover: #de8273;
+  --nd-brand-active: #d57768;
+  --nd-brand-ring: #d7897f;
+  --nd-brand-foreground: #1c1917;
+
+  /* Comments Panel & Toolbar Tokens */
+  --nd-comments-panel-bg: #f4f4f6;
+  --nd-comments-panel-border: rgba(0, 0, 0, 0.08);
+  --nd-comments-surface: #ffffff;
+  --nd-toolbar-hover-bg: oklch(0.93 0 0);
+
+  /* Document Comment Highlight Marks */
+  --nd-comment-mark-bg: rgba(234, 179, 8, 0.2);
+  --nd-comment-mark-bg-hover: rgba(234, 179, 8, 0.35);
+  --nd-comment-mark-bg-selected: rgba(234, 179, 8, 0.4);
+  --nd-comment-mark-border: rgba(234, 179, 8, 0.6);
+  --nd-comment-mark-border-hover: rgba(234, 179, 8, 0.9);
+  --nd-comment-mark-border-selected: #ca8a04;
+
+  /* Editor Dropdown / Suggestion Menu Custom Variables */
+  --editor-dropdown-radius: 8px;
+  --editor-dropdown-item-radius: 6px;
+  --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  --editor-dropdown-divider: 1.5px solid rgba(0, 0, 0, 0.15);
+  --editor-dropdown-item-font-size: 14px;
+  --editor-dropdown-label-font-size: 12px;
+  --editor-dropdown-icon-container-size: 29px;
+  --editor-dropdown-icon-size: 17px;
+
+  /* BlockNote Formatting Toolbar Custom Variables (bg/border reuse --sidebar vars directly) */
+  --editor-toolbar-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+  --editor-toolbar-button-height: 28px;
+  --editor-toolbar-active-bg: rgba(215, 137, 127, 0.18);
+  --editor-toolbar-active-color: #c06d62;
+
+  /* Code Block Language Picker Caret */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  /* BlockNote Divider & Table Variables */
+  --editor-divider-color: rgba(55, 53, 47, 0.14);
+  --editor-table-header-bg: rgba(55, 53, 47, 0.035);
+
+  /* BlockNote Checklist & Toggle Variables */
+  --checkbox-hover-bg: rgba(55, 53, 47, 0.08);
+  --checkbox-checked-bg: #2563eb;
+  --checkbox-checked-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5L6.5 11.5L12.5 4.5'/%3E%3C/svg%3E");
+  --toggle-hover-bg: rgba(55, 53, 47, 0.08);
+  --toggle-active-bg: rgba(55, 53, 47, 0.14);
+
+  /* BlockNote Side Menu Handle Variables */
+  --side-menu-color: rgba(55, 53, 47, 0.65);
+  --side-menu-hover-color: #121212;
+  --side-menu-hover-bg: rgba(55, 53, 47, 0.08);
+  --side-menu-active-bg: rgba(55, 53, 47, 0.14);
+}
+
+/* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
+.dark {
+  --background: #171615;
+  --foreground: oklch(0.985 0 0);
+  --card: #1e1e1e;
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --sidebar: #1f1f1d;
+  --sidebar-foreground: oklch(91.279% 0.0001 271.152);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: #2f2f2a;
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  /* NextDocs Brand Accent (matching NextDocs logo icon) */
+  --nd-brand: #e78f80;
+  --nd-brand-hover: #de8273;
+  --nd-brand-active: #d57768;
+  --nd-brand-ring: #d7897f;
+  --nd-brand-foreground: #1c1917;
+
+  /* Comments Panel & Toolbar Dark Tokens */
+  --nd-comments-panel-bg: #181816;
+  --nd-comments-panel-border: rgba(255, 255, 255, 0.08);
+  --nd-comments-surface: #242422;
+  --nd-toolbar-hover-bg: oklch(0.32 0 0);
+
+  /* Document Comment Highlight Marks Dark Overrides */
+  --nd-comment-mark-bg: rgba(234, 179, 8, 0.22);
+  --nd-comment-mark-bg-hover: rgba(234, 179, 8, 0.38);
+  --nd-comment-mark-bg-selected: rgba(234, 179, 8, 0.45);
+  --nd-comment-mark-border: rgba(234, 179, 8, 0.65);
+  --nd-comment-mark-border-hover: rgba(234, 179, 8, 0.9);
+  --nd-comment-mark-border-selected: #facc15;
+
+  /* Dark Mode Overrides for Dropdown / Suggestion Menu Variables */
+  --editor-dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --editor-dropdown-divider: 1.5px solid rgba(255, 255, 255, 0.15);
+
+  /* BlockNote Formatting Toolbar Dark Overrides */
+  --editor-toolbar-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.4);
+  --editor-toolbar-active-bg: rgba(215, 137, 127, 0.22);
+  --editor-toolbar-active-color: #e59a90;
+
+  /* Code Block Language Picker Dark Overrides */
+  --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+
+  /* BlockNote Divider & Table Dark Overrides */
+  --editor-divider-color: rgba(255, 255, 255, 0.12);
+  --editor-table-header-bg: rgba(255, 255, 255, 0.04);
+
+  /* BlockNote Checklist & Toggle Dark Overrides */
+  --checkbox-hover-bg: rgba(255, 255, 255, 0.08);
+  --checkbox-checked-bg: #3b82f6;
+  --toggle-hover-bg: rgba(255, 255, 255, 0.08);
+  --toggle-active-bg: rgba(255, 255, 255, 0.14);
+
+  /* BlockNote Side Menu Handle Dark Overrides */
+  --side-menu-color: rgba(255, 255, 255, 0.55);
+  --side-menu-hover-color: #f2f2f2;
+  --side-menu-hover-bg: rgba(255, 255, 255, 0.08);
+  --side-menu-active-bg: rgba(255, 255, 255, 0.14);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans:
+    var(--font-inter), 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Open Sans',
+    'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+}

@@ -56,7 +56,7 @@ export function measureDocumentToolbarInset(root: ParentNode): number {
  * The inset is also published as `DOC_TOOLBAR_INSET_CSS_VAR` on the document
  * element for CSS-positioned popups that no JS middleware reaches: Base UI's
  * `Positioner` (block-type select, colour menu) sizes its popups from
- * `--available-height`, and `styles/globals.css` subtracts the toolbar strip
+ * `--available-height`, and `styles/editor-menus.css` subtracts the toolbar strip
  * from it so upward-opening popups stop below the toolbar. Removed on unmount
  * so a stale measurement never caps popups on a page without a toolbar.
  */

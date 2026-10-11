@@ -1,0 +1,210 @@
+/* BlockNote formatting toolbar and its tooltips. */
+
+/* BlockNote Formatting Toolbar Redesign */
+
+.bn-toolbar {
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-toolbar-shadow) !important;
+  border-radius: var(--editor-dropdown-radius) !important;
+  padding: 3px 4px !important;
+  gap: 2px !important;
+  align-items: center !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 50 !important;
+}
+
+/* Mobile formatting toolbar positioning */
+.bn-mobile-formatting-toolbar {
+  background-color: var(--sidebar) !important;
+  border-top: 1px solid var(--sidebar-border) !important;
+  box-shadow: var(--editor-toolbar-shadow) !important;
+}
+
+/* Formatting toolbar buttons: compact, rounded, matching editor buttons.
+   The pinned dismiss button lives beside the scrolling row rather than inside
+   it (see MobileBlurEditorButton), so it is listed here too — same
+   background, icon colour, radius, padding, and feedback as every button. */
+.bn-toolbar .bn-button,
+.bn-toolbar [data-slot='button'],
+.bn-toolbar [data-slot='toggle'],
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button {
+  height: var(--editor-toolbar-button-height, 28px) !important;
+  min-width: var(--editor-toolbar-button-height, 28px) !important;
+  border-radius: var(--editor-dropdown-item-radius) !important;
+  padding: 0 6px !important;
+  font-size: var(--editor-dropdown-item-font-size) !important;
+  font-weight: 500 !important;
+  color: var(--sidebar-foreground) !important;
+  opacity: 0.8;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  outline: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease !important;
+}
+
+/* Hover state */
+.bn-toolbar .bn-button:hover,
+.bn-toolbar [data-slot='button']:hover,
+.bn-toolbar [data-slot='toggle']:hover,
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button:hover {
+  background-color: var(--sidebar-accent) !important;
+  color: var(--sidebar-accent-foreground) !important;
+  opacity: 1 !important;
+}
+
+/* Active / Pressed / Selected toggle state (Bold, Italic, Underline, Strike, Code, Align, etc.) */
+.bn-toolbar [data-slot='toggle'][aria-pressed='true'],
+.bn-toolbar [data-slot='toggle'][data-pressed],
+.bn-toolbar [data-slot='toggle'][data-state='on'],
+.bn-toolbar .bn-button[aria-pressed='true'],
+.bn-toolbar .bn-button[data-state='on'] {
+  background-color: var(--editor-toolbar-active-bg, rgba(215, 137, 127, 0.18)) !important;
+  color: var(--editor-toolbar-active-color, #c06d62) !important;
+  opacity: 1 !important;
+}
+
+/* Subtle group dividers inside the formatting toolbar, plus one before the
+   pinned dismiss button so it reads as its own group at the row's end */
+.bn-toolbar [data-test='alignTextLeft'],
+.bn-toolbar [data-test='colors'],
+.bn-toolbar [data-test='createLink'],
+.bn-toolbar [data-test='nestBlock'],
+.bn-toolbar [aria-label='Comment'],
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button {
+  margin-left: 4px !important;
+  position: relative !important;
+}
+
+.bn-toolbar [data-test='alignTextLeft']::before,
+.bn-toolbar [data-test='colors']::before,
+.bn-toolbar [data-test='createLink']::before,
+.bn-toolbar [data-test='nestBlock']::before,
+.bn-toolbar [aria-label='Comment']::before,
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: 15%;
+  height: 70%;
+  width: 1px;
+  background-color: var(--sidebar-border) !important;
+  pointer-events: none;
+}
+
+/* The docked bar opens with a section of its own: the "+" (add block) and the
+   trash (delete block) act on whole blocks rather than on the text inside them,
+   so a divider fences them off from the formatting buttons that follow. Same
+   line as the sections above, drawn on the leading section's trailing edge —
+   the button after it is BlockNote's block-type select, markup this app does not
+   own, so the section is fenced from the button it does own. The gap left
+   around it matches the dividers above (their 4px margin plus the row's 4px
+   gap). */
+.bn-mobile-formatting-toolbar .bn-toolbar [data-test='mobileDeleteBlockButton'] {
+  margin-right: 4px !important;
+  position: relative !important;
+}
+
+.bn-mobile-formatting-toolbar .bn-toolbar [data-test='mobileDeleteBlockButton']::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: 15%;
+  height: 70%;
+  width: 1px;
+  background-color: var(--sidebar-border) !important;
+  pointer-events: none;
+}
+
+/* Icons inside toolbar buttons */
+.bn-toolbar .bn-button svg,
+.bn-toolbar [data-slot='button'] svg,
+.bn-toolbar [data-slot='toggle'] svg,
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button svg {
+  width: 17px !important;
+  height: 17px !important;
+  color: inherit !important;
+}
+
+/* Disabled buttons */
+.bn-toolbar .bn-button:disabled,
+.bn-toolbar [data-slot='button']:disabled,
+.bn-toolbar [data-slot='toggle']:disabled,
+.bn-mobile-formatting-toolbar > .bn-blur-editor-button:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
+/* Ensure tooltips, dropdowns, and popovers render above fixed sidebars (comments sidebar z-index: 50) */
+div:has(> [data-slot='tooltip-content']),
+div[role='presentation']:has([data-slot='tooltip-content']),
+div:has(> [data-slot='dropdown-menu-content']),
+div[role='presentation']:has([data-slot='dropdown-menu-content']),
+div:has(> [data-slot='popover-content']),
+div[role='presentation']:has([data-slot='popover-content']) {
+  z-index: 70 !important;
+}
+
+/* Tooltip popups for toolbar buttons - preserve BlockNote's native tooltip design & arrow, retain theme coloring */
+[data-slot='tooltip-content'] {
+  z-index: 70 !important;
+  background-color: var(--sidebar) !important;
+  color: var(--sidebar-foreground) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
+}
+
+.dark [data-slot='tooltip-content'] {
+  background-color: #262624 !important;
+  color: #f2f2f2 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Tooltip arrow coloring matching the tooltip body */
+[data-slot='tooltip-content'] .rotate-45 {
+  background-color: var(--sidebar) !important;
+  fill: var(--sidebar) !important;
+}
+
+.dark [data-slot='tooltip-content'] .rotate-45 {
+  background-color: #262624 !important;
+  fill: #262624 !important;
+}
+
+[data-slot='tooltip-content'][data-side='top'] .rotate-45 {
+  border-right: 1px solid var(--sidebar-border) !important;
+  border-bottom: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot='tooltip-content'][data-side='bottom'] .rotate-45 {
+  border-left: 1px solid var(--sidebar-border) !important;
+  border-top: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot='tooltip-content'][data-side='left'] .rotate-45 {
+  border-top: 1px solid var(--sidebar-border) !important;
+  border-right: 1px solid var(--sidebar-border) !important;
+}
+
+[data-slot='tooltip-content'][data-side='right'] .rotate-45 {
+  border-bottom: 1px solid var(--sidebar-border) !important;
+  border-left: 1px solid var(--sidebar-border) !important;
+}
+
+.dark [data-slot='tooltip-content'][data-side='top'] .rotate-45,
+.dark [data-slot='tooltip-content'][data-side='bottom'] .rotate-45,
+.dark [data-slot='tooltip-content'][data-side='left'] .rotate-45,
+.dark [data-slot='tooltip-content'][data-side='right'] .rotate-45 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}

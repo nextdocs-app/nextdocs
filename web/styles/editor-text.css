@@ -1,0 +1,68 @@
+/* Quote blocks and editor links. */
+
+/* BlockNote Quote */
+:is(.bn-block-content[data-content-type='quote'], [data-content-type='quote']) blockquote {
+  border-left: 3.5px solid #71717a !important;
+  color: #545252 !important;
+}
+
+:is(.dark, [data-color-scheme='dark'])
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #d4d4d8 !important;
+  color: #d4d4d8 !important;
+}
+
+/* Explicit light override — beats stale data-color-scheme="dark" */
+html[data-theme='light']
+  :is(.bn-block-content[data-content-type='quote'], [data-content-type='quote'])
+  blockquote {
+  border-left: 3.5px solid #71717a !important;
+  color: #545252 !important;
+}
+
+/* BlockNote link — Dark mode */
+.bn-shadcn .bn-editor a,
+.bn-editor a {
+  color: #a1a1aa !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(161, 161, 170, 0.6);
+  cursor: pointer !important;
+  transition:
+    color 0.15s ease,
+    text-decoration-color 0.15s ease;
+}
+
+.bn-shadcn .bn-editor a:visited,
+.bn-editor a:visited {
+  color: #a1a1aa !important;
+}
+
+.bn-shadcn .bn-editor a:hover,
+.bn-editor a:hover,
+.bn-shadcn .bn-editor a:visited:hover,
+.bn-editor a:visited:hover {
+  color: #e4e4e7 !important;
+  text-decoration-color: #e4e4e7;
+}
+
+/* BlockNote link — Light mode */
+html:not(.dark) .bn-shadcn .bn-editor a,
+html:not(.dark) .bn-editor a {
+  color: #52525b !important;
+  text-decoration-color: rgba(82, 82, 91, 0.6);
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:visited,
+html:not(.dark) .bn-editor a:visited {
+  color: #52525b !important;
+}
+
+html:not(.dark) .bn-shadcn .bn-editor a:hover,
+html:not(.dark) .bn-editor a:hover,
+html:not(.dark) .bn-shadcn .bn-editor a:visited:hover,
+html:not(.dark) .bn-editor a:visited:hover {
+  color: #18181b !important;
+  text-decoration-color: #18181b;
+}

@@ -1,0 +1,200 @@
+/* Code blocks, inline code, and the code block language picker. */
+
+@layer components {
+  /* Code Block Background & Text — Light Mode */
+  .bn-block-content[data-content-type='codeBlock'] {
+    background-color: #f7f7f6 !important;
+    color: #24292e !important;
+    /* By default, the code block has very less gap between it's neighboring blocks.
+    To make it look clean, we are adding some gap using margin. */
+    margin-block: 12px !important;
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > pre {
+    background-color: transparent !important;
+    white-space: pre !important;
+    overflow-x: auto !important;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  .dark .bn-block-content[data-content-type='codeBlock'] > pre,
+  .bn-root[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] > pre,
+  .bn-container[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] > pre {
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  }
+
+  /* WebKit / Chromium custom thin horizontal scrollbar (5px) */
+  .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 9999px;
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.35);
+  }
+
+  .dark .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar-thumb,
+  .bn-root[data-color-scheme='dark']
+    .bn-block-content[data-content-type='codeBlock']
+    > pre::-webkit-scrollbar-thumb,
+  .bn-container[data-color-scheme='dark']
+    .bn-block-content[data-content-type='codeBlock']
+    > pre::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .dark .bn-block-content[data-content-type='codeBlock'] > pre::-webkit-scrollbar-thumb:hover,
+  .bn-root[data-color-scheme='dark']
+    .bn-block-content[data-content-type='codeBlock']
+    > pre::-webkit-scrollbar-thumb:hover,
+  .bn-container[data-color-scheme='dark']
+    .bn-block-content[data-content-type='codeBlock']
+    > pre::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.4);
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > pre > code,
+  .bn-block-content[data-content-type='codeBlock'] .bn-inline-content {
+    white-space: pre !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  /* Shiki Syntax Highlighting — Light Mode */
+  .bn-block-content[data-content-type='codeBlock'] .shiki {
+    color: var(--shiki-light, inherit) !important;
+  }
+
+  /* Code Block Background & Text — Dark Mode */
+  .dark .bn-block-content[data-content-type='codeBlock'],
+  .bn-root[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'],
+  .bn-container[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] {
+    background-color: #21211f !important;
+    color: #e1e4e8 !important;
+  }
+
+  /* Shiki Syntax Highlighting — Dark Mode */
+  .dark .bn-block-content[data-content-type='codeBlock'] .shiki,
+  .bn-root[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] .shiki,
+  .bn-container[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] .shiki {
+    color: var(--shiki-dark, inherit) !important;
+  }
+
+  /* Code Block Language Picker */
+  .bn-block-content[data-content-type='codeBlock'] > div > select {
+    position: absolute !important;
+    left: auto !important;
+    right: 12px !important;
+    field-sizing: content;
+    z-index: 2;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    box-sizing: border-box !important;
+    height: 24px !important;
+    line-height: 22px !important;
+    font-family: inherit !important;
+    font-size: 12.5px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.01em !important;
+    padding: 0 20px 0 8px !important;
+    cursor: pointer !important;
+    border-radius: 5px !important;
+    backdrop-filter: blur(8px) !important;
+    background-color: var(--sidebar) !important;
+    background-image: var(--code-language-caret) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 6px center !important;
+    background-size: 10px 10px !important;
+    color: var(--sidebar-foreground) !important;
+    border: 1px solid var(--sidebar-border) !important;
+    box-shadow: var(--code-language-shadow) !important;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.15s ease,
+      background-color 0.1s ease,
+      border-color 0.1s ease !important;
+  }
+
+  /* Reveal language picker on code block hover or when select is focused */
+  .bn-block-content[data-content-type='codeBlock']:hover > div > select,
+  .bn-block-content[data-content-type='codeBlock'] > div > select:focus {
+    opacity: 1 !important;
+    pointer-events: auto;
+    transition-delay: 0s !important;
+  }
+
+  /* Hover & Focus state on the language select */
+  .bn-block-content[data-content-type='codeBlock'] > div > select:hover,
+  .bn-block-content[data-content-type='codeBlock'] > div > select:focus {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    border-color: var(--sidebar-border) !important;
+  }
+
+  .bn-block-content[data-content-type='codeBlock'] > div > select:focus-visible {
+    outline: 2px solid var(--sidebar-ring, #3b82f6) !important;
+    outline-offset: 1px !important;
+  }
+
+  /* Dropdown options list matching sidebar */
+  .bn-block-content[data-content-type='codeBlock'] > div > select > option {
+    background-color: var(--sidebar) !important;
+    color: var(--sidebar-foreground) !important;
+    font-family: inherit !important;
+    font-size: var(--editor-dropdown-item-font-size, 14px) !important;
+  }
+
+  /* Inline Code Highlighting */
+  :is(.bn-editor, .bn-default-styles) .bn-inline-content code,
+  .bn-inline-content code,
+  p.bn-inline-content code {
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace !important;
+    font-size: 0.85em !important;
+    font-weight: 500 !important;
+    line-height: normal !important;
+    padding: 0.15em 0.35em !important;
+    margin: 0 0.15em !important;
+    border-radius: 4px !important;
+    background-color: rgba(0, 0, 0, 0.05) !important;
+    color: #d20f39 !important;
+    vertical-align: baseline !important;
+    box-decoration-break: slice !important;
+    -webkit-box-decoration-break: slice !important;
+    tab-size: 2 !important;
+  }
+
+  .dark :is(.bn-editor, .bn-default-styles) .bn-inline-content code,
+  .dark .bn-inline-content code,
+  .dark p.bn-inline-content code,
+  .bn-root[data-color-scheme='dark'] .bn-inline-content code,
+  .bn-container[data-color-scheme='dark'] .bn-inline-content code {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #e06c75 !important;
+  }
+
+  /* When custom colors are applied via toolbar color picker, respect them */
+  .bn-inline-content code:has([style*='color']) {
+    color: inherit !important;
+  }
+  .bn-inline-content [style*='color'] > code {
+    color: inherit !important;
+  }
+  .bn-inline-content [style*='background'] > code {
+    background-color: transparent !important;
+    border-color: transparent !important;
+  }
+}

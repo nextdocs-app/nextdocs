@@ -148,7 +148,7 @@ describe('useDocumentToolbarInset', () => {
 
     const { unmount } = renderHook(() => useDocumentToolbarInset());
 
-    // Read by `styles/globals.css` to cap upward-opening toolbar popups
+    // Read by `styles/editor-menus.css` to cap upward-opening toolbar popups
     // (block-type select, colour menu) below the toolbar.
     expect(document.documentElement.style.getPropertyValue(DOC_TOOLBAR_INSET_CSS_VAR)).toBe('44px');
 
