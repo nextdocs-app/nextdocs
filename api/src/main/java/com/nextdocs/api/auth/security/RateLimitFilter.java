@@ -34,6 +34,10 @@ import tools.jackson.databind.ObjectMapper;
  * - {@code auth:<ip>} — /api/v1/auth/* (login/signup/refresh), strict default budget.
  * - {@code public-read:<ip>} — anonymous reads: GET .../public, /public/path,
  *   /public/children and anonymous GET .../access-check, .../my-access.
+ * - {@code icons:<ip>} — builtin icon catalog, bundle, and glyphs
+ *   (GET|HEAD /api/v1/icons[/{name},/bundle]). Separate from public-read: the
+ *   bundle is ~830KB, so sharing the 120/min browsing bucket would let one
+ *   address pull ~100MB/min while starving share-link reads.
  * - {@code public-write:<ip>} — anonymous saves: PATCH .../public, strict budget
  *   plus an actual body-size ceiling (the controller's own snapshot-size guard
  *   runs only after the body has been parsed, so the limit has to be enforced here,
@@ -71,6 +75,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
     private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
+    private static final String ICON_CATALOG_PATH = "/api/v1/icons";
+    private static final String ICON_PATH_PREFIX = "/api/v1/icons/";
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
     private static final String MISSING_UPLOAD_LENGTH_MSG = "Uploads must declare a Content-Length.";
     private static final String UNSUPPORTED_MEDIA_TYPE_MSG = "Unsupported Media Type.";
@@ -87,6 +93,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final long uploadMaxDeclaredBytes;
     private final int downloadMaxRequests;
     private final Duration downloadWindow;
+    private final int iconMaxRequests;
+    private final Duration iconWindow;
 
     public RateLimitFilter(
             RateLimiter rateLimiter,
@@ -100,6 +108,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.upload-window-seconds:60}") long uploadWindowSeconds,
             @Value("${app.rate-limit.download-max-requests:600}") int downloadMaxRequests,
             @Value("${app.rate-limit.download-window-seconds:60}") long downloadWindowSeconds,
+            @Value("${app.rate-limit.icon-max-requests:60}") int iconMaxRequests,
+            @Value("${app.rate-limit.icon-window-seconds:60}") long iconWindowSeconds,
             @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
@@ -112,6 +122,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.uploadWindow = Duration.ofSeconds(uploadWindowSeconds);
         this.downloadMaxRequests = downloadMaxRequests;
         this.downloadWindow = Duration.ofSeconds(downloadWindowSeconds);
+        this.iconMaxRequests = iconMaxRequests;
+        this.iconWindow = Duration.ofSeconds(iconWindowSeconds);
         // Same ceiling the multipart parser enforces, derived rather than duplicated: a
         // self-hoster who raises ATTACHMENT_MAX_REQUEST_SIZE must not silently hit a second,
         // stale limit in the filter.
@@ -393,6 +405,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         if (!uri.startsWith(PUBLIC_DOCUMENT_PATH_PREFIX)) {
+            // Builtin icon catalog, bundle, and glyphs are static reads on
+            // their own budget — never unlimited, never shared with share-link
+            // browsing (see the class javadoc for the bandwidth math).
+            if (isIconRead(request)) {
+                return Verdict.customBudget("icons:", iconMaxRequests, iconWindow);
+            }
             return Verdict.unlimited();
         }
 
@@ -469,6 +487,33 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         return Verdict.unlimited();
+    }
+
+    /**
+     * Exactly {@code GET|HEAD /api/v1/icons}, {@code /bundle}, or {@code /{name}}.
+     *
+     * <p>Matched on the decoded path and gated on GET|HEAD. The decode is the part that
+     * matters: the raw URI may still carry percent-escapes, so matching raw would let the
+     * escape rather than the endpoint it addresses pick the bucket — {@code
+     * /api/v1/%69cons/bundle} escaped the icon budget entirely. Only reads exist on these
+     * routes, so a write must not spend the read bucket either.
+     */
+    private static boolean isIconRead(HttpServletRequest request) {
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
+            return false;
+        }
+        String path = decodePath(request.getRequestURI());
+        return path.equals(ICON_CATALOG_PATH) || path.startsWith(ICON_PATH_PREFIX);
+    }
+
+    /** Decoded path, or the raw path when it is not valid percent-encoding. */
+    private static String decodePath(String uri) {
+        try {
+            return UriUtils.decode(uri, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            return uri;
+        }
     }
 
     /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/file}, no nested or trailing segments. */

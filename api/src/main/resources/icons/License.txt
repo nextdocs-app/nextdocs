@@ -1,0 +1,8 @@
+Builtin page icons vendored from Streamline Ultimate Bold - Free.
+
+Source: https://www.streamlinehq.com/icons/ultimate-bold-free
+License: CC BY 4.0 by Streamline (https://creativecommons.org/licenses/by/4.0/)
+
+Redistributed SVG files live under `svg/` alongside the machine-readable
+name and category list in `icons.json`. Downstream consumers must preserve
+this attribution when redistributing or presenting the icons.

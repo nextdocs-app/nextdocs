@@ -66,6 +66,13 @@ public class SecurityConfig {
      */
     private static final String[] PUBLIC_ATTACHMENT_PATHS = {"/api/v1/attachments/*/url", "/api/v1/attachments/*/file"};
 
+    /**
+     * Builtin page-icon catalog and glyphs (static vendor set). Read-only on
+     * purpose: a method-agnostic permitAll would silently make the next write
+     * endpoint added under {@code /icons/*} public.
+     */
+    private static final String[] PUBLIC_ICON_PATHS = {"/api/v1/icons", "/api/v1/icons/*"};
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
@@ -76,6 +83,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth.requestMatchers(HttpMethod.GET, PUBLIC_ATTACHMENT_PATHS)
                         .permitAll()
                         .requestMatchers(HttpMethod.HEAD, PUBLIC_ATTACHMENT_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ICON_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.HEAD, PUBLIC_ICON_PATHS)
                         .permitAll()
                         .requestMatchers(PUBLIC_PATHS)
                         .permitAll()

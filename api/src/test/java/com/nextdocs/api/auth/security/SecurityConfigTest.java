@@ -1,13 +1,17 @@
 package com.nextdocs.api.auth.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.attachment.controller.AttachmentController;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.document.controller.DocumentIconController;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -84,6 +88,33 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DisplayName("Anonymous callers reach the builtin icon catalog and glyphs without a 401")
+    void publicPaths_permitAnonymousIconRequests() throws Exception {
+        mockMvc.perform(get(DocumentIconController.LIST_PATH)).andExpect(status().isOk());
+        mockMvc.perform(get(DocumentIconController.BUNDLE_PATH)).andExpect(status().isOk());
+        mockMvc.perform(get(DocumentIconController.SVG_PATH, "home")).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Anonymous writes to the icon endpoints are rejected for every write method")
+    void publicPaths_rejectAnonymousIconWrites() throws Exception {
+        // Only GET|HEAD are public: a method-agnostic permitAll would let a future
+        // write endpoint under /icons/* through to a 405 instead of a 401. Every
+        // write method is probed — pinning only POST lets a regression that
+        // allowlists PUT/PATCH/DELETE one method at a time stay green.
+        for (String path : new String[] {DocumentIconController.LIST_PATH, DocumentIconController.BUNDLE_PATH}) {
+            mockMvc.perform(post(path)).andExpect(status().isUnauthorized());
+            mockMvc.perform(put(path)).andExpect(status().isUnauthorized());
+            mockMvc.perform(patch(path)).andExpect(status().isUnauthorized());
+            mockMvc.perform(delete(path)).andExpect(status().isUnauthorized());
+        }
+        mockMvc.perform(post(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
+        mockMvc.perform(put(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
+        mockMvc.perform(patch(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("Anonymous callers are still rejected on non-public endpoints")
     void publicPaths_rejectAnonymousPrivateRequests() throws Exception {
         mockMvc.perform(get("/api/v1/probe/private")).andExpect(status().isUnauthorized());
@@ -147,6 +178,21 @@ class SecurityConfigTest {
 
         @PostMapping(AttachmentController.UPLOAD_PATH)
         String attachmentUpload(@PathVariable String documentId) {
+            return "ok";
+        }
+
+        @GetMapping(DocumentIconController.LIST_PATH)
+        String iconList() {
+            return "ok";
+        }
+
+        @GetMapping(DocumentIconController.BUNDLE_PATH)
+        String iconBundle() {
+            return "ok";
+        }
+
+        @GetMapping(DocumentIconController.SVG_PATH)
+        String iconSvg(@PathVariable String name) {
             return "ok";
         }
 
