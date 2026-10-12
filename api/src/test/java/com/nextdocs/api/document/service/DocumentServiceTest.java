@@ -79,6 +79,9 @@ class DocumentServiceTest {
     @Mock
     private AttachmentService attachmentService;
 
+    @Mock
+    private com.nextdocs.api.document.service.DocumentIconCoverApplier iconCoverApplier;
+
     private DocumentProperties documentProperties;
 
     private DocumentService documentService;
@@ -95,7 +98,8 @@ class DocumentServiceTest {
                 documentProperties,
                 permissionService,
                 queryHelper,
-                attachmentService);
+                attachmentService,
+                iconCoverApplier);
     }
 
     @Test
@@ -320,7 +324,7 @@ class DocumentServiceTest {
                 .displayName("Alice")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -347,7 +351,7 @@ class DocumentServiceTest {
                 .displayName("Alice")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -381,7 +385,7 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
@@ -410,7 +414,7 @@ class DocumentServiceTest {
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
@@ -429,7 +433,8 @@ class DocumentServiceTest {
                 .email("alice@example.com")
                 .displayName("Alice")
                 .build();
-        DocumentCreateRequest request = new DocumentCreateRequest(null, "My Doc", "AQID", "Alice", null, null, null);
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "My Doc", "AQID", "Alice", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(eq(userId), any()))
@@ -633,8 +638,8 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
+        var response = documentService.update(
+                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null));
 
         assertEquals("Updated title", response.title());
         verify(permissionService, atLeastOnce()).resolveAccess(requesterId, documentId);
@@ -652,7 +657,7 @@ class DocumentServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null)));
+                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null)));
 
         assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -668,7 +673,8 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null));
+        var response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null, null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -683,7 +689,8 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null));
+        var response = documentService.update(
+                requesterId, documentId, new DocumentUpdateRequest("   ", null, null, null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -840,7 +847,7 @@ class DocumentServiceTest {
         User host = User.builder().id(hostOwnerId).build();
         Document parent = Document.builder().id(parentId).user(host).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Jerry", parentId, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Jerry", parentId, null, null, null, null);
 
         when(userRepository.findById(creatorId))
                 .thenReturn(Optional.of(User.builder().id(creatorId).build()));
@@ -867,7 +874,7 @@ class DocumentServiceTest {
         User creator = User.builder().id(creatorId).build();
         Document parent = Document.builder().id(parentId).user(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -889,7 +896,7 @@ class DocumentServiceTest {
         User creator = User.builder().id(creatorId).build();
         Document parent = Document.builder().id(parentId).user(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -915,7 +922,7 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Retry", "AQID", "Jerry", null, null, null);
+                new DocumentCreateRequest(documentId, "Retry", "AQID", "Jerry", null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
                 .thenReturn(Optional.of(User.builder().id(creatorId).build()));
@@ -940,7 +947,7 @@ class DocumentServiceTest {
                 .title("Hosted")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Squat", "AQID", "Stranger", null, null, null);
+                new DocumentCreateRequest(documentId, "Squat", "AQID", "Stranger", null, null, null, null, null);
 
         when(userRepository.findById(strangerId))
                 .thenReturn(Optional.of(User.builder().id(strangerId).build()));
@@ -970,8 +977,8 @@ class DocumentServiceTest {
                 .parent(parent)
                 .siblingOrderKey("a0")
                 .build();
-        DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Child", "AQID", "Alice", parentId, prevSiblingId, nextSiblingId);
+        DocumentCreateRequest request = new DocumentCreateRequest(
+                null, "Child", "AQID", "Alice", parentId, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
@@ -988,8 +995,8 @@ class DocumentServiceTest {
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
-        DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, prevSiblingId, nextSiblingId);
+        DocumentCreateRequest request = new DocumentCreateRequest(
+                null, "Root Doc", "AQID", "Alice", null, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1012,7 +1019,7 @@ class DocumentServiceTest {
         UUID prevSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, prevSiblingId, null);
+                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, prevSiblingId, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1032,7 +1039,7 @@ class DocumentServiceTest {
         UUID nextSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, null, nextSiblingId);
+                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, null, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId))
@@ -1267,8 +1274,8 @@ class DocumentServiceTest {
         UUID userId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
         UUID explicitId = UUID.randomUUID();
-        DocumentCreateRequest request =
-                new DocumentCreateRequest(explicitId, "Retried Title", "eWFz", "Anonymous", null, null, null);
+        DocumentCreateRequest request = new DocumentCreateRequest(
+                explicitId, "Retried Title", "eWFz", "Anonymous", null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(userId, explicitId))
@@ -1589,7 +1596,8 @@ class DocumentServiceTest {
 
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.update(viewerId, documentId, new DocumentUpdateRequest("New title", null, null)));
+                () -> documentService.update(
+                        viewerId, documentId, new DocumentUpdateRequest("New title", null, null, null, null)));
 
         assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
     }
@@ -1652,6 +1660,8 @@ class DocumentServiceTest {
                 trashed.getCreatedAt(),
                 trashed.getUpdatedAt(),
                 trashed.getDeletedAt(),
+                null,
+                null,
                 null);
         when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(true), any()))
                 .thenReturn(new PageImpl<>(List.of(trashedResponse)));
@@ -2148,8 +2158,8 @@ class DocumentServiceTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(collaboratorRepository.existsByDocument_Id(documentId)).thenReturn(true);
 
-        DocumentResponse response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
+        DocumentResponse response = documentService.update(
+                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null));
 
         assertTrue(response.hasCollaborators());
     }
@@ -2169,7 +2179,8 @@ class DocumentServiceTest {
         // VARCHAR(255) invariant for every other caller instead of failing at the column.
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.update(requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null)));
+                () -> documentService.update(
+                        requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -2187,8 +2198,8 @@ class DocumentServiceTest {
 
         String longest = "t".repeat(DocumentService.MAX_TITLE_LENGTH);
 
-        DocumentResponse response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest(longest, null, null));
+        DocumentResponse response = documentService.update(
+                requesterId, documentId, new DocumentUpdateRequest(longest, null, null, null, null));
 
         assertEquals(longest, response.title());
     }
@@ -2208,7 +2219,7 @@ class DocumentServiceTest {
         ApiException ex = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest(null, encodedState, null)));
+                        requesterId, documentId, new DocumentUpdateRequest(null, encodedState, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -2226,7 +2237,7 @@ class DocumentServiceTest {
 
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any());
@@ -2243,8 +2254,8 @@ class DocumentServiceTest {
         when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         String encodedState = java.util.Base64.getEncoder().encodeToString("edit".getBytes(StandardCharsets.UTF_8));
-        DocumentResponse response =
-                documentService.updatePublic(docId, new DocumentUpdateRequest("Guest edit", encodedState, "Guest"));
+        DocumentResponse response = documentService.updatePublic(
+                docId, new DocumentUpdateRequest("Guest edit", encodedState, "Guest", null, null));
 
         assertEquals("Guest edit", response.title());
         // Guest creator labels are not adopted for public saves.
@@ -2264,7 +2275,8 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Too big", encodedState, null)));
+                () -> documentService.updatePublic(
+                        docId, new DocumentUpdateRequest("Too big", encodedState, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         verify(documentRepository, never()).save(any());
@@ -2285,7 +2297,7 @@ class DocumentServiceTest {
         byte[] atLimit = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES];
         String encodedState = java.util.Base64.getEncoder().encodeToString(atLimit);
 
-        documentService.updatePublic(docId, new DocumentUpdateRequest(null, encodedState, null));
+        documentService.updatePublic(docId, new DocumentUpdateRequest(null, encodedState, null, null, null));
 
         assertEquals(DocumentService.MAX_PUBLIC_STATE_BYTES, doc.getYjsState().length);
     }
@@ -2306,7 +2318,7 @@ class DocumentServiceTest {
         ApiException ex = assertThrows(
                 ApiException.class,
                 () -> documentService.updatePublic(
-                        docId, new DocumentUpdateRequest("Too big", oversizedGarbage, null)));
+                        docId, new DocumentUpdateRequest("Too big", oversizedGarbage, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertTrue(ex.getMessage().contains("exceeds the maximum size"));
@@ -2323,7 +2335,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2337,7 +2349,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2351,7 +2363,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 

@@ -35,4 +35,10 @@ public record DocumentResponse(
         OffsetDateTime deletedAt,
 
         @Schema(description = "When the document will be permanently removed (trash retention)")
-        OffsetDateTime purgeAt) {}
+        OffsetDateTime purgeAt,
+
+        @Schema(description = "Page icon, null when the document has none")
+        DocumentIconResponse icon,
+
+        @Schema(description = "Cover image, null when the document has none")
+        DocumentCoverResponse cover) {}
