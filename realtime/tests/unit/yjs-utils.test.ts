@@ -4,6 +4,7 @@ import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import * as Y from 'yjs';
 import { WebSocket } from 'ws';
+import type { DocumentCover, DocumentIcon } from '../../src/types/blocks.js';
 
 // Mock logger to avoid console output during tests (ESM)
 jest.unstable_mockModule('../../src/logger.js', () => ({
@@ -698,6 +699,118 @@ describe('Yjs Utils', () => {
       const doc = docs.get(`${docName}-comment-unknown`)!;
 
       expect(shouldRejectSyncMessage(doc, conn, 99)).toBe(true);
+    });
+  });
+
+  describe('page icon and cover meta', () => {
+    const icon: DocumentIcon = { type: 'builtin', value: 'arrow-right', color: 'blue' };
+    const cover: DocumentCover = {
+      type: 'upload',
+      value: '11111111-2222-4333-8444-555555555555',
+      position: 0.25,
+    };
+
+    const messageHandlerFor = (conn: any) => {
+      const handlerCall = conn.on.mock.calls.find((call: any) => call[0] === 'message');
+      if (!handlerCall) {
+        throw new Error('message handler not found');
+      }
+      return handlerCall[1];
+    };
+
+    const syncUpdateMessage = (update: Uint8Array) => {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // MESSAGE_SYNC
+      syncing.writeUpdate(encoder, update);
+      return Buffer.from(encoding.toUint8Array(encoder));
+    };
+
+    it('round-trips the structured icon and cover to a peer over the meta map', () => {
+      // DocumentMeta now carries objects instead of title-only strings, so the values
+      // a client writes under `meta` have to survive the sync path that broadcasts
+      // them; the web tests cover the client side, nothing pinned the round-trip.
+      const editorConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      const peerConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(editorConn, docName, 'EDIT');
+      setupWSConnection(peerConn, docName, 'EDIT');
+
+      const doc = docs.get(docName);
+      if (!doc) {
+        throw new Error(`Document ${docName} not found`);
+      }
+
+      editorConn.send.mockClear();
+      peerConn.send.mockClear();
+
+      const sourceDoc = new Y.Doc();
+      const sourceMeta = sourceDoc.getMap<string>('meta');
+      sourceMeta.set('icon', JSON.stringify(icon));
+      sourceMeta.set('cover', JSON.stringify(cover));
+
+      messageHandlerFor(editorConn)(syncUpdateMessage(Y.encodeStateAsUpdate(sourceDoc)));
+
+      expect(peerConn.send).toHaveBeenCalled();
+      const broadcast = peerConn.send.mock.calls[0][0] as Uint8Array;
+      const decoder = decoding.createDecoder(broadcast);
+      expect(decoding.readVarUint(decoder)).toBe(0); // MESSAGE_SYNC
+      expect(decoding.readVarUint(decoder)).toBe(syncing.messageYjsUpdate);
+
+      const peerDoc = new Y.Doc();
+      Y.applyUpdate(peerDoc, decoding.readVarUint8Array(decoder));
+      const peerMeta = peerDoc.getMap<string>('meta');
+      expect(JSON.parse(peerMeta.get('icon')!)).toEqual(icon);
+      expect(JSON.parse(peerMeta.get('cover')!)).toEqual(cover);
+    });
+
+    it('blocks icon and cover writes from comment connections through the meta gate', () => {
+      // The icon and cover keys live inside the gated `meta` map rather than as their
+      // own root keys: a root key would sail past COMMENT_WRITABLE_KEYS and let a
+      // reader rewrite the page icon.
+      const commentConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      const peerConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(commentConn, docName, 'COMMENT');
+      setupWSConnection(peerConn, docName, 'EDIT');
+
+      commentConn.send.mockClear();
+      peerConn.send.mockClear();
+
+      const sourceDoc = new Y.Doc();
+      const sourceMeta = sourceDoc.getMap<string>('meta');
+      sourceMeta.set('icon', JSON.stringify(icon));
+      sourceMeta.set('cover', JSON.stringify(cover));
+
+      (logger.warn as jest.Mock).mockClear();
+
+      messageHandlerFor(commentConn)(syncUpdateMessage(Y.encodeStateAsUpdate(sourceDoc)));
+
+      expect(peerConn.send).not.toHaveBeenCalled();
+      const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
+        ([warningMessage]) =>
+          warningMessage === 'Blocked sync write message from read-only connection'
+      );
+      expect(blockedWarnings.length).toBeGreaterThan(0);
     });
   });
 });

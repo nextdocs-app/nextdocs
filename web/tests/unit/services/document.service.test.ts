@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import * as Y from 'yjs';
-import { documentService } from '@/services/document.service';
+import { documentService, iconCoverPatch } from '@/services/document.service';
 import { indexedDBService } from '@/services/indexed-db.service';
 
 describe('document.service', () => {
@@ -381,6 +381,192 @@ describe('document.service', () => {
     });
   });
 
+  describe('page icon and cover', () => {
+    const ATTACHMENT_ID = '11111111-2222-4333-8444-555555555555';
+
+    function mockDocumentFetch(data: Record<string, unknown>) {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'id-1',
+            title: 'Doc',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+            ...data,
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+      return fetchMock;
+    }
+
+    it('maps a structured icon and cover onto the document meta', async () => {
+      mockDocumentFetch({
+        icon: { type: 'emoji', value: '📝' },
+        cover: { type: 'upload', value: ATTACHMENT_ID, position: 0.25 },
+      });
+
+      const { meta } = await documentService.getCloudDocument('id-1', 'token');
+
+      expect(meta.icon).toEqual({ type: 'emoji', value: '📝' });
+      expect(meta.cover).toEqual({ type: 'upload', value: ATTACHMENT_ID, position: 0.25 });
+    });
+
+    it('drops an icon whose builtin slug could escape the catalog path', async () => {
+      mockDocumentFetch({ icon: { type: 'builtin', value: '../../etc/passwd' } });
+
+      const { meta } = await documentService.getCloudDocument('id-1', 'token');
+
+      expect(meta.icon).toBeUndefined();
+    });
+
+    it('defaults a missing cover position to centred', async () => {
+      mockDocumentFetch({ cover: { type: 'upload', value: ATTACHMENT_ID } });
+
+      const { meta } = await documentService.getCloudDocument('id-1', 'token');
+
+      expect(meta.cover?.position).toBe(0.5);
+    });
+
+    it('sends an explicit null payload to clear an icon', async () => {
+      const fetchMock = mockDocumentFetch({});
+
+      await documentService.updateCloudIconCover(
+        'id-1',
+        { icon: { type: null, value: null } },
+        'token'
+      );
+
+      // Parsed JSON, not substring matching: key order must not matter.
+      const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
+        icon?: unknown;
+      };
+      expect(body.icon).toEqual({ type: null, value: null });
+    });
+
+    it('sends the focal position with a cover update', async () => {
+      const fetchMock = mockDocumentFetch({});
+
+      await documentService.updateCloudIconCover(
+        'id-1',
+        {
+          cover: {
+            type: 'upload',
+            value: ATTACHMENT_ID,
+            position: 0.8,
+          },
+        },
+        'token'
+      );
+
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"position":0.8');
+    });
+
+    it('writes icon/cover for guests through the public endpoint', async () => {
+      const fetchMock = mockDocumentFetch({});
+
+      await documentService.updatePublicIconCover('id-1', {
+        icon: { type: 'emoji', value: '🔥' },
+      });
+
+      expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8080/api/v1/documents/id-1/public');
+      expect(fetchMock.mock.calls[0][1]?.body).toContain('"value":"🔥"');
+    });
+
+    it('leaves the icon out of a content save when the page has none', async () => {
+      const fetchMock = mockDocumentFetch({});
+      const ydoc = new Y.Doc();
+
+      await documentService.saveCloudDocument(
+        'id-1',
+        ydoc,
+        {
+          title: 'Doc',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+        },
+        'token'
+      );
+
+      // Absent means "leave unchanged" on the API, which is what a content
+      // save must say — it is not the metadata writer.
+      expect(fetchMock.mock.calls[0][1]?.body).not.toContain('"icon"');
+    });
+
+    it('never sends icon/cover through the title-metadata endpoint', async () => {
+      const fetchMock = mockDocumentFetch({});
+
+      await documentService.updateCloudMetadata(
+        'id-1',
+        {
+          title: 'Doc',
+          icon: { type: 'emoji', value: '📝' },
+          cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.5 },
+        } as never,
+        'token'
+      );
+
+      // Parsed JSON, not substring matching: an icon nested anywhere in the
+      // payload must fail this, while a title containing the word must not.
+      const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body.title).toBe('Doc');
+      expect(body).not.toHaveProperty('icon');
+      expect(body).not.toHaveProperty('cover');
+    });
+
+    it('builds an icon/cover patch that clears, omits, or sets each value', () => {
+      // Explicit null clears; an omitted key leaves the value unchanged.
+      expect(iconCoverPatch({ icon: null })).toEqual({
+        icon: { type: null, value: null },
+      });
+      expect(iconCoverPatch({})).toEqual({});
+      expect(
+        iconCoverPatch({
+          icon: { type: 'emoji', value: '🔥' },
+          cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.8 },
+        })
+      ).toEqual({
+        icon: { type: 'emoji', value: '🔥' },
+        cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.8 },
+      });
+    });
+
+    it('includes icon and cover in a content save when the page has them', async () => {
+      const fetchMock = mockDocumentFetch({});
+      const ydoc = new Y.Doc();
+
+      await documentService.saveCloudDocument(
+        'id-1',
+        ydoc,
+        {
+          title: 'Doc',
+          icon: { type: 'emoji', value: '📝' },
+          cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.25 },
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+        },
+        'token'
+      );
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
+        icon?: unknown;
+        cover?: unknown;
+      };
+      expect(body.icon).toEqual({ type: 'emoji', value: '📝' });
+      expect(body.cover).toEqual({
+        type: 'link',
+        value: 'https://cdn.example/c.jpg',
+        position: 0.25,
+      });
+    });
+  });
+
   describe('promoteGuestDocumentsToAccount', () => {
     it('should cache promoted guest documents in the active user database', async () => {
       const cloudYDoc = new Y.Doc();
@@ -646,6 +832,91 @@ describe('document.service', () => {
       const page = await documentService.listPublicChildren('parent-1');
 
       expect(page.items[0].effectiveAccessLevel).toBe('VIEW');
+    });
+
+    it('should drop a hand-crafted icon from public children instead of rendering it', async () => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = jest
+        .fn()
+        .mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              content: [
+                {
+                  id: 'child-evil',
+                  title: 'Evil',
+                  parentId: 'parent-1',
+                  orderKey: 'a0',
+                  hasChildren: false,
+                  accessLevel: 'VIEW',
+                  icon: { type: 'link', value: 'javascript:alert(1)' },
+                  createdAt: '2024-01-01T00:00:00.000Z',
+                  updatedAt: '2024-01-02T00:00:00.000Z',
+                },
+                {
+                  id: 'child-good',
+                  title: 'Good',
+                  parentId: 'parent-1',
+                  orderKey: 'a1',
+                  hasChildren: false,
+                  accessLevel: 'VIEW',
+                  icon: { type: 'emoji', value: '📝' },
+                  createdAt: '2024-01-01T00:00:00.000Z',
+                  updatedAt: '2024-01-02T00:00:00.000Z',
+                },
+              ],
+              totalElements: 2,
+              totalPages: 1,
+              size: 50,
+              number: 0,
+              first: true,
+              last: true,
+            },
+            error: null,
+          }),
+        } as unknown as Response) as unknown as typeof fetch;
+
+      const page = await documentService.listPublicChildren('parent-1');
+
+      expect(page.items[0].icon).toBeNull();
+      expect(page.items[1].icon).toEqual({ type: 'emoji', value: '📝' });
+    });
+  });
+
+  describe('breadcrumb sanitization', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    it('should drop a hand-crafted breadcrumb icon instead of rendering it', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            { id: 'root-9', title: 'Root', parentId: null },
+            {
+              id: 'leaf-9',
+              title: 'Leaf',
+              parentId: 'root-9',
+              icon: { type: 'builtin', value: '../../etc/passwd' },
+            },
+          ],
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const crumbs = await documentService.getDocumentBreadcrumbs('crumb-doc-evil');
+
+      expect(crumbs[1].icon).toBeNull();
     });
   });
 

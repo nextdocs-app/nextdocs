@@ -82,6 +82,7 @@ export function useGuestSharedTree(activeDocId: string) {
           effectiveAccessLevel: sanitizeDocumentAccessLevel(crumb.accessLevel, 'VIEW'),
           createdAt: crumb.createdAt ?? '',
           updatedAt: crumb.updatedAt ?? '',
+          icon: crumb.icon ?? null,
         }));
         dispatch(syncPublicRoots(nodes));
 

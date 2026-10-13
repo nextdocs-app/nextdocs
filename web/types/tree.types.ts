@@ -1,5 +1,16 @@
 import type { DocumentAccessLevel } from '@/services/document.service';
+import type { DocumentIcon } from '@/types/document.types';
 
+/**
+ * Absent-value convention across the tree layer.
+ *
+ * `DocumentMeta` (domain) omits the key (`icon?: DocumentIcon` — undefined
+ * means "no icon"). Tree nodes normalize to an explicit null at the boundary
+ * (`?? null` in `toSidebarTreeNode`, the service mappers, and
+ * `syncSharedRoots`); readers treat a missing key and null identically as
+ * "no icon" and must not re-apply `?? null` on values that are already
+ * `DocumentIcon | null | undefined`.
+ */
 export interface TreeNode {
   id: string;
   title: string;
@@ -9,6 +20,7 @@ export interface TreeNode {
   effectiveAccessLevel: DocumentAccessLevel | null;
   createdAt: string;
   updatedAt: string;
+  icon?: DocumentIcon | null;
 }
 
 export interface TreeNodePage {
@@ -33,6 +45,7 @@ export interface SidebarTreeNode {
   orderKey: string;
   hasChildren: boolean;
   effectiveAccessLevel: DocumentAccessLevel | null;
+  icon?: DocumentIcon | null;
   isExpanded: boolean;
   isLoading: boolean;
   children: string[];

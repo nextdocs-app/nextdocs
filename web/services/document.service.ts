@@ -6,12 +6,45 @@ import {
   decodeYjsState,
   createDefaultDocumentMeta,
 } from '@/lib/yjs.util';
-import type { DocumentMeta, DocumentLoadResult, StoredDocument } from '@/types/document.types';
+import type {
+  DocumentIcon,
+  DocumentMeta,
+  DocumentLoadResult,
+  StoredDocument,
+} from '@/types/document.types';
 import type { TreeNode, TreeNodePage, MoveDocumentRequest } from '@/types/tree.types';
 import { getApiBaseUrl } from '@/lib/api-url.util';
 import { parseApiEnvelope } from '@/services/api-envelope';
+import {
+  sanitizeDocumentCover,
+  sanitizeDocumentIcon,
+  toCoverRequestPayload,
+  toIconRequestPayload,
+  type CoverRequestPayload,
+  type IconRequestPayload,
+} from '@/lib/document-icon.util';
 
 const CURRENT_SCHEMA_VERSION = 1;
+
+/**
+ * Builds an icon/cover PATCH body. Clearing needs an explicit null payload
+ * while omitting a key means "leave unchanged" — a distinction
+ * `Partial<DocumentMeta>` (where undefined already means "unchanged") cannot
+ * express, hence the `in` checks rather than truthiness.
+ */
+export function iconCoverPatch(patch: {
+  icon?: DocumentMeta['icon'] | null;
+  cover?: DocumentMeta['cover'] | null;
+}): { icon?: IconRequestPayload; cover?: CoverRequestPayload } {
+  const request: { icon?: IconRequestPayload; cover?: CoverRequestPayload } = {};
+  if ('icon' in patch) {
+    request.icon = toIconRequestPayload(patch.icon ?? null);
+  }
+  if ('cover' in patch) {
+    request.cover = toCoverRequestPayload(patch.cover ?? null);
+  }
+  return request;
+}
 
 interface ApiPage<T> {
   content: T[];
@@ -23,11 +56,22 @@ interface ApiPage<T> {
   last: boolean;
 }
 
+/** Icon and cover sub-objects as they appear on the wire (types are lowercase). */
+interface ApiDocumentIcon {
+  type?: string | null;
+  value?: string | null;
+  color?: string | null;
+}
+
+interface ApiDocumentCover extends ApiDocumentIcon {
+  position?: number | null;
+}
+
 interface ApiDocument {
   id: string;
   title: string;
-  icon?: string | null;
-  coverImage?: string | null;
+  icon?: ApiDocumentIcon | null;
+  cover?: ApiDocumentCover | null;
   yjsState?: string | null;
   parentId?: string | null;
   orderKey?: string | null;
@@ -122,6 +166,10 @@ interface ApiCollaborator {
   inheritedAccessLevel?: DocumentAccessLevel | null;
 }
 
+interface ApiDocumentBreadcrumbItem extends Omit<DocumentBreadcrumbItem, 'icon'> {
+  icon?: ApiDocumentIcon | null;
+}
+
 interface ApiSharingSettings {
   generalAccessMode: DocumentGeneralAccessMode;
   linkAccessLevel: DocumentAccessLevel;
@@ -185,7 +233,7 @@ export interface SharingSettings {
 export interface DocumentBreadcrumbItem {
   id: string;
   title: string;
-  icon?: string | null;
+  icon?: DocumentIcon | null;
   parentId?: string | null;
   orderKey?: string | null;
   accessLevel?: DocumentAccessLevel | null;
@@ -256,7 +304,14 @@ class DocumentService {
 
     return {
       ydoc,
-      meta: storedDoc.meta,
+      // IndexedDB may hold icon/cover written before sanitization hardened, so
+      // re-validate on read: stale garbage degrades to "no icon/cover" here
+      // instead of reaching render.
+      meta: {
+        ...storedDoc.meta,
+        icon: sanitizeDocumentIcon(storedDoc.meta.icon),
+        cover: sanitizeDocumentCover(storedDoc.meta.cover),
+      },
       origin: storedDoc.origin,
     };
   }
@@ -383,7 +438,15 @@ class DocumentService {
       // Records predating the origin tag have it undefined and count as local.
       return docs
         .filter((doc) => doc.origin !== 'public-link')
-        .map((doc) => ({ id: doc.id, meta: doc.meta, origin: doc.origin }));
+        .map((doc) => ({
+          id: doc.id,
+          meta: {
+            ...doc.meta,
+            icon: sanitizeDocumentIcon(doc.meta.icon),
+            cover: sanitizeDocumentCover(doc.meta.cover),
+          },
+          origin: doc.origin,
+        }));
     } catch (error) {
       console.error('Failed to get all documents:', error);
       return [];
@@ -463,6 +526,9 @@ class DocumentService {
         effectiveAccessLevel: sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER'),
         createdAt: item.meta.createdAt,
         updatedAt: item.meta.updatedAt,
+        // `toDocumentMeta` already sanitized, but re-validate at the tree
+        // boundary so a future caller passing unsanitized meta cannot reach render.
+        icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
       })),
       page: pageResult.page,
       size: pageResult.size,
@@ -492,6 +558,7 @@ class DocumentService {
         effectiveAccessLevel: sanitizeNullableAccessLevel(item.accessLevel),
         createdAt: item.meta.createdAt,
         updatedAt: item.meta.updatedAt,
+        icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
       })),
       page: pageResult.page,
       size: pageResult.size,
@@ -527,6 +594,7 @@ class DocumentService {
       effectiveAccessLevel: sanitizeNullableAccessLevel(body.accessLevel),
       createdAt: body.createdAt,
       updatedAt: body.updatedAt,
+      icon: sanitizeDocumentIcon(body.icon) ?? null,
     };
   }
 
@@ -582,22 +650,25 @@ class DocumentService {
   ): Promise<DocumentBreadcrumbItem[]> {
     // Breadcrumb chain and guest sidebar need the same path concurrently.
     return this.dedupedGet(`breadcrumbs:${id}:${accessToken ? 'auth' : 'anon'}`, async () => {
-      if (accessToken) {
-        return await this.fetchApi<DocumentBreadcrumbItem[]>(
-          `/api/v1/documents/${encodeURIComponent(id)}/path`,
-          {
-            method: 'GET',
-            accessToken,
-          }
-        );
-      } else {
-        return await this.fetchApi<DocumentBreadcrumbItem[]>(
-          `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
-          {
-            method: 'GET',
-          }
-        );
-      }
+      const items = accessToken
+        ? await this.fetchApi<ApiDocumentBreadcrumbItem[]>(
+            `/api/v1/documents/${encodeURIComponent(id)}/path`,
+            {
+              method: 'GET',
+              accessToken,
+            }
+          )
+        : await this.fetchApi<ApiDocumentBreadcrumbItem[]>(
+            `/api/v1/documents/${encodeURIComponent(id)}/public/path`,
+            {
+              method: 'GET',
+            }
+          );
+
+      return items.map((item) => ({
+        ...item,
+        icon: sanitizeDocumentIcon(item.icon) ?? null,
+      }));
     });
   }
 
@@ -660,6 +731,7 @@ class DocumentService {
       effectiveAccessLevel: sanitizeDocumentAccessLevel(doc.accessLevel, 'VIEW'),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
+      icon: sanitizeDocumentIcon(doc.icon) ?? null,
     }));
 
     return {
@@ -890,8 +962,10 @@ class DocumentService {
       accessToken,
       body: JSON.stringify({
         title: meta.title,
+        // Omitted (undefined) when the page has none: the API treats an absent
+        // icon/cover as "leave unchanged", which is what a content save means.
         icon: meta.icon,
-        coverImage: meta.coverImage,
+        cover: meta.cover,
         yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
         createdBy: meta.createdBy,
       }),
@@ -923,10 +997,37 @@ class DocumentService {
       accessToken,
       body: JSON.stringify({
         title,
-        icon: updates.icon,
-        coverImage: updates.coverImage,
         createdBy: updates.createdBy,
       }),
+    });
+  }
+
+  /**
+   * Writes just the page icon and/or cover. They live in their own request
+   * shape ({@link DocumentIconRequest} / {@link DocumentCoverRequest}) because
+   * clearing needs an explicit null payload, which a `Partial<DocumentMeta>`
+   * (where undefined already means "unchanged") cannot express.
+   */
+  public async updateCloudIconCover(
+    id: string,
+    patch: { icon?: IconRequestPayload; cover?: CoverRequestPayload },
+    accessToken: string
+  ): Promise<void> {
+    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      accessToken,
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /** Guest-side twin of {@link updateCloudIconCover}; needs an edit-level share link. */
+  public async updatePublicIconCover(
+    id: string,
+    patch: { icon?: IconRequestPayload; cover?: CoverRequestPayload }
+  ): Promise<void> {
+    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
     });
   }
 
@@ -1092,8 +1193,10 @@ class DocumentService {
   private toDocumentMeta(doc: ApiDocument): DocumentMeta {
     return {
       title: doc.title || 'Untitled',
-      icon: doc.icon ?? undefined,
-      coverImage: doc.coverImage ?? undefined,
+      // Sanitizers drop malformed values: an unrenderable icon must read as
+      // "no icon" rather than reach an `<img src>` or a CSS mask URL.
+      icon: sanitizeDocumentIcon(doc.icon),
+      cover: sanitizeDocumentCover(doc.cover),
       createdBy: doc.createdBy ?? undefined,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,

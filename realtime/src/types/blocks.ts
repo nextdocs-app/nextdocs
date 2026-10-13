@@ -185,10 +185,37 @@ export type Block =
 export type BlockType = Block['type'];
 
 // Our extensions for document-level metadata (not part of BlockNote)
+
+/** How a page icon is sourced. Mirrors the API's `DocumentIconType`. */
+export type DocumentIconType = 'emoji' | 'builtin' | 'upload' | 'link';
+
+/** Color theme for builtin page icons. Mirrors the API allowlist and `ICON_COLORS`. */
+export type DocumentIconColor =
+  'default' | 'gray' | 'brown' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink' | 'red';
+
+export interface DocumentIcon {
+  type: DocumentIconType;
+  /** Emoji grapheme, builtin catalog slug, attachment id, or image URL. */
+  value: string;
+  /** Color theme for builtin icons; absent means the default theme. */
+  color?: DocumentIconColor;
+}
+
+/** How a page cover is sourced. Mirrors the API's `DocumentCoverType`. */
+export type DocumentCoverType = 'upload' | 'link';
+
+export interface DocumentCover {
+  type: DocumentCoverType;
+  /** Attachment id or image URL. */
+  value: string;
+  /** Vertical focal offset in [0, 1]; 0 shows the top of the image, 1 the bottom. */
+  position: number;
+}
+
 export interface DocumentMeta {
   title: string;
-  icon?: string;
-  coverImage?: string;
+  icon?: DocumentIcon;
+  cover?: DocumentCover;
   createdAt: string;
   updatedAt: string;
   createdBy?: string;

@@ -118,6 +118,45 @@ describe('sidebarTree.slice', () => {
       expect(updated.nodes['doc-1'].title).toBe('Untitled');
     });
 
+    it('sanitizes an icon update instead of trusting it', () => {
+      const stateWithNode: SidebarTreeState = {
+        ...initialState,
+        nodes: {
+          'doc-1': {
+            id: 'doc-1',
+            title: 'Doc',
+            parentId: null,
+            orderKey: 'a0',
+            hasChildren: false,
+            effectiveAccessLevel: 'OWNER',
+            icon: { type: 'emoji', value: '📝' },
+            isExpanded: false,
+            isLoading: false,
+            children: [],
+            childrenLoaded: false,
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+          },
+        },
+        rootIds: ['doc-1'],
+      };
+
+      const cleared = sidebarTreeReducer(
+        stateWithNode,
+        updateNodeMeta({
+          id: 'doc-1',
+          icon: { type: 'link', value: 'javascript:alert(1)' } as never,
+        })
+      );
+      expect(cleared.nodes['doc-1'].icon).toBeNull();
+
+      const set = sidebarTreeReducer(
+        stateWithNode,
+        updateNodeMeta({ id: 'doc-1', icon: { type: 'emoji', value: '🚀' } })
+      );
+      expect(set.nodes['doc-1'].icon).toEqual({ type: 'emoji', value: '🚀' });
+    });
+
     it('adds root nodes and child nodes with proper ordering', () => {
       const rootNode1: TreeNode = {
         id: 'doc-1',
