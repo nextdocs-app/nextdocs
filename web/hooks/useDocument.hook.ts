@@ -16,6 +16,8 @@ import {
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
+import { useDocumentIconCover } from '@/hooks/useDocumentIconCover.hook';
+import { useDocumentYjsMetaSync } from '@/hooks/useDocumentYjsMetaSync.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
 import {
@@ -23,6 +25,11 @@ import {
   readCachedDocumentAccessLevel,
   writeCachedDocumentAccessLevel,
 } from '@/lib/document-access.util';
+import {
+  determineMetaWriteRoute,
+  mirrorTitleToYjs,
+  persistMetaWrite,
+} from '@/lib/document-meta-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
@@ -34,11 +41,6 @@ import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 const MESSAGE_ACCESS_LEVEL = 2;
-// Yjs-shared document title: `ydoc.getMap('meta').get('title')` is the live
-// transport for title edits. REST PATCH remains the durable source of truth
-// for lists/trees; Yjs carries the keystroke-instant cross-client update.
-const YJS_META_MAP_KEY = 'meta';
-const YJS_META_TITLE_KEY = 'title';
 
 class OfflineDocumentUnavailableError extends Error {
   constructor(message: string) {
@@ -215,6 +217,26 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [accessLevel, setAccessLevel] = useState<DocumentAccessLevel | null>(
     initialFallbackAccessLevel
   );
+  // True once the access level for the current document has been resolved
+  // (not just the cached/initial guess). The seeder gates Yjs writes on this:
+  // `accessLevel` state starts null for private docs (which reads as writable),
+  // so seeding before resolution lets VIEW/COMMENT clients emit writes the
+  // server drops. Writes elsewhere gate on `accessLevelRef`, so the seeder
+  // does too once resolved.
+  const [accessResolved, setAccessResolved] = useState(false);
+  const accessResolvedRef = useRef(false);
+  // Single writer for the access level so `accessLevelRef` (used by write
+  // guards) and `accessResolved` (used by the Yjs seeder) never drift from
+  // the state that re-renders. Always prefer this over raw `setAccessLevel`.
+  const setResolvedAccessLevel = useCallback(
+    (level: DocumentAccessLevel | null, resolved: boolean) => {
+      accessLevelRef.current = level;
+      setAccessLevel(level);
+      accessResolvedRef.current = resolved;
+      setAccessResolved(resolved);
+    },
+    []
+  );
   const [isGuestShareLink, setIsGuestShareLink] = useState(isSharedDocument);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
@@ -229,6 +251,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // observers synchronously inside `set`, before the metaRef effect commits,
   // so the echo guard cannot rely on metaRef alone.
   const lastLocalTitleRef = useRef<string | null>(null);
+  // Same echo guards for the page icon/cover JSON strings. `undefined` means
+  // no pending write, `null` means this client deleted the key, and a string
+  // is the JSON it last wrote. Needed for the same synchronous-observer
+  // reason as the title guard, and so a later remote revert to an older
+  // value is applied instead of mistaken for our own echo.
+  const lastLocalIconRef = useRef<string | null | undefined>(undefined);
+  const lastLocalCoverRef = useRef<string | null | undefined>(undefined);
   const resolvedDocumentIdRef = useRef(resolvedDocumentId);
   const {
     isInBackoff: isCloudReadInBackoff,
@@ -266,12 +295,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           meta: result.meta,
         })
       );
-      // Reconcile sidebar/lists with the freshly loaded title (it may have
-      // changed elsewhere while this document was not open).
+      // Reconcile sidebar/lists with the freshly loaded title/icon/cover (it
+      // may have changed elsewhere while this document was not open).
       dispatchDocumentMetaUpdated(documentId, result.meta);
       const nextLevel = trashAccessLevel ?? 'VIEW';
-      accessLevelRef.current = nextLevel;
-      setAccessLevel(nextLevel);
+      setResolvedAccessLevel(nextLevel, true);
       // Preserve the pre-trash access level in cache so a refresh shows the
       // correct Restore affordance immediately (Editor.tsx canManageTrash).
       // Reading is still gated by meta.deletedAt, so cached EDIT does not
@@ -284,7 +312,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       setErrorState(null);
       dispatch(setError(null));
     },
-    [dispatch]
+    [dispatch, setResolvedAccessLevel]
   );
 
   // Shared transition for "you can no longer see this document": drops the in-memory doc,
@@ -305,10 +333,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       setYDoc(null);
       dispatch(clearDocument());
       dispatch(setError(restrictedError.description));
-      accessLevelRef.current = null;
-      setAccessLevel(null);
+      setResolvedAccessLevel(null, false);
     },
-    [dispatch]
+    [dispatch, setResolvedAccessLevel]
   );
 
   useEffect(() => {
@@ -360,8 +387,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       setResolvedDocumentId(id);
       lastLoadContextKeyRef.current = null;
       const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
-      accessLevelRef.current = initialLevel;
-      setAccessLevel(initialLevel);
+      setResolvedAccessLevel(initialLevel, false);
       return;
     }
 
@@ -386,8 +412,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
     lastLoadContextKeyRef.current = loadContextKey;
     const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
-    accessLevelRef.current = initialLevel;
-    setAccessLevel(initialLevel);
+    setResolvedAccessLevel(initialLevel, false);
     // Reset before the load decides, so a share-link notice never lingers over the
     // document this device opened next.
     setIsGuestShareLink(isSharedDocument);
@@ -563,8 +588,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               // flicker to read-only before getMyAccess resolves. The doc
               // stays read-only via meta.deletedAt regardless of cached level.
               writeCachedDocumentAccessLevel(effectiveId, myAccess.accessLevel);
-              accessLevelRef.current = myAccess.accessLevel;
-              setAccessLevel(myAccess.accessLevel);
+              setResolvedAccessLevel(myAccess.accessLevel, true);
             } catch (accessErr) {
               if (
                 accessErr instanceof DocumentServiceApiError &&
@@ -582,8 +606,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                     currentAccessLevel: accessLevelRef.current,
                     isSharedDocument,
                   });
-              accessLevelRef.current = fallbackLevel;
-              setAccessLevel(fallbackLevel);
+              setResolvedAccessLevel(fallbackLevel, true);
             }
           } else {
             const fallbackLevel = isTrashedDoc
@@ -594,8 +617,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                     isSharedDocument,
                   })
                 : guestAccessLevel;
-            accessLevelRef.current = fallbackLevel;
-            setAccessLevel(fallbackLevel);
+            setResolvedAccessLevel(fallbackLevel, true);
             if (!isAuthenticated && !isTrashedDoc) {
               writeCachedDocumentAccessLevel(effectiveId, fallbackLevel);
             }
@@ -626,9 +648,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               meta: result.meta,
             })
           );
-          // The freshly loaded title is authoritative for this open document:
-          // fan it out so stale sidebar/list entries (updated elsewhere while
-          // this document was closed) reconcile instantly without a refetch.
+          // The freshly loaded title/icon/cover is authoritative for this open
+          // document: fan it out so stale sidebar/list entries (updated
+          // elsewhere while this document was closed) reconcile instantly
+          // without a refetch.
           dispatchDocumentMetaUpdated(effectiveId, result.meta);
         }
       } catch (err) {
@@ -766,7 +789,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 // The document was restored between getMyAccess and getCloudDocument:
                 // keep the document active and allow reconnection.
                 writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
-                setAccessLevel(myAccess.accessLevel);
+                setResolvedAccessLevel(myAccess.accessLevel, true);
                 provider.shouldConnect = true;
                 return;
               } catch (cloudErr) {
@@ -802,7 +825,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 return;
               }
               writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
-              setAccessLevel(publicAccess.accessLevel);
+              setResolvedAccessLevel(publicAccess.accessLevel, true);
               provider.shouldConnect = true;
             } catch (publicErr) {
               if (closeHandlerCancelled) return;
@@ -886,6 +909,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     dispatch,
     applyTrashedDocumentView,
     enterRestrictedState,
+    setResolvedAccessLevel,
   ]);
 
   // Awareness starts an interval on construction and destroys itself on ydoc
@@ -939,7 +963,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           return;
         }
 
-        setAccessLevel(decodedAccessLevel);
+        setResolvedAccessLevel(decodedAccessLevel, true);
         writeCachedDocumentAccessLevel(resolvedDocumentId, decodedAccessLevel);
       } catch (err) {
         console.warn('Failed to decode access level message:', err);
@@ -971,7 +995,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     return () => {
       wsConn.removeEventListener('message', messageHandler);
     };
-  }, [realtimeProvider, isRealtimeConnected, resolvedDocumentId]);
+  }, [realtimeProvider, isRealtimeConnected, resolvedDocumentId, setResolvedAccessLevel]);
 
   // Periodically revalidate access level to detect downgrades immediately
   useEffect(() => {
@@ -1008,7 +1032,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           }
           if (publicAccess.accessLevel !== accessLevelRef.current) {
             writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
-            setAccessLevel(publicAccess.accessLevel);
+            setResolvedAccessLevel(publicAccess.accessLevel, true);
           }
         } catch (err) {
           if (
@@ -1043,7 +1067,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
             // The document was restored between getMyAccess and getCloudDocument:
             writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
-            setAccessLevel(myAccess.accessLevel);
+            setResolvedAccessLevel(myAccess.accessLevel, true);
             return;
           } catch (cloudErr) {
             if (
@@ -1063,7 +1087,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         }
         if (myAccess.accessLevel !== accessLevelRef.current) {
           writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
-          setAccessLevel(myAccess.accessLevel);
+          setResolvedAccessLevel(myAccess.accessLevel, true);
         }
       } catch (err) {
         if (err instanceof DocumentServiceApiError && err.status === 401) {
@@ -1125,6 +1149,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     applyTrashedDocumentView,
     enterRestrictedState,
     triggerCloudReadBackoff,
+    setResolvedAccessLevel,
   ]);
 
   const updateMeta = useCallback(
@@ -1160,20 +1185,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
       dispatchDocumentMetaUpdated(resolvedDocumentId, updatedMeta);
 
-      // Mirror title into the shared Yjs map for instant cross-client sync.
-      // The map observer below ignores this echo, and remote applies never
-      // write back, so no loop is possible. REST PATCH below remains the
-      // durable persist for lists/trees.
-      if (normalizedUpdates.title !== undefined && ydocRef.current) {
-        try {
-          lastLocalTitleRef.current = normalizedUpdates.title;
-          const metaMap = ydocRef.current.getMap<string>(YJS_META_MAP_KEY);
-          if (metaMap.get(YJS_META_TITLE_KEY) !== normalizedUpdates.title) {
-            metaMap.set(YJS_META_TITLE_KEY, normalizedUpdates.title);
-          }
-        } catch (err) {
-          console.warn('Failed to mirror title into Yjs:', err);
-        }
+      // Mirror title into the shared Yjs map for instant cross-client sync
+      // (no loop: the observer ignores this echo, remote applies never write
+      // back). REST PATCH below remains the durable persist for lists/trees.
+      if (normalizedUpdates.title !== undefined) {
+        mirrorTitleToYjs(ydocRef.current, normalizedUpdates.title, lastLocalTitleRef);
       }
 
       const persistLocalMetadata = async () => {
@@ -1181,24 +1197,27 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         documentService.emitLocalDocumentsChanged();
       };
 
-      const canAttemptCloudMetadataWrite =
-        isAuthenticated && accessToken && isOnline && !isCloudMetadataInBackoff();
-      const canAttemptPublicMetadataWrite =
-        !isAuthenticated &&
-        (isSharedDocument || documentService.isPublicLinkDocument(resolvedDocumentId)) &&
-        (accessLevelRef.current === 'EDIT' || accessLevelRef.current === 'OWNER') &&
-        isOnline &&
-        !isCloudMetadataInBackoff();
-      const isRemoteMetadataWrite = canAttemptCloudMetadataWrite || canAttemptPublicMetadataWrite;
+      const mirrorRemoteMetadata = async () => {
+        await documentService.updateMetadata(resolvedDocumentId, {
+          ...normalizedUpdates,
+          updatedAt: updatedMeta.updatedAt,
+        });
+      };
+
+      const route = determineMetaWriteRoute({
+        isAuthenticated,
+        accessToken,
+        isOnline,
+        isSharedDocument,
+        isPublicLinkDocument: documentService.isPublicLinkDocument(resolvedDocumentId),
+        accessLevel: accessLevelRef.current,
+        inBackoff: isCloudMetadataInBackoff(),
+      });
 
       const queuePendingSync = () => {
         if (isAuthenticated && accessToken) {
           incrementPendingSyncEdits(resolvedDocumentId);
         }
-      };
-
-      const rollback = () => {
-        dispatch(updateMetaAction({ ...previousMeta, updatedAt: previousMeta.updatedAt }));
       };
 
       // Only roll back if no newer updateMeta has dispatched since. Without
@@ -1208,63 +1227,27 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         if (updateMetaSeqRef.current !== seq) {
           return;
         }
-        rollback();
+        dispatch(updateMetaAction({ ...previousMeta, updatedAt: previousMeta.updatedAt }));
       };
 
-      const persistPromise = canAttemptCloudMetadataWrite
-        ? documentService
-            .updateCloudMetadata(resolvedDocumentId, normalizedUpdates, accessToken)
-            .then(async () => {
-              try {
-                await documentService.updateMetadata(resolvedDocumentId, {
-                  ...normalizedUpdates,
-                  updatedAt: updatedMeta.updatedAt,
-                });
-              } catch (cacheErr) {
-                console.warn('Failed to mirror cloud metadata into local cache:', cacheErr);
-              }
-            })
-        : canAttemptPublicMetadataWrite
-          ? documentService
-              .updatePublicMetadata(resolvedDocumentId, normalizedUpdates)
-              .then(async () => {
-                try {
-                  await documentService.updateMetadata(resolvedDocumentId, {
-                    ...normalizedUpdates,
-                    updatedAt: updatedMeta.updatedAt,
-                  });
-                } catch (cacheErr) {
-                  console.warn('Failed to mirror public metadata into local cache:', cacheErr);
-                }
-              })
-          : persistLocalMetadata().then(() => {
-              queuePendingSync();
-            });
+      const cloudToken = route.canCloud ? accessToken : null;
 
-      persistPromise
-        .then(() => {
-          if (isRemoteMetadataWrite) {
-            clearCloudMetadataBackoff();
-          }
-        })
-        .catch(async (err) => {
-          if (isRemoteMetadataWrite && isConnectivityError(err)) {
-            triggerCloudMetadataBackoff();
+      const remoteWrite = cloudToken
+        ? documentService.updateCloudMetadata(resolvedDocumentId, normalizedUpdates, cloudToken)
+        : route.canPublic
+          ? documentService.updatePublicMetadata(resolvedDocumentId, normalizedUpdates)
+          : null;
 
-            try {
-              await persistLocalMetadata();
-              queuePendingSync();
-              return;
-            } catch (localErr) {
-              console.error('Failed to persist metadata update:', localErr);
-              guardedRollback();
-              return;
-            }
-          }
-
-          console.error('Failed to persist metadata update:', err);
-          guardedRollback();
-        });
+      persistMetaWrite({
+        remoteWrite,
+        mirrorRemote: mirrorRemoteMetadata,
+        persistLocal: persistLocalMetadata,
+        queuePendingSync,
+        triggerBackoff: triggerCloudMetadataBackoff,
+        clearBackoff: clearCloudMetadataBackoff,
+        rollback: guardedRollback,
+        logScope: 'metadata update',
+      });
     },
     [
       meta,
@@ -1280,75 +1263,25 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     ]
   );
 
-  // Live title sync across collaborators via the shared Yjs `meta` map.
-  // Local edits write the map in updateMeta above; remote Yjs updates land
-  // here through the map observer and are applied to Redux + the
-  // document-meta-updated fan-out (sidebar trees, document lists,
-  // breadcrumbs) without re-writing Yjs or re-PATCHing REST.
-  // Seed the map for documents created before Yjs title sync existed, so
-  // late joiners receive the current title over the live channel. Runs on
-  // meta.title (not just ydoc) so a late REST load still seeds, and skips
-  // read-only clients so COMMENT/VIEW never emit updates the server drops.
-  useEffect(() => {
-    if (!ydoc || !resolvedDocumentId) {
-      return;
-    }
-    if (isReadOnlyAccessLevel(accessLevel)) {
-      return;
-    }
-    const seedTitle = meta?.title;
-    if (seedTitle === undefined) {
-      return;
-    }
-    try {
-      const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
-      if (metaMap.get(YJS_META_TITLE_KEY) === undefined) {
-        metaMap.set(YJS_META_TITLE_KEY, normalizeDocumentTitle(seedTitle));
-      }
-    } catch (err) {
-      console.warn('Failed to seed Yjs title:', err);
-    }
-  }, [ydoc, resolvedDocumentId, meta?.title, accessLevel]);
-
-  useEffect(() => {
-    if (!ydoc || !resolvedDocumentId) {
-      return;
-    }
-
-    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
-
-    const observer = () => {
-      const yjsTitle = metaMap.get(YJS_META_TITLE_KEY);
-      if (typeof yjsTitle !== 'string') {
-        return;
-      }
-      // Hand-crafted EDIT writes can carry blank titles; honor the same
-      // Untitled invariant as local edits and the API.
-      const normalizedTitle = normalizeDocumentTitle(yjsTitle);
-      const localTitle = metaRef.current?.title;
-      // Local echo (our own updateMeta wrote the map) or duplicate delivery:
-      // already applied, nothing to do. The last-written title is checked as
-      // well because the observer runs before metaRef observes the render.
-      if (normalizedTitle === localTitle || normalizedTitle === lastLocalTitleRef.current) {
-        return;
-      }
-      if (!metaRef.current) {
-        return;
-      }
-      // The remote value won: drop the echo guard so a later remote revert
-      // to our old title is applied instead of mistaken for our own echo.
-      lastLocalTitleRef.current = null;
-      const updatedAt = new Date().toISOString();
-      const nextMeta = { ...metaRef.current, title: normalizedTitle, updatedAt };
-      dispatch(updateMetaAction({ title: normalizedTitle, updatedAt }));
-      dispatchDocumentMetaUpdated(resolvedDocumentIdRef.current, nextMeta);
-    };
-
-    metaMap.observe(observer);
-    return () => {
-      metaMap.unobserve(observer);
-    };
-  }, [ydoc, resolvedDocumentId, dispatch]);
+  // Live title/icon/cover sync across collaborators (seed + observer). Owns
+  // the Yjs `meta` map; local edits write it in updateMeta/commitIconCover.
+  useDocumentYjsMetaSync({
+    ydoc,
+    resolvedDocumentId,
+    meta,
+    accessLevel,
+    accessResolved,
+    dispatch,
+    refs: {
+      accessLevelRef,
+      accessResolvedRef,
+      metaRef,
+      lastLocalTitleRef,
+      lastLocalIconRef,
+      lastLocalCoverRef,
+      resolvedDocumentIdRef,
+    },
+  });
 
   // Listen for external restore events (e.g. from the sidebar)
   useEffect(() => {
@@ -1380,7 +1313,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               // fallback
             }
           }
-          setAccessLevel(nextLevel);
+          setResolvedAccessLevel(nextLevel, true);
           writeCachedDocumentAccessLevel(resolvedDocumentId, nextLevel);
         }
       } catch (err) {
@@ -1395,7 +1328,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       window.removeEventListener('cloud-documents-changed', handleDocsChanged);
       window.removeEventListener('local-documents-changed', handleDocsChanged);
     };
-  }, [resolvedDocumentId, meta?.deletedAt, dispatch]);
+  }, [resolvedDocumentId, meta?.deletedAt, dispatch, setResolvedAccessLevel]);
 
   const restore = useCallback(async () => {
     if (!isAuthenticated || !accessToken || !resolvedDocumentId) {
@@ -1422,10 +1355,29 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // fallback
     }
 
-    accessLevelRef.current = nextLevel;
-    setAccessLevel(nextLevel);
+    setResolvedAccessLevel(nextLevel, true);
     writeCachedDocumentAccessLevel(resolvedDocumentId, nextLevel);
-  }, [isAuthenticated, accessToken, resolvedDocumentId, dispatch]);
+  }, [isAuthenticated, accessToken, resolvedDocumentId, dispatch, setResolvedAccessLevel]);
+
+  // Page icon/cover writes. Shares the title's write sequence and the
+  // persistMetaWrite dispatcher with updateMeta above.
+  const { updateIcon, updateCover } = useDocumentIconCover({
+    dispatch,
+    resolvedDocumentId,
+    isAuthenticated,
+    accessToken,
+    isOnline,
+    isSharedDocument,
+    isCloudMetadataInBackoff,
+    clearCloudMetadataBackoff,
+    triggerCloudMetadataBackoff,
+    metaRef,
+    ydocRef,
+    accessLevelRef,
+    updateMetaSeqRef,
+    lastLocalIconRef,
+    lastLocalCoverRef,
+  });
 
   return {
     documentId: resolvedDocumentId,
@@ -1449,6 +1401,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isLoading,
     error: error ? new Error(error) : null,
     updateMeta,
+    updateIcon,
+    updateCover,
     restore,
   };
 }

@@ -92,7 +92,9 @@ import {
 } from './comment.utils';
 import type { SharedCommentUserProfile } from './comment.utils';
 import { useAttachmentHandlers } from './useAttachmentHandlers';
+import { DocumentPageHeader } from '@/components/page/DocumentPageHeader';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
+import type { DocumentCover, DocumentIcon } from '@/types/document.types';
 
 type CodeLanguageInfo = {
   name: string;
@@ -336,6 +338,8 @@ export function EditorContent({
   awareness,
   meta,
   updateMeta,
+  updateIcon,
+  updateCover,
   isReadOnly,
   accessLevel,
   realtimeProvider,
@@ -356,6 +360,10 @@ export function EditorContent({
   awareness?: Awareness | null;
   meta: DocumentMeta;
   updateMeta: (updates: Partial<DocumentMeta>) => void;
+  /** Applies (or clears, with null) the page icon; see useDocument's commit path. */
+  updateIcon: (icon: DocumentIcon | null) => void;
+  /** Applies (or clears, with null) the page cover, position included. */
+  updateCover: (cover: DocumentCover | null) => void;
   isReadOnly: boolean;
   accessLevel: DocumentAccessLevel | null;
   realtimeProvider: WebsocketProvider | null;
@@ -761,7 +769,6 @@ export function EditorContent({
   // Parent keys EditorContent by documentId, so the initial value is per-document.
   const initialEditableRef = useRef(!isReadOnly);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const focusRequested = useRef(false);
 
   const [isEditorVisible, setIsEditorVisible] = useState(() => {
@@ -794,32 +801,12 @@ export function EditorContent({
     }
   }, [isEditorVisible, editor]);
 
-  const adjustTextareaHeight = () => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${textarea.scrollHeight}px`;
-    }
-  };
-
-  useEffect(() => {
-    adjustTextareaHeight();
-  }, [meta.title]);
-
-  useEffect(() => {
-    if (!isReadOnly && textareaRef.current && meta.title === 'Untitled') {
-      textareaRef.current.focus();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleTitleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleTitleChange = (nextTitle: string) => {
     if (isReadOnly) {
       return;
     }
 
-    updateMeta({ title: e.target.value });
-    adjustTextareaHeight();
+    updateMeta({ title: nextTitle });
   };
 
   const handleTitleBlur = () => {
@@ -847,6 +834,24 @@ export function EditorContent({
       }
     }
   };
+
+  // Page icon/cover editing needs EDIT access on a live document; uploading an
+  // image additionally needs a signed-in session (guests may paste a link).
+  const canEditPageMedia =
+    !isReadOnly && !meta.deletedAt && (accessLevel === 'EDIT' || accessLevel === 'OWNER');
+  const canUploadPageMedia = canEditPageMedia && isAuthenticated && !!accessToken && isOnline;
+
+  const handleRemoveIcon = useCallback(() => updateIcon(null), [updateIcon]);
+  const handleRemoveCover = useCallback(() => updateCover(null), [updateCover]);
+  const handleCoverPositionChange = useCallback(
+    (position: number) => {
+      if (!meta.cover) {
+        return;
+      }
+      updateCover({ ...meta.cover, position });
+    },
+    [meta.cover, updateCover]
+  );
 
   // What the comments extension had selected when the press started. Its own
   // click handling runs on mouseup — after this snapshot and before our click
@@ -913,22 +918,31 @@ export function EditorContent({
   );
 
   return (
-    <div className="flex flex-col w-full mt-12 md:mt-24 pb-[40vh] relative bg-background">
-      <div className="document-title-container group">
-        <textarea
-          ref={textareaRef}
-          value={meta.title === 'Untitled' ? '' : meta.title}
-          readOnly={isReadOnly}
-          onChange={handleTitleChange}
-          onBlur={handleTitleBlur}
-          onKeyDown={handleKeyDown}
-          placeholder="Untitled"
-          className="document-title-input overflow-hidden"
-          rows={1}
-        />
-      </div>
+    <div
+      className={`flex flex-col w-full pb-[40vh] relative bg-background ${
+        meta.cover ? '' : 'pt-8 md:pt-16'
+      }`}
+    >
+      <DocumentPageHeader
+        documentId={documentId}
+        title={meta.title}
+        icon={meta.icon}
+        cover={meta.cover}
+        isReadOnly={isReadOnly}
+        canEdit={canEditPageMedia}
+        canUpload={canUploadPageMedia}
+        accessToken={accessToken}
+        onTitleChange={handleTitleChange}
+        onTitleBlur={handleTitleBlur}
+        onTitleKeyDown={handleKeyDown}
+        onSelectIcon={updateIcon}
+        onRemoveIcon={handleRemoveIcon}
+        onSelectCover={updateCover}
+        onRemoveCover={handleRemoveCover}
+        onCoverPositionChange={handleCoverPositionChange}
+      />
       {isEditorVisible && (
-        <div className="animate-in fade-in duration-300">
+        <div className="w-full max-w-4xl mx-auto px-2 sm:px-4 animate-in fade-in duration-300">
           <BlockNoteView
             editor={editor}
             theme={resolvedTheme}

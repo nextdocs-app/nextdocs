@@ -9,6 +9,7 @@ import {
   readCachedDocumentAccessLevel,
   writeCachedDocumentAccessLevel,
 } from '@/lib/document-access.util';
+import { readPendingIconCoverPatch, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
@@ -74,6 +75,8 @@ describe('useDocument', () => {
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
   let updatePublicMetadataSpy: jest.SpyInstance;
+  let updateCloudIconCoverSpy: jest.SpyInstance;
+  let updatePublicIconCoverSpy: jest.SpyInstance;
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
   let checkAccessSpy: jest.SpyInstance;
@@ -113,6 +116,12 @@ describe('useDocument', () => {
     updatePublicMetadataSpy = jest
       .spyOn(documentService, 'updatePublicMetadata')
       .mockImplementation(jest.fn());
+    updateCloudIconCoverSpy = jest
+      .spyOn(documentService, 'updateCloudIconCover')
+      .mockImplementation(jest.fn());
+    updatePublicIconCoverSpy = jest
+      .spyOn(documentService, 'updatePublicIconCover')
+      .mockImplementation(jest.fn());
     restoreCloudDocumentFromTrashSpy = jest
       .spyOn(documentService, 'restoreCloudDocumentFromTrash')
       .mockImplementation(jest.fn());
@@ -144,6 +153,8 @@ describe('useDocument', () => {
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
     updatePublicMetadataSpy.mockRestore();
+    updateCloudIconCoverSpy.mockRestore();
+    updatePublicIconCoverSpy.mockRestore();
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
     checkAccessSpy.mockRestore();
@@ -616,6 +627,847 @@ describe('useDocument', () => {
         }),
       })
     );
+  });
+
+  it('should mirror local icon edits into the shared Yjs meta map', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const nextIcon = { type: 'emoji', value: '🎉' } as const;
+
+    await act(async () => {
+      result.current.updateIcon(nextIcon);
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual(nextIcon);
+    });
+
+    expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(nextIcon));
+  });
+
+  it('should mirror local cover edits and removals into the shared Yjs meta map', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const nextCover = {
+      type: 'link',
+      value: 'https://cdn.example/cover.jpg',
+      position: 0.5,
+    } as const;
+
+    await act(async () => {
+      result.current.updateCover(nextCover);
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.cover).toEqual(nextCover);
+    });
+
+    expect(ydoc.getMap('meta').get('cover')).toBe(JSON.stringify(nextCover));
+
+    await act(async () => {
+      result.current.updateCover(null);
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.cover).toBeUndefined();
+    });
+
+    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+  });
+
+  it('should not fan out a second icon event for its own Yjs echo', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+
+    await act(async () => {
+      result.current.updateIcon({ type: 'emoji', value: '🎉' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual({ type: 'emoji', value: '🎉' });
+    });
+
+    // The map write runs synchronously inside commitIconCover, so the observer
+    // sees the echo before metaRef commits; only the local edit's own event belongs here.
+    const metaEvents = dispatchEventSpy.mock.calls.filter(
+      ([event]) => (event as Event).type === 'document-meta-updated'
+    );
+    expect(metaEvents).toHaveLength(1);
+  });
+
+  it('should apply remote Yjs icon and cover updates without re-persisting REST', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+    updateCloudMetadataSpy.mockClear();
+    updateMetadataSpy.mockClear();
+
+    const remoteIcon = { type: 'emoji', value: '🚀' };
+    const remoteCover = {
+      type: 'link',
+      value: 'https://cdn.example/remote.jpg',
+      position: 0.3,
+    };
+
+    await act(async () => {
+      ydoc.getMap('meta').set('icon', JSON.stringify(remoteIcon));
+      ydoc.getMap('meta').set('cover', JSON.stringify(remoteCover));
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual(remoteIcon);
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.cover).toEqual(remoteCover);
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ icon: remoteIcon, cover: remoteCover }),
+        }),
+      })
+    );
+    expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should apply a remote Yjs icon removal to the editor', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      icon: { type: 'emoji', value: '🎉' },
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The seeder mirrors the loaded icon so late joiners see it live.
+    await waitFor(() => {
+      expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(meta.icon));
+    });
+
+    dispatchEventSpy.mockClear();
+    updateMetadataSpy.mockClear();
+
+    await act(async () => {
+      ydoc.getMap('meta').delete('icon');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toBeUndefined();
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Original Title' }),
+        }),
+      })
+    );
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should apply a remote Yjs cover removal to the editor', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      cover: { type: 'link', value: 'https://example.com/c.jpg', position: 0.3 },
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The seeder mirrors the loaded cover so late joiners see it live.
+    await waitFor(() => {
+      expect(ydoc.getMap('meta').get('cover')).toBe(JSON.stringify(meta.cover));
+    });
+
+    dispatchEventSpy.mockClear();
+    updateMetadataSpy.mockClear();
+
+    await act(async () => {
+      ydoc.getMap('meta').delete('cover');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.cover).toBeUndefined();
+    });
+
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'document-meta-updated',
+        detail: expect.objectContaining({
+          id: 'test-id',
+          meta: expect.objectContaining({ title: 'Original Title' }),
+        }),
+      })
+    );
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+  });
+
+  it('should ignore invalid remote Yjs icon and cover payloads', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getOrCreateDocumentSpy.mockResolvedValue({
+      ydoc,
+      meta,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    dispatchEventSpy.mockClear();
+
+    await act(async () => {
+      ydoc.getMap('meta').set('icon', 'not-json');
+      ydoc
+        .getMap('meta')
+        .set('cover', JSON.stringify({ type: 'link', value: 'http://insecure/x.jpg' }));
+    });
+
+    // Let any observer-driven dispatch flush; neither payload may apply.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.meta?.icon).toBeUndefined();
+    expect(result.current.meta?.cover).toBeUndefined();
+    const metaEvents = dispatchEventSpy.mock.calls.filter(
+      ([event]) => (event as Event).type === 'document-meta-updated'
+    );
+    expect(metaEvents).toHaveLength(0);
+  });
+
+  it('should persist updateIcon through updateCloudIconCover and mirror into IndexedDB', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-icon',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudIconCoverSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('icon-cloud-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const nextIcon = { type: 'emoji', value: '🚀' } as const;
+
+    await act(async () => {
+      result.current.updateIcon(nextIcon);
+    });
+
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'icon-cloud-id',
+        { icon: { type: 'emoji', value: '🚀' } },
+        'token-icon'
+      );
+    });
+
+    // The durable cloud write is mirrored into the local IndexedDB cache.
+    await waitFor(() => {
+      expect(updateMetadataSpy).toHaveBeenCalledWith(
+        'icon-cloud-id',
+        expect.objectContaining({ icon: nextIcon })
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual(nextIcon);
+    });
+  });
+
+  it('should send an explicit null-clear payload for updateCover(null)', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      cover: { type: 'link', value: 'https://cdn.example/old.jpg', position: 0.2 },
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-cover',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudIconCoverSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('cover-cloud-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateCover(null);
+    });
+
+    // Clearing needs an explicit null payload; an absent key would mean
+    // "leave unchanged" on the icon/cover endpoint.
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'cover-cloud-id',
+        { cover: { type: null, value: null, position: null } },
+        'token-cover'
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.cover).toBeUndefined();
+    });
+
+    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+  });
+
+  it('should persist updateIcon through updatePublicIconCover for an edit-level guest', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+    updatePublicIconCoverSpy.mockResolvedValue(undefined);
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('shared-icon-id', { isSharedDocument: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateIcon({ type: 'emoji', value: '🎉' });
+    });
+
+    await waitFor(() => {
+      expect(updatePublicIconCoverSpy).toHaveBeenCalledWith('shared-icon-id', {
+        icon: { type: 'emoji', value: '🎉' },
+      });
+    });
+
+    expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('should roll back the icon when the durable write rejects and no newer write exists', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-rollback',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudIconCoverSpy.mockRejectedValue(new Error('durable boom'));
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const { result } = renderHook(() => useDocument('rollback-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      await act(async () => {
+        result.current.updateIcon({ type: 'emoji', value: '🚀' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.meta?.icon).toBeUndefined();
+      });
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to persist page icon/cover update:',
+        expect.any(Error)
+      );
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('should not roll back a newer icon when an older icon write fails', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-race',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    let rejectFirst!: (reason?: unknown) => void;
+    const firstWrite = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    firstWrite.catch(() => {});
+    updateCloudIconCoverSpy.mockReturnValueOnce(firstWrite).mockResolvedValueOnce(undefined);
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const { result } = renderHook(() => useDocument('icon-race-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      await act(async () => {
+        result.current.updateIcon({ type: 'emoji', value: '🥇' });
+      });
+
+      await act(async () => {
+        result.current.updateIcon({ type: 'emoji', value: '🥈' });
+      });
+
+      await act(async () => {
+        rejectFirst(new Error('stale icon failure'));
+        await firstWrite.catch(() => {});
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+
+      await waitFor(() => {
+        expect(result.current.meta?.icon).toEqual({ type: 'emoji', value: '🥈' });
+      });
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('should persist icon locally and queue pending sync while offline', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('icon-offline-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateIcon({ type: 'emoji', value: '📴' });
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual({ type: 'emoji', value: '📴' });
+    });
+
+    // Offline there is no durable remote write to attempt; the edit lands in
+    // IndexedDB and is queued for a later sync instead.
+    expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+    expect(updatePublicIconCoverSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).toHaveBeenCalledWith(
+      'icon-offline-id',
+      expect.objectContaining({ icon: { type: 'emoji', value: '📴' } })
+    );
+    expect(readPendingSyncEdits('icon-offline-id')).toBeGreaterThan(0);
+    // The counter alone cannot replay the edit, so the exact payload the online
+    // path would PATCH is queued beside it.
+    expect(readPendingIconCoverPatch('icon-offline-id')).toEqual({
+      icon: { type: 'emoji', value: '📴' },
+    });
+  });
+
+  it('should queue an explicit clear for an icon removed while offline', async () => {
+    const ydoc = new Y.Doc();
+    const existingIcon = { type: 'builtin', value: 'barcode', color: 'pink' } as const;
+    const meta = {
+      title: 'Cloud Document',
+      icon: existingIcon,
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline-clear',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('icon-offline-clear-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateIcon(null);
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toBeUndefined();
+    });
+
+    // A cleared icon is simply absent from the queued meta, and the API reads an
+    // absent icon as "leave unchanged", so the reconnect needs this explicit null
+    // payload or the removal is silently undone on the next load.
+    expect(readPendingIconCoverPatch('icon-offline-clear-id')).toEqual({
+      icon: { type: null, value: null },
+    });
+    expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('should fall back to local persist plus pending sync on connectivity loss without rolling back', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-flaky',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    updateCloudIconCoverSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('icon-flaky-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateIcon({ type: 'emoji', value: '🌩️' });
+    });
+
+    // The optimistic icon stays: connectivity failures persist locally and
+    // queue a sync instead of rolling back.
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toEqual({ type: 'emoji', value: '🌩️' });
+    });
+
+    await waitFor(() => {
+      expect(updateMetadataSpy).toHaveBeenCalledWith(
+        'icon-flaky-id',
+        expect.objectContaining({ icon: { type: 'emoji', value: '🌩️' } })
+      );
+    });
+    expect(readPendingSyncEdits('icon-flaky-id')).toBeGreaterThan(0);
+  });
+
+  it('should ignore updateIcon and updateCover on a read-only document', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Read Only',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-view',
+    });
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'icon-readonly-id',
+      allowed: true,
+      accessLevel: 'VIEW',
+      owner: false,
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('icon-readonly-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.isReadOnly).toBe(true);
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await act(async () => {
+        result.current.updateIcon({ type: 'emoji', value: '🚫' });
+        result.current.updateCover({
+          type: 'link',
+          value: 'https://cdn.example/c.jpg',
+          position: 0.5,
+        });
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+    expect(updateMetadataSpy).not.toHaveBeenCalled();
+    expect(result.current.meta?.icon).toBeUndefined();
+    expect(result.current.meta?.cover).toBeUndefined();
+    expect(ydoc.getMap('meta').has('icon')).toBe(false);
+    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+  });
+
+  it('should seed the Yjs meta map for a document created before meta sync existed', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Legacy Doc',
+      icon: { type: 'emoji', value: '📜' },
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-seed',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('seed-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // A late joiner receives the current values over the live channel.
+    await waitFor(() => {
+      expect(ydoc.getMap('meta').get('title')).toBe('Legacy Doc');
+    });
+    expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(meta.icon));
+  });
+
+  it('should apply a remote icon deletion observed on the Yjs map', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Shared Doc',
+      icon: { type: 'emoji', value: '📝' },
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-remote-delete',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('remote-delete-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(result.current.meta?.icon).toEqual(meta.icon);
+
+    // A collaborator's delete transaction arrives as a real map deletion —
+    // not mere absence — so the local icon is cleared without a REST write.
+    await act(async () => {
+      ydoc.getMap('meta').delete('icon');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.icon).toBeUndefined();
+    });
+    expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('should ignore hand-crafted garbage on the Yjs icon key', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Shared Doc',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-garbage',
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('garbage-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // Non-string values and unparseable JSON must never reach the DOM or Redux.
+    await act(async () => {
+      ydoc.getMap('meta').set('icon', 42 as never);
+    });
+    await act(async () => {
+      ydoc.getMap('meta').set('icon', 'not-json{{{');
+    });
+    await act(async () => {
+      ydoc.getMap('meta').set('icon', JSON.stringify({ type: 'link', value: 'javascript:x' }));
+    });
+
+    expect(result.current.meta?.icon).toBeUndefined();
   });
 
   it('should load cloud document when authenticated', async () => {

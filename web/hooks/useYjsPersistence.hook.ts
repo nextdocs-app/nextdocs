@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
-import { documentService, type DocumentAccessLevel } from '@/services/document.service';
+import {
+  documentService,
+  DocumentServiceApiError,
+  type DocumentAccessLevel,
+} from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
@@ -13,9 +17,11 @@ import {
 } from '@/stores/document/document.slice';
 import type { DocumentMeta } from '@/types/document.types';
 import {
+  clearPendingIconCoverPatch,
   clearPendingSyncEdits,
   incrementPendingSyncEdits,
   PENDING_SYNC_EVENT,
+  readPendingIconCoverPatch,
   readPendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
@@ -99,7 +105,11 @@ export function useYjsPersistence(
       return;
     }
 
-    if (pendingEditsRef.current <= 0) {
+    // A queued icon/cover patch counts as pending work too: it is bumped with the
+    // counter, but treating either one as the trigger keeps a clear from being
+    // stranded if the counter is ever reset while the patch survives.
+    const pendingIconCover = readPendingIconCoverPatch(documentId);
+    if (pendingEditsRef.current <= 0 && !pendingIconCover) {
       return;
     }
 
@@ -130,6 +140,30 @@ export function useYjsPersistence(
         origin: 'local',
       });
       reconcileSavedMeta(sourceMeta);
+
+      // Replay the icon/cover patch through the endpoint that can express a clear.
+      // The content save above omits a cleared icon — the API reads that as "leave
+      // unchanged" — so without this an offline Remove is undone on the next load.
+      if (pendingIconCover) {
+        try {
+          await documentService.updateCloudIconCover(documentId, pendingIconCover, accessToken);
+        } catch (patchErr) {
+          if (
+            patchErr instanceof DocumentServiceApiError &&
+            patchErr.status >= 400 &&
+            patchErr.status < 500
+          ) {
+            // The server will refuse this again, and a queued patch keeps the
+            // document pinned to its local copy (a pending sync forces local
+            // reads), so drop it rather than retry it forever.
+            console.warn('Dropping a rejected page icon/cover patch:', patchErr.message);
+          } else {
+            // Connectivity: leave the patch queued for the next flush attempt.
+            throw patchErr;
+          }
+        }
+        clearPendingIconCoverPatch(documentId);
+      }
 
       clearPendingSyncEdits(documentId);
       pendingEditsRef.current = 0;

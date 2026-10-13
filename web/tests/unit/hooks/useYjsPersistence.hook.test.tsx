@@ -8,7 +8,8 @@ import documentReducer, {
 } from '@/stores/document/document.slice';
 import type { DocumentMeta } from '@/types/document.types';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
-import { documentService } from '@/services/document.service';
+import { documentService, DocumentServiceApiError } from '@/services/document.service';
+import { mergePendingIconCoverPatch, readPendingIconCoverPatch } from '@/lib/offline-sync.util';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -30,6 +31,7 @@ describe('useYjsPersistence', () => {
   let loadDocumentSpy: jest.SpyInstance;
   let saveDocumentSpy: jest.SpyInstance;
   let saveCloudDocumentSpy: jest.SpyInstance;
+  let updateCloudIconCoverSpy: jest.SpyInstance;
   let emitLocalDocumentsChangedSpy: jest.SpyInstance;
 
   beforeEach(() => {
@@ -40,6 +42,9 @@ describe('useYjsPersistence', () => {
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     saveCloudDocumentSpy = jest
       .spyOn(documentService, 'saveCloudDocument')
+      .mockImplementation(jest.fn());
+    updateCloudIconCoverSpy = jest
+      .spyOn(documentService, 'updateCloudIconCover')
       .mockImplementation(jest.fn());
     emitLocalDocumentsChangedSpy = jest
       .spyOn(documentService, 'emitLocalDocumentsChanged')
@@ -60,6 +65,7 @@ describe('useYjsPersistence', () => {
     loadDocumentSpy.mockRestore();
     saveDocumentSpy.mockRestore();
     saveCloudDocumentSpy.mockRestore();
+    updateCloudIconCoverSpy.mockRestore();
     emitLocalDocumentsChangedSpy.mockRestore();
   });
 
@@ -590,6 +596,105 @@ describe('useYjsPersistence', () => {
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(0);
       expect(result.current.hasPendingSync).toBe(false);
+    });
+  });
+
+  // A cleared icon is absent from the queued meta and the content save omits that
+  // key, which the API reads as "leave unchanged". The queued patch is what makes
+  // an offline Remove survive the reconnect.
+  describe('queued icon/cover patch', () => {
+    const clearIcon = { type: null, value: null };
+
+    function setupQueuedPatch() {
+      const ydoc = new Y.Doc();
+      const meta: DocumentMeta = {
+        title: 'Icon Replay Test',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const networkState = { isOnline: false, isOffline: true };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-1',
+      });
+      (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
+      saveDocumentSpy.mockResolvedValue(undefined);
+      saveCloudDocumentSpy.mockResolvedValue(undefined);
+      loadDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      window.localStorage.setItem('nextdocs:pending-sync:cloud-id', '1');
+      mergePendingIconCoverPatch('cloud-id', { icon: clearIcon });
+
+      const { result, rerender } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), {
+        wrapper,
+      });
+
+      const goOnline = () => {
+        networkState.isOnline = true;
+        networkState.isOffline = false;
+        rerender();
+      };
+
+      return { result, goOnline };
+    }
+
+    it('replays the patch through the endpoint that can express a clear', async () => {
+      updateCloudIconCoverSpy.mockResolvedValue(undefined);
+
+      const { result, goOnline } = setupQueuedPatch();
+
+      // Offline there is no durable write to attempt yet.
+      expect(updateCloudIconCoverSpy).not.toHaveBeenCalled();
+
+      goOnline();
+
+      await waitFor(() => {
+        expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+          'cloud-id',
+          { icon: clearIcon },
+          'token-1'
+        );
+      });
+
+      await waitFor(() => {
+        expect(readPendingIconCoverPatch('cloud-id')).toBeNull();
+        expect(result.current.pendingEdits).toBe(0);
+      });
+    });
+
+    it('keeps the patch queued when the replay cannot reach the server', async () => {
+      updateCloudIconCoverSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+
+      const { result, goOnline } = setupQueuedPatch();
+
+      goOnline();
+
+      await waitFor(() => {
+        expect(updateCloudIconCoverSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // Still queued for the next reconnect, and the counter still marks the
+      // document as having unsynced work.
+      expect(readPendingIconCoverPatch('cloud-id')).toEqual({ icon: clearIcon });
+      expect(result.current.pendingEdits).toBeGreaterThan(0);
+    });
+
+    it('drops a patch the server refuses instead of pinning the document local', async () => {
+      updateCloudIconCoverSpy.mockRejectedValue(new DocumentServiceApiError('Forbidden', 403));
+
+      const { result, goOnline } = setupQueuedPatch();
+
+      goOnline();
+
+      // A queued patch forces local-only reads, so a write the server will keep
+      // refusing has to be dropped rather than retried forever.
+      await waitFor(() => {
+        expect(readPendingIconCoverPatch('cloud-id')).toBeNull();
+      });
+      await waitFor(() => {
+        expect(result.current.pendingEdits).toBe(0);
+      });
     });
   });
 
