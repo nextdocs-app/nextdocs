@@ -322,6 +322,24 @@ describe('sharedTree.slice updateNodeMeta', () => {
 
     expect(state).toEqual(nodeState);
   });
+
+  it('sanitizes an icon update like the private tree does', () => {
+    const state = sharedTreeReducer(
+      nodeState,
+      updateNodeMeta({
+        id: 'shared-root',
+        icon: { type: 'link', value: 'javascript:alert(1)' } as never,
+      })
+    );
+
+    expect(state.nodes['shared-root'].icon).toBeNull();
+
+    const set = sharedTreeReducer(
+      nodeState,
+      updateNodeMeta({ id: 'shared-root', icon: { type: 'emoji', value: '🚀' } })
+    );
+    expect(set.nodes['shared-root'].icon).toEqual({ type: 'emoji', value: '🚀' });
+  });
 });
 
 describe('sharedTree.slice resetTree', () => {

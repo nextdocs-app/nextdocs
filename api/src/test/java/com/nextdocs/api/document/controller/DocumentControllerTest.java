@@ -1,5 +1,6 @@
 package com.nextdocs.api.document.controller;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
@@ -17,7 +18,10 @@ import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
+import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
+import com.nextdocs.api.document.dto.response.DocumentCoverResponse;
+import com.nextdocs.api.document.dto.response.DocumentIconResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.DocumentService;
@@ -27,6 +31,7 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -92,6 +97,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
 
         when(documentService.create(eq(userId), any()))
@@ -126,6 +133,8 @@ class DocumentControllerTest {
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
+                null,
+                null,
                 null,
                 null);
 
@@ -163,6 +172,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
@@ -191,6 +202,8 @@ class DocumentControllerTest {
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
+                null,
+                null,
                 null,
                 null);
 
@@ -223,6 +236,8 @@ class DocumentControllerTest {
                 "Bob",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
+                null,
+                null,
                 null,
                 null);
 
@@ -257,6 +272,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
@@ -287,7 +304,9 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 deleted,
-                deleted.plusDays(30));
+                deleted.plusDays(30),
+                null,
+                null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
         when(documentService.list(eq(userId), eq(null), eq("all"), eq(true), any()))
@@ -324,6 +343,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
 
         when(documentService.update(eq(userId), eq(documentId), any())).thenReturn(response);
@@ -342,7 +363,53 @@ class DocumentControllerTest {
     }
 
     @Test
+    void update_iconAndCover_deserializesAndReturnsThem() throws Exception {
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Doc",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null,
+                new DocumentIconResponse("emoji", "📝"),
+                new DocumentCoverResponse("link", "https://example.com/c.png", 0.5));
+
+        when(documentService.update(eq(userId), eq(documentId), any())).thenReturn(response);
+
+        mockMvc.perform(patch("/api/v1/documents/{id}", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "icon": {"type": "EMOJI", "value": "📝"},
+                          "cover": {"type": "LINK", "value": "https://example.com/c.png", "position": 0.5}
+                        }
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.icon.type").value("emoji"))
+                .andExpect(jsonPath("$.data.icon.value").value("📝"))
+                .andExpect(jsonPath("$.data.cover.type").value("link"))
+                .andExpect(jsonPath("$.data.cover.position").value(0.5));
+
+        ArgumentCaptor<DocumentUpdateRequest> captor = ArgumentCaptor.forClass(DocumentUpdateRequest.class);
+        verify(documentService).update(eq(userId), eq(documentId), captor.capture());
+        assertEquals("EMOJI", captor.getValue().icon().type());
+        assertEquals("📝", captor.getValue().icon().value());
+        assertEquals("LINK", captor.getValue().cover().type());
+        assertEquals(0.5, captor.getValue().cover().position());
+    }
+
+    @Test
     void update_titleLongerThanTheColumn_returns400() throws Exception {
+
         mockMvc.perform(patch("/api/v1/documents/{id}", documentId)
                         .with(user(principal))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -376,6 +443,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
 
         when(documentService.restore(eq(userId), eq(documentId))).thenReturn(response);
@@ -400,6 +469,8 @@ class DocumentControllerTest {
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
+                null,
+                null,
                 null,
                 null);
 
@@ -467,6 +538,8 @@ class DocumentControllerTest {
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,
+                null,
+                null,
                 null);
         Page<DocumentResponse> page = new PageImpl<>(List.of(child));
 
@@ -492,6 +565,8 @@ class DocumentControllerTest {
                 "Alice",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
+                null,
+                null,
                 null,
                 null);
 

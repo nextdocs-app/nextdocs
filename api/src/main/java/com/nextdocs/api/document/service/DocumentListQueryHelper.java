@@ -4,6 +4,7 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.DocumentResponses;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
@@ -90,20 +91,8 @@ public class DocumentListQueryHelper {
             boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
             UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
-            return new DocumentResponse(
-                    doc.getId(),
-                    doc.getTitle(),
-                    null,
-                    parentDocId,
-                    doc.getSiblingOrderKey(),
-                    false,
-                    hasCollaborators,
-                    access,
-                    doc.getCreatedBy(),
-                    doc.getCreatedAt(),
-                    doc.getUpdatedAt(),
-                    deletedAt,
-                    purgeAt);
+            return DocumentResponses.of(
+                    doc, parentDocId, doc.getSiblingOrderKey(), false, hasCollaborators, access, deletedAt, purgeAt);
         });
     }
 
@@ -141,20 +130,8 @@ public class DocumentListQueryHelper {
                         UUID parentDocId =
                                 doc.getParent() != null ? doc.getParent().getId() : null;
 
-                        return new DocumentResponse(
-                                doc.getId(),
-                                doc.getTitle(),
-                                null,
-                                parentDocId,
-                                orderKey,
-                                hasChildren,
-                                hasCollaborators,
-                                access,
-                                doc.getCreatedBy(),
-                                doc.getCreatedAt(),
-                                doc.getUpdatedAt(),
-                                null,
-                                null);
+                        return DocumentResponses.of(
+                                doc, parentDocId, orderKey, hasChildren, hasCollaborators, access, null, null);
                     })
                     .toList();
 
@@ -181,18 +158,13 @@ public class DocumentListQueryHelper {
                         boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
                         boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
 
-                        return new DocumentResponse(
-                                doc.getId(),
-                                doc.getTitle(),
-                                null,
+                        return DocumentResponses.of(
+                                doc,
                                 null,
                                 orderKey,
                                 hasChildren,
                                 hasCollaborators,
                                 DocumentAccessLevel.OWNER,
-                                doc.getCreatedBy(),
-                                doc.getCreatedAt(),
-                                doc.getUpdatedAt(),
                                 null,
                                 null);
                     })
@@ -218,20 +190,8 @@ public class DocumentListQueryHelper {
                         String orderKey = (String) r[1];
                         boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
 
-                        return new DocumentResponse(
-                                doc.getId(),
-                                doc.getTitle(),
-                                null,
-                                null,
-                                orderKey,
-                                hasChildren,
-                                false,
-                                DocumentAccessLevel.OWNER,
-                                doc.getCreatedBy(),
-                                doc.getCreatedAt(),
-                                doc.getUpdatedAt(),
-                                null,
-                                null);
+                        return DocumentResponses.of(
+                                doc, null, orderKey, hasChildren, false, DocumentAccessLevel.OWNER, null, null);
                     })
                     .toList();
 
@@ -293,20 +253,8 @@ public class DocumentListQueryHelper {
                     ? DocumentAccessLevel.OWNER
                     : accessLevels.getOrDefault(doc.getId(), null);
 
-            return new DocumentResponse(
-                    doc.getId(),
-                    doc.getTitle(),
-                    null,
-                    parentId,
-                    doc.getSiblingOrderKey(),
-                    hasChildren,
-                    hasCollaborators,
-                    access,
-                    doc.getCreatedBy(),
-                    doc.getCreatedAt(),
-                    doc.getUpdatedAt(),
-                    null,
-                    null);
+            return DocumentResponses.of(
+                    doc, parentId, doc.getSiblingOrderKey(), hasChildren, hasCollaborators, access, null, null);
         });
     }
 
@@ -358,20 +306,8 @@ public class DocumentListQueryHelper {
                 String orderKey = isRootForUser ? userOrderKeys.get(doc.getId()) : doc.getSiblingOrderKey();
                 UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
-                return new DocumentResponse(
-                        doc.getId(),
-                        doc.getTitle(),
-                        null,
-                        parentDocId,
-                        orderKey,
-                        hasChildren,
-                        hasCollaborators,
-                        access,
-                        doc.getCreatedBy(),
-                        doc.getCreatedAt(),
-                        doc.getUpdatedAt(),
-                        null,
-                        null);
+                return DocumentResponses.of(
+                        doc, parentDocId, orderKey, hasChildren, hasCollaborators, access, null, null);
             });
         }
 
@@ -392,20 +328,8 @@ public class DocumentListQueryHelper {
             String orderKey = doc.getParent() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
             UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
-            return new DocumentResponse(
-                    doc.getId(),
-                    doc.getTitle(),
-                    null,
-                    parentDocId,
-                    orderKey,
-                    hasChildren,
-                    hasCollaborators,
-                    DocumentAccessLevel.OWNER,
-                    doc.getCreatedBy(),
-                    doc.getCreatedAt(),
-                    doc.getUpdatedAt(),
-                    null,
-                    null);
+            return DocumentResponses.of(
+                    doc, parentDocId, orderKey, hasChildren, hasCollaborators, DocumentAccessLevel.OWNER, null, null);
         });
     }
 

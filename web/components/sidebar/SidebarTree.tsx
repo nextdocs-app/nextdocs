@@ -14,7 +14,7 @@ import {
   selectSharedWithMeDocumentIds,
 } from '@/stores/documentList/documentList.selectors';
 import { useAuth } from '@/hooks/useAuth.hook';
-import { subscribeDocumentMetaUpdated } from '@/lib/document-meta-event.util';
+import { useTreeMetaSync } from '@/hooks/useTreeMetaSync.hook';
 import { Plus } from '@/icons';
 import { SidebarSection } from './SidebarSection';
 import { SidebarTreeItem } from './SidebarTreeItem';
@@ -105,16 +105,9 @@ export function SidebarTree({
     void dispatch(fetchRootNodesThunk());
   }, [dispatch, isAuthenticated, accessToken]);
 
-  useEffect(() => {
-    const unsubscribeMeta = subscribeDocumentMetaUpdated((detail) => {
-      dispatch(
-        updateNodeMeta({
-          id: detail.id,
-          title: detail.meta?.title,
-        })
-      );
-    });
+  useTreeMetaSync(dispatch, updateNodeMeta);
 
+  useEffect(() => {
     const handleDocsChanged = () => {
       // Background sync (e.g. doc created/restored in another view): must not
       // pulse isRootLoading.
@@ -125,7 +118,6 @@ export function SidebarTree({
     window.addEventListener('local-documents-changed', handleDocsChanged);
 
     return () => {
-      unsubscribeMeta();
       window.removeEventListener('cloud-documents-changed', handleDocsChanged);
       window.removeEventListener('local-documents-changed', handleDocsChanged);
     };

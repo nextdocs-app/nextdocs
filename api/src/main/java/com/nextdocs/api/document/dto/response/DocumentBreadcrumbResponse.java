@@ -9,8 +9,7 @@ import java.util.UUID;
 public record DocumentBreadcrumbResponse(
         @Schema(description = "Document ID") UUID id,
         @Schema(description = "Document title") String title,
-        // Document icon is reserved for future icon/cover support; title is used primarily for now
-        @Schema(description = "Document icon if present") String icon,
+        @Schema(description = "Page icon if present") DocumentIconResponse icon,
 
         @Schema(description = "Parent document ID, null for root-level")
         UUID parentId,
@@ -20,7 +19,7 @@ public record DocumentBreadcrumbResponse(
         @Schema(description = "Created timestamp") OffsetDateTime createdAt,
         @Schema(description = "Updated timestamp") OffsetDateTime updatedAt) {
 
-    public DocumentBreadcrumbResponse(UUID id, String title, String icon, UUID parentId) {
+    public DocumentBreadcrumbResponse(UUID id, String title, DocumentIconResponse icon, UUID parentId) {
         this(id, title, icon, parentId, null, null, null, null);
     }
 }

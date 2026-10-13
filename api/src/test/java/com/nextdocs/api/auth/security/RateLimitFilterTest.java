@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.nextdocs.api.auth.security.ratelimit.RateLimiter;
 import com.nextdocs.api.common.exception.ErrorCode;
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -58,6 +59,8 @@ class RateLimitFilterTest {
                 60,
                 600,
                 60,
+                60,
+                60,
                 MAX_TEST_UPLOAD_REQUEST_SIZE);
         mockMvc = MockMvcBuilders.standaloneSetup(new StubController())
                 .addFilters(filter)
@@ -100,6 +103,46 @@ class RateLimitFilterTest {
         mockMvc.perform(post("/api/v1/auth/login").remoteAddress("10.0.0.2"))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void iconCatalogAndGlyphs_useTheirOwnBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/icons").remoteAddress("10.0.0.9")).andExpect(status().isOk());
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("icons:10.0.0.9");
+
+        mockMvc.perform(get("/api/v1/icons/{name}", "home").remoteAddress("10.0.0.9"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.invocationCount).isEqualTo(2);
+        assertThat(rateLimiter.lastKey).isEqualTo("icons:10.0.0.9");
+
+        mockMvc.perform(get("/api/v1/icons/bundle").remoteAddress("10.0.0.9")).andExpect(status().isOk());
+        assertThat(rateLimiter.invocationCount).isEqualTo(3);
+        assertThat(rateLimiter.lastKey).isEqualTo("icons:10.0.0.9");
+    }
+
+    @Test
+    void iconPath_isClassifiedByItsDecodedForm() throws Exception {
+        // An escaped character in the path must not decide the bucket: matching the
+        // raw URI would let this fall through to unlimited instead of joining the
+        // icon bucket, whatever form the container hands over.
+        //
+        // The URI form rather than get(String): the string form re-encodes the escape
+        // (%69 → %2569), so it would not exercise a percent-encoded path at all.
+        mockMvc.perform(get(URI.create("/api/v1/%69cons/bundle")).remoteAddress("10.0.0.10"));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("icons:10.0.0.10");
+    }
+
+    @Test
+    void iconBucket_isReadOnly() throws Exception {
+        // No write route exists under the catalog, so a write must not spend the
+        // read budget it cannot legitimately consume.
+        mockMvc.perform(post("/api/v1/icons/bundle").remoteAddress("10.0.0.11"))
+                .andExpect(status().isMethodNotAllowed());
+
+        assertThat(rateLimiter.invocationCount).isZero();
     }
 
     @Test
@@ -859,6 +902,21 @@ class RateLimitFilterTest {
 
         @PostMapping("/api/v1/documents/{id}/attachments")
         ResponseEntity<String> uploadAttachment(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/icons")
+        ResponseEntity<String> iconCatalog() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/icons/bundle")
+        ResponseEntity<String> iconBundle() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/icons/{name}")
+        ResponseEntity<String> iconGlyph(@PathVariable String name) {
             return ResponseEntity.ok("ok");
         }
     }

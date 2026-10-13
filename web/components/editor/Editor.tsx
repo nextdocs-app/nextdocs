@@ -45,6 +45,8 @@ export default function Editor() {
     isLoading,
     error,
     updateMeta,
+    updateIcon,
+    updateCover,
     restore,
   } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
@@ -246,6 +248,8 @@ export default function Editor() {
         awareness={awareness}
         meta={meta}
         updateMeta={updateMeta}
+        updateIcon={updateIcon}
+        updateCover={updateCover}
         isReadOnly={isReadOnly}
         accessLevel={accessLevel}
         realtimeProvider={realtimeProvider}

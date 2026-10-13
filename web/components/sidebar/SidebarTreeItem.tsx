@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { ChevronRight, DocumentText, MoreHorizontal, Plus } from '@/icons';
+import { ChevronRight, MoreHorizontal, Plus } from '@/icons';
+import { DocRowIcon } from './DocRowIcon';
 import {
   MAX_PUBLIC_CHILDREN_PAGES,
   PUBLIC_CHILDREN_PAGE_SIZE,
@@ -197,14 +198,15 @@ export function SidebarTreeItem({
           </button>
         </span>
 
-        {/* Icon - document icon by default, chevron on hover for expandable items.
-            The doc icon stays visible on touch (left of the title); only the
-            hover-swap chevron is desktop-only since coarse pointers have their
-            own always-visible chevron slot above. */}
-        <div className="relative h-[17px] w-[17px] flex-shrink-0">
-          <DocumentText
-            size={17}
-            className="absolute inset-0 opacity-80 group-hover/tree-item-row:opacity-0 transition-opacity"
+        {/* Icon - page icon when set, document glyph otherwise; chevron swaps in
+            on hover for expandable items. The icon stays visible on touch (left
+            of the title); only the hover-swap chevron is desktop-only since
+            coarse pointers have their own always-visible chevron slot above. */}
+        <div className="relative flex h-[17px] w-[17px] flex-shrink-0 items-center justify-center">
+          <DocRowIcon
+            icon={node.icon}
+            className="absolute inset-0 flex items-center justify-center opacity-80 transition-opacity group-hover/tree-item-row:opacity-0"
+            glyphClassName="absolute inset-0 opacity-80 group-hover/tree-item-row:opacity-0 transition-opacity"
           />
           <button
             type="button"
@@ -348,3 +350,10 @@ export function SidebarTreeItem({
     </li>
   );
 }
+
+// NOTE: deliberately not memo()ed. Rows subscribe to the DnD context (treeApi
+// + dropState), and context updates re-render consumers regardless of props
+// memo — every store write mints a new `nodes` identity, so memo would only
+// skip parent-only re-renders while implying a per-row isolation that does
+// not exist. URL minting itself is already deduped and bounded in
+// attachment.service.

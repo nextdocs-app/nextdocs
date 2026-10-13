@@ -12,4 +12,14 @@ public record DocumentUpdateRequest(
 
         @Schema(description = "Optional creator label")
         @Size(max = 255, message = "createdBy must be at most 255 characters")
-        String createdBy) {}
+        String createdBy,
+
+        @Schema(
+                description = "Page icon assignment. Absent leaves the icon unchanged; "
+                        + "a value with a null type clears it.")
+        DocumentIconRequest icon,
+
+        @Schema(
+                description = "Cover image assignment. Absent leaves the cover unchanged; "
+                        + "a value with a null type clears it.")
+        DocumentCoverRequest cover) {}

@@ -8,6 +8,7 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.DocumentResponses;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -162,20 +163,8 @@ public class DocumentTreeService {
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
             boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
             DocumentAccessLevel access = permissionService.resolveAccess(userId, documentId);
-            return new DocumentResponse(
-                    saved.getId(),
-                    saved.getTitle(),
-                    null,
-                    newParent.getId(),
-                    newSiblingOrderKey,
-                    hasChildren,
-                    hasCollaborators,
-                    access,
-                    saved.getCreatedBy(),
-                    saved.getCreatedAt(),
-                    saved.getUpdatedAt(),
-                    null,
-                    null);
+            return DocumentResponses.of(
+                    saved, newParent.getId(), newSiblingOrderKey, hasChildren, hasCollaborators, access, null, null);
         } else {
             // Root-level move or personal Shared section reordering
             Document targetDoc = documentRepository
@@ -289,20 +278,8 @@ public class DocumentTreeService {
 
             UUID resultParentId = doc.getParent() != null ? doc.getParent().getId() : null;
 
-            return new DocumentResponse(
-                    doc.getId(),
-                    doc.getTitle(),
-                    null,
-                    resultParentId,
-                    newUserOrderKey,
-                    hasChildren,
-                    hasCollaborators,
-                    access,
-                    doc.getCreatedBy(),
-                    doc.getCreatedAt(),
-                    doc.getUpdatedAt(),
-                    null,
-                    null);
+            return DocumentResponses.of(
+                    doc, resultParentId, newUserOrderKey, hasChildren, hasCollaborators, access, null, null);
         }
     }
 

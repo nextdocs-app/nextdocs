@@ -29,6 +29,10 @@ export type {
   DefaultBlockProps,
   HeadingLevel,
   TextAlignment,
+  DocumentIcon,
+  DocumentIconType,
+  DocumentCover,
+  DocumentCoverType,
 } from '@/../../realtime/src/types/blocks';
 
 // Format we use when storing documents in IndexedDB

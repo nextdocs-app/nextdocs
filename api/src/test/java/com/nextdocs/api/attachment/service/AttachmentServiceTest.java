@@ -138,7 +138,7 @@ class AttachmentServiceTest {
 
         // Admission control runs first so an over-quota upload never reaches the disk.
         InOrder inOrder = inOrder(quotaService, attachmentStorage);
-        inOrder.verify(quotaService).reserve(userId, 5L);
+        inOrder.verify(quotaService).reserve(userId, 13L);
         inOrder.verify(attachmentStorage).put(anyString(), any(InputStream.class));
     }
 
@@ -148,7 +148,7 @@ class AttachmentServiceTest {
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         doThrow(new ApiException(ErrorCode.PAYLOAD_TOO_LARGE))
                 .when(quotaService)
-                .reserve(userId, 5L);
+                .reserve(userId, 13L);
 
         assertApiError(
                 ErrorCode.PAYLOAD_TOO_LARGE,
@@ -195,10 +195,10 @@ class AttachmentServiceTest {
         AttachmentResponse response = attachmentService.upload(
                 userId, documentId, underReportingMultipartFile("big.png", "image/png", "hello"));
 
-        assertEquals(5L, response.sizeBytes());
+        assertEquals(13L, response.sizeBytes());
         InOrder inOrder = inOrder(quotaService);
         inOrder.verify(quotaService).reserve(userId, 1L);
-        inOrder.verify(quotaService).reserve(userId, 4L);
+        inOrder.verify(quotaService).reserve(userId, 12L);
     }
 
     @Test
@@ -216,7 +216,7 @@ class AttachmentServiceTest {
 
         assertEquals("Screen Shot.PNG", response.fileName());
         assertEquals("image/png", response.contentType());
-        assertEquals(5L, response.sizeBytes());
+        assertEquals(13L, response.sizeBytes());
         assertEquals("/api/v1/attachments/" + response.id(), response.url());
 
         verify(attachmentStorage).put(eq(documentId + "/" + response.id()), any(InputStream.class));
@@ -224,7 +224,7 @@ class AttachmentServiceTest {
         verify(attachmentRepository).saveAndFlush(captor.capture());
         assertEquals(documentId + "/" + response.id(), captor.getValue().getStorageKey());
         assertEquals(
-                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                "0e8754cfeb908584f7a2f2ccd08e37fda8d3d540cbaf2e16ac559c7ea59a7151",
                 captor.getValue().getSha256());
     }
 
@@ -270,10 +270,10 @@ class AttachmentServiceTest {
 
         AttachmentResponse response = attachmentService.upload(userId, documentId, file);
 
-        assertEquals(5L, response.sizeBytes());
+        assertEquals(13L, response.sizeBytes());
         ArgumentCaptor<Attachment> captor = ArgumentCaptor.forClass(Attachment.class);
         verify(attachmentRepository).saveAndFlush(captor.capture());
-        assertEquals(5L, captor.getValue().getSizeBytes());
+        assertEquals(13L, captor.getValue().getSizeBytes());
     }
 
     @Test
@@ -303,6 +303,69 @@ class AttachmentServiceTest {
         assertThat(attachments.get(2).getContentType()).isEqualTo("application/octet-stream");
         // A padded but valid content type is still accepted after normalization.
         assertThat(attachments.get(3).getContentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void upload_acceptsGenericMediaTypes() {
+        List<Attachment> attachments = captureUploads(
+                new String[] {"clip.mp4", "song.mp3", "doc.pdf", "archive.zip"},
+                new String[] {"video/mp4", "audio/mpeg", "application/pdf", "application/zip"});
+
+        assertThat(attachments.get(0).getContentType()).isEqualTo("video/mp4");
+        assertThat(attachments.get(1).getContentType()).isEqualTo("audio/mpeg");
+        assertThat(attachments.get(2).getContentType()).isEqualTo("application/pdf");
+        assertThat(attachments.get(3).getContentType()).isEqualTo("application/zip");
+    }
+
+    @Test
+    void upload_ignoresLabelParametersAndStoresDetectedType() {
+        // A padded label with parameters is still a PNG once sniffed: the stored
+        // type is the detected one, never the raw label.
+        List<Attachment> attachments = captureUploads(new String[] {"d.bin"}, new String[] {" image/png "});
+
+        assertThat(attachments.get(0).getContentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void upload_readsTheUploadStreamOnce() {
+        stubStoragePut();
+        when(permissionService.requireEditAccess(userId, documentId)).thenReturn(document);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(attachmentRepository.saveAndFlush(any(Attachment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Sniff and store share one open: a second getInputStream() call on a
+        // MultipartFile that reuses its stream would read from EOF and persist an
+        // empty file with a digest of the empty payload.
+        AttachmentResponse response = attachmentService.upload(
+                userId, documentId, reusableStreamMultipartFile("a.png", "image/png", "hello"));
+
+        assertEquals(13L, response.sizeBytes());
+        ArgumentCaptor<Attachment> captor = ArgumentCaptor.forClass(Attachment.class);
+        verify(attachmentRepository).saveAndFlush(captor.capture());
+        assertEquals(
+                "0e8754cfeb908584f7a2f2ccd08e37fda8d3d540cbaf2e16ac559c7ea59a7151",
+                captor.getValue().getSha256());
+    }
+
+    @Test
+    void upload_rejectsScriptLabelledAsImage() {
+        when(permissionService.requireEditAccess(userId, documentId)).thenReturn(document);
+        // Raw script bytes with an image label and no magic header: the label
+        // must not save it. Built via a raw mock because the shared helper
+        // prepends real magic for image labels.
+        MultipartFile spoofed = mock(MultipartFile.class);
+        byte[] script = "<script>alert(1)</script>".getBytes(StandardCharsets.UTF_8);
+        lenient().when(spoofed.getOriginalFilename()).thenReturn("evil.png");
+        lenient().when(spoofed.getContentType()).thenReturn("image/png");
+        lenient().when(spoofed.getSize()).thenReturn((long) script.length);
+        lenient().when(spoofed.isEmpty()).thenReturn(false);
+        try {
+            lenient().when(spoofed.getInputStream()).thenAnswer(inv -> new ByteArrayInputStream(script));
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+        assertApiError(ErrorCode.VALIDATION_FAILED, () -> attachmentService.upload(userId, documentId, spoofed));
     }
 
     @Test
@@ -349,7 +412,7 @@ class AttachmentServiceTest {
     @Test
     void upload_acceptsFileExactlyAtTheLimit() {
         stubStoragePut();
-        properties.setMaxFileSize(DataSize.ofBytes(5));
+        properties.setMaxFileSize(DataSize.ofBytes(13));
         when(permissionService.requireEditAccess(userId, documentId)).thenReturn(document);
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(attachmentRepository.saveAndFlush(any(Attachment.class)))
@@ -358,7 +421,7 @@ class AttachmentServiceTest {
         AttachmentResponse response =
                 attachmentService.upload(userId, documentId, multipartFile("exact.png", "image/png", "hello"));
 
-        assertEquals(5L, response.sizeBytes());
+        assertEquals(13L, response.sizeBytes());
     }
 
     @Test
@@ -375,8 +438,8 @@ class AttachmentServiceTest {
 
         // Five bytes land on disk from a -1 declaration: without the clamp the
         // reconciliation would reserve six and over-hold one byte of quota.
-        assertEquals(5L, response.sizeBytes());
-        verify(quotaService).reserve(userId, 5L);
+        assertEquals(13L, response.sizeBytes());
+        verify(quotaService).reserve(userId, 13L);
         verify(quotaService, never()).release(eq(userId), anyLong());
     }
 
@@ -418,7 +481,7 @@ class AttachmentServiceTest {
 
         verify(attachmentRepository, never()).saveAndFlush(any());
         // The reservation must not outlive the failed upload.
-        verify(quotaService).release(userId, 4L);
+        verify(quotaService).release(userId, 12L);
     }
 
     @Test
@@ -442,8 +505,8 @@ class AttachmentServiceTest {
         AttachmentResponse response =
                 attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "hello"));
 
-        assertEquals(3L, response.sizeBytes());
-        // Declared 5 bytes but stored 3: the 2-byte over-report must be handed back, or
+        assertEquals(11L, response.sizeBytes());
+        // Declared 13 bytes but stored 11: the 2-byte over-report must be handed back, or
         // no-op'ing the delta<0 branch leaves quota permanently over-reserved.
         verify(quotaService).release(userId, 2L);
     }
@@ -459,7 +522,7 @@ class AttachmentServiceTest {
         doThrow(new IllegalStateException("delete failed"))
                 .when(attachmentStorage)
                 .delete(anyString());
-        doThrow(new IllegalStateException("release failed")).when(quotaService).release(userId, 4L);
+        doThrow(new IllegalStateException("release failed")).when(quotaService).release(userId, 12L);
 
         assertApiError(
                 ErrorCode.INTERNAL_ERROR,
@@ -479,7 +542,7 @@ class AttachmentServiceTest {
                 .isInstanceOf(RuntimeException.class);
 
         verify(attachmentStorage).delete(anyString());
-        verify(quotaService).release(userId, 4L);
+        verify(quotaService).release(userId, 12L);
     }
 
     @Test
@@ -895,19 +958,62 @@ class AttachmentServiceTest {
                 .put(anyString(), any(InputStream.class));
     }
 
+    private static final byte[] PNG_MAGIC = new byte[] {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+
+    /**
+     * Builds a multipart mock whose bytes pass magic-byte sniffing when the label
+     * is a raster image: the PNG header is prepended to the payload so the detected
+     * type is the label's type regardless of the label's parameters or casing.
+     * Non-image labels keep the raw payload so they are rejected as non-images.
+     * The stream is handed out fresh per call, which the service must not rely on —
+     * {@code reusableStreamMultipartFile} covers the spec-permitted alternative.
+     */
     private static MultipartFile multipartFile(String fileName, String contentType, String content) {
         MultipartFile file = mock(MultipartFile.class);
-        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        byte[] payload = content.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = isImagePngLabel(contentType) ? concat(PNG_MAGIC, payload) : payload;
         lenient().when(file.getOriginalFilename()).thenReturn(fileName);
         lenient().when(file.getContentType()).thenReturn(contentType);
         lenient().when(file.getSize()).thenReturn((long) bytes.length);
         lenient().when(file.isEmpty()).thenReturn(bytes.length == 0);
         try {
-            lenient().when(file.getInputStream()).thenReturn(new ByteArrayInputStream(bytes));
+            lenient().when(file.getInputStream()).thenAnswer(invocation -> new ByteArrayInputStream(bytes));
         } catch (IOException exception) {
             throw new UncheckedIOException(exception);
         }
         return file;
+    }
+
+    /**
+     * Hands out one stream instance for every {@code getInputStream()} call, the way a
+     * container may: the service has to sniff and store from a single open to read the
+     * whole payload.
+     */
+    private static MultipartFile reusableStreamMultipartFile(String fileName, String contentType, String content) {
+        MultipartFile file = multipartFile(fileName, contentType, content);
+        ByteArrayInputStream shared =
+                new ByteArrayInputStream(concat(PNG_MAGIC, content.getBytes(StandardCharsets.UTF_8)));
+        try {
+            when(file.getInputStream()).thenReturn(shared);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+        return file;
+    }
+
+    private static boolean isImagePngLabel(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String base = contentType.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return base.equals("image/png");
+    }
+
+    private static byte[] concat(byte[] head, byte[] tail) {
+        byte[] out = new byte[head.length + tail.length];
+        System.arraycopy(head, 0, out, 0, head.length);
+        System.arraycopy(tail, 0, out, head.length, tail.length);
+        return out;
     }
 
     /** Declares a tiny size while streaming the real bytes, modeling a container that lies. */

@@ -1,6 +1,8 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import { documentService } from '@/services/document.service';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
+import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
+import { applyNodeMeta, collectSubtreeIds } from '@/lib/tree-meta.util';
 import type { RootState } from '../store';
 import type { SidebarTreeNode, TreeNode, MoveDocumentRequest } from '@/types/tree.types';
 
@@ -40,6 +42,9 @@ export function toSidebarTreeNode(node: TreeNode, isExpanded = false): SidebarTr
     orderKey: node.orderKey,
     hasChildren: node.hasChildren,
     effectiveAccessLevel: node.effectiveAccessLevel,
+    // Tree nodes feed the sidebar icon render; re-validate so stale IndexedDB
+    // or a compromised payload degrades to no icon instead of reaching img/CSS.
+    icon: sanitizeDocumentIcon(node.icon) ?? null,
     isExpanded,
     isLoading: false,
     children: [],
@@ -71,6 +76,7 @@ export const fetchRootNodesThunk = createAsyncThunk<
       effectiveAccessLevel: 'OWNER',
       createdAt: d.meta.createdAt,
       updatedAt: d.meta.updatedAt,
+      icon: sanitizeDocumentIcon(d.meta.icon) ?? null,
     }));
     return { nodes, hasMore: false, page: 0 };
   }
@@ -95,6 +101,7 @@ export const fetchRootNodesThunk = createAsyncThunk<
       effectiveAccessLevel: 'OWNER',
       createdAt: d.meta.createdAt,
       updatedAt: d.meta.updatedAt,
+      icon: sanitizeDocumentIcon(d.meta.icon) ?? null,
     }));
     return { nodes, hasMore: false, page: 0 };
   }
@@ -167,13 +174,13 @@ const sidebarTreeSlice = createSlice({
       }
     },
 
-    updateNodeMeta(state, action: PayloadAction<{ id: string; title?: string }>) {
-      const { id, title } = action.payload;
-      const node = state.nodes[id];
+    updateNodeMeta(
+      state,
+      action: PayloadAction<{ id: string; title?: string; icon?: SidebarTreeNode['icon'] }>
+    ) {
+      const node = state.nodes[action.payload.id];
       if (node) {
-        if (title !== undefined) {
-          node.title = normalizeDocumentTitle(title);
-        }
+        applyNodeMeta(node, { title: action.payload.title, icon: action.payload.icon });
       }
     },
 
@@ -220,18 +227,7 @@ const sidebarTreeSlice = createSlice({
         state.rootIds = state.rootIds.filter((rootId) => rootId !== id);
       }
 
-      const toDelete = [id];
-      const queue = [id];
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        const currentNode = state.nodes[currentId];
-        if (currentNode?.children) {
-          for (const childId of currentNode.children) {
-            toDelete.push(childId);
-            queue.push(childId);
-          }
-        }
-      }
+      const toDelete = collectSubtreeIds(state.nodes, id);
 
       for (const deleteId of toDelete) {
         delete state.nodes[deleteId];

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppSelector } from '@/stores/hooks';
 import { documentService, type DocumentBreadcrumbItem } from '@/services/document.service';
+import type { DocumentIcon } from '@/types/document.types';
 import type { SidebarTreeNode } from '@/types/tree.types';
 
 const EMPTY_NODES: Record<string, SidebarTreeNode> = {};
@@ -8,7 +9,7 @@ const EMPTY_NODES: Record<string, SidebarTreeNode> = {};
 export function useDocumentBreadcrumbs(
   documentId: string,
   currentTitle?: string,
-  currentIcon?: string | null
+  currentIcon?: DocumentIcon | null
 ): {
   breadcrumbs: DocumentBreadcrumbItem[];
   isLoading: boolean;
@@ -44,8 +45,7 @@ export function useDocumentBreadcrumbs(
       items.push({
         id: node.id,
         title: node.title || 'Untitled',
-        // Document icon is reserved for future icon/cover support; title is used for now
-        icon: null,
+        icon: node.icon,
         parentId: node.parentId,
       });
       currentId = node.parentId;
@@ -122,17 +122,20 @@ export function useDocumentBreadcrumbs(
         return {
           ...item,
           title: currentTitle && currentTitle.trim() ? currentTitle : 'Untitled',
-          icon: currentIcon ?? null,
+          // Only fall back while meta is unknown (`undefined`). A known
+          // deletion (`null`) must win — otherwise the old icon flashes back.
+          icon: currentIcon === undefined ? item.icon : currentIcon,
         };
       }
 
-      // Check if ancestor title was updated in local tree store
+      // Check if ancestor title/icon was updated in local tree store
       const localNode = privateNodes[item.id] || sharedNodes[item.id];
       const liveTitle = localNode?.title || item.title || 'Untitled';
 
       return {
         ...item,
         title: liveTitle,
+        icon: localNode?.icon === undefined ? item.icon : localNode.icon,
       };
     });
   }, [

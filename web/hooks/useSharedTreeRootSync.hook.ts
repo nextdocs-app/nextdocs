@@ -26,7 +26,12 @@ export function useSharedTreeRootSync(documents: SharedDocumentEntry[]) {
 
     // Signature covers permission/relationship/order changes too: an
     // access-only change arrives with unchanged updatedAt but must still
-    // refresh effectiveAccessLevel affordances in the tree.
+    // refresh effectiveAccessLevel affordances in the tree. Title/icon/cover
+    // edits are deliberately excluded: they fan out through updateNodeMeta
+    // (Yjs meta sync + document-meta-updated, reconciled on open without a
+    // refetch), and including them would rebuild all roots O(N) on every
+    // keystroke or icon change. Closed shared rows going stale until opened
+    // is pre-existing and accepted — icon matches title exactly here.
     const signature = documents
       .map(
         (doc) =>

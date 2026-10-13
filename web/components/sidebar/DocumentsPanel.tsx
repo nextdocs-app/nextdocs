@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { ChevronRight, Search, DocumentText, Restore, Trash } from '@/icons';
+import { ChevronRight, Search, Restore, Trash } from '@/icons';
+import { DocRowIcon } from './DocRowIcon';
 import { DocumentsPanelSkeleton } from './DocumentsPanelSkeleton';
 import { DocumentActionsButton } from './DocumentActionsButton';
 import { SidebarTreeItem } from './SidebarTreeItem';
@@ -116,9 +117,13 @@ export function DocumentsPanel({
     };
   }, [onClose]);
 
-  // Infinite scroll IntersectionObserver (flat trash list)
+  // Infinite scroll IntersectionObserver (flat trash list).
+  //
+  // Paused while searching: new server pages cannot change the filtered view,
+  // so loading on would page through the whole trash behind a perpetual
+  // loading state instead of settling.
   useEffect(() => {
-    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore) {
+    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore || isSearching) {
       return;
     }
 
@@ -156,13 +161,18 @@ export function DocumentsPanel({
     hasMore,
     isLoadingInitial,
     isLoadingMore,
+    isSearching,
     onLoadMore,
     filteredDocuments.length,
   ]);
 
-  // Infinite scroll for the tree panels (next page of root documents)
+  // Infinite scroll for the tree panels (next page of root documents).
+  //
+  // Paused while searching, for the same reason as the trash list: appended
+  // roots cannot change the filtered tree, so auto-paging would burn through
+  // server pages behind a loading state that never settles.
   useEffect(() => {
-    if (!isTreePanel || !rootHasMore || isLoadingRootMore) {
+    if (!isTreePanel || !rootHasMore || isLoadingRootMore || isSearching) {
       return;
     }
 
@@ -195,11 +205,20 @@ export function DocumentsPanel({
     return () => {
       observer.disconnect();
     };
-  }, [isTreePanel, rootHasMore, isLoadingRootMore, onLoadMoreRoots, visibleRootIds.length]);
+  }, [
+    isTreePanel,
+    rootHasMore,
+    isLoadingRootMore,
+    isSearching,
+    onLoadMoreRoots,
+    visibleRootIds.length,
+  ]);
 
-  // Keep fetching pages while the list does not fill the panel viewport yet
+  // Keep fetching pages while the list does not fill the panel viewport yet.
+  // Skipped while searching (see above): a short filtered list must not
+  // trigger loads whose results it cannot show.
   useEffect(() => {
-    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore) {
+    if (!isTrashPanel || !hasMore || isLoadingInitial || isLoadingMore || isSearching) {
       return;
     }
 
@@ -216,13 +235,15 @@ export function DocumentsPanel({
     hasMore,
     isLoadingInitial,
     isLoadingMore,
+    isSearching,
     onLoadMore,
     filteredDocuments.length,
   ]);
 
-  // Keep fetching root pages while the tree does not fill the panel viewport yet
+  // Keep fetching root pages while the tree does not fill the panel viewport yet.
+  // Skipped while searching (see above).
   useEffect(() => {
-    if (!isTreePanel || !rootHasMore || isLoadingRootMore) {
+    if (!isTreePanel || !rootHasMore || isLoadingRootMore || isSearching) {
       return;
     }
 
@@ -234,7 +255,14 @@ export function DocumentsPanel({
     if (container.scrollHeight <= container.clientHeight + 24) {
       onLoadMoreRoots();
     }
-  }, [isTreePanel, rootHasMore, isLoadingRootMore, onLoadMoreRoots, visibleRootIds.length]);
+  }, [
+    isTreePanel,
+    rootHasMore,
+    isLoadingRootMore,
+    isSearching,
+    onLoadMoreRoots,
+    visibleRootIds.length,
+  ]);
 
   const trashedDocIds = useMemo(() => {
     if (!isTrashPanel) {
@@ -376,7 +404,7 @@ export function DocumentsPanel({
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
-                        <DocumentText size={17} className="flex-shrink-0 opacity-80" />
+                        <DocRowIcon icon={doc.meta.icon} />
                         <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
                       </button>
 
@@ -432,7 +460,7 @@ export function DocumentsPanel({
                             : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
                         }`}
                       >
-                        <DocumentText size={17} className="flex-shrink-0 opacity-80" />
+                        <DocRowIcon icon={doc.meta.icon} />
                         <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
                       </button>
 

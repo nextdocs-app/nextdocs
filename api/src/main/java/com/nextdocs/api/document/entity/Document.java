@@ -42,6 +42,27 @@ public class Document {
     @Column(name = "created_by", length = 255)
     private String createdBy;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "icon_type", length = 16)
+    private DocumentIconType iconType;
+
+    @Column(name = "icon_value", length = 2048)
+    private String iconValue;
+
+    @Column(name = "icon_color", length = 32)
+    private String iconColor;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cover_type", length = 16)
+    private DocumentCoverType coverType;
+
+    @Column(name = "cover_value", length = 2048)
+    private String coverValue;
+
+    /** Vertical focal offset in [0, 1]; only meaningful while a cover is set. */
+    @Column(name = "cover_position")
+    private Double coverPosition;
+
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 

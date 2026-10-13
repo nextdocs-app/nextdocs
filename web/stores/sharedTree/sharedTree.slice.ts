@@ -5,6 +5,8 @@ import type { SidebarTreeNode, TreeNode, MoveDocumentRequest } from '@/types/tre
 import type { SharedDocumentEntry } from '../documentList/documentList.types';
 import { compareOrderKeys, toSidebarTreeNode } from '../sidebarTree/sidebarTree.slice';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
+import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
+import { applyNodeMeta, collectSubtreeIds, pruneUnreachableNodes } from '@/lib/tree-meta.util';
 
 export interface SharedTreeState {
   nodes: Record<string, SidebarTreeNode>;
@@ -152,18 +154,7 @@ const sharedTreeSlice = createSlice({
         state.rootIds = state.rootIds.filter((rootId) => rootId !== id);
       }
 
-      const toDelete = [id];
-      const queue = [id];
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        const currentNode = state.nodes[currentId];
-        if (currentNode?.children) {
-          for (const childId of currentNode.children) {
-            toDelete.push(childId);
-            queue.push(childId);
-          }
-        }
-      }
+      const toDelete = collectSubtreeIds(state.nodes, id);
 
       for (const deleteId of toDelete) {
         delete state.nodes[deleteId];
@@ -175,13 +166,13 @@ const sharedTreeSlice = createSlice({
       state.rootIds = [];
     },
 
-    updateNodeMeta(state, action: PayloadAction<{ id: string; title?: string }>) {
-      const { id, title } = action.payload;
-      const node = state.nodes[id];
+    updateNodeMeta(
+      state,
+      action: PayloadAction<{ id: string; title?: string; icon?: SidebarTreeNode['icon'] }>
+    ) {
+      const node = state.nodes[action.payload.id];
       if (node) {
-        if (title !== undefined) {
-          node.title = normalizeDocumentTitle(title);
-        }
+        applyNodeMeta(node, { title: action.payload.title, icon: action.payload.icon });
       }
     },
 
@@ -241,26 +232,7 @@ const sharedTreeSlice = createSlice({
 
       // Prune nodes that are no longer reachable from the roots, except keep
       // previously fetched children of surviving nodes (lazy-loaded subtrees).
-      const reachable = new Set<string>(state.rootIds);
-      const queue = [...state.rootIds];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
-        const node = state.nodes[id];
-        if (!node) {
-          continue;
-        }
-        for (const childId of node.children) {
-          if (!reachable.has(childId)) {
-            reachable.add(childId);
-            queue.push(childId);
-          }
-        }
-      }
-      for (const id of Object.keys(state.nodes)) {
-        if (!reachable.has(id)) {
-          delete state.nodes[id];
-        }
-      }
+      pruneUnreachableNodes(state.nodes, state.rootIds);
     },
 
     /**
@@ -305,6 +277,9 @@ const sharedTreeSlice = createSlice({
           hasChildren: false,
           effectiveAccessLevel:
             entry.relationship === 'owner' ? 'OWNER' : (entry.accessLevel ?? null),
+          // Same boundary sanitization as toSidebarTreeNode: the shared list
+          // may carry a stale icon that must degrade to null, not reach render.
+          icon: sanitizeDocumentIcon(entry.meta.icon) ?? null,
           isExpanded: false,
           isLoading: false,
           children: [],
@@ -378,26 +353,7 @@ const sharedTreeSlice = createSlice({
 
       // Prune nodes that are no longer reachable from the roots (unshared
       // documents, nested owned documents, removed parents, ...).
-      const reachable = new Set<string>(rootEntryIds);
-      const queue = [...rootEntryIds];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
-        const node = state.nodes[id];
-        if (!node) {
-          continue;
-        }
-        for (const childId of node.children) {
-          if (!reachable.has(childId)) {
-            reachable.add(childId);
-            queue.push(childId);
-          }
-        }
-      }
-      for (const id of Object.keys(state.nodes)) {
-        if (!reachable.has(id)) {
-          delete state.nodes[id];
-        }
-      }
+      pruneUnreachableNodes(state.nodes, [...rootEntryIds]);
 
       // Roots: always order root documents by the caller's personal navigation order key.
       const newRootIds = entries

@@ -11,7 +11,9 @@ import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
+import com.nextdocs.api.document.dto.response.DocumentIconCoverMapper;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.DocumentResponses;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
@@ -84,6 +86,7 @@ public class DocumentService {
     private final PermissionService permissionService;
     private final DocumentListQueryHelper queryHelper;
     private final AttachmentService attachmentService;
+    private final DocumentIconCoverApplier iconCoverApplier;
 
     @Autowired
     @Lazy
@@ -171,6 +174,9 @@ public class DocumentService {
                 .parent(parent)
                 .siblingOrderKey(siblingOrderKey)
                 .build();
+
+        iconCoverApplier.applyIconForCreate(document, request.icon());
+        iconCoverApplier.applyCoverForCreate(document, request.cover());
 
         Document saved = documentRepository.saveAndFlush(document);
 
@@ -273,18 +279,13 @@ public class DocumentService {
             OffsetDateTime purgeAt =
                     deletedAt != null ? deletedAt.plusDays(documentProperties.getTrashRetentionDays()) : null;
 
-            return new DocumentResponse(
-                    child.getId(),
-                    child.getTitle(),
-                    null,
+            return DocumentResponses.of(
+                    child,
                     parentById.getOrDefault(child.getId(), parentId),
                     child.getSiblingOrderKey(),
                     hasChildren,
                     hasCollaborators,
                     accessLevel,
-                    child.getCreatedBy(),
-                    child.getCreatedAt(),
-                    child.getUpdatedAt(),
                     deletedAt,
                     purgeAt);
         });
@@ -362,6 +363,9 @@ public class DocumentService {
             document.setYjsState(state);
         }
 
+        iconCoverApplier.applyIcon(document, request.icon());
+        iconCoverApplier.applyCover(document, request.cover());
+
         // The EDIT gate above already resolved the public level: reuse it instead
         // of resolving a second time inside toResponse.
         return toResponse(documentRepository.save(document), true, null, access);
@@ -429,7 +433,7 @@ public class DocumentService {
             path.add(new DocumentBreadcrumbResponse(
                     current.getId(),
                     formatBreadcrumbTitle(current.getTitle()),
-                    null,
+                    DocumentIconCoverMapper.toIconResponse(current),
                     parentId,
                     current.getSiblingOrderKey(),
                     level,
@@ -495,7 +499,7 @@ public class DocumentService {
             path.add(new DocumentBreadcrumbResponse(
                     current.getId(),
                     formatBreadcrumbTitle(current.getTitle()),
-                    null,
+                    DocumentIconCoverMapper.toIconResponse(current),
                     parentId,
                     current.getSiblingOrderKey(),
                     level,
@@ -551,6 +555,9 @@ public class DocumentService {
         if (request.createdBy() != null) {
             document.setCreatedBy(request.createdBy());
         }
+
+        iconCoverApplier.applyIcon(document, request.icon());
+        iconCoverApplier.applyCover(document, request.cover());
 
         return toResponse(documentRepository.save(document), true, userId);
     }
@@ -942,7 +949,9 @@ public class DocumentService {
                 document.getCreatedAt(),
                 document.getUpdatedAt(),
                 deletedAt,
-                purgeAt);
+                purgeAt,
+                DocumentIconCoverMapper.toIconResponse(document),
+                DocumentIconCoverMapper.toCoverResponse(document));
     }
 
     private List<Document> collectAllDescendants(UUID rootId) {

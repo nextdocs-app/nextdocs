@@ -1,5 +1,6 @@
 package com.nextdocs.api.attachment.controller;
 
+import com.nextdocs.api.attachment.AttachmentContentTypes;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
 import com.nextdocs.api.attachment.entity.Attachment;
@@ -239,10 +240,6 @@ public class AttachmentController {
         }
     }
 
-    /** Raster image types a browser can render without executing embedded scripts. */
-    private static final Set<String> INLINE_IMAGE_TYPES =
-            Set.of("image/png", "image/jpeg", "image/gif", "image/webp", "image/avif");
-
     /** Common media containers browsers play natively; anything else downloads. */
     private static final Set<String> INLINE_VIDEO_TYPES = Set.of("video/mp4", "video/webm", "video/ogg");
 
@@ -264,7 +261,7 @@ public class AttachmentController {
         // attachment path even if the sandbox/CSP headers are ever weakened or stripped by
         // a proxy. The stored content type is client-supplied, so a prefix match would let
         // an attacker smuggle a scriptable type under a `video/` or `audio/` prefix.
-        return INLINE_IMAGE_TYPES.contains(type)
+        return AttachmentContentTypes.INLINE_RASTER_IMAGE_TYPES.contains(type)
                 || INLINE_VIDEO_TYPES.contains(type)
                 || INLINE_AUDIO_TYPES.contains(type)
                 || type.equals("application/pdf");

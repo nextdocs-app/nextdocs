@@ -33,4 +33,10 @@ public record DocumentCreateRequest(
         UUID prevSiblingId,
 
         @Schema(description = "ID of the sibling immediately after this document's initial position.")
-        UUID nextSiblingId) {}
+        UUID nextSiblingId,
+
+        @Schema(description = "Page icon assignment. Null means no icon.")
+        DocumentIconRequest icon,
+
+        @Schema(description = "Cover image assignment. Null means no cover.")
+        DocumentCoverRequest cover) {}

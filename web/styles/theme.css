@@ -94,6 +94,18 @@
   --side-menu-hover-color: #121212;
   --side-menu-hover-bg: rgba(55, 53, 47, 0.08);
   --side-menu-active-bg: rgba(55, 53, 47, 0.14);
+
+  /* Notion-style Icon Colors */
+  --nd-icon-color-default: currentColor;
+  --nd-icon-color-gray: #9b9a97;
+  --nd-icon-color-brown: #64473a;
+  --nd-icon-color-orange: #d9730d;
+  --nd-icon-color-yellow: #dfab01;
+  --nd-icon-color-green: #0f7b6c;
+  --nd-icon-color-blue: #0b6e99;
+  --nd-icon-color-purple: #6940a5;
+  --nd-icon-color-pink: #ad1a72;
+  --nd-icon-color-red: #e03e3e;
 }
 
 /* Dark theme — handles both explicit and system-prefers-dark via JS-set .dark class */
@@ -175,6 +187,18 @@
   --side-menu-hover-color: #f2f2f2;
   --side-menu-hover-bg: rgba(255, 255, 255, 0.08);
   --side-menu-active-bg: rgba(255, 255, 255, 0.14);
+
+  /* Notion-style Icon Colors Dark Overrides */
+  --nd-icon-color-default: currentColor;
+  --nd-icon-color-gray: #979a9b;
+  --nd-icon-color-brown: #937264;
+  --nd-icon-color-orange: #ffa344;
+  --nd-icon-color-yellow: #ffdc49;
+  --nd-icon-color-green: #4dab9a;
+  --nd-icon-color-blue: #529cca;
+  --nd-icon-color-purple: #9a6dd7;
+  --nd-icon-color-pink: #e255a1;
+  --nd-icon-color-red: #ff6161;
 }
 
 @theme inline {
