@@ -9,7 +9,9 @@ import { toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
+import { PageIcon } from '@/components/page/PageIcon';
 import type { DocumentBreadcrumbItem } from '@/services/document.service';
+import type { DocumentIcon } from '@/types/document.types';
 
 function formatLastEdited(dateStr: string | undefined | null): string {
   if (!dateStr) return '';
@@ -40,8 +42,8 @@ interface DocToolbarProps {
   documentId: string;
   /** Current document title for live breadcrumb updates */
   documentTitle?: string;
-  /** Current document icon (reserved for future icon/cover support) */
-  documentIcon?: string | null;
+  /** Current document icon, rendered ahead of the active crumb */
+  documentIcon?: DocumentIcon | null;
   /** Optional navigation callback */
   onNavigateDocument?: (id: string) => void;
   /** Whether the authenticated user can open the share panel */
@@ -184,7 +186,7 @@ export function DocToolbar({
   const currentItem =
     breadcrumbs.length > 0
       ? breadcrumbs[breadcrumbs.length - 1]
-      : { id: documentId, title: documentTitle || 'Untitled' };
+      : { id: documentId, title: documentTitle || 'Untitled', icon: documentIcon ?? null };
 
   // Left offset tracking: aligns pixel-perfectly with the left sidebar edge.
   // On mobile the rail is off-canvas, so only the drawer toggle sits up here.
@@ -229,11 +231,6 @@ export function DocToolbar({
           <Hamburger size={19} />
         </button>
 
-        {/*
-          Note: Document icon and cover image are not yet introduced into the entity model.
-          For now, we display document titles only in the hierarchy breadcrumbs.
-          When the icon/cover feature is introduced in the future, icons can be rendered here directly alongside titles.
-        */}
         {shouldCollapseBreadcrumbs ? (
           <>
             {/* Root Document */}
@@ -245,7 +242,7 @@ export function DocToolbar({
                 aria-label={`Open "${rootItem.title || 'Untitled'}"`}
                 className="
                   hidden md:inline-flex
-                  group/crumb items-center rounded-sm px-1.5 py-0.5
+                  group/crumb items-center gap-2 rounded-sm px-1.5 py-0.5
                   text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
@@ -253,6 +250,9 @@ export function DocToolbar({
                   focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
                 "
               >
+                {rootItem.icon ? (
+                  <PageIcon icon={rootItem.icon} size={16} className="flex-shrink-0" />
+                ) : null}
                 <span className="truncate leading-normal">{rootItem.title || 'Untitled'}</span>
               </button>
             )}
@@ -306,9 +306,12 @@ export function DocToolbar({
                       className="
                         w-full rounded-sm px-2 py-1.5 text-left text-[13.5px] leading-normal
                         text-popover-foreground hover:bg-accent hover:text-accent-foreground
-                        transition-colors flex items-center gap-1.5 cursor-pointer
+                        transition-colors flex items-center gap-2 cursor-pointer
                       "
                     >
+                      {item.icon ? (
+                        <PageIcon icon={item.icon} size={16} className="flex-shrink-0" />
+                      ) : null}
                       <span className="truncate leading-normal">{item.title || 'Untitled'}</span>
                     </button>
                   ))}
@@ -332,7 +335,7 @@ export function DocToolbar({
                 aria-label={`Open "${parentItem.title || 'Untitled'}"`}
                 className="
                   hidden md:inline-flex
-                  group/crumb items-center rounded-sm px-1.5 py-0.5
+                  group/crumb items-center gap-2 rounded-sm px-1.5 py-0.5
                   text-[14px] font-normal leading-normal text-muted-foreground
                   hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                   transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
@@ -340,6 +343,9 @@ export function DocToolbar({
                   focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
                 "
               >
+                {parentItem.icon ? (
+                  <PageIcon icon={parentItem.icon} size={16} className="flex-shrink-0" />
+                ) : null}
                 <span className="truncate leading-normal">{parentItem.title || 'Untitled'}</span>
               </button>
             )}
@@ -355,12 +361,15 @@ export function DocToolbar({
             <span
               aria-current="page"
               className="
-                inline-flex items-center rounded-sm px-1.5 py-0.5
+                inline-flex items-center gap-2 rounded-sm px-1.5 py-0.5
                 text-[14px] font-medium leading-normal text-foreground
                 min-w-0 sm:max-w-[220px] md:max-w-[280px]
                 md:shrink-0 select-none
               "
             >
+              {currentItem.icon ? (
+                <PageIcon icon={currentItem.icon} size={16} className="flex-shrink-0" />
+              ) : null}
               <span className="truncate leading-normal">{currentItem.title || 'Untitled'}</span>
             </span>
           </>
@@ -380,12 +389,15 @@ export function DocToolbar({
                   <span
                     aria-current="page"
                     className="
-                      inline-flex items-center rounded-sm px-1.5 py-0.5
+                      inline-flex items-center gap-2 rounded-sm px-1.5 py-0.5
                       text-[14px] font-medium leading-normal text-foreground
                       min-w-0 sm:max-w-[220px] md:max-w-[280px]
                       md:shrink-0 select-none
                     "
                   >
+                    {item.icon ? (
+                      <PageIcon icon={item.icon} size={16} className="flex-shrink-0" />
+                    ) : null}
                     <span className="truncate leading-normal">{item.title || 'Untitled'}</span>
                   </span>
                 ) : (
@@ -396,7 +408,7 @@ export function DocToolbar({
                       title={`Open "${item.title || 'Untitled'}"`}
                       aria-label={`Open "${item.title || 'Untitled'}"`}
                       className="
-                        group/crumb inline-flex items-center rounded-sm px-1.5 py-0.5
+                        group/crumb inline-flex items-center gap-2 rounded-sm px-1.5 py-0.5
                         text-[14px] font-normal leading-normal text-muted-foreground
                         hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
                         transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
@@ -404,6 +416,9 @@ export function DocToolbar({
                         focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
                       "
                     >
+                      {item.icon ? (
+                        <PageIcon icon={item.icon} size={16} className="flex-shrink-0" />
+                      ) : null}
                       <span className="truncate leading-normal">{item.title || 'Untitled'}</span>
                     </button>
                     <span

@@ -59,6 +59,65 @@
     color: rgba(63, 63, 63, 0.3);
   }
 
+  /* ── Page icon & cover ── */
+
+  /* Catalog glyphs are `currentColor` SVGs, so they are masked into
+     the inherited text colour. Loading them as <img> would paint every glyph
+     black in both themes. The URL arrives as the --nd-icon-url custom property. */
+  .nd-page-icon-mask {
+    display: inline-block;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask-image: var(--nd-icon-url);
+    mask-image: var(--nd-icon-url);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+  }
+
+  .nd-page-icon-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', var(--font-sans);
+    line-height: 1;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* The cover is a drag target when repositioning: keep the browser from
+     starting its own image drag or text selection instead. */
+  .nd-page-cover img {
+    -webkit-user-drag: none;
+  }
+
+  /* The picker scrolls its own columns and menus, so thin every scrollbar
+     inside it the way the editor thins its own subtree (`.bn-root *`): the
+     default 6px bar reads as a heavy edge on a 360px panel. */
+  .nd-picker * {
+    scrollbar-width: thin;
+  }
+
+  /* EmojiMart custom element inside IconPickerPanel.
+     `--rgb-accent` is the element's only accent knob: it drives the search
+     field's focus ring and the active category / selected-swatch states, and
+     defaults to EmojiMart's blue (34, 102, 237). It takes a bare `r, g, b`
+     triplet, so this is `--nd-brand` (#e78f80) written in that form — the same
+     peach the rest of the picker uses, light or dark. */
+  em-emoji-picker {
+    --rgb-accent: 231, 143, 128;
+    --border-radius: 0px;
+    --shadow: none;
+    border: none;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 380px !important;
+  }
+
   .bn-root .bn-default-styles,
   .bn-default-styles {
     font-size: 16px !important;
