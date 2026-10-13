@@ -3,6 +3,7 @@ package com.nextdocs.api.document.service;
 import com.nextdocs.api.attachment.AttachmentContentTypes;
 import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
+import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentCoverRequest;
@@ -12,6 +13,8 @@ import com.nextdocs.api.document.entity.DocumentCoverType;
 import com.nextdocs.api.document.entity.DocumentIconType;
 import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.document.validation.IconSlugs;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.Locale;
 import java.util.Set;
@@ -66,6 +69,7 @@ public class DocumentIconCoverApplier {
             Set.of("default", "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red");
 
     private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorage attachmentStorage;
     private final IconCatalog iconCatalog;
 
     /** Applies {@code request} to {@code document}; a null request leaves the icon untouched. */
@@ -340,10 +344,38 @@ public class DocumentIconCoverApplier {
         String contentType = attachment.getContentType();
         if (contentType == null
                 || !AttachmentContentTypes.INLINE_RASTER_IMAGE_TYPES.contains(contentType.toLowerCase(Locale.ROOT))) {
-            throw new ApiException(
-                    ErrorCode.VALIDATION_FAILED, field + " uploads must be PNG, JPEG, GIF, WebP, or AVIF images.");
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
         }
+        verifyStoredBytes(field, attachment);
         return attachmentId.toString();
+    }
+
+    /**
+     * Re-sniffs the stored head instead of trusting the row's content type.
+     *
+     * <p>A row can carry a raster label over non-raster bytes — uploaded before
+     * uploads sniffed their bytes, or written by an older deployment — and the
+     * icon/cover URL is rendered by the browser, so the bytes have to be what
+     * decides. The label check above stays as the cheap first cut and keeps the
+     * type wording; this one is what makes the guarantee true for existing rows.
+     */
+    private void verifyStoredBytes(String field, Attachment attachment) {
+        byte[] head;
+        try (InputStream stored =
+                attachmentStorage.open(attachment.getStorageKey()).resource().getInputStream()) {
+            head = stored.readNBytes(AttachmentContentTypes.SNIFF_BYTES);
+        } catch (IOException | RuntimeException ex) {
+            // A row whose bytes are missing or unreadable cannot back an icon: the
+            // storage layer raises a 404-style error for an absent file.
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
+        }
+        if (AttachmentContentTypes.detectRasterImageType(head) == null) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
+        }
+    }
+
+    private static String rasterTypeError(String field) {
+        return field + " uploads must be PNG, JPEG, GIF, WebP, or AVIF images.";
     }
 
     private static String validateLink(String field, String raw) {

@@ -3,10 +3,13 @@ package com.nextdocs.api.document.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
+import com.nextdocs.api.attachment.storage.AttachmentStorage;
+import com.nextdocs.api.attachment.storage.StoredAttachment;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentCoverRequest;
@@ -15,6 +18,7 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentCoverType;
 import com.nextdocs.api.document.entity.DocumentIconType;
 import com.nextdocs.api.document.validation.IconCatalog;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,12 +26,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.io.ByteArrayResource;
 
 @ExtendWith(MockitoExtension.class)
 class DocumentIconCoverApplierTest {
 
+    private static final byte[] PNG_HEAD = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+
     @Mock
     private AttachmentRepository attachmentRepository;
+
+    @Mock
+    private AttachmentStorage attachmentStorage;
 
     @Mock
     private IconCatalog iconCatalog;
@@ -38,7 +48,7 @@ class DocumentIconCoverApplierTest {
 
     @BeforeEach
     void setUp() {
-        applier = new DocumentIconCoverApplier(attachmentRepository, iconCatalog);
+        applier = new DocumentIconCoverApplier(attachmentRepository, attachmentStorage, iconCatalog);
         documentId = UUID.randomUUID();
         document = Document.builder().id(documentId).title("Doc").build();
     }
@@ -160,11 +170,41 @@ class DocumentIconCoverApplierTest {
     void applyIcon_upload_acceptsOwnedRasterImage() {
         UUID attachmentId = UUID.randomUUID();
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/png")));
+        stubStoredBytes(PNG_HEAD);
 
         applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString()));
 
         assertEquals(DocumentIconType.UPLOAD, document.getIconType());
         assertEquals(attachmentId.toString(), document.getIconValue());
+    }
+
+    @Test
+    void applyIcon_upload_rejectsRasterLabelOverScriptBytes() {
+        // A row written before uploads sniffed keeps its image/png label over script
+        // bytes, so the label alone must not be enough to adopt it as an icon.
+        UUID attachmentId = UUID.randomUUID();
+        when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/png")));
+        stubStoredBytes("<script>alert(1)</script>".getBytes(StandardCharsets.UTF_8));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertNull(document.getIconType());
+    }
+
+    @Test
+    void applyIcon_upload_rejectsBytesMissingFromStorage() {
+        UUID attachmentId = UUID.randomUUID();
+        when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/png")));
+        when(attachmentStorage.open(anyString())).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
@@ -319,6 +359,7 @@ class DocumentIconCoverApplierTest {
     void applyCover_upload_acceptsOwnedGif() {
         UUID attachmentId = UUID.randomUUID();
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/gif")));
+        stubStoredBytes("GIF89a".getBytes(StandardCharsets.US_ASCII));
 
         applier.applyCover(document, new DocumentCoverRequest("UPLOAD", attachmentId.toString(), null));
 
@@ -538,6 +579,11 @@ class DocumentIconCoverApplierTest {
         assertNull(document.getIconType());
         assertNull(document.getIconValue());
         assertNull(document.getIconColor());
+    }
+
+    private void stubStoredBytes(byte[] head) {
+        when(attachmentStorage.open(anyString()))
+                .thenReturn(new StoredAttachment(new ByteArrayResource(head), head.length, true));
     }
 
     private static Attachment attachment(UUID owningDocumentId, String contentType) {

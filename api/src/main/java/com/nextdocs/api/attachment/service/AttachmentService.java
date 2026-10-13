@@ -1,5 +1,6 @@
 package com.nextdocs.api.attachment.service;
 
+import com.nextdocs.api.attachment.AttachmentContentTypes;
 import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
@@ -17,6 +18,7 @@ import jakarta.annotation.PostConstruct;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PushbackInputStream;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -96,65 +98,124 @@ public class AttachmentService {
             throw new ApiException(ErrorCode.PAYLOAD_TOO_LARGE, describeSizeLimit(maxFileSizeBytes));
         }
 
-        User uploader = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        String sanitizedDeclaredType = sanitizeContentType(file.getContentType());
+        // One open of the multipart stream feeds both the sniff and the store: a
+        // MultipartFile is not required to hand out a fresh stream per
+        // getInputStream() call, so sniffing and storing from two calls could hash
+        // one payload and persist another — or read a stream already at EOF.
+        ProbedUpload probe = openForSniff(file);
 
-        UUID attachmentId = UUID.randomUUID();
-        String storageKey = document.getId() + "/" + attachmentId;
-
-        // Reserve before touching the disk so an over-quota upload leaves nothing behind,
-        // and before the write so the reservation is committed by its own short transaction.
-        quotaService.reserve(userId, declaredSize);
-        long reservedBytes = declaredSize;
-
+        PushbackInputStream upload = probe.stream();
         try {
-            StoredContent stored = storeAndHash(storageKey, file);
+            // Sniff the actual bytes to detect raster images and reject spoofed raster
+            // labels. Runs before the quota reservation so spoofed uploads never churn
+            // quota.
+            String resolvedContentType = resolveContentType(sanitizedDeclaredType, probe.head());
 
-            // The multipart container's declared size is advisory and can be wrong, so the
-            // limit is re-checked against the bytes actually read.
-            if (stored.sizeBytes() > maxFileSizeBytes) {
-                throw new ApiException(ErrorCode.PAYLOAD_TOO_LARGE, describeSizeLimit(maxFileSizeBytes));
-            }
-            if (stored.sizeBytes() != reservedBytes) {
-                adjustReservation(userId, reservedBytes, stored.sizeBytes());
-                reservedBytes = stored.sizeBytes();
-            }
+            User uploader = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-            Attachment attachment = Attachment.builder()
-                    .id(attachmentId)
-                    .document(document)
-                    .uploadedBy(uploader)
-                    .fileName(sanitizeFileName(file.getOriginalFilename()))
-                    .contentType(sanitizeContentType(file.getContentType()))
-                    .sizeBytes(stored.sizeBytes())
-                    .storageKey(storageKey)
-                    .sha256(stored.sha256())
-                    .build();
+            UUID attachmentId = UUID.randomUUID();
+            String storageKey = document.getId() + "/" + attachmentId;
 
-            Attachment saved = attachmentMetadataWriter.insert(attachment);
-            return toResponse(saved);
-        } catch (RuntimeException ex) {
-            // Never leave bytes on disk that no database row points at, and never hold
-            // reserved quota for an upload that did not happen. Cleanup is best effort and
-            // must not replace the original failure with whatever it throws.
+            // Reserve before touching the disk so an over-quota upload leaves nothing behind,
+            // and before the write so the reservation is committed by its own short transaction.
+            quotaService.reserve(userId, declaredSize);
+            long reservedBytes = declaredSize;
+
             try {
-                attachmentStorage.delete(storageKey);
-            } catch (RuntimeException cleanupFailure) {
-                log.warn(
-                        "Failed to delete stored file {} after a failed upload: {}",
-                        storageKey,
-                        cleanupFailure.getMessage());
+                StoredContent stored = storeAndHash(storageKey, upload);
+
+                // The multipart container's declared size is advisory and can be wrong, so the
+                // limit is re-checked against the bytes actually read.
+                if (stored.sizeBytes() > maxFileSizeBytes) {
+                    throw new ApiException(ErrorCode.PAYLOAD_TOO_LARGE, describeSizeLimit(maxFileSizeBytes));
+                }
+                if (stored.sizeBytes() != reservedBytes) {
+                    adjustReservation(userId, reservedBytes, stored.sizeBytes());
+                    reservedBytes = stored.sizeBytes();
+                }
+
+                Attachment attachment = Attachment.builder()
+                        .id(attachmentId)
+                        .document(document)
+                        .uploadedBy(uploader)
+                        .fileName(sanitizeFileName(file.getOriginalFilename()))
+                        .contentType(resolvedContentType)
+                        .sizeBytes(stored.sizeBytes())
+                        .storageKey(storageKey)
+                        .sha256(stored.sha256())
+                        .build();
+
+                Attachment saved = attachmentMetadataWriter.insert(attachment);
+                return toResponse(saved);
+            } catch (RuntimeException ex) {
+                // Never leave bytes on disk that no database row points at, and never hold
+                // reserved quota for an upload that did not happen. Cleanup is best effort and
+                // must not replace the original failure with whatever it throws.
+                try {
+                    attachmentStorage.delete(storageKey);
+                } catch (RuntimeException cleanupFailure) {
+                    log.warn(
+                            "Failed to delete stored file {} after a failed upload: {}",
+                            storageKey,
+                            cleanupFailure.getMessage());
+                }
+                try {
+                    quotaService.release(userId, reservedBytes);
+                } catch (RuntimeException cleanupFailure) {
+                    log.warn(
+                            "Failed to release {} reserved bytes for user {}: {}",
+                            reservedBytes,
+                            userId,
+                            cleanupFailure.getMessage());
+                }
+                throw ex;
             }
-            try {
-                quotaService.release(userId, reservedBytes);
-            } catch (RuntimeException cleanupFailure) {
-                log.warn(
-                        "Failed to release {} reserved bytes for user {}: {}",
-                        reservedBytes,
-                        userId,
-                        cleanupFailure.getMessage());
-            }
-            throw ex;
+        } finally {
+            // try-with-resources would have to declare IOException for close(); a close
+            // failure on an already-read stream is not worth failing a stored upload over.
+            closeUploadStream(upload);
         }
+    }
+
+    private static void closeUploadStream(InputStream upload) {
+        try {
+            upload.close();
+        } catch (IOException ex) {
+            log.debug("Failed to close the upload stream: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * Opens the upload stream once and reads the bytes the sniff needs, pushing them
+     * back so the store still sees the whole payload.
+     */
+    private static ProbedUpload openForSniff(MultipartFile file) {
+        try {
+            PushbackInputStream stream =
+                    new PushbackInputStream(file.getInputStream(), AttachmentContentTypes.SNIFF_BYTES);
+            byte[] head = stream.readNBytes(AttachmentContentTypes.SNIFF_BYTES);
+            stream.unread(head);
+            return new ProbedUpload(stream, head);
+        } catch (IOException ex) {
+            throw new ApiException(ErrorCode.INTERNAL_ERROR, "Failed to read the uploaded file.");
+        }
+    }
+
+    /**
+     * The bytes win over the label: a detected raster image is stored as its detected type,
+     * a raster label over non-raster bytes is rejected outright, and anything else keeps the
+     * sanitized label so non-image attachments still round-trip.
+     */
+    private static String resolveContentType(String declaredType, byte[] head) {
+        String detected = AttachmentContentTypes.detectRasterImageType(head);
+        if (detected != null) {
+            return detected;
+        }
+        if (AttachmentContentTypes.INLINE_RASTER_IMAGE_TYPES.contains(declaredType)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, AttachmentContentTypes.UNSUPPORTED_RASTER_MESSAGE);
+        }
+        return declaredType;
     }
 
     /**
@@ -296,9 +357,10 @@ public class AttachmentService {
     /**
      * Streams the upload to storage while hashing it and counting what was actually read.
      * The persisted size must match the bytes on disk, not the multipart container's claim.
+     * Takes the already-open upload stream so one payload is both sniffed and stored.
      */
-    private StoredContent storeAndHash(String storageKey, MultipartFile file) {
-        try (InputStream inputStream = file.getInputStream()) {
+    private StoredContent storeAndHash(String storageKey, InputStream inputStream) {
+        try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             CountingInputStream countingStream = new CountingInputStream(inputStream);
             try (DigestInputStream digestStream = new DigestInputStream(countingStream, digest)) {
@@ -386,6 +448,9 @@ public class AttachmentService {
 
     /** Bytes actually copied to storage plus their digest. */
     private record StoredContent(String sha256, long sizeBytes) {}
+
+    /** The opened upload stream plus the head already read from it. */
+    private record ProbedUpload(PushbackInputStream stream, byte[] head) {}
 
     /**
      * Counts what the storage implementation actually read from the upload stream. Skips are

@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.service.AttachmentService;
+import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -74,6 +75,9 @@ class DocumentServiceIconCoverTest {
     @Mock
     private AttachmentRepository attachmentRepository;
 
+    @Mock
+    private AttachmentStorage attachmentStorage;
+
     private DocumentService documentService;
 
     @BeforeEach
@@ -82,7 +86,8 @@ class DocumentServiceIconCoverTest {
         documentProperties.setTrashRetentionDays(30);
         DocumentIconService iconService = new DocumentIconService(new ObjectMapper());
         iconService.loadCatalog();
-        DocumentIconCoverApplier applier = new DocumentIconCoverApplier(attachmentRepository, iconService);
+        DocumentIconCoverApplier applier =
+                new DocumentIconCoverApplier(attachmentRepository, attachmentStorage, iconService);
         documentService = new DocumentService(
                 documentRepository,
                 collaboratorRepository,
