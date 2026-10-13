@@ -29,4 +29,6 @@ export { TriangleAlert } from './TriangleAlert';
 export { CircleAlert } from './CircleAlert';
 export { Info } from './Info';
 export { CircleCheck } from './CircleCheck';
+export { Smile } from './Smile';
+export { ImageIcon } from './ImageIcon';
 export type { IconProps } from './IconBase';
