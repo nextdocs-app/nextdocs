@@ -57,7 +57,7 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 ## Conventions
 
 - Git hooks live in `.husky/*` (thin sh wrappers around `scripts/hooks.js`) and are installed by `npm ci` through the root `prepare` script: `pre-commit` runs lint-staged (Prettier + ESLint `--fix` per workspace, Spotless per staged Java file), `commit-msg` validates the subject. `npm run verify` runs the format/lint/test checks manually against the branch diff (tests otherwise run in CI); bypass a hook with `SKIP_HOOKS=1`, `SKIP_HOOKS=<hook>`, `HUSKY=0`, or `--no-verify`.
-- lint-staged leaves its `lint-staged automatic backup` stash behind when it cannot restore the tree (the hook prints recovery commands). `api/mvnw.cmd` is permanently reported as modified here (CRLF vs `.gitattributes eol=crlf`), which is what triggers it — do not commit that normalization unless asked.
+- lint-staged leaves its `lint-staged automatic backup` stash behind when it cannot restore the tree (the hook prints recovery commands).
 - Commit subjects use an area prefix: `editor:`, `sidebar:`, `layout:`, `api:`, `readme:`, `build(deps):` (enforced by the `commit-msg` hook; max 100 characters, blank line before the body).
 - Icons are hand-written SVG components in `web/icons` (`IconBase` + barrel export); there is no icon library dependency — add a component rather than a package.
 
