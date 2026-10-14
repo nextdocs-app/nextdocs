@@ -5,7 +5,7 @@
 </p>
 
 <h3 align="center">
-  <em>An open-source, block-based wiki and documentation platform for individuals and teams.</em>
+  <em>An open-source, block-based wiki and documentation platform for everyone.</em>
 </h3>
 
 <p align="center">
@@ -15,16 +15,7 @@
   <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Release-Pre--alpha-orange?style=flat-square" alt="Release Status"></a>
 </p>
 
-<p align="center">
-  <a href="#getting-started">Getting Started</a> ·
-  <a href="#roadmap">Roadmap</a>
-</p>
-
 ## Overview
-
-<h3>
-  <img width="860" alt="NextDocs editor screenshot" src="https://github.com/user-attachments/assets/6f2df608-c4b7-4a87-af6d-d40c51214561" />
-</h3>
 
 - **Block-based editing** — text, tables, media, code and much more.
 - **Real-time collaboration** — live cursors and merging.
@@ -127,15 +118,15 @@ npm run dev -- --filter=realtime  # Realtime server only
 ## Roadmap
 
 - [x] Core features listed in [overview](#overview).
-- [x] Basic polish to blocknote editor.
-- [ ] Icons + covers for documents.
+- [x] Polish blocknote editor experience.
+- [x] Icons + covers for documents.
+
+### Q4 20226
 - [ ] Document version history and snapshots.
-- [ ] Search documents by content.
-- [ ] Workspace admin and Teamspaces.
-- [ ] OAuth login (Google, GitHub) — our first step in SSO for individuals and small teams.
-- [ ] Document options like Import/Export, font-options, etc.
-- [ ] Responsive design for all screen sizes.
-- [ ] Enterprise-level SSO options.
+- [ ] Full-text search support.
+- [ ] AI integration and MCP support.
+- [ ] Workspace admin claim and Spaces.
+- [ ] Databases with Table and Board view.
 
 ## License
 
