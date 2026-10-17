@@ -10,9 +10,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.attachment.controller.AttachmentController;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.controller.DocumentIconController;
 import com.nextdocs.api.workspace.controller.InstanceController;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,7 +45,7 @@ class SecurityConfigTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     @Test
     @DisplayName("Anonymous callers reach the signed attachment endpoints without a 401")

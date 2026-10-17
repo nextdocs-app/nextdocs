@@ -9,7 +9,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.nextdocs.api.auth.dto.response.AuthResponse;
 import com.nextdocs.api.auth.dto.response.UserResponse;
 import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.auth.service.AuthService;
@@ -17,6 +16,7 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInvitePreviewResponse;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.service.WorkspaceInviteService;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -52,7 +52,7 @@ class AuthControllerTest {
 
     /** Required by JwtAuthenticationFilter. */
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     private User testUser;
     private UserPrincipal testPrincipal;

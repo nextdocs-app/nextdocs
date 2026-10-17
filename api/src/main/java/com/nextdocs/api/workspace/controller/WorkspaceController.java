@@ -151,7 +151,8 @@ public class WorkspaceController {
             summary = "Remove a member",
             description = "Owner or admin. Admins can remove plain members only; nobody can remove "
                     + "themselves; the last owner can never be removed. Removal deactivates the "
-                    + "account and revokes its sessions. Returns the recalculated roster.",
+                    + "account, drops the membership, and revokes its sessions: the member's live "
+                    + "tokens stop working on the next request. Returns the recalculated roster.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

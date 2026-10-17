@@ -1,6 +1,8 @@
 package com.nextdocs.api.auth.security;
 
-import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -20,6 +22,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /**
  * Validates the JWT Bearer token on every request and populates the Spring
  * Security context with a {@link UserPrincipal} when the token is valid.
+ *
+ * <p>A token only authenticates while the caller is still an active workspace
+ * member: removal deletes the membership and deactivates the account, and both are
+ * re-read here on every request. A removed member's otherwise unexpired token stops
+ * working on the next call instead of staying live until it expires, and document
+ * endpoints are covered because the gate sits in front of every route.
  */
 @Slf4j
 @Component
@@ -27,7 +35,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
-    private final UserRepository userRepository;
+    private final WorkspaceMemberRepository memberRepository;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -41,15 +49,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 // Only load the user if this request hasn't been authenticated yet
                 if (SecurityContextHolder.getContext().getAuthentication() == null) {
-                    userRepository.findById(userId).ifPresent(user -> {
-                        if (user.isActive()) {
-                            UserPrincipal principal = UserPrincipal.from(user);
-                            var authentication = new UsernamePasswordAuthenticationToken(
-                                    principal, null, principal.getAuthorities());
-                            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                            SecurityContextHolder.getContext().setAuthentication(authentication);
-                        }
-                    });
+                    memberRepository
+                            .findByUserId(userId)
+                            .map(WorkspaceMember::getUser)
+                            .filter(User::isActive)
+                            .ifPresent(user -> {
+                                UserPrincipal principal = UserPrincipal.from(user);
+                                var authentication = new UsernamePasswordAuthenticationToken(
+                                        principal, null, principal.getAuthorities());
+                                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                                SecurityContextHolder.getContext().setAuthentication(authentication);
+                            });
                 }
             } catch (JwtException e) {
                 // Token is malformed or expired — continue unauthenticated

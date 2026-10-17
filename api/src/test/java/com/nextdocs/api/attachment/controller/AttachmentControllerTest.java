@@ -21,11 +21,11 @@ import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.attachment.service.AttachmentService.AttachmentDownload;
 import com.nextdocs.api.attachment.storage.StoredAttachment;
 import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.io.FileNotFoundException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -62,7 +62,7 @@ class AttachmentControllerTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     private UserPrincipal principal;
     private UUID userId;
