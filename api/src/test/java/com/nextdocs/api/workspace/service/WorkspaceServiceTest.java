@@ -558,32 +558,42 @@ class WorkspaceServiceTest {
     }
 
     @Test
-    void updateMemberRole_rejectsChangingOwnRole() {
+    void updateMemberRole_allowsSelfDemotionWhileAnotherOwnerRemains() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        WorkspaceMember ownerMember = member(owner, WorkspaceRole.OWNER);
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, owner.getId()))
+                .thenReturn(Optional.of(ownerMember));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(2L);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(ownerMember, member(target, WorkspaceRole.OWNER)));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.updateMemberRole(
+                actorId, owner.getId(), new WorkspaceMemberRoleUpdateRequest("member"));
+
+        assertThat(ownerMember.getRole()).isEqualTo(WorkspaceRole.MEMBER);
+        assertThat(roster.get(0).role()).isEqualTo(WorkspaceRole.MEMBER);
+        verify(memberRepository).save(ownerMember);
+    }
+
+    @Test
+    void updateMemberRole_rejectsSelfDemotionAsTheLastOwner() {
         givenOwner();
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
         when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, owner.getId()))
                 .thenReturn(Optional.of(member(owner, WorkspaceRole.OWNER)));
-
-        assertThatThrownBy(() -> workspaceService.updateMemberRole(
-                        actorId, owner.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER")))
-                .isInstanceOf(ApiException.class)
-                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
-        verify(memberRepository, never()).save(any());
-    }
-
-    @Test
-    void updateMemberRole_rejectsDemotingTheLastOwner() {
-        givenOwner();
-        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
-                .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
         when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
                 .thenReturn(1L);
 
         assertThatThrownBy(() -> workspaceService.updateMemberRole(
-                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER")))
+                        actorId, owner.getId(), new WorkspaceMemberRoleUpdateRequest("ADMIN")))
                 .isInstanceOf(ApiException.class)
-                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+                .satisfies(ex -> {
+                    assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT);
+                    assertThat(ex.getMessage()).contains("Make another member an owner");
+                });
+        verify(memberRepository, never()).save(any());
     }
 
     @Test

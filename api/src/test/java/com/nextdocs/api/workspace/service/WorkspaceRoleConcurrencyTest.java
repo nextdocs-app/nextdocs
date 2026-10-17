@@ -14,7 +14,10 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
+import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -128,6 +131,39 @@ class WorkspaceRoleConcurrencyTest {
 
         assertThat(outcome).isEqualTo(ErrorCode.FORBIDDEN);
         assertThat(memberRepository.findByUserId(target.getId())).isPresent();
+    }
+
+    @Test
+    void twoOwnersDemotingThemselvesConcurrently_leaveExactlyOneOwner() throws Exception {
+        WorkspaceMember targetMember =
+                memberRepository.findByUserId(target.getId()).orElseThrow();
+        targetMember.setRole(WorkspaceRole.OWNER);
+        memberRepository.saveAndFlush(targetMember);
+
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<ErrorCode> first = pool.submit(() -> demoteSelfWhenReleased(actor.getId(), start));
+            Future<ErrorCode> second = pool.submit(() -> demoteSelfWhenReleased(target.getId(), start));
+
+            assertThat(Arrays.asList(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(null, ErrorCode.CONFLICT);
+            assertThat(memberRepository.countByWorkspaceIdAndRole(workspace.getId(), WorkspaceRole.OWNER))
+                    .isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private ErrorCode demoteSelfWhenReleased(UUID userId, CyclicBarrier start) throws Exception {
+        start.await(10, TimeUnit.SECONDS);
+        try {
+            workspaceService.updateMemberRole(
+                    userId, userId, new WorkspaceMemberRoleUpdateRequest(WorkspaceRole.MEMBER.name()));
+            return null;
+        } catch (ApiException ex) {
+            return ex.getErrorCode();
+        }
     }
 
     /**

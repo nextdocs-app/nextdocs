@@ -118,15 +118,16 @@ public class WorkspaceController {
 
     @Operation(
             summary = "Change a member's role",
-            description = "Owner only. The caller cannot change their own role, and the last owner "
-                    + "can never be demoted. Returns the recalculated roster.",
+            description = "Owner only. An owner may change their own role: promote another member to "
+                    + "owner first, then step down. The last owner cannot demote themselves. Returns "
+                    + "the recalculated roster.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
                         description = "Role updated, member roster returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
-                        description = "Invalid role or self role change"),
+                        description = "Invalid role"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "403",
                         description = "Caller is not an owner"),
@@ -135,7 +136,7 @@ public class WorkspaceController {
                         description = "Member not found"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "409",
-                        description = "Last owner would be demoted")
+                        description = "Last owner cannot demote themselves")
             })
     @PatchMapping("/members/{userId}")
     public ResponseEntity<ApiResponse<List<WorkspaceMemberResponse>>> updateMemberRole(

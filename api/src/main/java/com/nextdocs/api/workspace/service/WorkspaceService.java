@@ -54,6 +54,9 @@ public class WorkspaceService {
 
     private static final String LAST_OWNER_MESSAGE = "The workspace must keep at least one owner.";
 
+    private static final String LAST_OWNER_SELF_DEMOTE_MESSAGE =
+            "Make another member an owner before demoting yourself.";
+
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository memberRepository;
     private final UserRepository userRepository;
@@ -213,6 +216,12 @@ public class WorkspaceService {
         return roster(workspaceId(membership));
     }
 
+    /**
+     * Changes {@code targetUserId}'s role. Owner only. An owner may change their own
+     * role: that is the hand-over path — promote another member to owner, then step
+     * down. The one refusal is demoting the last owner, which is always the caller
+     * themselves, because the workspace must never be left ownerless.
+     */
     @Transactional
     public List<WorkspaceMemberResponse> updateMemberRole(
             UUID actorId, UUID targetUserId, WorkspaceMemberRoleUpdateRequest request) {
@@ -230,12 +239,9 @@ public class WorkspaceService {
         // The target may have been demoted or promoted while this transaction waited.
         accessService.refreshForLock(target);
 
-        if (target.getUser().getId().equals(actorId)) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "You cannot change your own role.");
-        }
         WorkspaceRole newRole = parseRole(request.role());
         if (target.getRole() == WorkspaceRole.OWNER && newRole != WorkspaceRole.OWNER && ownerCount(workspaceId) <= 1) {
-            throw new ApiException(ErrorCode.CONFLICT, LAST_OWNER_MESSAGE);
+            throw new ApiException(ErrorCode.CONFLICT, LAST_OWNER_SELF_DEMOTE_MESSAGE);
         }
         target.setRole(newRole);
         memberRepository.save(target);
