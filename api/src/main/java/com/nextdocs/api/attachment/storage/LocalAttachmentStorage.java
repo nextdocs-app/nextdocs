@@ -18,7 +18,8 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Component;
 
 /**
- * Self-hosted filesystem storage: {@code <storagePath>/<documentId>/<attachmentId>}.
+ * Self-hosted filesystem storage: {@code <storagePath>/<scopeId>/<attachmentId>},
+ * where the scope is the owning document or workspace.
  *
  * <p>Keys are never derived from user input — they are two server-generated UUIDs — and
  * every key is re-validated before touching the filesystem, so a compromised or corrupted

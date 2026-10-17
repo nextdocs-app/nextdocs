@@ -44,8 +44,9 @@ import tools.jackson.databind.ObjectMapper;
  *   on bytes read rather than on the declared Content-Length which chunked
  *   uploads omit).
  * - {@code upload-ip:<ip>} + {@code upload:<userId>} — authenticated attachment uploads
- *   (POST .../attachments). Consumes both buckets so neither one account nor one
- *   egress address can queue disk-filling requests. A declared body over the multipart
+ *   (POST .../attachments: document blocks and the workspace icon). Consumes both
+ *   buckets so neither one account nor one egress address can queue disk-filling
+ *   requests. A declared body over the multipart
  *   ceiling is rejected before the container buffers it, and because the multipart
  *   parser reads the same stream the filter would consume, uploads without a declared
  *   Content-Length are rejected outright rather than bounded by a byte-counting read.
@@ -75,6 +76,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
     private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
+    private static final String WORKSPACE_PATH_PREFIX = "/api/v1/workspaces/";
+    private static final String WORKSPACE_ATTACHMENTS_REMAINDER = "current/attachments";
     private static final String ICON_CATALOG_PATH = "/api/v1/icons";
     private static final String ICON_PATH_PREFIX = "/api/v1/icons/";
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
@@ -380,6 +383,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String uri = request.getRequestURI();
         if (uri.startsWith(AUTH_PATH_PREFIX)) {
             return Verdict.defaultBudget("auth:");
+        }
+
+        // Workspace routes are membership administration behind a JWT: unlimited,
+        // except the icon upload, the one write that can consume unbounded disk.
+        // Matched on the decoded path so a percent-escaped prefix cannot address the
+        // controller while skipping the upload bucket.
+        String decodedUri = decodePath(uri);
+        if (decodedUri.startsWith(WORKSPACE_PATH_PREFIX)) {
+            if ("POST".equalsIgnoreCase(request.getMethod())
+                    && decodedUri.substring(WORKSPACE_PATH_PREFIX.length()).equals(WORKSPACE_ATTACHMENTS_REMAINDER)) {
+                return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
+            }
+            return Verdict.unlimited();
         }
 
         // Signed-URL issuance and the signed download are reachable anonymously, so they

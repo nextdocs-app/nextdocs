@@ -88,7 +88,7 @@ class DocumentServiceIconCoverTest {
         DocumentIconService iconService = new DocumentIconService(new ObjectMapper());
         iconService.loadCatalog();
         DocumentIconCoverApplier applier = new DocumentIconCoverApplier(
-                attachmentRepository, attachmentStorage, new PageIconValidator(iconService));
+                new PageIconValidator(iconService, attachmentRepository, attachmentStorage));
         documentService = new DocumentService(
                 documentRepository,
                 collaboratorRepository,

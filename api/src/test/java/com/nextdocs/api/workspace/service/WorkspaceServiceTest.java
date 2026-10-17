@@ -4,10 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
+import com.nextdocs.api.attachment.entity.Attachment;
+import com.nextdocs.api.attachment.repository.AttachmentRepository;
+import com.nextdocs.api.attachment.service.AttachmentService;
+import com.nextdocs.api.attachment.storage.AttachmentStorage;
+import com.nextdocs.api.attachment.storage.StoredAttachment;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
 import com.nextdocs.api.auth.repository.UserRepository;
@@ -37,6 +45,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.web.multipart.MultipartFile;
 
 @ExtendWith(MockitoExtension.class)
 class WorkspaceServiceTest {
@@ -59,6 +69,15 @@ class WorkspaceServiceTest {
     @Mock
     private IconCatalog iconCatalog;
 
+    @Mock
+    private AttachmentRepository attachmentRepository;
+
+    @Mock
+    private AttachmentStorage attachmentStorage;
+
+    @Mock
+    private AttachmentService attachmentService;
+
     private WorkspaceService workspaceService;
     private Workspace workspace;
     private UUID workspaceId;
@@ -74,7 +93,8 @@ class WorkspaceServiceTest {
                 userRepository,
                 refreshTokenRepository,
                 accessService,
-                new PageIconValidator(iconCatalog));
+                new PageIconValidator(iconCatalog, attachmentRepository, attachmentStorage),
+                attachmentService);
         workspaceId = UUID.randomUUID();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
         owner = user("owner@example.com", "Owner");
@@ -232,23 +252,135 @@ class WorkspaceServiceTest {
     }
 
     @Test
-    void updateCurrent_rejectsUploadIconUntilTheUploadEndpointExists() {
+    void updateCurrent_setsUploadIconFromWorkspaceAttachment() {
+        UUID attachmentId = UUID.randomUUID();
         givenOwner();
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+        givenStoredPng(attachmentId);
+
+        WorkspaceResponse response = workspaceService.updateCurrent(
+                actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", attachmentId.toString())));
+
+        assertThat(workspace.getIconType()).isEqualTo(PageIconType.UPLOAD);
+        assertThat(workspace.getIconValue()).isEqualTo(attachmentId.toString());
+        assertThat(response.icon().type()).isEqualTo("upload");
+        verifyNoInteractions(attachmentService);
+    }
+
+    @Test
+    void updateCurrent_rejectsUploadIconFromAnotherWorkspace() {
+        UUID attachmentId = UUID.randomUUID();
+        givenOwner();
+        Workspace otherWorkspace =
+                Workspace.builder().id(UUID.randomUUID()).name("Other").build();
+        when(attachmentRepository.findById(attachmentId))
+                .thenReturn(Optional.of(Attachment.builder()
+                        .id(attachmentId)
+                        .workspace(otherWorkspace)
+                        .uploadedBy(owner)
+                        .fileName("icon.png")
+                        .contentType("image/png")
+                        .sizeBytes(8)
+                        .storageKey(otherWorkspace.getId() + "/" + attachmentId)
+                        .sha256("0".repeat(64))
+                        .build()));
+
+        assertThatThrownBy(() -> workspaceService.updateCurrent(
+                        actorId,
+                        new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", attachmentId.toString()))))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        assertThat(workspace.getIconType()).isNull();
+        verifyNoInteractions(attachmentService);
+    }
+
+    @Test
+    void updateCurrent_replacingUploadIconReleasesThePreviousFile() {
+        UUID oldAttachmentId = UUID.randomUUID();
+        UUID newAttachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(oldAttachmentId.toString());
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+        givenStoredPng(newAttachmentId);
+
+        workspaceService.updateCurrent(
+                actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", newAttachmentId.toString())));
+
+        assertThat(workspace.getIconValue()).isEqualTo(newAttachmentId.toString());
+        verify(attachmentService).deleteWorkspaceUpload(oldAttachmentId);
+    }
+
+    @Test
+    void updateCurrent_replacingUploadIconWithEmojiReleasesTheFile() {
+        UUID oldAttachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(oldAttachmentId.toString());
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+
+        workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("emoji", "📝")));
+
+        assertThat(workspace.getIconType()).isEqualTo(PageIconType.EMOJI);
+        verify(attachmentService).deleteWorkspaceUpload(oldAttachmentId);
+    }
+
+    @Test
+    void updateCurrent_clearingUploadIconReleasesTheFile() {
+        UUID attachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(attachmentId.toString());
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+
+        workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest(null, new PageIconRequest(null, null)));
+
+        assertThat(workspace.getIconType()).isNull();
+        verify(attachmentService).deleteWorkspaceUpload(attachmentId);
+    }
+
+    @Test
+    void updateCurrent_resubmittingTheSameUploadIconKeepsTheFile() {
+        UUID attachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(attachmentId.toString());
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+        givenStoredPng(attachmentId);
+
+        workspaceService.updateCurrent(
+                actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", attachmentId.toString())));
+
+        verify(attachmentService, never()).deleteWorkspaceUpload(any());
+    }
+
+    @Test
+    void updateCurrent_rejectedUploadKeepsTheExistingIconUpload() {
+        UUID oldAttachmentId = UUID.randomUUID();
+        UUID rejectedAttachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(oldAttachmentId.toString());
+        givenOwner();
+        when(attachmentRepository.findById(rejectedAttachmentId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> workspaceService.updateCurrent(
                         actorId,
                         new WorkspaceUpdateRequest(
-                                null,
-                                new PageIconRequest("UPLOAD", UUID.randomUUID().toString()))))
+                                null, new PageIconRequest("UPLOAD", rejectedAttachmentId.toString()))))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        assertThat(workspace.getIconValue()).isEqualTo(oldAttachmentId.toString());
+        verify(attachmentService, never()).deleteWorkspaceUpload(any());
     }
 
     @Test
     void updateCurrent_rejectsColorOnAnEmojiIcon() {
         givenOwner();
-        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
 
         assertThatThrownBy(() -> workspaceService.updateCurrent(
                         actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("emoji", "📝", "blue"))))
@@ -264,6 +396,31 @@ class WorkspaceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
         verify(workspaceRepository, never()).findByIdForUpdate(any());
+    }
+
+    // --- uploadAttachment ---
+
+    @Test
+    void uploadAttachment_storesUnderTheCallersWorkspace() {
+        MultipartFile file = mock(MultipartFile.class);
+        AttachmentResponse stored = new AttachmentResponse(
+                UUID.randomUUID(), null, "icon.png", "image/png", 8, "/api/v1/attachments/x", OffsetDateTime.now());
+        when(attachmentService.uploadWorkspaceAttachment(actorId, file)).thenReturn(stored);
+
+        assertThat(workspaceService.uploadAttachment(actorId, file)).isSameAs(stored);
+
+        verify(attachmentService).uploadWorkspaceAttachment(actorId, file);
+    }
+
+    @Test
+    void uploadAttachment_propagatesTheOwnerCheck() {
+        MultipartFile file = mock(MultipartFile.class);
+        when(attachmentService.uploadWorkspaceAttachment(actorId, file))
+                .thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        assertThatThrownBy(() -> workspaceService.uploadAttachment(actorId, file))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
     }
 
     // --- listMembers ---
@@ -556,5 +713,26 @@ class WorkspaceServiceTest {
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
         verify(memberRepository, never()).delete(any());
         verify(refreshTokenRepository, never()).revokeAllForUser(any());
+    }
+
+    // --- helpers ---
+
+    /** PNG magic bytes: enough for the raster sniff to pass. */
+    private static final byte[] PNG_HEAD = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+
+    private void givenStoredPng(UUID attachmentId) {
+        when(attachmentRepository.findById(attachmentId))
+                .thenReturn(Optional.of(Attachment.builder()
+                        .id(attachmentId)
+                        .workspace(workspace)
+                        .uploadedBy(owner)
+                        .fileName("icon.png")
+                        .contentType("image/png")
+                        .sizeBytes(PNG_HEAD.length)
+                        .storageKey(workspaceId + "/" + attachmentId)
+                        .sha256("0".repeat(64))
+                        .build()));
+        when(attachmentStorage.open(workspaceId + "/" + attachmentId))
+                .thenReturn(new StoredAttachment(new ByteArrayResource(PNG_HEAD), PNG_HEAD.length, true));
     }
 }

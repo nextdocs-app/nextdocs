@@ -1,12 +1,14 @@
 package com.nextdocs.api.workspace.service;
 
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
+import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.pageicon.PageIconType;
-import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
@@ -26,6 +28,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * Workspace identity and membership administration.
@@ -50,6 +53,7 @@ public class WorkspaceService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final WorkspaceAccessService accessService;
     private final PageIconValidator pageIconValidator;
+    private final AttachmentService attachmentService;
 
     /**
      * Creates the workspace and makes {@code user} its owner when the instance has no
@@ -87,6 +91,11 @@ public class WorkspaceService {
     public WorkspaceResponse updateCurrent(UUID userId, WorkspaceUpdateRequest request) {
         Membership membership = accessService.requireOwner(userId);
         UUID workspaceId = membership.workspace().getId();
+        AttachmentScope scope = AttachmentScope.workspace(workspaceId);
+        // Validate (and sniff the upload bytes) before taking the workspace row lock:
+        // storage I/O must not serialize every role mutation and icon edit behind it.
+        PageIconValidator.ValidatedIcon icon =
+                request.icon() == null ? null : pageIconValidator.validateIcon(request.icon(), scope);
         // Serialized against role mutations and other icon edits: without the lock a
         // concurrent icon replace could clean up the upload the winner kept.
         Workspace workspace = workspaceRepository
@@ -100,11 +109,26 @@ public class WorkspaceService {
             }
             workspace.setName(name);
         }
-        if (request.icon() != null) {
-            applyIcon(workspace, request.icon());
+        if (icon != null) {
+            // Validation ran before the lock; re-check the row (still scoped to this
+            // workspace) under it so a concurrent delete cannot be adopted.
+            if (icon.type() == PageIconType.UPLOAD) {
+                pageIconValidator.validateUploadReference("Icon", icon.value(), scope);
+            }
+            applyIcon(workspace, icon);
         }
 
         return toResponse(new Membership(workspace, membership.member()));
+    }
+
+    /**
+     * Stores an image the workspace icon can reference. Owner only: the icon is
+     * instance identity, not content. The returned id is set through
+     * {@link #updateCurrent} with type {@code UPLOAD}; the upload route is the only
+     * way to obtain an id bound to this workspace.
+     */
+    public AttachmentResponse uploadAttachment(UUID userId, MultipartFile file) {
+        return attachmentService.uploadWorkspaceAttachment(userId, file);
     }
 
     @Transactional(readOnly = true)
@@ -182,31 +206,42 @@ public class WorkspaceService {
     }
 
     /**
-     * Applies an icon request: absent (null) leaves the icon untouched, a null type
-     * clears it. Uploads reference an attachment that must belong to this workspace;
-     * the endpoint that stores one is the only way to obtain such an id.
+     * Applies an already-validated icon: absent (null type) clears it. Uploads reference
+     * an attachment that must belong to this workspace; the endpoint that stores one is
+     * the only way to obtain such an id. Replacing or clearing an upload icon reclaims
+     * the replaced file and its quota: workspaces have no document-style purge path that
+     * would sweep it up later.
      */
-    private void applyIcon(Workspace workspace, PageIconRequest request) {
-        if (request.type() == null || request.type().isBlank()) {
+    private void applyIcon(Workspace workspace, PageIconValidator.ValidatedIcon icon) {
+        if (icon.type() == null) {
+            releaseReplacedIconUpload(workspace, null);
             workspace.setIconType(null);
             workspace.setIconValue(null);
             workspace.setIconColor(null);
             return;
         }
-        PageIconType type = PageIconValidator.parseType(request.type());
-        String value =
-                switch (type) {
-                    case EMOJI -> pageIconValidator.validateEmoji(request.value());
-                    case BUILTIN -> pageIconValidator.validateBuiltin(request.value());
-                    case LINK -> PageIconValidator.validateLink("Icon", request.value());
-                    case UPLOAD ->
-                        throw new ApiException(
-                                ErrorCode.VALIDATION_FAILED,
-                                "Icon uploads must be stored through the workspace attachment endpoint first.");
-                };
-        workspace.setIconType(type);
-        workspace.setIconValue(value);
-        workspace.setIconColor(PageIconValidator.validateColor(type, request.color()));
+        // Releasing after validation means a rejected new value leaves the old upload in
+        // place. Re-setting the same id releases nothing.
+        releaseReplacedIconUpload(workspace, icon.type() == PageIconType.UPLOAD ? icon.value() : null);
+        workspace.setIconType(icon.type());
+        workspace.setIconValue(icon.value());
+        workspace.setIconColor(icon.color());
+    }
+
+    /**
+     * Deletes the file behind the current upload icon unless {@code keepValue} is
+     * that same id. The stored value is always one this class wrote through
+     * {@link PageIconValidator#validateUpload}, so it parses as a UUID.
+     */
+    private void releaseReplacedIconUpload(Workspace workspace, String keepValue) {
+        if (workspace.getIconType() != PageIconType.UPLOAD) {
+            return;
+        }
+        String currentValue = workspace.getIconValue();
+        if (currentValue == null || currentValue.equals(keepValue)) {
+            return;
+        }
+        attachmentService.deleteWorkspaceUpload(UUID.fromString(currentValue));
     }
 
     private UUID workspaceId(Membership membership) {

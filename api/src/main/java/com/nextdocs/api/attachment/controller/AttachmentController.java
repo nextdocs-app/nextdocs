@@ -1,6 +1,7 @@
 package com.nextdocs.api.attachment.controller;
 
 import com.nextdocs.api.attachment.AttachmentContentTypes;
+import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
 import com.nextdocs.api.attachment.entity.Attachment;
@@ -84,7 +85,8 @@ public class AttachmentController {
             @PathVariable UUID documentId,
             @RequestPart("file") MultipartFile file) {
         UserPrincipal caller = Objects.requireNonNull(principal, "Authentication is required to upload.");
-        AttachmentResponse response = attachmentService.upload(caller.getId(), documentId, file);
+        AttachmentResponse response =
+                attachmentService.upload(caller.getId(), AttachmentScope.document(documentId), file);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Attachment uploaded."));
     }
 

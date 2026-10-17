@@ -50,7 +50,7 @@ class DocumentIconCoverApplierTest {
     @BeforeEach
     void setUp() {
         applier = new DocumentIconCoverApplier(
-                attachmentRepository, attachmentStorage, new PageIconValidator(iconCatalog));
+                new PageIconValidator(iconCatalog, attachmentRepository, attachmentStorage));
         documentId = UUID.randomUUID();
         document = Document.builder().id(documentId).title("Doc").build();
     }
@@ -167,7 +167,8 @@ class DocumentIconCoverApplierTest {
     @Test
     void applyIcon_upload_acceptsOwnedRasterImage() {
         UUID attachmentId = UUID.randomUUID();
-        when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/png")));
+        when(attachmentRepository.findById(attachmentId))
+                .thenReturn(Optional.of(attachment(attachmentId, documentId, "image/png")));
         stubStoredBytes(PNG_HEAD);
 
         applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString()));
@@ -572,9 +573,13 @@ class DocumentIconCoverApplierTest {
     }
 
     private static Attachment attachment(UUID owningDocumentId, String contentType) {
+        return attachment(UUID.randomUUID(), owningDocumentId, contentType);
+    }
+
+    private static Attachment attachment(UUID id, UUID owningDocumentId, String contentType) {
         Document owner = Document.builder().id(owningDocumentId).title("Owner").build();
         return Attachment.builder()
-                .id(UUID.randomUUID())
+                .id(id)
                 .document(owner)
                 .fileName("image.png")
                 .contentType(contentType)

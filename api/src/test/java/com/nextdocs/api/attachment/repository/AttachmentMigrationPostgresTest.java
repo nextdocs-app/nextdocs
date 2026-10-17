@@ -76,6 +76,7 @@ class AttachmentMigrationPostgresTest {
                 .containsExactlyInAnyOrder(
                         "id",
                         "document_id",
+                        "workspace_id",
                         "uploaded_by",
                         "file_name",
                         "content_type",
@@ -118,19 +119,52 @@ class AttachmentMigrationPostgresTest {
                 }
                 assertThat(definitions)
                         .anyMatch(def -> def.contains("idx_attachments_document_id"))
+                        .anySatisfy(def -> assertThat(def)
+                                .contains("idx_attachments_workspace_id")
+                                .contains("WHERE (workspace_id IS NOT NULL)"))
                         .anyMatch(def -> def.contains("uq_attachments_storage_key"));
             }
         }
     }
 
     @Test
-    void attachments_everyColumnIsNotNullableWithServerSideDefaults() throws SQLException {
+    void migration_rejectsAnAttachmentWithoutExactlyOneScope() throws SQLException {
+        UUID documentId = insertDocument();
+        UUID workspaceId = insertWorkspace();
+
+        // Exactly one scope: neither and both are rejected, which is what keeps the
+        // document/workspace columns from drifting apart.
+        assertThatThrownBy(() -> insertScopedAttachment(UUID.randomUUID(), null, null, "none"))
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> insertScopedAttachment(UUID.randomUUID(), documentId, workspaceId, "both"))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void workspaceForeignKeyCascades() throws SQLException {
+        UUID workspaceId = insertWorkspace();
+        UUID attachmentId = UUID.randomUUID();
+        String storageKey = workspaceId + "/" + attachmentId;
+        insertScopedAttachment(attachmentId, null, workspaceId, storageKey);
+
+        assertThat(countAttachmentsInWorkspace(workspaceId)).isEqualTo(1);
+
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM workspaces WHERE id = ?")) {
+            stmt.setObject(1, workspaceId);
+            stmt.executeUpdate();
+        }
+        assertThat(countAttachmentsInWorkspace(workspaceId)).isZero();
+    }
+
+    @Test
+    void attachments_singleScopeColumnsAreNullableAndEveryOtherColumnIsNotNullable() throws SQLException {
         Map<String, String[]> columns = columnFacts("attachments");
 
         assertThat(columns)
                 .containsOnlyKeys(
                         "id",
                         "document_id",
+                        "workspace_id",
                         "uploaded_by",
                         "file_name",
                         "content_type",
@@ -139,7 +173,9 @@ class AttachmentMigrationPostgresTest {
                         "sha256",
                         "created_at");
         for (Map.Entry<String, String[]> entry : columns.entrySet()) {
-            assertThat(entry.getValue()[0]).as("%s nullability", entry.getKey()).isEqualTo("NO");
+            boolean scopeColumn =
+                    entry.getKey().equals("document_id") || entry.getKey().equals("workspace_id");
+            assertThat(entry.getValue()[0]).as("%s nullability", entry.getKey()).isEqualTo(scopeColumn ? "YES" : "NO");
         }
         // Server-side defaults matter: the id must be mintable without the application
         // supplying one, and created_at must land even on a direct SQL insert.
@@ -148,6 +184,48 @@ class AttachmentMigrationPostgresTest {
         assertThat(columns.get("size_bytes")[1])
                 .as("size_bytes must come from the upload")
                 .isNull();
+    }
+
+    @Test
+    void v20_preservesExistingDocumentAttachmentsWhenAddingWorkspaceScope() throws SQLException {
+        String legacySchema = "attachpg_v20_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            migrate(legacySchema, "19");
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET search_path TO " + legacySchema);
+            }
+
+            userId = insertUser();
+            UUID documentId = insertDocument();
+            UUID attachmentId = UUID.randomUUID();
+            // Pre-V20 shape: only document_id exists, so insert without workspace_id.
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    "INSERT INTO attachments (id, document_id, uploaded_by, file_name, content_type, size_bytes, "
+                            + "storage_key, sha256) VALUES (?, ?, ?, 'file.bin', 'application/octet-stream', 3, ?, ?)")) {
+                stmt.setObject(1, attachmentId);
+                stmt.setObject(2, documentId);
+                stmt.setObject(3, userId);
+                stmt.setString(4, documentId + "/" + attachmentId);
+                stmt.setString(5, "0".repeat(64));
+                stmt.executeUpdate();
+            }
+
+            migrate(legacySchema, null);
+
+            // The staged upgrade must keep the document attachment and its scope, then
+            // allow a workspace-scoped row through the new single-scope check.
+            assertThat(countAttachmentsForDocument(documentId)).isEqualTo(1);
+            assertThat(workspaceIdOf(attachmentId)).isNull();
+            UUID workspaceId = insertWorkspace();
+            UUID iconId = UUID.randomUUID();
+            insertScopedAttachment(iconId, null, workspaceId, workspaceId + "/" + iconId);
+            assertThat(countAttachmentsInWorkspace(workspaceId)).isEqualTo(1);
+        } finally {
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET search_path TO " + schema);
+                stmt.execute("DROP SCHEMA IF EXISTS " + legacySchema + " CASCADE");
+            }
+        }
     }
 
     @Test
@@ -237,15 +315,33 @@ class AttachmentMigrationPostgresTest {
         return id;
     }
 
-    private void insertAttachment(UUID attachmentId, UUID documentId, String storageKey) throws SQLException {
+    private UUID insertWorkspace() throws SQLException {
+        UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO attachments (id, document_id, uploaded_by, file_name, content_type, size_bytes, "
-                        + "storage_key, sha256) VALUES (?, ?, ?, 'file.bin', 'application/octet-stream', 3, ?, ?)")) {
+                "INSERT INTO workspaces (id, name, created_at, updated_at) VALUES (?, ?, now(), now())")) {
+            stmt.setObject(1, id);
+            stmt.setString(2, "Attachment workspace " + id);
+            stmt.executeUpdate();
+        }
+        return id;
+    }
+
+    private void insertAttachment(UUID attachmentId, UUID documentId, String storageKey) throws SQLException {
+        insertScopedAttachment(attachmentId, documentId, null, storageKey);
+    }
+
+    private void insertScopedAttachment(UUID attachmentId, UUID documentId, UUID workspaceId, String storageKey)
+            throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO attachments (id, document_id, workspace_id, uploaded_by, file_name, content_type, "
+                        + "size_bytes, storage_key, sha256) VALUES (?, ?, ?, ?, 'file.bin', 'application/octet-stream', "
+                        + "3, ?, ?)")) {
             stmt.setObject(1, attachmentId);
             stmt.setObject(2, documentId);
-            stmt.setObject(3, userId);
-            stmt.setString(4, storageKey);
-            stmt.setString(5, "0".repeat(64));
+            stmt.setObject(3, workspaceId);
+            stmt.setObject(4, userId);
+            stmt.setString(5, storageKey);
+            stmt.setString(6, "0".repeat(64));
             stmt.executeUpdate();
         }
     }
@@ -273,6 +369,28 @@ class AttachmentMigrationPostgresTest {
             try (ResultSet rs = stmt.executeQuery()) {
                 rs.next();
                 return rs.getInt(1);
+            }
+        }
+    }
+
+    private int countAttachmentsInWorkspace(UUID workspaceId) throws SQLException {
+        try (PreparedStatement stmt =
+                connection.prepareStatement("SELECT count(*) FROM attachments WHERE workspace_id = ?")) {
+            stmt.setObject(1, workspaceId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+    }
+
+    private UUID workspaceIdOf(UUID attachmentId) throws SQLException {
+        try (PreparedStatement stmt =
+                connection.prepareStatement("SELECT workspace_id FROM attachments WHERE id = ?")) {
+            stmt.setObject(1, attachmentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return (UUID) rs.getObject(1);
             }
         }
     }

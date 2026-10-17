@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
 import com.nextdocs.api.attachment.entity.Attachment;
@@ -84,7 +85,7 @@ class AttachmentControllerTest {
 
     @Test
     void upload_success_returns201() throws Exception {
-        when(attachmentService.upload(eq(userId), eq(documentId), any()))
+        when(attachmentService.upload(eq(userId), eq(AttachmentScope.document(documentId)), any()))
                 .thenReturn(new AttachmentResponse(
                         attachmentId,
                         documentId,
@@ -112,7 +113,7 @@ class AttachmentControllerTest {
 
     @Test
     void upload_withoutEditAccess_returns403() throws Exception {
-        when(attachmentService.upload(eq(userId), eq(documentId), any()))
+        when(attachmentService.upload(eq(userId), eq(AttachmentScope.document(documentId)), any()))
                 .thenThrow(new ApiException(ErrorCode.FORBIDDEN));
 
         mockMvc.perform(declaredUpload(multipart("/api/v1/documents/{documentId}/attachments", documentId)
@@ -124,7 +125,7 @@ class AttachmentControllerTest {
 
     @Test
     void upload_oversizedFile_returns413() throws Exception {
-        when(attachmentService.upload(eq(userId), eq(documentId), any()))
+        when(attachmentService.upload(eq(userId), eq(AttachmentScope.document(documentId)), any()))
                 .thenThrow(new ApiException(ErrorCode.PAYLOAD_TOO_LARGE));
 
         mockMvc.perform(declaredUpload(multipart("/api/v1/documents/{documentId}/attachments", documentId)

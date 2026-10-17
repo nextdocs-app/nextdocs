@@ -268,6 +268,39 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void workspaceUploadPath_consumesCallerAndAddressBuckets() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post("/api/v1/workspaces/current/attachments").remoteAddress("10.0.6.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.6.1", "upload:" + callerId);
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void workspaceUploadPath_withEncodedPrefix_staysOnTheUploadBudget() throws Exception {
+        // The raw URI differs from the route the controller sees, so the match has to
+        // happen on the decoded path: an escape must not skip the disk-filling budget.
+        // The URI form rather than get(String): the string form re-encodes the escape.
+        UUID callerId = authenticate();
+
+        mockMvc.perform(
+                post(URI.create("/api/v1/%77orkspaces/current/attachments")).remoteAddress("10.0.6.2"));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("upload:" + callerId);
+    }
+
+    @Test
+    void workspaceAdministrationPaths_stayUnlimited() throws Exception {
+        mockMvc.perform(get("/api/v1/workspaces/current").remoteAddress("10.0.6.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
     void uploadPath_whenCallerBucketIsExhausted_returnsTooManyRequests() throws Exception {
         UUID callerId = authenticate();
         rateLimiter.deniedKeys.add("upload:" + callerId);
@@ -902,6 +935,16 @@ class RateLimitFilterTest {
 
         @PostMapping("/api/v1/documents/{id}/attachments")
         ResponseEntity<String> uploadAttachment(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/workspaces/current")
+        ResponseEntity<String> currentWorkspace() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @PostMapping("/api/v1/workspaces/current/attachments")
+        ResponseEntity<String> uploadWorkspaceIcon() {
             return ResponseEntity.ok("ok");
         }
 

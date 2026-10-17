@@ -1,5 +1,6 @@
 package com.nextdocs.api.workspace.controller;
 
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
@@ -15,15 +16,20 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @Tag(name = "Workspace", description = "Workspace identity and membership administration")
 @RestController
@@ -36,6 +42,8 @@ public class WorkspaceController {
     public static final String CURRENT_PATH = "/api/v1/workspaces/current";
 
     public static final String MEMBERS_PATH = CURRENT_PATH + "/members";
+
+    public static final String ATTACHMENTS_PATH = CURRENT_PATH + "/attachments";
 
     private final WorkspaceService workspaceService;
 
@@ -152,6 +160,34 @@ public class WorkspaceController {
     public ResponseEntity<ApiResponse<List<WorkspaceMemberResponse>>> removeMember(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID userId) {
         return ResponseEntity.ok(ApiResponse.ok(workspaceService.removeMember(callerId(principal), userId)));
+    }
+
+    @Operation(
+            summary = "Upload a workspace icon image",
+            description = "Stores an image for use as the workspace icon and returns its id. Owner only. "
+                    + "Set the returned id through PATCH on the workspace with icon type UPLOAD.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "201",
+                        description = "Attachment stored"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "400",
+                        description = "Empty or invalid file"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not an owner"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "413",
+                        description = "File exceeds the configured size limit")
+            })
+    @PostMapping(value = "/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<AttachmentResponse>> uploadAttachment(
+            @AuthenticationPrincipal UserPrincipal principal, @RequestPart("file") MultipartFile file) {
+        AttachmentResponse response = workspaceService.uploadAttachment(callerId(principal), file);
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Attachment uploaded."));
     }
 
     private static UUID callerId(UserPrincipal principal) {

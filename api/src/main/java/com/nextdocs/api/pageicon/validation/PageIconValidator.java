@@ -1,21 +1,31 @@
 package com.nextdocs.api.pageicon.validation;
 
+import com.nextdocs.api.attachment.AttachmentContentTypes;
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.entity.Attachment;
+import com.nextdocs.api.attachment.repository.AttachmentRepository;
+import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.document.validation.IconSlugs;
 import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
  * Validation rules shared by every page icon (documents, workspaces): one emoji
- * grapheme, a catalogued builtin slug, an https image link, and the builtin-only
- * color palette. Callers orchestrate which sources they accept and how the result
- * is stored; this class owns what a valid value looks like.
+ * grapheme, a catalogued builtin slug, an https image link, an upload reference
+ * that belongs to the target scope, and the builtin-only color palette. Callers
+ * orchestrate which sources they accept and how the result is stored; this class
+ * owns what a valid value looks like.
  */
 @Component
 @RequiredArgsConstructor
@@ -55,6 +65,30 @@ public class PageIconValidator {
             Set.of("default", "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red");
 
     private final IconCatalog iconCatalog;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorage attachmentStorage;
+
+    /** A request field set after all source-specific rules (and upload bytes) passed. */
+    public record ValidatedIcon(PageIconType type, String value, String color) {}
+
+    /**
+     * Validates a whole icon request, including reading and sniffing upload bytes. Callers
+     * that mutate under a database lock should run this first, then re-check the upload
+     * reference under the lock with {@link #validateUploadReference}.
+     */
+    public ValidatedIcon validateIcon(PageIconRequest request, AttachmentScope scope) {
+        if (request.type() == null || request.type().isBlank()) {
+            return new ValidatedIcon(null, null, null);
+        }
+        PageIconType type = parseType(request.type());
+        String value = switch (type) {
+            case EMOJI -> validateEmoji(request.value());
+            case BUILTIN -> validateBuiltin(request.value());
+            case LINK -> validateLink("Icon", request.value());
+            case UPLOAD -> validateUpload("Icon", request.value(), scope);
+        };
+        return new ValidatedIcon(type, value, validateColor(type, request.color()));
+    }
 
     /** Parses a case-insensitive icon source name; unknown values are a validation error. */
     public static PageIconType parseType(String raw) {
@@ -199,6 +233,79 @@ public class PageIconValidator {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "Unknown builtin icon: " + echo(raw) + ".");
         }
         return value;
+    }
+
+    /**
+     * Validates an upload reference and its stored bytes, returning the canonical
+     * attachment id. See {@link #validateUploadReference} for the row checks; this adds
+     * the re-sniff of the file, which does storage I/O and must stay outside a database
+     * lock.
+     */
+    public String validateUpload(String field, String raw, AttachmentScope scope) {
+        Attachment attachment = validateUploadReference(field, raw, scope);
+        verifyStoredBytes(field, attachment);
+        return attachment.getId().toString();
+    }
+
+    /**
+     * Validates an upload reference without touching storage: the row must exist, belong
+     * to {@code scope}, and carry a raster content type. Its bytes are re-sniffed by
+     * {@link #validateUpload}; callers that already did that outside a lock re-run this
+     * cheap check under the lock so a deleted or re-scoped row cannot be adopted.
+     */
+    public Attachment validateUploadReference(String field, String raw, AttachmentScope scope) {
+        String value = raw == null ? "" : raw.strip();
+        UUID attachmentId;
+        try {
+            attachmentId = UUID.fromString(value);
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, field + " upload must reference an attachment id.");
+        }
+        Attachment attachment = attachmentRepository
+                .findById(attachmentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.VALIDATION_FAILED, "Referenced upload was not found."));
+        if (!attachment.scope().equals(scope)) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED, "Referenced upload does not belong to this " + scopeNoun(scope) + ".");
+        }
+        String contentType = attachment.getContentType();
+        if (contentType == null
+                || !AttachmentContentTypes.INLINE_RASTER_IMAGE_TYPES.contains(contentType.toLowerCase(Locale.ROOT))) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
+        }
+        return attachment;
+    }
+
+    private static String scopeNoun(AttachmentScope scope) {
+        return scope.kind() == AttachmentScope.Kind.DOCUMENT ? "document" : "workspace";
+    }
+
+    /**
+     * Re-sniffs the stored head instead of trusting the row's content type.
+     *
+     * <p>A row can carry a raster label over non-raster bytes — uploaded before
+     * uploads sniffed their bytes, or written by an older deployment — and the
+     * icon/cover URL is rendered by the browser, so the bytes have to be what
+     * decides. The label check is the cheap first cut and keeps the type wording;
+     * this one is what makes the guarantee true for existing rows.
+     */
+    private void verifyStoredBytes(String field, Attachment attachment) {
+        byte[] head;
+        try (InputStream stored =
+                attachmentStorage.open(attachment.getStorageKey()).resource().getInputStream()) {
+            head = stored.readNBytes(AttachmentContentTypes.SNIFF_BYTES);
+        } catch (IOException | RuntimeException ex) {
+            // A row whose bytes are missing or unreadable cannot back an icon: the
+            // storage layer raises a 404-style error for an absent file.
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
+        }
+        if (AttachmentContentTypes.detectRasterImageType(head) == null) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, rasterTypeError(field));
+        }
+    }
+
+    private static String rasterTypeError(String field) {
+        return field + " uploads must be PNG, JPEG, GIF, WebP, or AVIF images.";
     }
 
     /** Strips the color and normalizes the literal "default" to null (the stored form). */

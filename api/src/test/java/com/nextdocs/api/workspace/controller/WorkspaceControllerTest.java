@@ -6,14 +6,18 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
+import com.nextdocs.api.common.exception.ApiException;
+import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
@@ -29,8 +33,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 
 @WebMvcTest(WorkspaceController.class)
 @Import({
@@ -159,5 +165,66 @@ class WorkspaceControllerTest {
                         .with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
+    void uploadAttachment_success_returns201() throws Exception {
+        UUID attachmentId = UUID.randomUUID();
+        when(workspaceService.uploadAttachment(eq(userId), any()))
+                .thenReturn(new AttachmentResponse(
+                        attachmentId,
+                        null,
+                        "icon.png",
+                        "image/png",
+                        3,
+                        "/api/v1/attachments/" + attachmentId,
+                        OffsetDateTime.now()));
+
+        mockMvc.perform(declaredUpload(multipart(WorkspaceController.ATTACHMENTS_PATH)
+                                .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[] {1, 2, 3})))
+                        .with(user(principal)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.url").value("/api/v1/attachments/" + attachmentId))
+                .andExpect(jsonPath("$.data.documentId").doesNotExist())
+                .andExpect(jsonPath("$.message").value("Attachment uploaded."));
+    }
+
+    @Test
+    void uploadAttachment_withoutAuthentication_returns401() throws Exception {
+        mockMvc.perform(declaredUpload(multipart(WorkspaceController.ATTACHMENTS_PATH)
+                        .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[] {1}))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void uploadAttachment_nonOwner_returns403() throws Exception {
+        when(workspaceService.uploadAttachment(eq(userId), any())).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        mockMvc.perform(declaredUpload(multipart(WorkspaceController.ATTACHMENTS_PATH)
+                                .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[] {1})))
+                        .with(user(principal)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void uploadAttachment_withoutFilePart_returns400() throws Exception {
+        mockMvc.perform(declaredUpload(multipart(WorkspaceController.ATTACHMENTS_PATH))
+                        .with(user(principal)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    /**
+     * MockMvc multipart probes carry no body, so getContentLengthLong() reports -1 and the
+     * rate-limit filter (rightly) refuses an undeclared multipart upload. Give the probe an
+     * empty declared body so it exercises the controller, not the transport guard.
+     */
+    private static <T extends AbstractMockHttpServletRequestBuilder<T>> T declaredUpload(T builder) {
+        return builder.with(request -> {
+            request.setContent(new byte[0]);
+            return request;
+        });
     }
 }
