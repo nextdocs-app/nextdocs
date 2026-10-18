@@ -23,6 +23,7 @@ public interface WorkspaceMemberRepository extends JpaRepository<WorkspaceMember
     @EntityGraph(attributePaths = {"user", "workspace"})
     Optional<WorkspaceMember> findByUserId(UUID userId);
 
+    @EntityGraph(attributePaths = "user")
     List<WorkspaceMember> findAllByWorkspaceIdOrderByCreatedAtAsc(UUID workspaceId);
 
     Optional<WorkspaceMember> findByWorkspaceIdAndUserId(UUID workspaceId, UUID userId);
