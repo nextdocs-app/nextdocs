@@ -25,6 +25,8 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
+import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -84,7 +86,7 @@ class DocumentControllerTest {
 
     @Test
     void create_success_returns201() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "My Doc",
                 "AQID",
@@ -121,7 +123,7 @@ class DocumentControllerTest {
 
     @Test
     void create_existingClientDocument_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "My Doc",
                 "AQID",
@@ -159,7 +161,7 @@ class DocumentControllerTest {
 
     @Test
     void list_default_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "My Doc",
                 null,
@@ -190,7 +192,7 @@ class DocumentControllerTest {
 
     @Test
     void list_rootPrivate_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Root Private",
                 null,
@@ -224,7 +226,7 @@ class DocumentControllerTest {
 
     @Test
     void list_rootShared_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Root Shared",
                 null,
@@ -259,7 +261,7 @@ class DocumentControllerTest {
     @Test
     void list_children_success_returns200() throws Exception {
         UUID parentId = UUID.randomUUID();
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Child Doc",
                 null,
@@ -291,7 +293,7 @@ class DocumentControllerTest {
     @Test
     void list_trashed_success_returns200() throws Exception {
         OffsetDateTime deleted = OffsetDateTime.parse("2025-01-01T00:00:00Z");
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Trashed",
                 null,
@@ -330,7 +332,7 @@ class DocumentControllerTest {
 
     @Test
     void update_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Updated",
                 "AQID",
@@ -364,7 +366,7 @@ class DocumentControllerTest {
 
     @Test
     void update_iconAndCover_deserializesAndReturnsThem() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Doc",
                 null,
@@ -430,7 +432,7 @@ class DocumentControllerTest {
 
     @Test
     void restore_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Restored",
                 null,
@@ -457,7 +459,7 @@ class DocumentControllerTest {
 
     @Test
     void move_success_returns200() throws Exception {
-        DocumentResponse moved = new DocumentResponse(
+        DocumentResponse moved = DocumentResponse.withoutBranding(
                 documentId,
                 "Moved",
                 null,
@@ -511,6 +513,37 @@ class DocumentControllerTest {
     }
 
     @Test
+    void getPublic_success_includesWorkspaceBranding() throws Exception {
+        WorkspaceBrandingResponse branding = new WorkspaceBrandingResponse("Acme", new PageIconResponse("emoji", "🐧"));
+        DocumentResponse response = new DocumentResponse(
+                documentId,
+                "Public Doc",
+                null,
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.VIEW,
+                "Alice",
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                null,
+                null,
+                null,
+                null,
+                branding);
+
+        when(documentService.getPublic(eq(documentId))).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public", documentId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workspace.name").value("Acme"))
+                .andExpect(jsonPath("$.data.workspace.icon.type").value("emoji"))
+                .andExpect(jsonPath("$.data.workspace.icon.value").value("🐧"));
+    }
+
+    @Test
     void getPublicBreadcrumbs_success_returns200() throws Exception {
         DocumentBreadcrumbResponse item = new DocumentBreadcrumbResponse(documentId, "Public Doc", null, null);
 
@@ -525,7 +558,7 @@ class DocumentControllerTest {
 
     @Test
     void listPublicChildren_success_returns200() throws Exception {
-        DocumentResponse child = new DocumentResponse(
+        DocumentResponse child = DocumentResponse.withoutBranding(
                 UUID.randomUUID(),
                 "Public Child",
                 null,
@@ -553,7 +586,7 @@ class DocumentControllerTest {
 
     @Test
     void updatePublic_success_returns200() throws Exception {
-        DocumentResponse response = new DocumentResponse(
+        DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Guest edit",
                 null,

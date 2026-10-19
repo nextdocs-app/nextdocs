@@ -19,6 +19,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.AttachmentVisibility;
 import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
@@ -647,6 +648,64 @@ class AttachmentServiceTest {
     }
 
     @Test
+    void upload_workspaceScope_staysPrivateUntilTheIconAdoptsIt() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        attachmentService.upload(
+                userId, AttachmentScope.workspace(workspaceId), multipartFile("icon.png", "image/png", "hello"));
+
+        assertThat(captured.getValue().getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+        assertThat(captured.getValue().isPublic()).isFalse();
+    }
+
+    @Test
+    void upload_workspaceScope_unappliedUploadIsNotFoundToAnonymousViewers() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+        AttachmentResponse response = attachmentService.upload(
+                userId, AttachmentScope.workspace(workspaceId), multipartFile("icon.png", "image/png", "hello"));
+        when(attachmentRepository.findById(response.id())).thenReturn(Optional.of(captured.getValue()));
+
+        // Guessing the id of an upload the owner never applied must not read it.
+        assertApiError(ErrorCode.NOT_FOUND, () -> attachmentService.resolveUrl(null, response.id()));
+    }
+
+    @Test
+    void upload_workspaceScope_rejectsANonRasterFile() {
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+
+        assertApiError(
+                ErrorCode.VALIDATION_FAILED,
+                () -> attachmentService.upload(
+                        userId,
+                        AttachmentScope.workspace(workspaceId),
+                        multipartFile("not-an-icon.pdf", "application/pdf", "%PDF-1.7")));
+
+        // Rejected before quota or storage: a workspace upload can only back an icon.
+        verifyNoInteractions(userRepository, quotaService, attachmentStorage, attachmentRepository);
+    }
+
+    @Test
+    void upload_documentScope_isAlwaysPrivate() {
+        stubStoragePut();
+        when(permissionService.requireEditAccess(userId, documentId)).thenReturn(document);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello"));
+
+        assertThat(captured.getValue().getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+    }
+
+    @Test
     void upload_workspaceScope_ofAnotherWorkspace_throwsNotFound() {
         Workspace other =
                 Workspace.builder().id(UUID.randomUUID()).name("Other").build();
@@ -799,12 +858,23 @@ class AttachmentServiceTest {
     }
 
     @Test
-    void resolveUrl_workspaceAttachment_anonymousCaller_throwsNotFound() {
-        // Workspace icons have no share-link surface: existence itself is masked.
-        Attachment attachment = workspaceAttachment();
+    void resolveUrl_privateWorkspaceAttachment_anonymousCaller_throwsNotFound() {
+        // Private workspace attachments stay invisible to share-link visitors.
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
         when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
 
         assertApiError(ErrorCode.NOT_FOUND, () -> attachmentService.resolveUrl(null, attachment.getId()));
+    }
+
+    @Test
+    void resolveUrl_publicWorkspaceAttachment_anonymousCaller_returnsSignedUrl() {
+        // The workspace icon is branding: share pages must render it without a session.
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PUBLIC);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        AttachmentUrlResponse response = attachmentService.resolveUrl(null, attachment.getId());
+
+        assertThat(response.url()).startsWith("/api/v1/attachments/" + attachment.getId() + "/file?exp=");
     }
 
     @Test
@@ -1029,6 +1099,27 @@ class AttachmentServiceTest {
     }
 
     @Test
+    void publishWorkspaceUpload_makesTheAdoptedIconAnonymousReadable() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.publishWorkspaceUpload(workspaceId, attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PUBLIC);
+        assertThat(attachmentService.resolveUrl(null, attachment.getId()).url()).startsWith("/api/v1/attachments/");
+    }
+
+    @Test
+    void publishWorkspaceUpload_rowOfAnotherWorkspace_isLeftPrivate() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.publishWorkspaceUpload(UUID.randomUUID(), attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+    }
+
+    @Test
     void deleteWorkspaceUpload_deletesRowReleasesQuotaAndFile() {
         Attachment attachment = workspaceAttachment();
         when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
@@ -1092,6 +1183,10 @@ class AttachmentServiceTest {
     }
 
     private Attachment workspaceAttachment() {
+        return workspaceAttachment(AttachmentVisibility.PRIVATE);
+    }
+
+    private Attachment workspaceAttachment(AttachmentVisibility visibility) {
         return Attachment.builder()
                 .id(UUID.randomUUID())
                 .workspace(workspace)
@@ -1101,6 +1196,7 @@ class AttachmentServiceTest {
                 .sizeBytes(3)
                 .storageKey(workspaceId + "/" + UUID.randomUUID())
                 .sha256("0".repeat(64))
+                .visibility(visibility)
                 .build();
     }
 

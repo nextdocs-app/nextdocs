@@ -83,6 +83,7 @@ class AttachmentMigrationPostgresTest {
                         "size_bytes",
                         "storage_key",
                         "sha256",
+                        "visibility",
                         "created_at");
     }
 
@@ -171,6 +172,7 @@ class AttachmentMigrationPostgresTest {
                         "size_bytes",
                         "storage_key",
                         "sha256",
+                        "visibility",
                         "created_at");
         for (Map.Entry<String, String[]> entry : columns.entrySet()) {
             boolean scopeColumn =
@@ -181,6 +183,7 @@ class AttachmentMigrationPostgresTest {
         // supplying one, and created_at must land even on a direct SQL insert.
         assertThat(columns.get("id")[1]).contains("gen_random_uuid");
         assertThat(columns.get("created_at")[1]).contains("now()");
+        assertThat(columns.get("visibility")[1]).contains("PRIVATE");
         assertThat(columns.get("size_bytes")[1])
                 .as("size_bytes must come from the upload")
                 .isNull();
@@ -229,6 +232,64 @@ class AttachmentMigrationPostgresTest {
     }
 
     @Test
+    void visibility_separatesOwnershipFromAudience() throws SQLException {
+        UUID documentId = insertDocument();
+        UUID workspaceId = insertWorkspace();
+        UUID documentAttachmentId = UUID.randomUUID();
+        UUID publicIconId = UUID.randomUUID();
+        insertScopedAttachment(documentAttachmentId, documentId, null, "doc/" + documentAttachmentId);
+        insertScopedAttachmentWithVisibility(publicIconId, null, workspaceId, "workspace/" + publicIconId, "PUBLIC");
+
+        assertThat(visibilityOf(documentAttachmentId)).isEqualTo("PRIVATE");
+        assertThat(visibilityOf(publicIconId)).isEqualTo("PUBLIC");
+
+        // A document's audience comes from the document itself, so a public flag on a
+        // document attachment would be a lie the policy ignores. Reject it in schema.
+        assertThatThrownBy(() -> insertScopedAttachmentWithVisibility(
+                        UUID.randomUUID(), documentId, null, "doc/" + UUID.randomUUID(), "PUBLIC"))
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> insertScopedAttachmentWithVisibility(
+                        UUID.randomUUID(), null, workspaceId, "workspace/" + UUID.randomUUID(), "SOMETIMES"))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void visibilityBackfill_publishesOnlyTheAdoptedIconUpload() throws SQLException {
+        String legacySchema = "attachpg_legacy_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            migrate(legacySchema, "22");
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET search_path TO " + legacySchema);
+            }
+
+            userId = insertUser();
+            UUID workspaceId = insertWorkspace();
+            UUID adoptedId = UUID.randomUUID();
+            UUID abandonedId = UUID.randomUUID();
+            insertScopedAttachment(adoptedId, null, workspaceId, workspaceId + "/" + adoptedId);
+            insertScopedAttachment(abandonedId, null, workspaceId, workspaceId + "/" + abandonedId);
+            try (PreparedStatement stmt = connection.prepareStatement(
+                    "UPDATE workspaces SET icon_type = 'UPLOAD', icon_value = ? WHERE id = ?")) {
+                stmt.setString(1, adoptedId.toString());
+                stmt.setObject(2, workspaceId);
+                stmt.executeUpdate();
+            }
+
+            migrate(legacySchema, null);
+
+            // Only the file the workspace actually shows is branding. A guessed id for an
+            // upload left over from an unfinished edit must stay private.
+            assertThat(visibilityOf(adoptedId)).isEqualTo("PUBLIC");
+            assertThat(visibilityOf(abandonedId)).isEqualTo("PRIVATE");
+        } finally {
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET search_path TO " + schema);
+                stmt.execute("DROP SCHEMA IF EXISTS " + legacySchema + " CASCADE");
+            }
+        }
+    }
+
+    @Test
     void attachmentUsage_isKeyedByNotNullableUserAndCounter() throws SQLException {
         Map<String, String[]> columns = columnFacts("attachment_usage");
 
@@ -256,6 +317,20 @@ class AttachmentMigrationPostgresTest {
             rs.next();
             assertThat(rs.getInt(1)).isZero();
         }
+    }
+
+    private void migrate(String targetSchema, String targetVersion) {
+        String url = PostgresTestSupport.resolveUrl();
+        var configuration = Flyway.configure()
+                .dataSource(url, PostgresTestSupport.resolveUsername(), PostgresTestSupport.resolvePassword())
+                .schemas(targetSchema)
+                .defaultSchema(targetSchema)
+                .createSchemas(true)
+                .locations("classpath:db/migration");
+        if (targetVersion != null) {
+            configuration = configuration.target(targetVersion);
+        }
+        configuration.load().migrate();
     }
 
     private Map<String, String[]> columnFacts(String table) throws SQLException {
@@ -343,6 +418,34 @@ class AttachmentMigrationPostgresTest {
             stmt.setString(5, storageKey);
             stmt.setString(6, "0".repeat(64));
             stmt.executeUpdate();
+        }
+    }
+
+    private void insertScopedAttachmentWithVisibility(
+            UUID attachmentId, UUID documentId, UUID workspaceId, String storageKey, String visibility)
+            throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO attachments (id, document_id, workspace_id, uploaded_by, file_name, content_type, "
+                        + "size_bytes, storage_key, sha256, visibility) VALUES (?, ?, ?, ?, 'file.bin', "
+                        + "'application/octet-stream', 3, ?, ?, ?)")) {
+            stmt.setObject(1, attachmentId);
+            stmt.setObject(2, documentId);
+            stmt.setObject(3, workspaceId);
+            stmt.setObject(4, userId);
+            stmt.setString(5, storageKey);
+            stmt.setString(6, "0".repeat(64));
+            stmt.setString(7, visibility);
+            stmt.executeUpdate();
+        }
+    }
+
+    private String visibilityOf(UUID attachmentId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT visibility FROM attachments WHERE id = ?")) {
+            stmt.setObject(1, attachmentId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return rs.getString(1);
+            }
         }
     }
 

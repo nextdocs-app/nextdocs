@@ -20,9 +20,10 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>document uploads need EDIT access and downloads follow the document access
  *       rules, including trash and anonymous share links;</li>
- *   <li>workspace uploads are owner-only and downloads require the caller to be a
- *       member of the owning workspace. Anonymous callers are masked as 404: a
- *       workspace icon is never part of a share-link surface.</li>
+ *   <li>workspace uploads are owner-only. A public workspace attachment (the icon,
+ *       instance branding) is readable by anyone so public share pages can render it;
+ *       every private workspace attachment still requires membership and masks
+ *       anonymous callers as 404.</li>
  * </ul>
  */
 @Component
@@ -56,16 +57,21 @@ public class AttachmentAccessPolicy {
     /**
      * Enforces that the caller may resolve a signed URL for {@code attachment}.
      *
-     * @param userId caller id, or {@code null} for anonymous viewers (public documents only)
+     * @param userId caller id, or {@code null} for anonymous viewers (shared documents and
+     *     public workspace branding only)
      */
     public void requireDownload(UUID userId, Attachment attachment) {
         if (attachment.getDocument() != null) {
             requireDocumentDownload(userId, attachment.getDocument());
             return;
         }
+        if (attachment.isPublic()) {
+            // Workspace branding is intentionally anonymous so share-link visitors can
+            // see the instance identity without an account.
+            return;
+        }
         if (userId == null) {
-            // Workspace attachments have no anonymous surface: masking as not found
-            // keeps their existence out of reach of share-link visitors.
+            // Private workspace attachments stay invisible to share-link visitors.
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         UUID callerWorkspaceId =

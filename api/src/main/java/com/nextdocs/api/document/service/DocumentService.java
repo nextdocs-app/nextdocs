@@ -22,6 +22,8 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
+import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -87,6 +89,7 @@ public class DocumentService {
     private final DocumentListQueryHelper queryHelper;
     private final AttachmentService attachmentService;
     private final DocumentIconCoverApplier iconCoverApplier;
+    private final WorkspaceService workspaceService;
 
     @Autowired
     @Lazy
@@ -236,7 +239,12 @@ public class DocumentService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
 
-        return toResponse(document, true, null, publicAccess);
+        return toResponse(
+                document,
+                true,
+                null,
+                publicAccess,
+                workspaceService.findPublicBranding().orElse(null));
     }
 
     @Transactional(readOnly = true)
@@ -858,6 +866,11 @@ public class DocumentService {
         return toResponse(document, includeState, callerUserId, null);
     }
 
+    private DocumentResponse toResponse(
+            Document document, boolean includeState, UUID callerUserId, DocumentAccessLevel publicAccessHint) {
+        return toResponse(document, includeState, callerUserId, publicAccessHint, null);
+    }
+
     /**
      * Converts a single Document entity to DocumentResponse DTO.
      * Note: This method accesses document.getParent() lazily and makes individual permission checks,
@@ -867,9 +880,15 @@ public class DocumentService {
      *
      * @param publicAccessHint already-resolved public level for anonymous single-document
      *     reads, so callers that resolved it for gating do not pay a second CTE.
+     * @param workspaceBranding workspace name and icon to disclose on an anonymous share read,
+     *     or null everywhere else.
      */
     private DocumentResponse toResponse(
-            Document document, boolean includeState, UUID callerUserId, DocumentAccessLevel publicAccessHint) {
+            Document document,
+            boolean includeState,
+            UUID callerUserId,
+            DocumentAccessLevel publicAccessHint,
+            WorkspaceBrandingResponse workspaceBranding) {
         OffsetDateTime deletedAt = document.getDeletedAt();
         OffsetDateTime purgeAt = null;
         if (deletedAt != null) {
@@ -951,7 +970,8 @@ public class DocumentService {
                 deletedAt,
                 purgeAt,
                 DocumentIconCoverMapper.toIconResponse(document),
-                DocumentIconCoverMapper.toCoverResponse(document));
+                DocumentIconCoverMapper.toCoverResponse(document),
+                workspaceBranding);
     }
 
     private List<Document> collectAllDescendants(UUID rootId) {

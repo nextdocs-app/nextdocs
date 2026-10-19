@@ -93,9 +93,10 @@ public class AttachmentController {
     @Operation(
             summary = "Create a signed download URL",
             description = "Returns a short-lived URL that authorizes downloading a single attachment. "
-                    + "Requires read access to the owning document; anonymous callers are allowed for "
-                    + "documents shared as ANYONE_WITH_LINK. Browser media elements cannot send "
-                    + "Authorization headers, which is why this indirection exists.",
+                    + "Requires read access to the owning document or workspace; anonymous callers are "
+                    + "allowed for documents shared as ANYONE_WITH_LINK and public workspace branding. "
+                    + "Browser media elements cannot send Authorization headers, which is why this "
+                    + "indirection exists.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

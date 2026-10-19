@@ -27,6 +27,7 @@ import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
 import com.nextdocs.api.workspace.entity.InstanceLock;
@@ -229,6 +230,32 @@ class WorkspaceServiceTest {
         assertThat(response.icon()).isNull();
     }
 
+    // --- public branding ---
+
+    @Test
+    void findPublicBranding_returnsIdentityWithoutAMembershipCheck() {
+        UUID iconId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(iconId.toString());
+        when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.of(workspace));
+
+        WorkspaceBrandingResponse response =
+                workspaceService.findPublicBranding().orElseThrow();
+
+        assertThat(response.name()).isEqualTo("NextDocs");
+        assertThat(response.icon().type()).isEqualTo("upload");
+        assertThat(response.icon().value()).isEqualTo(iconId.toString());
+        verifyNoInteractions(accessService);
+    }
+
+    @Test
+    void findPublicBranding_beforeInitialization_isEmpty() {
+        when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.empty());
+
+        assertThat(workspaceService.findPublicBranding()).isEmpty();
+        verifyNoInteractions(accessService);
+    }
+
     // --- updateCurrent ---
 
     @Test
@@ -302,7 +329,8 @@ class WorkspaceServiceTest {
         assertThat(workspace.getIconType()).isEqualTo(PageIconType.UPLOAD);
         assertThat(workspace.getIconValue()).isEqualTo(attachmentId.toString());
         assertThat(response.icon().type()).isEqualTo("upload");
-        verifyNoInteractions(attachmentService);
+        // Adoption is what makes the upload anonymously readable; uploading did not.
+        verify(attachmentService).publishWorkspaceUpload(workspaceId, attachmentId);
     }
 
     @Test
@@ -348,6 +376,7 @@ class WorkspaceServiceTest {
 
         assertThat(workspace.getIconValue()).isEqualTo(newAttachmentId.toString());
         verify(attachmentService).deleteWorkspaceUpload(workspaceId, oldAttachmentId);
+        verify(attachmentService).publishWorkspaceUpload(workspaceId, newAttachmentId);
     }
 
     @Test
@@ -394,6 +423,7 @@ class WorkspaceServiceTest {
                 actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", attachmentId.toString())));
 
         verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+        verify(attachmentService).publishWorkspaceUpload(workspaceId, attachmentId);
     }
 
     @Test
@@ -413,6 +443,7 @@ class WorkspaceServiceTest {
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
         assertThat(workspace.getIconValue()).isEqualTo(oldAttachmentId.toString());
         verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+        verify(attachmentService, never()).publishWorkspaceUpload(any(), any());
     }
 
     @Test

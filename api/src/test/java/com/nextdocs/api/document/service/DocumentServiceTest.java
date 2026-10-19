@@ -35,6 +35,9 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
+import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -82,6 +85,9 @@ class DocumentServiceTest {
     @Mock
     private com.nextdocs.api.document.service.DocumentIconCoverApplier iconCoverApplier;
 
+    @Mock
+    private WorkspaceService workspaceService;
+
     private DocumentProperties documentProperties;
 
     private DocumentService documentService;
@@ -99,7 +105,8 @@ class DocumentServiceTest {
                 permissionService,
                 queryHelper,
                 attachmentService,
-                iconCoverApplier);
+                iconCoverApplier,
+                workspaceService);
     }
 
     @Test
@@ -500,6 +507,9 @@ class DocumentServiceTest {
 
         assertEquals(documentId, response.id());
         assertEquals("Shared doc", response.title());
+        // Branding is a share-page concern; an authenticated read leaves it out.
+        assertNull(response.workspace());
+        verify(workspaceService, never()).findPublicBranding();
     }
 
     @Test
@@ -1647,7 +1657,7 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
-        DocumentResponse trashedResponse = new DocumentResponse(
+        DocumentResponse trashedResponse = DocumentResponse.withoutBranding(
                 trashed.getId(),
                 "Trashed",
                 null,
@@ -2097,6 +2107,40 @@ class DocumentServiceTest {
         assertEquals(docId, response.id());
         assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
         assertFalse(response.hasCollaborators());
+    }
+
+    @Test
+    void getPublic_includesWorkspaceBrandingForSharePages() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        doc.setGeneralAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK);
+        WorkspaceBrandingResponse branding = new WorkspaceBrandingResponse("Acme", new PageIconResponse("emoji", "🐧"));
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+        when(workspaceService.findPublicBranding()).thenReturn(Optional.of(branding));
+
+        DocumentResponse response = documentService.getPublic(docId);
+
+        // Branding is disclosed only alongside a document the owner already shared.
+        assertEquals(branding, response.workspace());
+    }
+
+    @Test
+    void getPublic_withoutAWorkspaceRow_returnsDocWithoutBranding() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.VIEW);
+        doc.setGeneralAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+        when(workspaceService.findPublicBranding()).thenReturn(Optional.empty());
+
+        DocumentResponse response = documentService.getPublic(docId);
+
+        assertNull(response.workspace());
     }
 
     @Test

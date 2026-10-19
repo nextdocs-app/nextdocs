@@ -32,6 +32,7 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -79,6 +80,9 @@ class DocumentServiceIconCoverTest {
     @Mock
     private AttachmentStorage attachmentStorage;
 
+    @Mock
+    private WorkspaceService workspaceService;
+
     private DocumentService documentService;
 
     @BeforeEach
@@ -98,7 +102,8 @@ class DocumentServiceIconCoverTest {
                 permissionService,
                 queryHelper,
                 attachmentService,
-                applier);
+                applier,
+                workspaceService);
     }
 
     @Test

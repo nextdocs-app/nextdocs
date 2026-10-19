@@ -14,6 +14,7 @@ import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -28,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -128,6 +130,19 @@ public class WorkspaceService {
         return toResponse(membership);
     }
 
+    /**
+     * Workspace identity for the public document read. Deliberately no membership check:
+     * the icon is branding, not content, and its attachment is marked public when the
+     * icon adopts it. Empty when the instance has not been initialized, so a document
+     * read never fails just because the branding row is absent.
+     */
+    @Transactional(readOnly = true)
+    public Optional<WorkspaceBrandingResponse> findPublicBranding() {
+        return workspaceRepository
+                .findFirstByOrderByCreatedAtAsc()
+                .map(workspace -> new WorkspaceBrandingResponse(workspace.getName(), toIconResponse(workspace)));
+    }
+
     @Transactional
     public WorkspaceResponse updateCurrent(UUID userId, WorkspaceUpdateRequest request) {
         Membership membership = accessService.requireOwner(userId);
@@ -166,7 +181,8 @@ public class WorkspaceService {
      * Stores an image the workspace icon can reference. Owner only: the icon is
      * instance identity, not content. The returned id is set through
      * {@link #updateCurrent} with type {@code UPLOAD}; the upload route is the only
-     * way to obtain an id bound to this workspace.
+     * way to obtain an id bound to this workspace. Private until then: an upload the
+     * owner abandons before saving stays invisible to share pages and is swept later.
      */
     public AttachmentResponse uploadAttachment(UUID userId, MultipartFile file) {
         return attachmentService.uploadWorkspaceAttachment(userId, file);
@@ -290,9 +306,10 @@ public class WorkspaceService {
     /**
      * Applies an already-validated icon: absent (null type) clears it. Uploads reference
      * an attachment that must belong to this workspace; the endpoint that stores one is
-     * the only way to obtain such an id. Replacing or clearing an upload icon reclaims
-     * the replaced file and its quota: workspaces have no document-style purge path that
-     * would sweep it up later.
+     * the only way to obtain such an id, and adopting it publishes the file for
+     * anonymous share pages. Replacing or clearing an upload icon reclaims the replaced
+     * file and its quota: workspaces have no document-style purge path that would sweep
+     * it up later.
      */
     private void applyIcon(Workspace workspace, PageIconValidator.ValidatedIcon icon) {
         if (icon.type() == null) {
@@ -303,8 +320,12 @@ public class WorkspaceService {
             return;
         }
         // Releasing after validation means a rejected new value leaves the old upload in
-        // place. Re-setting the same id releases nothing.
+        // place. Re-setting the same id releases nothing. The adopted upload becomes
+        // public only here, under the workspace lock, never at upload time.
         releaseReplacedIconUpload(workspace, icon.type() == PageIconType.UPLOAD ? icon.value() : null);
+        if (icon.type() == PageIconType.UPLOAD) {
+            attachmentService.publishWorkspaceUpload(workspace.getId(), UUID.fromString(icon.value()));
+        }
         workspace.setIconType(icon.type());
         workspace.setIconValue(icon.value());
         workspace.setIconColor(icon.color());

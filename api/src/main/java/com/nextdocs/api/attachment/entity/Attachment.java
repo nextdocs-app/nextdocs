@@ -1,6 +1,7 @@
 package com.nextdocs.api.attachment.entity;
 
 import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.AttachmentVisibility;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -36,6 +37,16 @@ public class Attachment {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "workspace_id")
     private Workspace workspace;
+
+    /**
+     * Anonymous-read flag, separate from ownership. Document attachments always stay
+     * private because their audience is the document. Only workspace branding assets
+     * are public.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    @Builder.Default
+    private AttachmentVisibility visibility = AttachmentVisibility.PRIVATE;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "uploaded_by", nullable = false)
@@ -76,5 +87,10 @@ public class Attachment {
         return document != null
                 ? AttachmentScope.document(document.getId())
                 : AttachmentScope.workspace(workspace.getId());
+    }
+
+    /** True only for workspace branding assets that public share pages may read. */
+    public boolean isPublic() {
+        return visibility == AttachmentVisibility.PUBLIC;
     }
 }
