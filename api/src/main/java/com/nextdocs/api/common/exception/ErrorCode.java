@@ -12,6 +12,16 @@ public enum ErrorCode {
     TOKEN_MISSING(HttpStatus.UNAUTHORIZED, "Authentication token is required."),
     REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "Refresh token is invalid or expired."),
 
+    // Workspace invites
+    REGISTRATION_INVITE_REQUIRED(
+            HttpStatus.FORBIDDEN,
+            "This workspace requires an invitation. Please use your invitation email or ask your workspace"
+                    + " admin to resend it."),
+    INVALID_INVITE(HttpStatus.FORBIDDEN, "This invitation is invalid or has expired."),
+    EMAIL_DELIVERY_NOT_CONFIGURED(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Invitations are sent by email; this instance has no email delivery configured."),
+
     // Attachments
     PAYLOAD_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "The uploaded file exceeds the configured size limit."),
 

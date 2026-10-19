@@ -1,6 +1,7 @@
 package com.nextdocs.api.attachment.repository;
 
 import com.nextdocs.api.attachment.entity.Attachment;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -32,4 +33,10 @@ public interface AttachmentRepository extends JpaRepository<Attachment, UUID> {
     @Modifying(flushAutomatically = true)
     @Query("DELETE FROM Attachment a WHERE a.document.id IN :documentIds")
     int deleteByDocumentIds(@Param("documentIds") Collection<UUID> documentIds);
+
+    /**
+     * Workspace-scoped uploads older than {@code cutoff}: candidates for the abandoned
+     * icon-upload sweep, which keeps only the one the workspace's icon references.
+     */
+    List<Attachment> findByWorkspaceIsNotNullAndCreatedAtBefore(OffsetDateTime cutoff);
 }

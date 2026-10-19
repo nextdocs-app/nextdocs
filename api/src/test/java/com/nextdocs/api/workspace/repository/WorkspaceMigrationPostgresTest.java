@@ -12,7 +12,9 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
@@ -129,6 +131,164 @@ class WorkspaceMigrationPostgresTest {
         assertThatThrownBy(() -> setIcon("BUILTIN", "chartreuse")).isInstanceOf(SQLException.class);
         setIcon("BUILTIN", "blue");
         assertThat(iconColor()).isEqualTo("blue");
+    }
+
+    @Test
+    void workspaceInvites_haveExpectedColumnsAndDefaults() throws SQLException {
+        Map<String, String[]> columns = columnFacts("workspace_invites");
+
+        assertThat(columns)
+                .containsOnlyKeys(
+                        "id",
+                        "workspace_id",
+                        "email",
+                        "role",
+                        "token_hash",
+                        "created_by",
+                        "expires_at",
+                        "accepted_at",
+                        "accepted_by",
+                        "created_at");
+        for (Map.Entry<String, String[]> entry : columns.entrySet()) {
+            boolean acceptedClaim =
+                    entry.getKey().equals("accepted_at") || entry.getKey().equals("accepted_by");
+            assertThat(entry.getValue()[0])
+                    .as("%s nullability", entry.getKey())
+                    .isEqualTo(acceptedClaim ? "YES" : "NO");
+        }
+        // The id must be mintable without the application supplying one, and created_at
+        // must land even on a direct SQL insert.
+        assertThat(columns.get("id")[1]).contains("gen_random_uuid");
+        assertThat(columns.get("created_at")[1]).contains("now()");
+    }
+
+    @Test
+    void workspaceInvites_tokenHashIsUnique() throws SQLException {
+        insertInvite(workspaceId(), "jane@example.com", "a".repeat(64));
+
+        // A token hash maps to at most one invite; a second row with the same hash is a
+        // bug, and the uniqueness is the backstop for the hash-only claim lookup.
+        assertThatThrownBy(() -> insertInvite(workspaceId(), "john@example.com", "a".repeat(64)))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void workspaceInvites_onePendingInvitePerEmailIsEnforcedByAPartialUniqueIndex() throws SQLException {
+        UUID workspace = workspaceId();
+        insertInvite(workspace, "jane@example.com");
+
+        // A second pending invite for the same address is a bug: re-inviting replaces
+        // the row in code, and this index is what backs that invariant.
+        assertThatThrownBy(() -> insertInvite(workspace, "jane@example.com")).isInstanceOf(SQLException.class);
+
+        // Accepted rows are outside the partial index, so re-inviting an address that
+        // already joined (or was removed) stays allowed and the audit trail unconstrained.
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "UPDATE workspace_invites SET accepted_at = now(), accepted_by = ? WHERE email = ?")) {
+            stmt.setObject(1, seededUsers.get(0));
+            stmt.setString(2, "jane@example.com");
+            assertThat(stmt.executeUpdate()).isEqualTo(1);
+        }
+        insertInvite(workspace, "jane@example.com");
+        assertThat(countRows("workspace_invites")).isEqualTo(2);
+    }
+
+    @Test
+    void workspaceInvites_acceptedByMustReferenceAUser() throws SQLException {
+        UUID inviteId = insertInvite(workspaceId(), "jane@example.com");
+
+        // The claim is a one-way transition: only an accepted row references the
+        // accepting user, and that user must exist.
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "UPDATE workspace_invites SET accepted_at = now(), accepted_by = ? WHERE id = ?")) {
+            stmt.setObject(1, UUID.randomUUID());
+            stmt.setObject(2, inviteId);
+            assertThatThrownBy(stmt::executeUpdate).isInstanceOf(SQLException.class);
+        }
+    }
+
+    @Test
+    void workspaceInvites_deletingTheWorkspaceCascades() throws SQLException {
+        UUID workspace = workspaceId();
+        insertInvite(workspace, "jane@example.com");
+
+        assertThat(countRows("workspace_invites")).isEqualTo(1);
+
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM workspaces WHERE id = ?")) {
+            stmt.setObject(1, workspace);
+            stmt.executeUpdate();
+        }
+        assertThat(countRows("workspace_invites")).isZero();
+    }
+
+    @Test
+    void workspaceInvites_pendingLookupIsCoveredByAPartialIndex() throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND tablename = 'workspace_invites'")) {
+            stmt.setString(1, schema);
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<String> definitions = new ArrayList<>();
+                while (rs.next()) {
+                    definitions.add(rs.getString(1));
+                }
+                // The People view lists pending invites; accepted history must stay out
+                // of the index so it does not grow with the audit trail.
+                assertThat(definitions)
+                        .anySatisfy(def -> assertThat(def)
+                                .contains("uq_workspace_invites_pending_email")
+                                .contains("WHERE (accepted_at IS NULL)"));
+            }
+        }
+    }
+
+    @Test
+    void instanceLock_holdsExactlyOneSeededRow() throws SQLException {
+        Map<String, String[]> columns = columnFacts("instance_lock");
+
+        assertThat(columns).containsOnlyKeys("id");
+        assertThat(columns.get("id")[0]).isEqualTo("NO");
+        // V22 seeds the singleton row; registration takes its write lock to serialize
+        // the bootstrap check-then-insert on an otherwise empty database.
+        assertThat(countRows("instance_lock")).isEqualTo(1);
+
+        try (PreparedStatement stmt = connection.prepareStatement("INSERT INTO instance_lock (id) VALUES (2)")) {
+            assertThatThrownBy(stmt::executeUpdate).isInstanceOf(SQLException.class);
+        }
+    }
+
+    private UUID insertInvite(UUID workspace, String email) throws SQLException {
+        return insertInvite(workspace, email, "hash-" + UUID.randomUUID());
+    }
+
+    private UUID insertInvite(UUID workspace, String email, String tokenHash) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO workspace_invites (workspace_id, email, role, token_hash, created_by, expires_at) "
+                        + "VALUES (?, ?, 'MEMBER', ?, ?, now() + interval '7 days') RETURNING id")) {
+            stmt.setObject(1, workspace);
+            stmt.setString(2, email);
+            stmt.setString(3, tokenHash);
+            stmt.setObject(4, seededUsers.get(0));
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return (UUID) rs.getObject(1);
+            }
+        }
+    }
+
+    private Map<String, String[]> columnFacts(String table) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "SELECT column_name, is_nullable, column_default FROM information_schema.columns "
+                        + "WHERE table_schema = ? AND table_name = ?")) {
+            stmt.setString(1, schema);
+            stmt.setString(2, table);
+            try (ResultSet rs = stmt.executeQuery()) {
+                Map<String, String[]> facts = new LinkedHashMap<>();
+                while (rs.next()) {
+                    facts.put(rs.getString(1), new String[] {rs.getString(2), rs.getString(3)});
+                }
+                return facts;
+            }
+        }
     }
 
     @Test

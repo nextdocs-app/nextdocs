@@ -20,10 +20,17 @@ public record RegisterRequest(
         @Schema(description = "Password (min 8 characters)", example = "Secure@123")
         @NotBlank(message = "Password is required")
         @Size(min = 8, max = 128, message = "Password must be between 8 and 128 characters")
-        String password) {
+        String password,
+
+        @Schema(
+                description = "Single-use token from the invitation link; required once the"
+                        + " instance has a first account")
+        @Size(max = 255, message = "Invitation token is too long")
+        String inviteToken) {
 
     @Override
     public String toString() {
-        return "RegisterRequest[email=" + email + ", displayName=" + displayName + ", password=[PROTECTED]]";
+        return "RegisterRequest[email=" + email + ", displayName=" + displayName
+                + ", password=[PROTECTED], inviteToken=[PROTECTED]]";
     }
 }

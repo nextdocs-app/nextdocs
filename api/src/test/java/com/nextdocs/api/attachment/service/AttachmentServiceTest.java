@@ -1033,7 +1033,7 @@ class AttachmentServiceTest {
         Attachment attachment = workspaceAttachment();
         when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
 
-        attachmentService.deleteWorkspaceUpload(attachment.getId());
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachment.getId());
 
         verify(attachmentRepository).delete(attachment);
         verify(quotaService).release(userId, attachment.getSizeBytes());
@@ -1045,7 +1045,7 @@ class AttachmentServiceTest {
         UUID attachmentId = UUID.randomUUID();
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.empty());
 
-        attachmentService.deleteWorkspaceUpload(attachmentId);
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachmentId);
 
         verify(attachmentRepository, never()).delete(any());
         verifyNoInteractions(quotaService, attachmentStorage);
@@ -1057,7 +1057,20 @@ class AttachmentServiceTest {
         Attachment attachment = attachment();
         when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
 
-        attachmentService.deleteWorkspaceUpload(attachment.getId());
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachment.getId());
+
+        verify(attachmentRepository, never()).delete(any());
+        verifyNoInteractions(quotaService, attachmentStorage);
+    }
+
+    @Test
+    void deleteWorkspaceUpload_rowOfAnotherWorkspace_isLeftAlone() {
+        Attachment attachment = workspaceAttachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        // The caller names the workspace it is cleaning up; an upload of any other
+        // workspace must not be deletable by id alone.
+        attachmentService.deleteWorkspaceUpload(UUID.randomUUID(), attachment.getId());
 
         verify(attachmentRepository, never()).delete(any());
         verifyNoInteractions(quotaService, attachmentStorage);

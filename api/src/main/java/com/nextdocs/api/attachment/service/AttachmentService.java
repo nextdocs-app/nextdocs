@@ -22,6 +22,7 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
@@ -301,17 +302,28 @@ public class AttachmentService {
     }
 
     /**
+     * Workspace-scoped uploads created before {@code cutoff}. The abandoned-icon sweep
+     * keeps the one the workspace's icon references and deletes the rest.
+     */
+    @Transactional(readOnly = true)
+    public List<Attachment> findWorkspaceUploadsCreatedBefore(OffsetDateTime cutoff) {
+        return attachmentRepository.findByWorkspaceIsNotNullAndCreatedAtBefore(cutoff);
+    }
+
+    /**
      * Deletes a workspace-scoped upload and hands its bytes back to the uploader's quota.
      *
      * <p>Workspaces have no purge path like documents do, so replacing or clearing a
      * workspace icon has to clean up after itself here. A missing row is a no-op, and a
-     * document-scoped row is left alone: this path must never delete a file a document
-     * still points at.
+     * row outside {@code workspaceId} is left alone: callers must not be able to name a
+     * file into or out of a workspace they are not cleaning up.
      */
     @Transactional
-    public void deleteWorkspaceUpload(UUID attachmentId) {
+    public void deleteWorkspaceUpload(UUID workspaceId, UUID attachmentId) {
         Attachment attachment = attachmentRepository.findById(attachmentId).orElse(null);
-        if (attachment == null || attachment.getWorkspace() == null) {
+        if (attachment == null
+                || attachment.getWorkspace() == null
+                || !attachment.getWorkspace().getId().equals(workspaceId)) {
             return;
         }
         attachmentRepository.delete(attachment);

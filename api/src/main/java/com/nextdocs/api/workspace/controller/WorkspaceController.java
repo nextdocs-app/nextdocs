@@ -3,10 +3,16 @@ package com.nextdocs.api.workspace.controller;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
+import com.nextdocs.api.common.response.PagedResponse;
+import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
+import com.nextdocs.api.workspace.dto.response.WorkspaceInviteCreatedResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceInviteEmailResult;
+import com.nextdocs.api.workspace.dto.response.WorkspaceInviteResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
+import com.nextdocs.api.workspace.service.WorkspaceInviteService;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -16,6 +22,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -45,7 +53,11 @@ public class WorkspaceController {
 
     public static final String ATTACHMENTS_PATH = CURRENT_PATH + "/attachments";
 
+    public static final String INVITES_PATH = CURRENT_PATH + "/invites";
+
     private final WorkspaceService workspaceService;
+
+    private final WorkspaceInviteService inviteService;
 
     @Operation(
             summary = "Get the current workspace",
@@ -188,6 +200,103 @@ public class WorkspaceController {
             @AuthenticationPrincipal UserPrincipal principal, @RequestPart("file") MultipartFile file) {
         AttachmentResponse response = workspaceService.uploadAttachment(callerId(principal), file);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Attachment uploaded."));
+    }
+
+    @Operation(
+            summary = "Invite people to the workspace",
+            description = "Owner or admin. Creates one invite per distinct email, emails the signup link "
+                    + "to each invited address, and returns a per-email result. The link is never returned: "
+                    + "it exists only in the email, so accepting it proves the invited mailbox. Owners can "
+                    + "invite any role, admins only plain members. Re-inviting a pending email replaces its "
+                    + "invite (role and expiry).",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "201",
+                        description = "Invites processed, per-email results returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "400",
+                        description = "Validation error"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not an admin, or issued a role they cannot grant"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "503",
+                        description = "This instance has no email delivery configured, so invites cannot be sent")
+            })
+    @PostMapping("/invites")
+    public ResponseEntity<ApiResponse<List<WorkspaceInviteEmailResult>>> createInvites(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody WorkspaceInviteCreateRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.ok(inviteService.createInvites(callerId(principal), request), "Invites processed."));
+    }
+
+    @Operation(
+            summary = "List pending invites",
+            description = "Owner or admin. Accepted and revoked invites are not listed. "
+                    + "Paginated so an instance that issued many invites does not return them all in one response.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Pending invites returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not an admin")
+            })
+    @GetMapping("/invites")
+    public ResponseEntity<ApiResponse<PagedResponse<WorkspaceInviteResponse>>> listInvites(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+        return ResponseEntity.ok(
+                ApiResponse.ok(PagedResponse.from(inviteService.listInvites(callerId(principal), pageable))));
+    }
+
+    @Operation(
+            summary = "Revoke an invite",
+            description = "Owner or admin. Deletes the invite: the address can no longer register with "
+                    + "it. Admins may only manage member invites.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "204",
+                        description = "Invite revoked"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not an admin, or cannot grant the invite's role"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Invite not found or already accepted")
+            })
+    @DeleteMapping("/invites/{inviteId}")
+    public ResponseEntity<Void> revokeInvite(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID inviteId) {
+        inviteService.revoke(callerId(principal), inviteId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @Operation(
+            summary = "Resend an invite",
+            description = "Owner or admin. Rotates the invite's token and resets its expiry — the previous "
+                    + "link stops working — and emails the fresh link to the invited address (never to the "
+                    + "caller). Admins may only manage member invites.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Invite rotated and emailed"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not an admin, or cannot grant the invite's role"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Invite not found or already accepted"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "503",
+                        description = "This instance has no email delivery configured, so the invite was not rotated")
+            })
+    @PostMapping("/invites/{inviteId}/resend")
+    public ResponseEntity<ApiResponse<WorkspaceInviteCreatedResponse>> resendInvite(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID inviteId) {
+        return ResponseEntity.ok(
+                ApiResponse.ok(inviteService.resend(callerId(principal), inviteId), "Invitation resent."));
     }
 
     private static UUID callerId(UserPrincipal principal) {

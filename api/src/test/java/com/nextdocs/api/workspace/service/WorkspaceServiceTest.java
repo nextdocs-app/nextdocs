@@ -29,9 +29,11 @@ import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
+import com.nextdocs.api.workspace.entity.InstanceLock;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.InstanceLockRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
@@ -78,6 +80,9 @@ class WorkspaceServiceTest {
     @Mock
     private AttachmentService attachmentService;
 
+    @Mock
+    private InstanceLockRepository instanceLockRepository;
+
     private WorkspaceService workspaceService;
     private Workspace workspace;
     private UUID workspaceId;
@@ -94,7 +99,8 @@ class WorkspaceServiceTest {
                 refreshTokenRepository,
                 accessService,
                 new PageIconValidator(iconCatalog, attachmentRepository, attachmentStorage),
-                attachmentService);
+                attachmentService,
+                instanceLockRepository);
         workspaceId = UUID.randomUUID();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
         owner = user("owner@example.com", "Owner");
@@ -133,13 +139,19 @@ class WorkspaceServiceTest {
 
     // --- bootstrap ---
 
+    /** The singleton bootstrap lock row exists in a migrated database (V22). */
+    private void givenInstanceLock() {
+        when(instanceLockRepository.lockForUpdate()).thenReturn(Optional.of(new InstanceLock()));
+    }
+
     @Test
     void bootstrapFirstUser_createsWorkspaceAndOwnerMembership() {
+        givenInstanceLock();
         when(accessService.isInitialized()).thenReturn(false);
         when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.empty());
         when(workspaceRepository.save(any(Workspace.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        workspaceService.bootstrapFirstUser(owner);
+        assertThat(workspaceService.bootstrapFirstUser(owner)).isTrue();
 
         ArgumentCaptor<Workspace> workspaceCaptor = ArgumentCaptor.forClass(Workspace.class);
         verify(workspaceRepository).save(workspaceCaptor.capture());
@@ -154,10 +166,11 @@ class WorkspaceServiceTest {
 
     @Test
     void bootstrapFirstUser_reusesExistingWorkspaceWhenItHasNoMembers() {
+        givenInstanceLock();
         when(accessService.isInitialized()).thenReturn(false);
         when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.of(workspace));
 
-        workspaceService.bootstrapFirstUser(owner);
+        assertThat(workspaceService.bootstrapFirstUser(owner)).isTrue();
 
         verify(workspaceRepository, never()).save(any());
         ArgumentCaptor<WorkspaceMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceMember.class);
@@ -166,13 +179,37 @@ class WorkspaceServiceTest {
     }
 
     @Test
-    void bootstrapFirstUser_doesNothingWhenInstanceIsInitialized() {
+    void bootstrapFirstUser_whenAnotherRegistrationWon_returnsFalseWithoutCreatingAnything() {
+        givenInstanceLock();
+        // The re-check under the lock is what decides the race: the preliminary check in
+        // the registration flow may have seen an empty instance moments earlier.
         when(accessService.isInitialized()).thenReturn(true);
 
-        workspaceService.bootstrapFirstUser(owner);
+        assertThat(workspaceService.bootstrapFirstUser(owner)).isFalse();
 
         verify(workspaceRepository, never()).save(any());
         verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void bootstrapFirstUser_whenTheInstanceLockRowIsMissing_failsLoudly() {
+        when(instanceLockRepository.lockForUpdate()).thenReturn(Optional.empty());
+
+        // The row is seeded by V22; its absence means the schema is broken, not that the
+        // instance is fresh, and silently bootstrapping without the lock would reopen
+        // the race the lock exists to close.
+        assertThatThrownBy(() -> workspaceService.bootstrapFirstUser(owner)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void addMember_grantsTheInviteRoleInTheGivenWorkspace() {
+        workspaceService.addMember(workspace, target, WorkspaceRole.ADMIN);
+
+        ArgumentCaptor<WorkspaceMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceMember.class);
+        verify(memberRepository).save(memberCaptor.capture());
+        assertThat(memberCaptor.getValue().getWorkspace()).isSameAs(workspace);
+        assertThat(memberCaptor.getValue().getUser()).isSameAs(target);
+        assertThat(memberCaptor.getValue().getRole()).isEqualTo(WorkspaceRole.ADMIN);
     }
 
     // --- getCurrent ---
@@ -310,7 +347,7 @@ class WorkspaceServiceTest {
                 actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", newAttachmentId.toString())));
 
         assertThat(workspace.getIconValue()).isEqualTo(newAttachmentId.toString());
-        verify(attachmentService).deleteWorkspaceUpload(oldAttachmentId);
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, oldAttachmentId);
     }
 
     @Test
@@ -325,7 +362,7 @@ class WorkspaceServiceTest {
         workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("emoji", "📝")));
 
         assertThat(workspace.getIconType()).isEqualTo(PageIconType.EMOJI);
-        verify(attachmentService).deleteWorkspaceUpload(oldAttachmentId);
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, oldAttachmentId);
     }
 
     @Test
@@ -340,7 +377,7 @@ class WorkspaceServiceTest {
         workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest(null, new PageIconRequest(null, null)));
 
         assertThat(workspace.getIconType()).isNull();
-        verify(attachmentService).deleteWorkspaceUpload(attachmentId);
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, attachmentId);
     }
 
     @Test
@@ -356,7 +393,7 @@ class WorkspaceServiceTest {
         workspaceService.updateCurrent(
                 actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("UPLOAD", attachmentId.toString())));
 
-        verify(attachmentService, never()).deleteWorkspaceUpload(any());
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
     }
 
     @Test
@@ -375,7 +412,7 @@ class WorkspaceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
         assertThat(workspace.getIconValue()).isEqualTo(oldAttachmentId.toString());
-        verify(attachmentService, never()).deleteWorkspaceUpload(any());
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
     }
 
     @Test
@@ -396,6 +433,49 @@ class WorkspaceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
         verify(workspaceRepository, never()).findByIdForUpdate(any());
+    }
+
+    // --- abandoned icon uploads ---
+
+    @Test
+    void purgeAbandonedIconUploads_keepsTheCurrentIconAndDeletesTheRest() {
+        UUID liveId = UUID.randomUUID();
+        UUID abandonedId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(liveId.toString());
+        when(attachmentService.findWorkspaceUploadsCreatedBefore(any()))
+                .thenReturn(List.of(workspaceUpload(liveId), workspaceUpload(abandonedId)));
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+
+        assertThat(workspaceService.purgeAbandonedIconUploads()).isEqualTo(1);
+
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, abandonedId);
+        verify(attachmentService, never()).deleteWorkspaceUpload(workspaceId, liveId);
+    }
+
+    @Test
+    void purgeAbandonedIconUploads_deletesEverything_whenTheIconIsNotAnUpload() {
+        UUID abandonedId = UUID.randomUUID();
+        when(attachmentService.findWorkspaceUploadsCreatedBefore(any()))
+                .thenReturn(List.of(workspaceUpload(abandonedId)));
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+
+        assertThat(workspaceService.purgeAbandonedIconUploads()).isEqualTo(1);
+
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, abandonedId);
+    }
+
+    private Attachment workspaceUpload(UUID attachmentId) {
+        return Attachment.builder()
+                .id(attachmentId)
+                .workspace(workspace)
+                .uploadedBy(owner)
+                .fileName("icon.png")
+                .contentType("image/png")
+                .sizeBytes(8)
+                .storageKey(workspaceId + "/" + attachmentId)
+                .sha256("0".repeat(64))
+                .build();
     }
 
     // --- uploadAttachment ---

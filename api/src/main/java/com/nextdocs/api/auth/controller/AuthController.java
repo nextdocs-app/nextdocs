@@ -1,5 +1,6 @@
 package com.nextdocs.api.auth.controller;
 
+import com.nextdocs.api.auth.dto.request.InvitePreviewRequest;
 import com.nextdocs.api.auth.dto.request.LoginRequest;
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
@@ -7,6 +8,8 @@ import com.nextdocs.api.auth.dto.response.UserResponse;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.auth.service.AuthService;
 import com.nextdocs.api.common.response.ApiResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceInvitePreviewResponse;
+import com.nextdocs.api.workspace.service.WorkspaceInviteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -27,9 +30,13 @@ public class AuthController {
 
     private final AuthService authService;
 
+    private final WorkspaceInviteService inviteService;
+
     @Operation(
             summary = "Register a new account",
-            description = "Creates a new user account with email + password.",
+            description = "Creates a new user account with email + password. On an initialized instance the"
+                    + " request must carry the single-use token from an invitation link, and the email must be"
+                    + " the invited one; the first account of a fresh instance bootstraps without an invite.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "201",
@@ -37,6 +44,9 @@ public class AuthController {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "400",
                         description = "Validation error"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Registration requires an invitation, or the invitation is invalid"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "409",
                         description = "Email already registered"),
@@ -49,6 +59,28 @@ public class AuthController {
             @Valid @RequestBody RegisterRequest request, HttpServletRequest req, HttpServletResponse res) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(authService.register(request, req, res), "Account created."));
+    }
+
+    @Operation(
+            summary = "Preview an invitation link",
+            description = "Public. Resolves the token from an invitation link to the address it admits, the"
+                    + " workspace, the granted role and the expiry, so the join page can show who is joining"
+                    + " before collecting a name and password. The token travels in the body, never in the URL.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Invitation resolved"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Invitation is invalid, expired or already used"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "429",
+                        description = "Too many requests")
+            })
+    @PostMapping("/invite/preview")
+    public ResponseEntity<ApiResponse<WorkspaceInvitePreviewResponse>> previewInvite(
+            @Valid @RequestBody InvitePreviewRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(inviteService.preview(request.token())));
     }
 
     @Operation(

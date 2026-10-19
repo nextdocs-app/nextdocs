@@ -2,6 +2,7 @@ package com.nextdocs.api.workspace.service;
 
 import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
+import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
@@ -18,15 +19,21 @@ import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.InstanceLockRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
+import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -54,21 +61,41 @@ public class WorkspaceService {
     private final WorkspaceAccessService accessService;
     private final PageIconValidator pageIconValidator;
     private final AttachmentService attachmentService;
+    private final InstanceLockRepository instanceLockRepository;
+
+    /**
+     * How long an uploaded icon may sit unapplied before the nightly sweep deletes it.
+     * Long enough for an owner to upload and finish the edit; short enough that an
+     * abandoned upload does not hold disk and quota forever.
+     */
+    @Value("${app.workspaces.icon-upload-grace-hours:24}")
+    private long iconUploadGraceHours = 24;
 
     /**
      * Creates the workspace and makes {@code user} its owner when the instance has no
      * members yet: the first account bootstraps without an invite.
      *
-     * <p>Called from the registration transaction. The check-then-insert is only
-     * guarded per JVM, which is enough for a self-hosted instance running one API
-     * replica: two concurrent first registrations on separate replicas would each
-     * create a workspace.
+     * <p>Called from the registration transaction. The caller's preliminary check can
+     * race with another first registration, so this method re-checks under a pessimistic
+     * lock on the V22 singleton row: on an empty database there is no workspace row to
+     * lock, and without one two requests would both create a workspace. READ_COMMITTED
+     * is pinned so that re-check sees the winner's membership after waiting for the lock;
+     * under REPEATABLE READ it could still read a pre-lock snapshot.
+     *
+     * @return {@code true} when this call bootstrapped the instance; {@code false} when
+     *     another registration won, in which case the caller must not admit the account
      */
-    @Transactional
-    public void bootstrapFirstUser(User user) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean bootstrapFirstUser(User user) {
+        instanceLockRepository
+                .lockForUpdate()
+                .orElseThrow(() -> new IllegalStateException("instance_lock row is missing (V22)"));
         if (accessService.isInitialized()) {
-            return;
+            return false;
         }
+        // Insert the account only after winning the lock: a same-email racer that
+        // inserts first would otherwise hit uq_users_email before re-checking.
+        userRepository.save(user);
         Workspace workspace = workspaceRepository
                 .findFirstByOrderByCreatedAtAsc()
                 .orElseGet(() -> workspaceRepository.save(
@@ -79,6 +106,17 @@ public class WorkspaceService {
                 .role(WorkspaceRole.OWNER)
                 .build());
         log.info("Bootstrapped workspace {} with owner {}", workspace.getId(), user.getId());
+        return true;
+    }
+
+    /** Adds a user admitted by an invite, carrying the invite's role. */
+    @Transactional
+    public void addMember(Workspace workspace, User user, WorkspaceRole role) {
+        memberRepository.save(WorkspaceMember.builder()
+                .workspace(workspace)
+                .user(user)
+                .role(role)
+                .build());
     }
 
     @Transactional(readOnly = true)
@@ -129,6 +167,44 @@ public class WorkspaceService {
      */
     public AttachmentResponse uploadAttachment(UUID userId, MultipartFile file) {
         return attachmentService.uploadWorkspaceAttachment(userId, file);
+    }
+
+    /**
+     * Sweeps workspace icon uploads the owner never applied (or uploaded twice before
+     * saving): the workspace row is the only thing that can reference one, so every
+     * upload older than the grace period except the current icon is dead.
+     *
+     * <p>Each workspace is read with a row lock, the same lock an icon update takes, so
+     * an apply racing the sweep serializes instead of pointing the icon at a swept row.
+     *
+     * @return number of uploads deleted
+     */
+    @Transactional
+    public int purgeAbandonedIconUploads() {
+        OffsetDateTime cutoff = OffsetDateTime.now().minusHours(iconUploadGraceHours);
+        List<Attachment> uploads = attachmentService.findWorkspaceUploadsCreatedBefore(cutoff);
+        if (uploads.isEmpty()) {
+            return 0;
+        }
+        Map<UUID, Workspace> workspaces = new HashMap<>();
+        for (UUID workspaceId : uploads.stream()
+                .map(upload -> upload.getWorkspace().getId())
+                .distinct()
+                .toList()) {
+            workspaceRepository.findByIdForUpdate(workspaceId).ifPresent(w -> workspaces.put(workspaceId, w));
+        }
+
+        int purged = 0;
+        for (Attachment upload : uploads) {
+            UUID workspaceId = upload.getWorkspace().getId();
+            Workspace workspace = workspaces.get(workspaceId);
+            if (workspace != null && upload.getId().toString().equals(currentUploadIconId(workspace))) {
+                continue;
+            }
+            attachmentService.deleteWorkspaceUpload(workspaceId, upload.getId());
+            purged++;
+        }
+        return purged;
     }
 
     @Transactional(readOnly = true)
@@ -241,7 +317,7 @@ public class WorkspaceService {
         if (currentValue == null || currentValue.equals(keepValue)) {
             return;
         }
-        attachmentService.deleteWorkspaceUpload(UUID.fromString(currentValue));
+        attachmentService.deleteWorkspaceUpload(workspace.getId(), UUID.fromString(currentValue));
     }
 
     private UUID workspaceId(Membership membership) {
@@ -285,6 +361,11 @@ public class WorkspaceService {
                 toIconResponse(workspace),
                 membership.member().getRole(),
                 memberRepository.countByWorkspaceId(workspace.getId()));
+    }
+
+    /** The attachment id the current upload icon points at, or null for any other icon. */
+    private static String currentUploadIconId(Workspace workspace) {
+        return workspace.getIconType() == PageIconType.UPLOAD ? workspace.getIconValue() : null;
     }
 
     private static PageIconResponse toIconResponse(Workspace workspace) {
