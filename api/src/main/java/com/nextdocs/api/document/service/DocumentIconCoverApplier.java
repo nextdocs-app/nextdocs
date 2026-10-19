@@ -113,13 +113,12 @@ public class DocumentIconCoverApplier {
                     "Icon uploads cannot be referenced while creating a document: "
                             + "create it first, upload the file, then set the icon.");
         }
-        String value =
-                switch (type) {
-                    case EMOJI -> validateEmoji(request.value());
-                    case BUILTIN -> validateBuiltin(request.value());
-                    case UPLOAD -> validateUpload("Icon", request.value(), document.getId());
-                    case LINK -> validateLink("Icon", request.value());
-                };
+        String value = switch (type) {
+            case EMOJI -> validateEmoji(request.value());
+            case BUILTIN -> validateBuiltin(request.value());
+            case UPLOAD -> validateUpload("Icon", request.value(), document.getId());
+            case LINK -> validateLink("Icon", request.value());
+        };
         document.setIconType(type);
         document.setIconValue(value);
         document.setIconColor(validateIconColor(type, request.color()));
@@ -156,11 +155,10 @@ public class DocumentIconCoverApplier {
                     "Cover uploads cannot be referenced while creating a document: "
                             + "create it first, upload the file, then set the cover.");
         }
-        String value =
-                switch (type) {
-                    case UPLOAD -> validateUpload("Cover", request.value(), document.getId());
-                    case LINK -> validateLink("Cover", request.value());
-                };
+        String value = switch (type) {
+            case UPLOAD -> validateUpload("Cover", request.value(), document.getId());
+            case LINK -> validateLink("Cover", request.value());
+        };
         // Resolve before mutating: keeping the offset for an unchanged cover
         // reads the current row, which the assignments below would overwrite.
         Double position = resolvePosition(document, type, value, request.position());
