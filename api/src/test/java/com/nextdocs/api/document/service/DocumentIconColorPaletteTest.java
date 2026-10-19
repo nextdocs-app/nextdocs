@@ -2,6 +2,7 @@ package com.nextdocs.api.document.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -17,7 +18,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The icon palette is written down three times: the validator's accepted set, the
- * {@code chk_documents_icon_color} list in {@code V18}, and the picker's list on the
+ * {@code chk_documents_icon_color} list in {@code V18} (and its workspace twin,
+ * {@code chk_workspaces_icon_color} in {@code V19}), and the picker's list on the
  * web. Nothing at runtime ties them together, and the drift is quiet in both
  * directions: a key added to the validator but missing from the migration fails every
  * write with a constraint violation, and one missing from the web list renders as the
@@ -25,7 +27,9 @@ import org.junit.jupiter.api.Test;
  */
 class DocumentIconColorPaletteTest {
 
-    private static final String MIGRATION_RESOURCE = "db/migration/V18__document_icon_color.sql";
+    private static final String DOCUMENT_MIGRATION_RESOURCE = "db/migration/V18__document_icon_color.sql";
+
+    private static final String WORKSPACE_MIGRATION_RESOURCE = "db/migration/V19__workspaces_and_members.sql";
 
     /**
      * The picker's palette. The API never consumes it, so the path is resolved
@@ -39,28 +43,34 @@ class DocumentIconColorPaletteTest {
     private static final Pattern WEB_COLOR = Pattern.compile("id:\\s*'([^']+)'");
 
     @Test
-    void paletteAgreesAcrossValidatorMigrationAndWeb() throws IOException {
-        Set<String> validator = DocumentIconCoverApplier.ALLOWED_ICON_COLORS;
-        Set<String> migration = paletteOf(readMigration(), "chk_documents_icon_color", SQL_COLOR);
+    void paletteAgreesAcrossValidatorMigrationsAndWeb() throws IOException {
+        Set<String> validator = PageIconValidator.ALLOWED_ICON_COLORS;
+        Set<String> documents =
+                paletteOf(readResource(DOCUMENT_MIGRATION_RESOURCE), "chk_documents_icon_color", SQL_COLOR);
+        Set<String> workspaces =
+                paletteOf(readResource(WORKSPACE_MIGRATION_RESOURCE), "chk_workspaces_icon_color", SQL_COLOR);
         Set<String> web = paletteOf(readWebPalette(), "ICON_COLORS", WEB_COLOR);
 
         // Guard the extraction itself: a refactor that stops matching has to fail here
         // rather than quietly compare two empty sets.
         assertThat(validator).isNotEmpty();
-        assertThat(migration).isNotEmpty();
+        assertThat(documents).isNotEmpty();
+        assertThat(workspaces).isNotEmpty();
         assertThat(web).isNotEmpty();
 
         // "default" is a real choice: the picker offers it and the validator accepts
         // it, then normalizes it to NULL before the row is written. It is therefore
-        // absent from the migration, which holds only storable keys.
+        // absent from the migrations, which hold only storable keys.
         assertThat(validator).contains("default");
         assertThat(web).contains("default");
-        assertThat(migration).doesNotContain("default");
+        assertThat(documents).doesNotContain("default");
+        assertThat(workspaces).doesNotContain("default");
         assertThat(web).isEqualTo(validator);
 
         Set<String> storable =
                 validator.stream().filter(color -> !"default".equals(color)).collect(Collectors.toSet());
-        assertThat(migration).isEqualTo(storable);
+        assertThat(documents).isEqualTo(storable);
+        assertThat(workspaces).isEqualTo(storable);
     }
 
     /** Palette named from {@code marker} onward, so unrelated quoted text cannot leak in. */
@@ -77,11 +87,11 @@ class DocumentIconColorPaletteTest {
         return palette;
     }
 
-    private static String readMigration() throws IOException {
+    private static String readResource(String resource) throws IOException {
         try (InputStream in =
-                DocumentIconColorPaletteTest.class.getClassLoader().getResourceAsStream(MIGRATION_RESOURCE)) {
+                DocumentIconColorPaletteTest.class.getClassLoader().getResourceAsStream(resource)) {
             if (in == null) {
-                throw new IllegalStateException("Migration is missing from the test classpath: " + MIGRATION_RESOURCE);
+                throw new IllegalStateException("Migration is missing from the test classpath: " + resource);
             }
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }

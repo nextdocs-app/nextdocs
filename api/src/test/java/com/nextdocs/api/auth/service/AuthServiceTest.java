@@ -16,6 +16,7 @@ import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.workspace.service.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Optional;
@@ -42,6 +43,9 @@ class AuthServiceTest {
 
     @Mock
     private TokenService tokenService;
+
+    @Mock
+    private WorkspaceService workspaceService;
 
     @InjectMocks
     private AuthService authService;
@@ -82,6 +86,7 @@ class AuthServiceTest {
         assertThat(authResponse.accessToken()).isEqualTo("access.token.jwt");
         assertThat(authResponse.tokenType()).isEqualTo("Bearer");
         assertThat(authResponse.expiresIn()).isEqualTo(900L);
+        verify(workspaceService).bootstrapFirstUser(argThat(u -> u.getEmail().equals("alice@example.com")));
     }
 
     @Test

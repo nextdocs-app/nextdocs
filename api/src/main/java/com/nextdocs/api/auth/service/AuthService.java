@@ -10,6 +10,7 @@ import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.workspace.service.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Optional;
@@ -32,6 +33,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenService tokenService;
+    private final WorkspaceService workspaceService;
 
     @Transactional
     public AuthResponse register(RegisterRequest request, HttpServletRequest req, HttpServletResponse res) {
@@ -49,6 +51,8 @@ public class AuthService {
                 .build();
 
         userRepository.save(user);
+        // No-op once the instance has members; the first account becomes the workspace owner.
+        workspaceService.bootstrapFirstUser(user);
         log.info("New user registered: {}", user.getId());
 
         return buildAuthResponse(user, req, res);

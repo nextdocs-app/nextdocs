@@ -1,5 +1,6 @@
 package com.nextdocs.api.document.dto.request;
 
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Size;
 
@@ -17,7 +18,7 @@ public record DocumentUpdateRequest(
         @Schema(
                 description = "Page icon assignment. Absent leaves the icon unchanged; "
                         + "a value with a null type clears it.")
-        DocumentIconRequest icon,
+        PageIconRequest icon,
 
         @Schema(
                 description = "Cover image assignment. Absent leaves the cover unchanged; "

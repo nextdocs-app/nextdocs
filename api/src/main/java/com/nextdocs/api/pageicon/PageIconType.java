@@ -1,7 +1,7 @@
-package com.nextdocs.api.document.entity;
+package com.nextdocs.api.pageicon;
 
-/** How a document's page icon is sourced. NULL on the row means no icon. */
-public enum DocumentIconType {
+/** How a page icon (document or workspace) is sourced. NULL on the row means no icon. */
+public enum PageIconType {
     /** A single emoji grapheme stored inline. */
     EMOJI,
     /** A slug from the server-provided builtin icon catalog. */

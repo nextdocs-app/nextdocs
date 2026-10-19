@@ -13,11 +13,12 @@ import com.nextdocs.api.attachment.storage.StoredAttachment;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentCoverRequest;
-import com.nextdocs.api.document.dto.request.DocumentIconRequest;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentCoverType;
-import com.nextdocs.api.document.entity.DocumentIconType;
 import com.nextdocs.api.document.validation.IconCatalog;
+import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
+import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,28 +49,29 @@ class DocumentIconCoverApplierTest {
 
     @BeforeEach
     void setUp() {
-        applier = new DocumentIconCoverApplier(attachmentRepository, attachmentStorage, iconCatalog);
+        applier = new DocumentIconCoverApplier(
+                attachmentRepository, attachmentStorage, new PageIconValidator(iconCatalog));
         documentId = UUID.randomUUID();
         document = Document.builder().id(documentId).title("Doc").build();
     }
 
     @Test
     void applyIcon_nullRequest_leavesUntouched() {
-        document.setIconType(DocumentIconType.EMOJI);
+        document.setIconType(PageIconType.EMOJI);
         document.setIconValue("📝");
 
         applier.applyIcon(document, null);
 
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        assertEquals(PageIconType.EMOJI, document.getIconType());
         assertEquals("📝", document.getIconValue());
     }
 
     @Test
     void applyIcon_nullType_clears() {
-        document.setIconType(DocumentIconType.EMOJI);
+        document.setIconType(PageIconType.EMOJI);
         document.setIconValue("📝");
 
-        applier.applyIcon(document, new DocumentIconRequest(null, "📝"));
+        applier.applyIcon(document, new PageIconRequest(null, "📝"));
 
         assertNull(document.getIconType());
         assertNull(document.getIconValue());
@@ -77,26 +79,25 @@ class DocumentIconCoverApplierTest {
 
     @Test
     void applyIcon_emoji_acceptsSingleGrapheme() {
-        applier.applyIcon(document, new DocumentIconRequest("emoji", "📝"));
+        applier.applyIcon(document, new PageIconRequest("emoji", "📝"));
 
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        assertEquals(PageIconType.EMOJI, document.getIconType());
         assertEquals("📝", document.getIconValue());
     }
 
     @Test
     void applyIcon_emoji_acceptsMultiCodePointSequence() {
         // Family emoji is one grapheme but seven code points: length caps must allow it.
-        applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨‍👩‍👧‍👦"));
+        applier.applyIcon(document, new PageIconRequest("EMOJI", "👨‍👩‍👧‍👦"));
 
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        assertEquals(PageIconType.EMOJI, document.getIconType());
     }
 
     @Test
     void applyIcon_emoji_rejectsEmptyAndPlainText() {
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "  ")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "  ")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "a".repeat(17))));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "a".repeat(17))));
     }
 
     @Test
@@ -104,11 +105,9 @@ class DocumentIconCoverApplierTest {
         // The reviewed counterexample: sixteen separate 😀 fit inside a 16-code-point
         // budget and passed as "a single emoji".
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀".repeat(16))));
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀🚀")));
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "🇺🇸🇨🇦")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀".repeat(16))));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀🚀")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "🇺🇸🇨🇦")));
     }
 
     @Test
@@ -117,9 +116,9 @@ class DocumentIconCoverApplierTest {
         // the code-point budget rejected even though it is a single emoji.
         String decorated = "😀" + "\u0301".repeat(20);
 
-        applier.applyIcon(document, new DocumentIconRequest("EMOJI", decorated));
+        applier.applyIcon(document, new PageIconRequest("EMOJI", decorated));
 
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        assertEquals(PageIconType.EMOJI, document.getIconType());
         assertEquals(decorated, document.getIconValue());
     }
 
@@ -129,14 +128,13 @@ class DocumentIconCoverApplierTest {
         // limit rather than the dead arm of the old code-point disjunct.
         String oversized = "😀" + "\u0301".repeat(2100);
 
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", oversized)));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", oversized)));
     }
 
     @Test
     void applyIcon_unknownType_rejected() {
         ApiException ex = assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("TABLER", "home")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("TABLER", "home")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -144,9 +142,9 @@ class DocumentIconCoverApplierTest {
     void applyIcon_builtin_acceptsCataloguedSlug() {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
 
-        applier.applyIcon(document, new DocumentIconRequest("builtin", "home"));
+        applier.applyIcon(document, new PageIconRequest("builtin", "home"));
 
-        assertEquals(DocumentIconType.BUILTIN, document.getIconType());
+        assertEquals(PageIconType.BUILTIN, document.getIconType());
         assertEquals("home", document.getIconValue());
     }
 
@@ -155,14 +153,14 @@ class DocumentIconCoverApplierTest {
         when(iconCatalog.isValidSlug("nope")).thenReturn(false);
 
         ApiException ex = assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("BUILTIN", "nope")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("BUILTIN", "nope")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void applyIcon_builtin_rejectsTraversal() {
         ApiException ex = assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("BUILTIN", "../secret")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("BUILTIN", "../secret")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -172,9 +170,9 @@ class DocumentIconCoverApplierTest {
         when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.of(attachment(documentId, "image/png")));
         stubStoredBytes(PNG_HEAD);
 
-        applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString()));
+        applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString()));
 
-        assertEquals(DocumentIconType.UPLOAD, document.getIconType());
+        assertEquals(PageIconType.UPLOAD, document.getIconType());
         assertEquals(attachmentId.toString(), document.getIconValue());
     }
 
@@ -188,7 +186,7 @@ class DocumentIconCoverApplierTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+                () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString())));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertNull(document.getIconType());
@@ -202,7 +200,7 @@ class DocumentIconCoverApplierTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+                () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString())));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
@@ -214,7 +212,7 @@ class DocumentIconCoverApplierTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+                () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString())));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -226,7 +224,7 @@ class DocumentIconCoverApplierTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", attachmentId.toString())));
+                () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", attachmentId.toString())));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -239,25 +237,23 @@ class DocumentIconCoverApplierTest {
 
         // Uploaded SVG stays rejected: it is scriptable XML, unlike a remote <img> reference.
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", pdfId.toString())));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", pdfId.toString())));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", svgId.toString())));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", svgId.toString())));
     }
 
     @Test
     void applyIcon_upload_rejectsNonUuid() {
         ApiException ex = assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("UPLOAD", "not-a-uuid")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("UPLOAD", "not-a-uuid")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void applyIcon_link_acceptsHttps() {
-        applier.applyIcon(document, new DocumentIconRequest("LINK", "https://example.com/icon.png"));
+        applier.applyIcon(document, new PageIconRequest("LINK", "https://example.com/icon.png"));
 
-        assertEquals(DocumentIconType.LINK, document.getIconType());
+        assertEquals(PageIconType.LINK, document.getIconType());
         assertEquals("https://example.com/icon.png", document.getIconValue());
     }
 
@@ -265,10 +261,9 @@ class DocumentIconCoverApplierTest {
     void applyIcon_link_rejectsHttpAndMalformed() {
         assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("LINK", "http://example.com/i.png")));
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("LINK", "not a url")));
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("LINK", "  ")));
+                () -> applier.applyIcon(document, new PageIconRequest("LINK", "http://example.com/i.png")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("LINK", "not a url")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("LINK", "  ")));
     }
 
     @Test
@@ -369,21 +364,21 @@ class DocumentIconCoverApplierTest {
 
     @Test
     void applyIcon_emoji_rejectsPlainText() {
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "hello")));
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "A")));
-        assertThrows(ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "1")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "hello")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "A")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "1")));
     }
 
     @Test
     void applyIcon_emoji_acceptsKeycapAndFlags() {
-        applier.applyIcon(document, new DocumentIconRequest("EMOJI", "1️⃣"));
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        applier.applyIcon(document, new PageIconRequest("EMOJI", "1️⃣"));
+        assertEquals(PageIconType.EMOJI, document.getIconType());
 
-        applier.applyIcon(document, new DocumentIconRequest("EMOJI", "🇺🇸"));
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        applier.applyIcon(document, new PageIconRequest("EMOJI", "🇺🇸"));
+        assertEquals(PageIconType.EMOJI, document.getIconType());
 
-        applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨‍👩‍👧‍👦"));
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        applier.applyIcon(document, new PageIconRequest("EMOJI", "👨‍👩‍👧‍👦"));
+        assertEquals(PageIconType.EMOJI, document.getIconType());
     }
 
     @Test
@@ -391,14 +386,12 @@ class DocumentIconCoverApplierTest {
         // UAX #29 joins only a pictograph to the cluster before the joiner, so each of
         // these is two glyphs — the count used to fold whatever followed the joiner into
         // the preceding cluster and store them as a one-emoji icon.
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀\u200Da")));
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀\u200D#")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀\u200Da")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀\u200D#")));
         // An extender between the joiner and the pictograph spends the join.
         assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀\u200D\u0301😀")));
+                () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀\u200D\u0301😀")));
     }
 
     @Test
@@ -406,15 +399,14 @@ class DocumentIconCoverApplierTest {
         // The sequences this rule exists for: a skin tone or variation selector on
         // either side of the joiner never spends it.
         for (String joined : new String[] {"👋🏽\u200D♀️", "🫱🏽\u200D🫲🏻", "👨\u200D👩\u200D👧"}) {
-            applier.applyIcon(document, new DocumentIconRequest("EMOJI", joined));
-            assertEquals(DocumentIconType.EMOJI, document.getIconType());
+            applier.applyIcon(document, new PageIconRequest("EMOJI", joined));
+            assertEquals(PageIconType.EMOJI, document.getIconType());
         }
     }
 
     @Test
     void applyIcon_emoji_rejectsBidiControls() {
-        assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "📝\u202A")));
+        assertThrows(ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "📝\u202A")));
     }
 
     @Test
@@ -422,40 +414,33 @@ class DocumentIconCoverApplierTest {
         // Each sits directly after a joiner, where the cluster rule folds it into the
         // preceding cluster: all four were stored as a one-emoji icon before this check.
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨\u200D\u200B")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "👨\u200D\u200B")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨\u200D\uFEFF")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "👨\u200D\uFEFF")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨\u200D\u2060")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "👨\u200D\u2060")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "👨\u200D\u00AD")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "👨\u200D\u00AD")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀\u200D\u200C")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀\u200D\u200C")));
         assertThrows(
-                ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("EMOJI", "😀\u200D\u2063")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("EMOJI", "😀\u200D\u2063")));
     }
 
     @Test
     void applyIcon_type_isTrimmedAndCaseInsensitive() {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
 
-        applier.applyIcon(document, new DocumentIconRequest("  BuIlTiN  ", "home"));
+        applier.applyIcon(document, new PageIconRequest("  BuIlTiN  ", "home"));
 
-        assertEquals(DocumentIconType.BUILTIN, document.getIconType());
+        assertEquals(PageIconType.BUILTIN, document.getIconType());
     }
 
     @Test
     void applyIcon_link_rejectsUserInfo() {
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(
-                        document, new DocumentIconRequest("LINK", "https://user:pass@example.com/i.png")));
+                () -> applier.applyIcon(document, new PageIconRequest("LINK", "https://user:pass@example.com/i.png")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -477,7 +462,7 @@ class DocumentIconCoverApplierTest {
                 ApiException.class,
                 () -> applier.applyIconForCreate(
                         document,
-                        new DocumentIconRequest("UPLOAD", UUID.randomUUID().toString())));
+                        new PageIconRequest("UPLOAD", UUID.randomUUID().toString())));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertNull(document.getIconType());
     }
@@ -495,8 +480,8 @@ class DocumentIconCoverApplierTest {
 
     @Test
     void applyIconForCreate_acceptsEmojiAndLink() {
-        applier.applyIconForCreate(document, new DocumentIconRequest("EMOJI", "📝"));
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        applier.applyIconForCreate(document, new PageIconRequest("EMOJI", "📝"));
+        assertEquals(PageIconType.EMOJI, document.getIconType());
 
         applier.applyCoverForCreate(document, new DocumentCoverRequest("LINK", "https://example.com/c.png", null));
         assertEquals(DocumentCoverType.LINK, document.getCoverType());
@@ -506,9 +491,9 @@ class DocumentIconCoverApplierTest {
     @Test
     void applyIcon_builtin_savesValidColor() {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
-        applier.applyIcon(document, new DocumentIconRequest("builtin", "home", "blue"));
+        applier.applyIcon(document, new PageIconRequest("builtin", "home", "blue"));
 
-        assertEquals(DocumentIconType.BUILTIN, document.getIconType());
+        assertEquals(PageIconType.BUILTIN, document.getIconType());
         assertEquals("home", document.getIconValue());
         assertEquals("blue", document.getIconColor());
     }
@@ -516,9 +501,9 @@ class DocumentIconCoverApplierTest {
     @Test
     void applyIcon_builtin_defaultColor_storedAsNull() {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
-        applier.applyIcon(document, new DocumentIconRequest("builtin", "home", "default"));
+        applier.applyIcon(document, new PageIconRequest("builtin", "home", "default"));
 
-        assertEquals(DocumentIconType.BUILTIN, document.getIconType());
+        assertEquals(PageIconType.BUILTIN, document.getIconType());
         assertEquals("home", document.getIconValue());
         assertNull(document.getIconColor());
     }
@@ -526,9 +511,9 @@ class DocumentIconCoverApplierTest {
     @Test
     void applyIcon_builtin_blankColor_storedAsNull() {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
-        applier.applyIcon(document, new DocumentIconRequest("builtin", "home", " "));
+        applier.applyIcon(document, new PageIconRequest("builtin", "home", " "));
 
-        assertEquals(DocumentIconType.BUILTIN, document.getIconType());
+        assertEquals(PageIconType.BUILTIN, document.getIconType());
         assertEquals("home", document.getIconValue());
         assertNull(document.getIconColor());
     }
@@ -537,9 +522,9 @@ class DocumentIconCoverApplierTest {
     void applyIcon_emoji_blankColor_storedAsNull() {
         // Blank must read as absent before the "color is only for builtins" rule, or
         // an empty color on a non-builtin icon is rejected as an unknown color.
-        applier.applyIcon(document, new DocumentIconRequest("emoji", "📝", " "));
+        applier.applyIcon(document, new PageIconRequest("emoji", "📝", " "));
 
-        assertEquals(DocumentIconType.EMOJI, document.getIconType());
+        assertEquals(PageIconType.EMOJI, document.getIconType());
         assertEquals("📝", document.getIconValue());
         assertNull(document.getIconColor());
     }
@@ -549,14 +534,14 @@ class DocumentIconCoverApplierTest {
         when(iconCatalog.isValidSlug("home")).thenReturn(true);
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("builtin", "home", "rainbow")));
+                () -> applier.applyIcon(document, new PageIconRequest("builtin", "home", "rainbow")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void applyIcon_nonBuiltin_colorRejected() {
         ApiException ex = assertThrows(
-                ApiException.class, () -> applier.applyIcon(document, new DocumentIconRequest("emoji", "📝", "blue")));
+                ApiException.class, () -> applier.applyIcon(document, new PageIconRequest("emoji", "📝", "blue")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
@@ -564,17 +549,17 @@ class DocumentIconCoverApplierTest {
     void applyIcon_link_colorRejected() {
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> applier.applyIcon(document, new DocumentIconRequest("link", "https://example.com/a.png", "red")));
+                () -> applier.applyIcon(document, new PageIconRequest("link", "https://example.com/a.png", "red")));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
     }
 
     @Test
     void applyIcon_clear_clearsColor() {
-        document.setIconType(DocumentIconType.BUILTIN);
+        document.setIconType(PageIconType.BUILTIN);
         document.setIconValue("home");
         document.setIconColor("blue");
 
-        applier.applyIcon(document, new DocumentIconRequest(null, null));
+        applier.applyIcon(document, new PageIconRequest(null, null));
 
         assertNull(document.getIconType());
         assertNull(document.getIconValue());

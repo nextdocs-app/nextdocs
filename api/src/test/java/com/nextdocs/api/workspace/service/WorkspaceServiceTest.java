@@ -1,0 +1,560 @@
+package com.nextdocs.api.workspace.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.auth.repository.RefreshTokenRepository;
+import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.common.exception.ApiException;
+import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.validation.IconCatalog;
+import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
+import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
+import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
+import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
+import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
+import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+@ExtendWith(MockitoExtension.class)
+class WorkspaceServiceTest {
+
+    @Mock
+    private WorkspaceRepository workspaceRepository;
+
+    @Mock
+    private WorkspaceMemberRepository memberRepository;
+
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private RefreshTokenRepository refreshTokenRepository;
+
+    @Mock
+    private WorkspaceAccessService accessService;
+
+    @Mock
+    private IconCatalog iconCatalog;
+
+    private WorkspaceService workspaceService;
+    private Workspace workspace;
+    private UUID workspaceId;
+    private User owner;
+    private User target;
+    private UUID actorId;
+
+    @BeforeEach
+    void setUp() {
+        workspaceService = new WorkspaceService(
+                workspaceRepository,
+                memberRepository,
+                userRepository,
+                refreshTokenRepository,
+                accessService,
+                new PageIconValidator(iconCatalog));
+        workspaceId = UUID.randomUUID();
+        workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
+        owner = user("owner@example.com", "Owner");
+        target = user("target@example.com", "Target");
+        actorId = owner.getId();
+    }
+
+    private static User user(String email, String displayName) {
+        User user = User.builder()
+                .email(email)
+                .displayName(displayName)
+                .passwordHash("$2a$12$hash")
+                .build();
+        user.setId(UUID.randomUUID());
+        return user;
+    }
+
+    private WorkspaceMember member(User user, WorkspaceRole role) {
+        return WorkspaceMember.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .user(user)
+                .role(role)
+                .createdAt(OffsetDateTime.now())
+                .build();
+    }
+
+    private void givenOwner() {
+        when(accessService.requireOwner(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.OWNER)));
+    }
+
+    private void givenAdmin(WorkspaceRole actorRole) {
+        when(accessService.requireAdmin(actorId)).thenReturn(new Membership(workspace, member(owner, actorRole)));
+    }
+
+    // --- bootstrap ---
+
+    @Test
+    void bootstrapFirstUser_createsWorkspaceAndOwnerMembership() {
+        when(accessService.isInitialized()).thenReturn(false);
+        when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.empty());
+        when(workspaceRepository.save(any(Workspace.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        workspaceService.bootstrapFirstUser(owner);
+
+        ArgumentCaptor<Workspace> workspaceCaptor = ArgumentCaptor.forClass(Workspace.class);
+        verify(workspaceRepository).save(workspaceCaptor.capture());
+        assertThat(workspaceCaptor.getValue().getName()).isEqualTo(WorkspaceService.DEFAULT_NAME);
+
+        ArgumentCaptor<WorkspaceMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceMember.class);
+        verify(memberRepository).save(memberCaptor.capture());
+        assertThat(memberCaptor.getValue().getRole()).isEqualTo(WorkspaceRole.OWNER);
+        assertThat(memberCaptor.getValue().getUser()).isSameAs(owner);
+        assertThat(memberCaptor.getValue().getWorkspace()).isSameAs(workspaceCaptor.getValue());
+    }
+
+    @Test
+    void bootstrapFirstUser_reusesExistingWorkspaceWhenItHasNoMembers() {
+        when(accessService.isInitialized()).thenReturn(false);
+        when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.of(workspace));
+
+        workspaceService.bootstrapFirstUser(owner);
+
+        verify(workspaceRepository, never()).save(any());
+        ArgumentCaptor<WorkspaceMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceMember.class);
+        verify(memberRepository).save(memberCaptor.capture());
+        assertThat(memberCaptor.getValue().getWorkspace()).isSameAs(workspace);
+    }
+
+    @Test
+    void bootstrapFirstUser_doesNothingWhenInstanceIsInitialized() {
+        when(accessService.isInitialized()).thenReturn(true);
+
+        workspaceService.bootstrapFirstUser(owner);
+
+        verify(workspaceRepository, never()).save(any());
+        verify(memberRepository, never()).save(any());
+    }
+
+    // --- getCurrent ---
+
+    @Test
+    void getCurrent_returnsIdentityRoleAndMemberCount() {
+        when(accessService.requireMember(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.ADMIN)));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(3L);
+
+        WorkspaceResponse response = workspaceService.getCurrent(actorId);
+
+        assertThat(response.id()).isEqualTo(workspaceId);
+        assertThat(response.name()).isEqualTo("NextDocs");
+        assertThat(response.role()).isEqualTo(WorkspaceRole.ADMIN);
+        assertThat(response.memberCount()).isEqualTo(3);
+        assertThat(response.icon()).isNull();
+    }
+
+    // --- updateCurrent ---
+
+    @Test
+    void updateCurrent_renamesWorkspace() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+
+        WorkspaceResponse response =
+                workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest("  Acme  ", null));
+
+        assertThat(workspace.getName()).isEqualTo("Acme");
+        assertThat(response.name()).isEqualTo("Acme");
+    }
+
+    @Test
+    void updateCurrent_rejectsBlankName() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+
+        assertThatThrownBy(() -> workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest("   ", null)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        assertThat(workspace.getName()).isEqualTo("NextDocs");
+    }
+
+    @Test
+    void updateCurrent_setsBuiltinIconWithColor() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+        when(iconCatalog.isValidSlug("home")).thenReturn(true);
+
+        WorkspaceResponse response = workspaceService.updateCurrent(
+                actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("builtin", "home", "blue")));
+
+        assertThat(workspace.getIconType()).isEqualTo(PageIconType.BUILTIN);
+        assertThat(workspace.getIconValue()).isEqualTo("home");
+        assertThat(workspace.getIconColor()).isEqualTo("blue");
+        assertThat(response.icon().type()).isEqualTo("builtin");
+        assertThat(response.icon().color()).isEqualTo("blue");
+    }
+
+    @Test
+    void updateCurrent_clearsIconOnNullType() {
+        workspace.setIconType(PageIconType.EMOJI);
+        workspace.setIconValue("📝");
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+
+        WorkspaceResponse response = workspaceService.updateCurrent(
+                actorId, new WorkspaceUpdateRequest(null, new PageIconRequest(null, null)));
+
+        assertThat(workspace.getIconType()).isNull();
+        assertThat(workspace.getIconValue()).isNull();
+        assertThat(response.icon()).isNull();
+    }
+
+    @Test
+    void updateCurrent_rejectsUploadIconUntilTheUploadEndpointExists() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+
+        assertThatThrownBy(() -> workspaceService.updateCurrent(
+                        actorId,
+                        new WorkspaceUpdateRequest(
+                                null,
+                                new PageIconRequest("UPLOAD", UUID.randomUUID().toString()))))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    void updateCurrent_rejectsColorOnAnEmojiIcon() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+
+        assertThatThrownBy(() -> workspaceService.updateCurrent(
+                        actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("emoji", "📝", "blue"))))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    void updateCurrent_requiresOwner() {
+        when(accessService.requireOwner(actorId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        assertThatThrownBy(() -> workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest("Acme", null)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+        verify(workspaceRepository, never()).findByIdForUpdate(any());
+    }
+
+    // --- listMembers ---
+
+    @Test
+    void listMembers_mapsRosterWithRoles() {
+        when(accessService.requireMember(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.OWNER)));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.MEMBER);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER), targetMember));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.listMembers(actorId);
+
+        assertThat(roster).hasSize(2);
+        assertThat(roster.get(0).email()).isEqualTo("owner@example.com");
+        assertThat(roster.get(0).role()).isEqualTo(WorkspaceRole.OWNER);
+        assertThat(roster.get(1).userId()).isEqualTo(target.getId());
+        assertThat(roster.get(1).role()).isEqualTo(WorkspaceRole.MEMBER);
+    }
+
+    // --- updateMemberRole ---
+
+    @Test
+    void updateMemberRole_changesRoleAndReturnsRoster() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.MEMBER);
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(targetMember));
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER), targetMember));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.updateMemberRole(
+                actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("admin"));
+
+        assertThat(targetMember.getRole()).isEqualTo(WorkspaceRole.ADMIN);
+        assertThat(roster.get(1).role()).isEqualTo(WorkspaceRole.ADMIN);
+        verify(memberRepository).save(targetMember);
+    }
+
+    @Test
+    void updateMemberRole_acceptsLowercaseRoleNames() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.MEMBER);
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(targetMember));
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(targetMember));
+
+        workspaceService.updateMemberRole(actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("owner"));
+
+        assertThat(targetMember.getRole()).isEqualTo(WorkspaceRole.OWNER);
+    }
+
+    @Test
+    void updateMemberRole_rejectsChangingOwnRole() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, owner.getId()))
+                .thenReturn(Optional.of(member(owner, WorkspaceRole.OWNER)));
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, owner.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void updateMemberRole_rejectsDemotingTheLastOwner() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(1L);
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+    }
+
+    @Test
+    void updateMemberRole_allowsDemotingAnOwnerWhileAnotherRemains() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.OWNER);
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(targetMember));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(2L);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER), targetMember));
+
+        workspaceService.updateMemberRole(actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER"));
+
+        assertThat(targetMember.getRole()).isEqualTo(WorkspaceRole.MEMBER);
+    }
+
+    @Test
+    void updateMemberRole_rejectsUnknownRole() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("SUPREME")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    void updateMemberRole_rejectsNullOrBlankRole() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest(null)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("   ")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    void updateMemberRole_requiresOwner() {
+        when(accessService.requireOwner(actorId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("ADMIN")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
+    void updateMemberRole_rejectsAnOwnerDemotedBeforeTheLockWasAcquired() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        doAnswer(invocation -> {
+                    WorkspaceMember actorMember = invocation.getArgument(0);
+                    actorMember.setRole(WorkspaceRole.MEMBER);
+                    return null;
+                })
+                .when(accessService)
+                .refreshForLock(any());
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("ADMIN")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    void updateMemberRole_refreshesTheTargetRoleBeforeDeciding() {
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.MEMBER);
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(targetMember));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(1L);
+        // Another transaction promoted the target while this one waited for the lock.
+        doAnswer(invocation -> {
+                    WorkspaceMember member = invocation.getArgument(0);
+                    if (member == targetMember) {
+                        member.setRole(WorkspaceRole.OWNER);
+                    }
+                    return null;
+                })
+                .when(accessService)
+                .refreshForLock(any());
+
+        assertThatThrownBy(() -> workspaceService.updateMemberRole(
+                        actorId, target.getId(), new WorkspaceMemberRoleUpdateRequest("MEMBER")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+        verify(memberRepository, never()).save(any());
+    }
+
+    // --- removeMember ---
+
+    @Test
+    void removeMember_deletesMembershipDeactivatesAccountAndRevokesTokens() {
+        givenAdmin(WorkspaceRole.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER)));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.removeMember(actorId, target.getId());
+
+        assertThat(roster).hasSize(1);
+        verify(memberRepository).delete(any(WorkspaceMember.class));
+        verify(userRepository).save(target);
+        assertThat(target.isActive()).isFalse();
+        verify(refreshTokenRepository).revokeAllForUser(target.getId());
+    }
+
+    @Test
+    void removeMember_rejectsSelfRemoval() {
+        givenAdmin(WorkspaceRole.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, owner.getId()))
+                .thenReturn(Optional.of(member(owner, WorkspaceRole.OWNER)));
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, owner.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(memberRepository, never()).delete(any());
+    }
+
+    @Test
+    void removeMember_adminCanOnlyRemovePlainMembers() {
+        givenAdmin(WorkspaceRole.ADMIN);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.ADMIN)));
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+        verify(memberRepository, never()).delete(any());
+    }
+
+    @Test
+    void removeMember_ownerCanRemoveAnotherOwner() {
+        givenAdmin(WorkspaceRole.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(2L);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER)));
+
+        workspaceService.removeMember(actorId, target.getId());
+
+        verify(memberRepository).delete(any(WorkspaceMember.class));
+    }
+
+    @Test
+    void removeMember_rejectsRemovingTheLastOwner() {
+        givenAdmin(WorkspaceRole.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
+        when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
+                .thenReturn(1L);
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+        verify(refreshTokenRepository, never()).revokeAllForUser(any());
+    }
+
+    @Test
+    void removeMember_requiresAdmin() {
+        when(accessService.requireAdmin(actorId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
+    void removeMember_rejectsAnAdminDemotedBeforeTheLockWasAcquired() {
+        givenAdmin(WorkspaceRole.ADMIN);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        doAnswer(invocation -> {
+                    WorkspaceMember actorMember = invocation.getArgument(0);
+                    actorMember.setRole(WorkspaceRole.MEMBER);
+                    return null;
+                })
+                .when(accessService)
+                .refreshForLock(any());
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+        verify(memberRepository, never()).delete(any());
+        verify(refreshTokenRepository, never()).revokeAllForUser(any());
+    }
+}

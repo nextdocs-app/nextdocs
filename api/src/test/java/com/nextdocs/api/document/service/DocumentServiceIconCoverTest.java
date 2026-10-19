@@ -19,7 +19,6 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.request.DocumentCoverRequest;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
-import com.nextdocs.api.document.dto.request.DocumentIconRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentCoverResponse;
 import com.nextdocs.api.document.dto.response.DocumentIconResponse;
@@ -27,10 +26,12 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCoverType;
-import com.nextdocs.api.document.entity.DocumentIconType;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
+import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -86,8 +87,8 @@ class DocumentServiceIconCoverTest {
         documentProperties.setTrashRetentionDays(30);
         DocumentIconService iconService = new DocumentIconService(new ObjectMapper());
         iconService.loadCatalog();
-        DocumentIconCoverApplier applier =
-                new DocumentIconCoverApplier(attachmentRepository, attachmentStorage, iconService);
+        DocumentIconCoverApplier applier = new DocumentIconCoverApplier(
+                attachmentRepository, attachmentStorage, new PageIconValidator(iconService));
         documentService = new DocumentService(
                 documentRepository,
                 collaboratorRepository,
@@ -112,7 +113,7 @@ class DocumentServiceIconCoverTest {
                 null,
                 null,
                 null,
-                new DocumentIconRequest("emoji", "📝"),
+                new PageIconRequest("emoji", "📝"),
                 new DocumentCoverRequest("link", "https://example.com/c.png", 0.25));
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -124,7 +125,7 @@ class DocumentServiceIconCoverTest {
         assertTrue(result.created());
         ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
         verify(documentRepository).saveAndFlush(captor.capture());
-        assertEquals(DocumentIconType.EMOJI, captor.getValue().getIconType());
+        assertEquals(PageIconType.EMOJI, captor.getValue().getIconType());
         assertEquals("📝", captor.getValue().getIconValue());
         assertEquals(DocumentCoverType.LINK, captor.getValue().getCoverType());
         assertEquals(0.25, captor.getValue().getCoverPosition());
@@ -139,7 +140,7 @@ class DocumentServiceIconCoverTest {
         UUID userId = UUID.randomUUID();
         when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Doc", "AQID", null, null, null, null, new DocumentIconRequest("builtin", "no-such-icon"), null);
+                null, "Doc", "AQID", null, null, null, null, new PageIconRequest("builtin", "no-such-icon"), null);
 
         ApiException ex = assertThrows(ApiException.class, () -> documentService.create(userId, request));
 
@@ -167,7 +168,7 @@ class DocumentServiceIconCoverTest {
                         null,
                         null,
                         null,
-                        new DocumentIconRequest("BUILTIN", "add-circle-bold"),
+                        new PageIconRequest("BUILTIN", "add-circle-bold"),
                         new DocumentCoverRequest(null, null, null)));
 
         assertEquals(new DocumentIconResponse("builtin", "add-circle-bold"), response.icon());
@@ -204,7 +205,7 @@ class DocumentServiceIconCoverTest {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document document = activeDoc(userId, documentId);
-        document.setIconType(DocumentIconType.EMOJI);
+        document.setIconType(PageIconType.EMOJI);
         document.setIconValue("📝");
 
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
@@ -233,7 +234,7 @@ class DocumentServiceIconCoverTest {
                         null,
                         null,
                         null,
-                        new DocumentIconRequest("EMOJI", "🚀"),
+                        new PageIconRequest("EMOJI", "🚀"),
                         new DocumentCoverRequest("LINK", "https://example.com/c.gif", null)));
 
         assertEquals(new DocumentIconResponse("emoji", "🚀"), response.icon());
