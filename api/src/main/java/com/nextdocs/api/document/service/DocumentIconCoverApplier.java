@@ -71,15 +71,13 @@ public class DocumentIconCoverApplier {
                     "Icon uploads cannot be referenced while creating a document: "
                             + "create it first, upload the file, then set the icon.");
         }
-        String value =
-                switch (type) {
-                    case EMOJI -> pageIconValidator.validateEmoji(request.value());
-                    case BUILTIN -> pageIconValidator.validateBuiltin(request.value());
-                    case UPLOAD ->
-                        pageIconValidator.validateUpload(
-                                "Icon", request.value(), AttachmentScope.document(document.getId()));
-                    case LINK -> PageIconValidator.validateLink("Icon", request.value());
-                };
+        String value = switch (type) {
+            case EMOJI -> pageIconValidator.validateEmoji(request.value());
+            case BUILTIN -> pageIconValidator.validateBuiltin(request.value());
+            case UPLOAD ->
+                pageIconValidator.validateUpload("Icon", request.value(), AttachmentScope.document(document.getId()));
+            case LINK -> PageIconValidator.validateLink("Icon", request.value());
+        };
         document.setIconType(type);
         document.setIconValue(value);
         document.setIconColor(PageIconValidator.validateColor(type, request.color()));
@@ -102,13 +100,11 @@ public class DocumentIconCoverApplier {
                     "Cover uploads cannot be referenced while creating a document: "
                             + "create it first, upload the file, then set the cover.");
         }
-        String value =
-                switch (type) {
-                    case UPLOAD ->
-                        pageIconValidator.validateUpload(
-                                "Cover", request.value(), AttachmentScope.document(document.getId()));
-                    case LINK -> PageIconValidator.validateLink("Cover", request.value());
-                };
+        String value = switch (type) {
+            case UPLOAD ->
+                pageIconValidator.validateUpload("Cover", request.value(), AttachmentScope.document(document.getId()));
+            case LINK -> PageIconValidator.validateLink("Cover", request.value());
+        };
         // Resolve before mutating: keeping the offset for an unchanged cover
         // reads the current row, which the assignments below would overwrite.
         Double position = resolvePosition(document, type, value, request.position());
