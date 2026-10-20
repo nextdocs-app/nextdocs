@@ -32,7 +32,7 @@ import {
 } from '@/lib/document-meta-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
-import { getPendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { getPendingCloudCreate, PENDING_CLOUD_CREATE_EVENT } from '@/lib/pending-cloud-create.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import { getRealtimeUrl } from '@/lib/api-url.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
@@ -235,6 +235,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
+  // A queued create means this id has no cloud row yet: the realtime server and
+  // /my-access would only see "not found". Track the queue so both wait it out.
+  const [hasPendingCloudCreate, setHasPendingCloudCreate] = useState(
+    () => getPendingCloudCreate(id, user?.id ?? null) !== null
+  );
   const lastLoadContextKeyRef = useRef<string | null>(null);
   const updateMetaSeqRef = useRef(0);
   // Latest committed meta for the Yjs title observer (avoids stale closures
@@ -352,23 +357,57 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   }, [resolvedDocumentId]);
 
   useEffect(() => {
+    const syncPendingCloudCreate = () => {
+      setHasPendingCloudCreate(getPendingCloudCreate(id, user?.id ?? null) !== null);
+    };
+
+    syncPendingCloudCreate();
+    window.addEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+
+    return () => {
+      window.removeEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+    };
+  }, [id, user?.id]);
+
+  useEffect(() => {
     if (!isAuthenticated || isInitializing || errorState === null || ydoc !== null || isLoading) {
       return;
     }
 
     const retryLoad = () => {
+      // A restricted verdict earned while the cloud row was still queued is
+      // stale once the entry is gone; clear it so the retry can reach the row.
+      if (
+        errorState.kind === 'restricted' &&
+        getPendingCloudCreate(id, user?.id ?? null) === null
+      ) {
+        setErrorState(null);
+        dispatch(setError(null));
+      }
       clearCloudReadBackoff();
       setRetryTrigger((prev) => prev + 1);
     };
 
     window.addEventListener('cloud-documents-changed', retryLoad);
     window.addEventListener('local-documents-changed', retryLoad);
+    window.addEventListener(PENDING_CLOUD_CREATE_EVENT, retryLoad);
 
     return () => {
       window.removeEventListener('cloud-documents-changed', retryLoad);
       window.removeEventListener('local-documents-changed', retryLoad);
+      window.removeEventListener(PENDING_CLOUD_CREATE_EVENT, retryLoad);
     };
-  }, [isAuthenticated, isInitializing, errorState, ydoc, isLoading, clearCloudReadBackoff]);
+  }, [
+    isAuthenticated,
+    isInitializing,
+    errorState,
+    ydoc,
+    isLoading,
+    id,
+    user?.id,
+    dispatch,
+    clearCloudReadBackoff,
+  ]);
 
   useEffect(() => {
     if (isInitializing) {
@@ -422,7 +461,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         // trip the restricted state. Keep serving the local copy until the
         // queued create lands.
         const hasPendingCloudCreateForRequestedDoc =
-          isAuthenticated && token ? getPendingCloudCreate(id) !== null : false;
+          isAuthenticated && token ? getPendingCloudCreate(id, user?.id ?? null) !== null : false;
 
         dispatch(setLoading(true));
         dispatch(setError(null));
@@ -719,6 +758,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // connecting would trigger a 1008 close followed by a spurious "access restricted"
       // error for the document owner.
       !!meta?.deletedAt ||
+      // The cloud row does not exist until the queued create replays, so the
+      // realtime access check would 404 and lock the document.
+      hasPendingCloudCreate ||
       isCloudReadInBackoff() ||
       !canConnectRealtime
     ) {
@@ -897,6 +939,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isAuthenticated,
     isGuestRealtimeLevelKnown,
     meta?.deletedAt,
+    hasPendingCloudCreate,
     isCloudReadInBackoff,
     refresh,
     dispatch,
@@ -1002,6 +1045,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       !resolvedDocumentId ||
       resolvedDocumentId !== currentDocumentId ||
       !!meta?.deletedAt ||
+      hasPendingCloudCreate || // No cloud row yet; /my-access would answer "not found".
       isRealtimeConnected // Skip polling if we have an active realtime WebSocket connection
     ) {
       return;
@@ -1135,6 +1179,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     // title keystroke/save while realtime was down, coupling API load to
     // typing cadence.
     meta?.deletedAt,
+    hasPendingCloudCreate,
     dispatch,
     isCloudReadInBackoff,
     refresh,

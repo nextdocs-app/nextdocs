@@ -11,6 +11,8 @@ import {
 } from '@/lib/document-access.util';
 import { readPendingIconCoverPatch, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
+import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { WebsocketProvider } from 'y-websocket';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -1699,6 +1701,78 @@ describe('useDocument', () => {
     expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
     expect(result.current.errorState).toBeNull();
 
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('waits for a queued cloud create before polling access or connecting realtime', async () => {
+    const offlineId = '11111111-2222-4333-8444-555555555555';
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    queuePendingCloudCreate({ id: offlineId, userId: 'user-1', parentId: null });
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument(offlineId), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.meta?.title).toBe('Offline Draft');
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
+    // No cloud row yet: /my-access answers {allowed:false} and a realtime
+    // connect answers 1008, both of which would lock the page for good.
+    expect(getMyAccessSpy).not.toHaveBeenCalled();
+    expect(WebsocketProvider).not.toHaveBeenCalled();
+
+    removePendingCloudCreate(offlineId);
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledWith(offlineId, 'token-1');
+    });
+    expect(WebsocketProvider).toHaveBeenCalled();
+  });
+
+  it('retries a restricted document once its queued create is no longer pending', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const recoveredYdoc = new Y.Doc();
+    const recoveredMeta = {
+      title: 'Recovered Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    getCloudDocumentSpy
+      .mockRejectedValueOnce(new DocumentServiceApiError('Not found', 404))
+      .mockResolvedValueOnce({ ydoc: recoveredYdoc, meta: recoveredMeta });
+
+    const { result } = renderHook(() => useDocument('queued-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.errorState?.kind).toBe('restricted');
+    });
+
+    act(() => {
+      queuePendingCloudCreate({ id: 'queued-id', userId: 'user-1', parentId: null });
+    });
+    act(() => {
+      removePendingCloudCreate('queued-id');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Recovered Offline Draft');
+    });
+
+    expect(result.current.errorState).toBeNull();
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
     consoleErrorSpy.mockRestore();
   });
 
