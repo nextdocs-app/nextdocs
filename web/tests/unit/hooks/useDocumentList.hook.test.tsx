@@ -48,6 +48,7 @@ const renderHook = <Result, Props>(
       accessToken: authMock?.accessToken || null,
       expiresAt: authMock?.isAuthenticated ? Date.now() + 3600 * 1000 : null,
       isLoading: false,
+      isRefreshing: false,
       isInitializing: authMock?.isInitializing ?? false,
       error: null,
     },

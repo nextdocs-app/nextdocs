@@ -95,6 +95,7 @@ const initialState: AuthState = {
   accessToken: persistedAuth?.accessToken ?? null,
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastSilentRefreshAt: null,
+  isRefreshing: false,
   isLoading: false,
   isInitializing: true,
   error: null,
@@ -156,6 +157,11 @@ export const refreshSessionThunk = createAsyncThunk<
   {
     condition: (_, { getState }) => {
       const { auth } = getState();
+      // Two rotations of the same refresh cookie make the API treat the second
+      // as reuse and revoke the whole session, so share the request in flight.
+      if (auth.isRefreshing) {
+        return false;
+      }
       if (
         auth.lastSilentRefreshAt != null &&
         Date.now() - auth.lastSilentRefreshAt < SILENT_REFRESH_MIN_INTERVAL_MS
@@ -247,9 +253,11 @@ const authSlice = createSlice({
 
     builder
       .addCase(refreshSessionThunk.pending, (state) => {
+        state.isRefreshing = true;
         state.error = null;
       })
       .addCase(refreshSessionThunk.fulfilled, (state, action) => {
+        state.isRefreshing = false;
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
@@ -268,6 +276,7 @@ const authSlice = createSlice({
         if (action.meta?.condition) {
           return;
         }
+        state.isRefreshing = false;
         state.lastSilentRefreshAt = null;
         if (action.payload === 'unauthorized') {
           state.user = null;

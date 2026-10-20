@@ -13,6 +13,8 @@ export interface AuthState {
   expiresAt: number | null;
   /** Unix timestamp (ms) of the most recent silent refresh attempt, used to coalesce parallel dispatches. */
   lastSilentRefreshAt?: number | null;
+  /** True while a refresh request is in flight, so parallel dispatches share it. */
+  isRefreshing: boolean;
   isLoading: boolean;
   isInitializing: boolean;
   error: string | null;

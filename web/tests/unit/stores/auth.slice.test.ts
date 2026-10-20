@@ -68,6 +68,7 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           accessToken: null,
           expiresAt: null,
           lastSilentRefreshAt: null,
+          isRefreshing: false,
           isLoading: false,
           isInitializing: true,
           error: null,
@@ -213,6 +214,36 @@ describe('auth slice', () => {
     expect(auth.user).toBeNull();
     expect(auth.accessToken).toBeNull();
     expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
+  });
+
+  it('refreshSessionThunk/rejected resets the coalescing state and drops the persisted session when unauthorized', async () => {
+    window.sessionStorage.clear();
+    window.sessionStorage.setItem(
+      AUTH_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        user: mockUser,
+        accessToken: 'stale',
+        expiresAt: Date.now() + 1000 * 60,
+      })
+    );
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('Revoked', 403));
+    const store = makeStore({
+      user: mockUser,
+      accessToken: 'stale',
+      lastSilentRefreshAt: Date.now() - 60_000,
+      isInitializing: false,
+    });
+
+    const result = await store.dispatch(refreshSessionThunk());
+    const { auth } = store.getState();
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(auth.isRefreshing).toBe(false);
+    expect(auth.lastSilentRefreshAt).toBeNull();
+    expect(auth.user).toBeNull();
+    expect(auth.accessToken).toBeNull();
+    expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+    expect(clearLocalUserData).toHaveBeenCalledTimes(1);
   });
 
   it('refreshSessionThunk/rejected retains state on network error and only changes isInitializing if true', async () => {
@@ -426,6 +457,36 @@ describe('auth slice', () => {
     expect(authApiService.refresh).not.toHaveBeenCalled();
     // A condition abort must not wipe the coalescing window.
     expect(store.getState().auth.lastSilentRefreshAt).toBe(stamp);
+  });
+
+  it('refreshSessionThunk shares one request between parallel dispatches', async () => {
+    // An expired reload fires the mount refresh and the auto-refresh effect in
+    // the same tick. Two rotations of one refresh cookie read as token reuse,
+    // so the second dispatch must join the request already in flight.
+    let resolveRefresh!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock).mockImplementation(
+      () =>
+        new Promise<AuthApiResponse>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const first = store.dispatch(refreshSessionThunk());
+    const second = store.dispatch(refreshSessionThunk());
+
+    expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+    expect(store.getState().auth.isRefreshing).toBe(true);
+
+    const secondResult = await second;
+    expect(refreshSessionThunk.rejected.match(secondResult)).toBe(true);
+    expect((secondResult.meta as { condition?: boolean }).condition).toBe(true);
+
+    resolveRefresh(mockAuthResponse);
+    await first;
+
+    expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+    expect(store.getState().auth.isRefreshing).toBe(false);
   });
 
   it('clearAuth wipes session registries', () => {
