@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -31,6 +32,8 @@ import tools.jackson.databind.ObjectMapper;
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
+// Slices import this config but scan only controllers/filters, so bring the resolver along.
+@Import(ClientIpResolver.class)
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -43,6 +46,7 @@ public class SecurityConfig {
     /** Public endpoints that do not require a JWT. */
     private static final String[] PUBLIC_PATHS = {
         "/api/v1/auth/register",
+        "/api/v1/auth/invite/preview",
         "/api/v1/auth/login",
         "/api/v1/auth/refresh",
         "/api/v1/documents/*/public",
@@ -73,6 +77,14 @@ public class SecurityConfig {
      */
     private static final String[] PUBLIC_ICON_PATHS = {"/api/v1/icons", "/api/v1/icons/*"};
 
+    /**
+     * Onboarding read for the auth screens: instance status tells the register form
+     * whether an invite is needed. Method-scoped GET/HEAD like the attachment and icon
+     * sets above; a method-agnostic permitAll would also open writes later added under
+     * this path.
+     */
+    private static final String[] PUBLIC_ONBOARDING_PATHS = {"/api/v1/instance/status"};
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
@@ -87,6 +99,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, PUBLIC_ICON_PATHS)
                         .permitAll()
                         .requestMatchers(HttpMethod.HEAD, PUBLIC_ICON_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ONBOARDING_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.HEAD, PUBLIC_ONBOARDING_PATHS)
                         .permitAll()
                         .requestMatchers(PUBLIC_PATHS)
                         .permitAll()

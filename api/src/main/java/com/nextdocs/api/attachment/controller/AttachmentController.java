@@ -1,6 +1,7 @@
 package com.nextdocs.api.attachment.controller;
 
 import com.nextdocs.api.attachment.AttachmentContentTypes;
+import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
 import com.nextdocs.api.attachment.entity.Attachment;
@@ -84,16 +85,18 @@ public class AttachmentController {
             @PathVariable UUID documentId,
             @RequestPart("file") MultipartFile file) {
         UserPrincipal caller = Objects.requireNonNull(principal, "Authentication is required to upload.");
-        AttachmentResponse response = attachmentService.upload(caller.getId(), documentId, file);
+        AttachmentResponse response =
+                attachmentService.upload(caller.getId(), AttachmentScope.document(documentId), file);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Attachment uploaded."));
     }
 
     @Operation(
             summary = "Create a signed download URL",
             description = "Returns a short-lived URL that authorizes downloading a single attachment. "
-                    + "Requires read access to the owning document; anonymous callers are allowed for "
-                    + "documents shared as ANYONE_WITH_LINK. Browser media elements cannot send "
-                    + "Authorization headers, which is why this indirection exists.",
+                    + "Requires read access to the owning document or workspace; anonymous callers are "
+                    + "allowed for documents shared as ANYONE_WITH_LINK and public workspace branding. "
+                    + "Browser media elements cannot send Authorization headers, which is why this "
+                    + "indirection exists.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

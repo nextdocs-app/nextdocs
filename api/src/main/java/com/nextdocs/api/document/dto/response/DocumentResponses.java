@@ -32,7 +32,7 @@ public final class DocumentResponses {
             DocumentAccessLevel accessLevel,
             OffsetDateTime deletedAt,
             OffsetDateTime purgeAt) {
-        return new DocumentResponse(
+        return DocumentResponse.withoutBranding(
                 document.getId(),
                 document.getTitle(),
                 null,

@@ -18,6 +18,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.AttachmentVisibility;
 import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
@@ -33,6 +35,10 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -75,6 +81,12 @@ class AttachmentServiceTest {
     private PermissionService permissionService;
 
     @Mock
+    private WorkspaceAccessService workspaceAccessService;
+
+    @Mock
+    private AttachmentScopeBinder scopeBinder;
+
+    @Mock
     private AttachmentStorage attachmentStorage;
 
     @Mock
@@ -87,8 +99,11 @@ class AttachmentServiceTest {
 
     private UUID userId;
     private UUID documentId;
+    private UUID workspaceId;
+    private AttachmentScope documentScope;
     private User user;
     private Document document;
+    private Workspace workspace;
 
     @BeforeEach
     void setUp() {
@@ -102,15 +117,21 @@ class AttachmentServiceTest {
         attachmentService = new AttachmentService(
                 attachmentRepository,
                 userRepository,
-                permissionService,
+                new AttachmentAccessPolicy(permissionService, workspaceAccessService),
+                scopeBinder,
                 attachmentStorage,
                 signer,
                 quotaService,
                 properties,
                 metadataWriter);
+        // Binding is verified in AttachmentScopeBinderTest; here the service only has
+        // to hand the policy-authorized scope through untouched.
+        lenient().when(scopeBinder.bind(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         userId = UUID.randomUUID();
         documentId = UUID.randomUUID();
+        workspaceId = UUID.randomUUID();
+        documentScope = AttachmentScope.document(documentId);
         user = User.builder()
                 .id(userId)
                 .email("alice@example.com")
@@ -122,6 +143,7 @@ class AttachmentServiceTest {
                 .title("Doc")
                 .yjsState(new byte[] {1, 2, 3})
                 .build();
+        workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
     }
 
     // --- upload ---------------------------------------------------------------
@@ -134,7 +156,7 @@ class AttachmentServiceTest {
         when(attachmentRepository.saveAndFlush(any(Attachment.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "hello"));
+        attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello"));
 
         // Admission control runs first so an over-quota upload never reaches the disk.
         InOrder inOrder = inOrder(quotaService, attachmentStorage);
@@ -152,7 +174,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.PAYLOAD_TOO_LARGE,
-                () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "hello")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello")));
 
         verifyNoInteractions(attachmentStorage);
         verify(attachmentRepository, never()).saveAndFlush(any());
@@ -177,7 +199,7 @@ class AttachmentServiceTest {
         when(attachmentRepository.saveAndFlush(any(Attachment.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data"));
+        attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data"));
 
         assertThat(transactionActiveDuringPut).isFalse();
     }
@@ -193,7 +215,7 @@ class AttachmentServiceTest {
         // Declares one byte but streams five: the missing four must be reserved too, or an
         // under-reporting container gets a quota discount.
         AttachmentResponse response = attachmentService.upload(
-                userId, documentId, underReportingMultipartFile("big.png", "image/png", "hello"));
+                userId, documentScope, underReportingMultipartFile("big.png", "image/png", "hello"));
 
         assertEquals(13L, response.sizeBytes());
         InOrder inOrder = inOrder(quotaService);
@@ -211,7 +233,7 @@ class AttachmentServiceTest {
 
         AttachmentResponse response = attachmentService.upload(
                 userId,
-                documentId,
+                documentScope,
                 multipartFile("..\\screens\\Screen Shot.PNG", "image/png; charset=binary", "hello"));
 
         assertEquals("Screen Shot.PNG", response.fileName());
@@ -252,7 +274,7 @@ class AttachmentServiceTest {
         });
 
         AttachmentResponse response =
-                attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "hello"));
+                attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello"));
 
         assertEquals(createdAt, response.createdAt());
     }
@@ -268,7 +290,7 @@ class AttachmentServiceTest {
         // The multipart container may under-report its size; the bytes on disk win.
         MultipartFile file = underReportingMultipartFile("a.png", "image/png", "hello");
 
-        AttachmentResponse response = attachmentService.upload(userId, documentId, file);
+        AttachmentResponse response = attachmentService.upload(userId, documentScope, file);
 
         assertEquals(13L, response.sizeBytes());
         ArgumentCaptor<Attachment> captor = ArgumentCaptor.forClass(Attachment.class);
@@ -338,7 +360,7 @@ class AttachmentServiceTest {
         // MultipartFile that reuses its stream would read from EOF and persist an
         // empty file with a digest of the empty payload.
         AttachmentResponse response = attachmentService.upload(
-                userId, documentId, reusableStreamMultipartFile("a.png", "image/png", "hello"));
+                userId, documentScope, reusableStreamMultipartFile("a.png", "image/png", "hello"));
 
         assertEquals(13L, response.sizeBytes());
         ArgumentCaptor<Attachment> captor = ArgumentCaptor.forClass(Attachment.class);
@@ -365,7 +387,7 @@ class AttachmentServiceTest {
         } catch (IOException exception) {
             throw new UncheckedIOException(exception);
         }
-        assertApiError(ErrorCode.VALIDATION_FAILED, () -> attachmentService.upload(userId, documentId, spoofed));
+        assertApiError(ErrorCode.VALIDATION_FAILED, () -> attachmentService.upload(userId, documentScope, spoofed));
     }
 
     @Test
@@ -374,7 +396,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.VALIDATION_FAILED,
-                () -> attachmentService.upload(userId, documentId, multipartFile("empty.txt", "text/plain", "")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("empty.txt", "text/plain", "")));
 
         verifyNoInteractions(attachmentStorage);
     }
@@ -386,7 +408,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.PAYLOAD_TOO_LARGE,
-                () -> attachmentService.upload(userId, documentId, multipartFile("big.txt", "text/plain", "12345")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("big.txt", "text/plain", "12345")));
 
         verifyNoInteractions(attachmentStorage);
     }
@@ -403,7 +425,7 @@ class AttachmentServiceTest {
         assertApiError(
                 ErrorCode.PAYLOAD_TOO_LARGE,
                 () -> attachmentService.upload(
-                        userId, documentId, underReportingMultipartFile("big.png", "image/png", "hello")));
+                        userId, documentScope, underReportingMultipartFile("big.png", "image/png", "hello")));
 
         verify(attachmentStorage).delete(anyString());
         verify(attachmentRepository, never()).saveAndFlush(any());
@@ -419,7 +441,7 @@ class AttachmentServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         AttachmentResponse response =
-                attachmentService.upload(userId, documentId, multipartFile("exact.png", "image/png", "hello"));
+                attachmentService.upload(userId, documentScope, multipartFile("exact.png", "image/png", "hello"));
 
         assertEquals(13L, response.sizeBytes());
     }
@@ -434,7 +456,7 @@ class AttachmentServiceTest {
         MultipartFile file = multipartFile("a.png", "image/png", "hello");
         when(file.getSize()).thenReturn(-1L);
 
-        AttachmentResponse response = attachmentService.upload(userId, documentId, file);
+        AttachmentResponse response = attachmentService.upload(userId, documentScope, file);
 
         // Five bytes land on disk from a -1 declaration: without the clamp the
         // reconciliation would reserve six and over-hold one byte of quota.
@@ -450,7 +472,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.NOT_FOUND,
-                () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data")));
 
         verifyNoInteractions(attachmentStorage);
     }
@@ -461,7 +483,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.FORBIDDEN,
-                () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data")));
 
         verifyNoInteractions(attachmentStorage);
         verify(attachmentRepository, never()).saveAndFlush(any());
@@ -477,7 +499,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.INTERNAL_ERROR,
-                () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data")));
 
         verify(attachmentRepository, never()).saveAndFlush(any());
         // The reservation must not outlive the failed upload.
@@ -503,7 +525,7 @@ class AttachmentServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         AttachmentResponse response =
-                attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "hello"));
+                attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello"));
 
         assertEquals(11L, response.sizeBytes());
         // Declared 13 bytes but stored 11: the 2-byte over-report must be handed back, or
@@ -526,7 +548,7 @@ class AttachmentServiceTest {
 
         assertApiError(
                 ErrorCode.INTERNAL_ERROR,
-                () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data")));
+                () -> attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data")));
     }
 
     @Test
@@ -537,8 +559,8 @@ class AttachmentServiceTest {
         when(attachmentRepository.saveAndFlush(any(Attachment.class)))
                 .thenThrow(new RuntimeException("constraint violation"));
 
-        assertThatThrownBy(
-                        () -> attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data")))
+        assertThatThrownBy(() ->
+                        attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data")))
                 .isInstanceOf(RuntimeException.class);
 
         verify(attachmentStorage).delete(anyString());
@@ -557,7 +579,7 @@ class AttachmentServiceTest {
         List<TransactionSynchronization> synchronizations;
         TransactionSynchronizationManager.initSynchronization();
         try {
-            response = attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data"));
+            response = attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data"));
             synchronizations = TransactionSynchronizationManager.getSynchronizations();
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
@@ -580,7 +602,7 @@ class AttachmentServiceTest {
         List<TransactionSynchronization> synchronizations;
         TransactionSynchronizationManager.initSynchronization();
         try {
-            attachmentService.upload(userId, documentId, multipartFile("a.png", "image/png", "data"));
+            attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "data"));
             synchronizations = TransactionSynchronizationManager.getSynchronizations();
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
@@ -590,6 +612,128 @@ class AttachmentServiceTest {
         synchronizations.get(0).afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
 
         verify(attachmentStorage, never()).delete(anyString());
+    }
+
+    // --- workspace scope --------------------------------------------------------
+
+    @Test
+    void uploadWorkspaceAttachment_resolvesTheCallersWorkspaceOnce() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(attachmentRepository.saveAndFlush(any(Attachment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        AttachmentResponse response =
+                attachmentService.uploadWorkspaceAttachment(userId, multipartFile("icon.png", "image/png", "hello"));
+
+        assertThat(response.documentId()).isNull();
+        verify(workspaceAccessService, times(1)).requireOwner(userId);
+        verify(attachmentStorage).put(eq(workspaceId + "/" + response.id()), any(InputStream.class));
+    }
+
+    @Test
+    void upload_workspaceScope_storesUnderTheWorkspaceAndReturnsANullDocumentId() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(attachmentRepository.saveAndFlush(any(Attachment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        AttachmentResponse response = attachmentService.upload(
+                userId, AttachmentScope.workspace(workspaceId), multipartFile("icon.png", "image/png", "hello"));
+
+        assertThat(response.documentId()).isNull();
+        verify(attachmentStorage).put(eq(workspaceId + "/" + response.id()), any(InputStream.class));
+    }
+
+    @Test
+    void upload_workspaceScope_staysPrivateUntilTheIconAdoptsIt() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        attachmentService.upload(
+                userId, AttachmentScope.workspace(workspaceId), multipartFile("icon.png", "image/png", "hello"));
+
+        assertThat(captured.getValue().getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+        assertThat(captured.getValue().isPublic()).isFalse();
+    }
+
+    @Test
+    void upload_workspaceScope_unappliedUploadIsNotFoundToAnonymousViewers() {
+        stubStoragePut();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+        AttachmentResponse response = attachmentService.upload(
+                userId, AttachmentScope.workspace(workspaceId), multipartFile("icon.png", "image/png", "hello"));
+        when(attachmentRepository.findById(response.id())).thenReturn(Optional.of(captured.getValue()));
+
+        // Guessing the id of an upload the owner never applied must not read it.
+        assertApiError(ErrorCode.NOT_FOUND, () -> attachmentService.resolveUrl(null, response.id()));
+    }
+
+    @Test
+    void upload_workspaceScope_rejectsANonRasterFile() {
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.OWNER));
+
+        assertApiError(
+                ErrorCode.VALIDATION_FAILED,
+                () -> attachmentService.upload(
+                        userId,
+                        AttachmentScope.workspace(workspaceId),
+                        multipartFile("not-an-icon.pdf", "application/pdf", "%PDF-1.7")));
+
+        // Rejected before quota or storage: a workspace upload can only back an icon.
+        verifyNoInteractions(userRepository, quotaService, attachmentStorage, attachmentRepository);
+    }
+
+    @Test
+    void upload_documentScope_isAlwaysPrivate() {
+        stubStoragePut();
+        when(permissionService.requireEditAccess(userId, documentId)).thenReturn(document);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        ArgumentCaptor<Attachment> captured = ArgumentCaptor.forClass(Attachment.class);
+        when(attachmentRepository.saveAndFlush(captured.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        attachmentService.upload(userId, documentScope, multipartFile("a.png", "image/png", "hello"));
+
+        assertThat(captured.getValue().getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+    }
+
+    @Test
+    void upload_workspaceScope_ofAnotherWorkspace_throwsNotFound() {
+        Workspace other =
+                Workspace.builder().id(UUID.randomUUID()).name("Other").build();
+        when(workspaceAccessService.requireOwner(userId)).thenReturn(membershipIn(other, WorkspaceRole.OWNER));
+
+        assertApiError(
+                ErrorCode.NOT_FOUND,
+                () -> attachmentService.upload(
+                        userId,
+                        AttachmentScope.workspace(workspaceId),
+                        multipartFile("icon.png", "image/png", "data")));
+
+        verifyNoInteractions(attachmentStorage);
+        verify(attachmentRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void upload_workspaceScope_withoutOwnerRole_propagatesForbidden() {
+        when(workspaceAccessService.requireOwner(userId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        assertApiError(
+                ErrorCode.FORBIDDEN,
+                () -> attachmentService.upload(
+                        userId,
+                        AttachmentScope.workspace(workspaceId),
+                        multipartFile("icon.png", "image/png", "data")));
+
+        verifyNoInteractions(attachmentStorage);
     }
 
     // --- signed URL issuance --------------------------------------------------
@@ -700,6 +844,48 @@ class AttachmentServiceTest {
         AttachmentUrlResponse response = attachmentService.resolveUrl(userId, attachment.getId());
 
         assertThat(response.url()).startsWith("https://files.example.com/api/v1/attachments/");
+    }
+
+    @Test
+    void resolveUrl_workspaceAttachment_memberOfOwningWorkspace_returnsSignedUrl() {
+        Attachment attachment = workspaceAttachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+        when(workspaceAccessService.requireMember(userId)).thenReturn(membershipIn(workspace, WorkspaceRole.MEMBER));
+
+        AttachmentUrlResponse response = attachmentService.resolveUrl(userId, attachment.getId());
+
+        assertThat(response.url()).startsWith("/api/v1/attachments/" + attachment.getId() + "/file?exp=");
+    }
+
+    @Test
+    void resolveUrl_privateWorkspaceAttachment_anonymousCaller_throwsNotFound() {
+        // Private workspace attachments stay invisible to share-link visitors.
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        assertApiError(ErrorCode.NOT_FOUND, () -> attachmentService.resolveUrl(null, attachment.getId()));
+    }
+
+    @Test
+    void resolveUrl_publicWorkspaceAttachment_anonymousCaller_returnsSignedUrl() {
+        // The workspace icon is branding: share pages must render it without a session.
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PUBLIC);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        AttachmentUrlResponse response = attachmentService.resolveUrl(null, attachment.getId());
+
+        assertThat(response.url()).startsWith("/api/v1/attachments/" + attachment.getId() + "/file?exp=");
+    }
+
+    @Test
+    void resolveUrl_workspaceAttachment_callerFromAnotherWorkspace_throwsNotFound() {
+        Attachment attachment = workspaceAttachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+        Workspace other =
+                Workspace.builder().id(UUID.randomUUID()).name("Other").build();
+        when(workspaceAccessService.requireMember(userId)).thenReturn(membershipIn(other, WorkspaceRole.MEMBER));
+
+        assertApiError(ErrorCode.NOT_FOUND, () -> attachmentService.resolveUrl(userId, attachment.getId()));
     }
 
     // --- download -------------------------------------------------------------
@@ -912,6 +1098,75 @@ class AttachmentServiceTest {
         verify(attachmentRepository).findStorageKeysByDocumentIds(ids.subList(500, 501));
     }
 
+    @Test
+    void publishWorkspaceUpload_makesTheAdoptedIconAnonymousReadable() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.publishWorkspaceUpload(workspaceId, attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PUBLIC);
+        assertThat(attachmentService.resolveUrl(null, attachment.getId()).url()).startsWith("/api/v1/attachments/");
+    }
+
+    @Test
+    void publishWorkspaceUpload_rowOfAnotherWorkspace_isLeftPrivate() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PRIVATE);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.publishWorkspaceUpload(UUID.randomUUID(), attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+    }
+
+    @Test
+    void deleteWorkspaceUpload_deletesRowReleasesQuotaAndFile() {
+        Attachment attachment = workspaceAttachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachment.getId());
+
+        verify(attachmentRepository).delete(attachment);
+        verify(quotaService).release(userId, attachment.getSizeBytes());
+        verify(attachmentStorage).delete(attachment.getStorageKey());
+    }
+
+    @Test
+    void deleteWorkspaceUpload_unknownRow_isNoOp() {
+        UUID attachmentId = UUID.randomUUID();
+        when(attachmentRepository.findById(attachmentId)).thenReturn(Optional.empty());
+
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachmentId);
+
+        verify(attachmentRepository, never()).delete(any());
+        verifyNoInteractions(quotaService, attachmentStorage);
+    }
+
+    @Test
+    void deleteWorkspaceUpload_documentScopedRow_isLeftAlone() {
+        // A shared cleanup helper must never delete a file a document still points at.
+        Attachment attachment = attachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.deleteWorkspaceUpload(workspaceId, attachment.getId());
+
+        verify(attachmentRepository, never()).delete(any());
+        verifyNoInteractions(quotaService, attachmentStorage);
+    }
+
+    @Test
+    void deleteWorkspaceUpload_rowOfAnotherWorkspace_isLeftAlone() {
+        Attachment attachment = workspaceAttachment();
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        // The caller names the workspace it is cleaning up; an upload of any other
+        // workspace must not be deletable by id alone.
+        attachmentService.deleteWorkspaceUpload(UUID.randomUUID(), attachment.getId());
+
+        verify(attachmentRepository, never()).delete(any());
+        verifyNoInteractions(quotaService, attachmentStorage);
+    }
+
     // --- helpers --------------------------------------------------------------
 
     private Attachment attachment() {
@@ -927,6 +1182,35 @@ class AttachmentServiceTest {
                 .build();
     }
 
+    private Attachment workspaceAttachment() {
+        return workspaceAttachment(AttachmentVisibility.PRIVATE);
+    }
+
+    private Attachment workspaceAttachment(AttachmentVisibility visibility) {
+        return Attachment.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .uploadedBy(user)
+                .fileName("icon.png")
+                .contentType("image/png")
+                .sizeBytes(3)
+                .storageKey(workspaceId + "/" + UUID.randomUUID())
+                .sha256("0".repeat(64))
+                .visibility(visibility)
+                .build();
+    }
+
+    private WorkspaceAccessService.Membership membershipIn(Workspace memberWorkspace, WorkspaceRole role) {
+        return new WorkspaceAccessService.Membership(
+                memberWorkspace,
+                WorkspaceMember.builder()
+                        .id(UUID.randomUUID())
+                        .workspace(memberWorkspace)
+                        .user(user)
+                        .role(role)
+                        .build());
+    }
+
     private List<Attachment> captureUploads(String[] fileNames, String contentType) {
         String[] contentTypes = new String[fileNames.length];
         java.util.Arrays.fill(contentTypes, contentType);
@@ -940,7 +1224,7 @@ class AttachmentServiceTest {
         when(attachmentRepository.saveAndFlush(any(Attachment.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         for (int i = 0; i < fileNames.length; i++) {
-            attachmentService.upload(userId, documentId, multipartFile(fileNames[i], contentTypes[i], "data"));
+            attachmentService.upload(userId, documentScope, multipartFile(fileNames[i], contentTypes[i], "data"));
         }
         ArgumentCaptor<Attachment> captor = ArgumentCaptor.forClass(Attachment.class);
         verify(attachmentRepository, times(fileNames.length)).saveAndFlush(captor.capture());

@@ -1,6 +1,7 @@
 package com.nextdocs.api.document.dto.response;
 
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -41,4 +42,50 @@ public record DocumentResponse(
         DocumentIconResponse icon,
 
         @Schema(description = "Cover image, null when the document has none")
-        DocumentCoverResponse cover) {}
+        DocumentCoverResponse cover,
+
+        @Schema(
+                description =
+                        "Workspace name and icon for anonymous share pages; null on " + "authenticated and list reads")
+        WorkspaceBrandingResponse workspace) {
+
+    /**
+     * Member and list projection: workspace branding is only disclosed on a public share
+     * page, so everything that is not {@code GET /api/v1/documents/{id}/public} calls this
+     * factory instead of passing a null branding argument at each construction.
+     */
+    public static DocumentResponse withoutBranding(
+            UUID id,
+            String title,
+            String yjsState,
+            UUID parentId,
+            String orderKey,
+            boolean hasChildren,
+            boolean hasCollaborators,
+            DocumentAccessLevel accessLevel,
+            String createdBy,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            OffsetDateTime deletedAt,
+            OffsetDateTime purgeAt,
+            DocumentIconResponse icon,
+            DocumentCoverResponse cover) {
+        return new DocumentResponse(
+                id,
+                title,
+                yjsState,
+                parentId,
+                orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
+                createdBy,
+                createdAt,
+                updatedAt,
+                deletedAt,
+                purgeAt,
+                icon,
+                cover,
+                null);
+    }
+}

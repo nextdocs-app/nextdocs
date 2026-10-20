@@ -9,6 +9,7 @@ import static org.mockito.Mockito.*;
 import com.nextdocs.api.auth.entity.RefreshToken;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
+import com.nextdocs.api.auth.security.ClientIpResolver;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import jakarta.servlet.http.Cookie;
@@ -34,6 +35,12 @@ class TokenServiceTest {
     @Mock
     private RefreshTokenRepository refreshTokenRepository;
 
+    @Mock
+    private RefreshTokenRevoker refreshTokenRevoker;
+
+    @Mock
+    private ClientIpResolver clientIpResolver;
+
     @InjectMocks
     private TokenService tokenService;
 
@@ -46,6 +53,9 @@ class TokenServiceTest {
         ReflectionTestUtils.setField(tokenService, "refreshTokenExpiryMs", REFRESH_EXPIRY_MS);
         ReflectionTestUtils.setField(tokenService, "cookieSecure", false);
         ReflectionTestUtils.setField(tokenService, "cookieDomain", "");
+
+        // Not every refresh-token test cares about IP capture.
+        lenient().when(clientIpResolver.resolve(any())).thenReturn("203.0.113.5");
 
         mockRequest = new MockHttpServletRequest();
         mockResponse = new MockHttpServletResponse();
@@ -100,8 +110,7 @@ class TokenServiceTest {
     }
 
     @Test
-    void issueRefreshToken_usesXForwardedForAsIpAddress() {
-        mockRequest.addHeader("X-Forwarded-For", "203.0.113.5, 10.0.0.1");
+    void issueRefreshToken_storesTheResolvedClientAddress() {
         when(refreshTokenRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         tokenService.issueRefreshToken(testUser, mockRequest, mockResponse);
@@ -109,6 +118,18 @@ class TokenServiceTest {
         ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
         verify(refreshTokenRepository).save(captor.capture());
         assertThat(captor.getValue().getIpAddress().getHostAddress()).isEqualTo("203.0.113.5");
+    }
+
+    @Test
+    void issueRefreshToken_leavesIpAddressNull_whenNoIpLiteralResolves() {
+        when(clientIpResolver.resolve(any())).thenReturn("");
+        when(refreshTokenRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        tokenService.issueRefreshToken(testUser, mockRequest, mockResponse);
+
+        ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
+        verify(refreshTokenRepository).save(captor.capture());
+        assertThat(captor.getValue().getIpAddress()).isNull();
     }
 
     @Test
@@ -149,7 +170,34 @@ class TokenServiceTest {
                 .satisfies(ex ->
                         assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.REFRESH_TOKEN_INVALID));
 
-        verify(refreshTokenRepository).revokeAllForUser(testUser.getId());
+        // Through the revoker, not the repository directly: the revocation must commit
+        // even though this method throws (the throw rolls its transaction back).
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+        verify(refreshTokenRepository, never()).revokeAllForUser(any());
+    }
+
+    @Test
+    void rotateRefreshToken_revokesAndThrows_whenUserIsDeactivated() {
+        mockRequest.setCookies(new Cookie("rt", "validrawtoken"));
+        testUser.setActive(false);
+
+        RefreshToken validToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(validToken));
+
+        // Removal deactivates the account and revokes its tokens; this backstop refuses
+        // any token that slips through instead of minting a fresh access token.
+        assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_DISABLED));
+
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+        verify(refreshTokenRepository, never()).save(any());
+        assertThat(mockResponse.getHeader("Set-Cookie")).isNull();
     }
 
     @Test

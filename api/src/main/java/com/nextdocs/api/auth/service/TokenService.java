@@ -3,21 +3,17 @@ package com.nextdocs.api.auth.service;
 import com.nextdocs.api.auth.entity.RefreshToken;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
+import com.nextdocs.api.auth.security.ClientIpResolver;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.common.util.SecureTokens;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
-import java.util.Base64;
-import java.util.HexFormat;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,9 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class TokenService {
 
     private static final String REFRESH_TOKEN_COOKIE = "rt";
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final RefreshTokenRepository refreshTokenRepository;
+    private final RefreshTokenRevoker refreshTokenRevoker;
+    private final ClientIpResolver clientIpResolver;
 
     @Value("${app.jwt.refresh-token-expiry-ms}")
     private long refreshTokenExpiryMs;
@@ -53,8 +50,8 @@ public class TokenService {
 
     @Transactional
     public String issueRefreshToken(User user, HttpServletRequest req, HttpServletResponse res) {
-        String rawToken = generateRawToken();
-        String hash = sha256Hex(rawToken);
+        String rawToken = SecureTokens.mint();
+        String hash = SecureTokens.sha256Hex(rawToken);
 
         RefreshToken entity = RefreshToken.builder()
                 .user(user)
@@ -74,25 +71,36 @@ public class TokenService {
         String rawToken =
                 extractRefreshTokenCookie(req).orElseThrow(() -> new ApiException(ErrorCode.REFRESH_TOKEN_INVALID));
 
-        String hash = sha256Hex(rawToken);
+        String hash = SecureTokens.sha256Hex(rawToken);
         RefreshToken stored = refreshTokenRepository
                 .findByTokenHash(hash)
                 .orElseThrow(() -> new ApiException(ErrorCode.REFRESH_TOKEN_INVALID));
 
         if (!stored.isValid()) {
-            // Possible token reuse — revoke all tokens for this user as a precaution
+            // Possible token reuse — revoke all tokens for this user as a precaution.
+            // The revoker commits independently: this method throws, so a revocation in
+            // this transaction would be rolled back and the reused token would survive.
             log.warn(
                     "Invalid/expired refresh token used for user {}. Revoking all tokens.",
                     stored.getUser().getId());
-            refreshTokenRepository.revokeAllForUser(stored.getUser().getId());
+            refreshTokenRevoker.revokeAllForUser(stored.getUser().getId());
             throw new ApiException(ErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        User user = stored.getUser();
+        if (!user.isActive()) {
+            // A removed member's session must not outlive the removal by rotating here.
+            // Removal revokes eagerly; this is the backstop for a token that slipped
+            // through, so it revokes again (committing on its own) before refusing.
+            log.warn("Refresh token used for deactivated user {}. Revoking all tokens.", user.getId());
+            refreshTokenRevoker.revokeAllForUser(user.getId());
+            throw new ApiException(ErrorCode.ACCOUNT_DISABLED);
         }
 
         // Revoke the used token (rotation)
         stored.setRevoked(true);
         refreshTokenRepository.save(stored);
 
-        User user = stored.getUser();
         issueRefreshToken(user, req, res);
         return user;
     }
@@ -100,7 +108,7 @@ public class TokenService {
     @Transactional
     public void revokeRefreshToken(HttpServletRequest req, HttpServletResponse res) {
         extractRefreshTokenCookie(req).ifPresent(rawToken -> {
-            String hash = sha256Hex(rawToken);
+            String hash = SecureTokens.sha256Hex(rawToken);
             refreshTokenRepository.findByTokenHash(hash).ifPresent(token -> {
                 token.setRevoked(true);
                 refreshTokenRepository.save(token);
@@ -142,28 +150,13 @@ public class TokenService {
                 .findFirst();
     }
 
-    // --- Crypto helpers ---
-
-    private String generateRawToken() {
-        byte[] bytes = new byte[32]; // 256 bits
-        SECURE_RANDOM.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    private String sha256Hex(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is required but not available", e);
-        }
-    }
-
     private InetAddress resolveIp(HttpServletRequest request) {
+        String ip = clientIpResolver.resolve(request);
+        if (ip.isEmpty()) {
+            return null;
+        }
         try {
-            String forwarded = request.getHeader("X-Forwarded-For");
-            String ip = (forwarded != null) ? forwarded.split(",")[0].trim() : request.getRemoteAddr();
+            // resolve() only yields IP literals, so this never performs a DNS lookup.
             return InetAddress.getByName(ip);
         } catch (UnknownHostException e) {
             return null;

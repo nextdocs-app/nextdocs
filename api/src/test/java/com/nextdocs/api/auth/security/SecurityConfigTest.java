@@ -10,8 +10,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.attachment.controller.AttachmentController;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.controller.DocumentIconController;
+import com.nextdocs.api.workspace.controller.InstanceController;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,7 +45,7 @@ class SecurityConfigTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     @Test
     @DisplayName("Anonymous callers reach the signed attachment endpoints without a 401")
@@ -112,6 +113,31 @@ class SecurityConfigTest {
         mockMvc.perform(put(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
         mockMvc.perform(patch(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
         mockMvc.perform(delete(DocumentIconController.SVG_PATH, "home")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Anonymous callers reach the onboarding read without a 401")
+    void publicPaths_permitAnonymousOnboardingReads() throws Exception {
+        mockMvc.perform(get(InstanceController.STATUS_PATH)).andExpect(status().isOk());
+        mockMvc.perform(head(InstanceController.STATUS_PATH)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Anonymous writes to the onboarding path are rejected for every write method")
+    void publicPaths_rejectAnonymousOnboardingWrites() throws Exception {
+        // Only GET|HEAD are public: the register screen reads the instance status, it
+        // never writes it, and a method-agnostic permitAll would open whatever write
+        // endpoint a future route adds under the path.
+        mockMvc.perform(post(InstanceController.STATUS_PATH)).andExpect(status().isUnauthorized());
+        mockMvc.perform(put(InstanceController.STATUS_PATH)).andExpect(status().isUnauthorized());
+        mockMvc.perform(patch(InstanceController.STATUS_PATH)).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete(InstanceController.STATUS_PATH)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Anonymous callers reach the invitation preview without a 401")
+    void publicPaths_permitAnonymousInvitePreview() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/invite/preview")).andExpect(status().isOk());
     }
 
     @Test
@@ -193,6 +219,16 @@ class SecurityConfigTest {
 
         @GetMapping(DocumentIconController.SVG_PATH)
         String iconSvg(@PathVariable String name) {
+            return "ok";
+        }
+
+        @GetMapping(InstanceController.STATUS_PATH)
+        String instanceStatus() {
+            return "ok";
+        }
+
+        @PostMapping("/api/v1/auth/invite/preview")
+        String invitePreview() {
             return "ok";
         }
 

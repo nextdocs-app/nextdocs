@@ -1,6 +1,7 @@
 package com.nextdocs.api.document.entity;
 
 import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.pageicon.PageIconType;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -44,7 +45,7 @@ public class Document {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "icon_type", length = 16)
-    private DocumentIconType iconType;
+    private PageIconType iconType;
 
     @Column(name = "icon_value", length = 2048)
     private String iconValue;

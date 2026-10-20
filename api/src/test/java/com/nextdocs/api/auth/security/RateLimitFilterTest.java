@@ -42,14 +42,17 @@ class RateLimitFilterTest {
 
     private MockMvc mockMvc;
     private StubRateLimiter rateLimiter;
+    private ClientIpResolver clientIpResolver;
     private RateLimitFilter filter;
 
     @BeforeEach
     void setUp() {
         rateLimiter = new StubRateLimiter();
+        clientIpResolver = new ClientIpResolver();
         filter = new RateLimitFilter(
                 rateLimiter,
                 new ObjectMapper(),
+                clientIpResolver,
                 120,
                 60,
                 20,
@@ -103,6 +106,17 @@ class RateLimitFilterTest {
         mockMvc.perform(post("/api/v1/auth/login").remoteAddress("10.0.0.2"))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void authPath_isClassifiedByItsDecodedForm() throws Exception {
+        // The container routes the decoded path, so an escaped prefix must not leave
+        // login/signup on the unlimited fallback.
+        mockMvc.perform(post(URI.create("/api/v1/%61uth/login")).remoteAddress("10.0.0.12"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.12");
     }
 
     @Test
@@ -160,6 +174,21 @@ class RateLimitFilterTest {
 
         assertThat(rateLimiter.invocationCount).isEqualTo(1);
         assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.0.4");
+    }
+
+    @Test
+    void publicDocumentPaths_areClassifiedByTheirDecodedForm() throws Exception {
+        mockMvc.perform(get(URI.create("/api/v1/%64ocuments/" + DOCUMENT_ID + "/public"))
+                        .remoteAddress("10.0.0.13"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.0.13");
+
+        mockMvc.perform(patch(URI.create("/api/v1/documents/" + DOCUMENT_ID + "/%70ublic"))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}")
+                        .remoteAddress("10.0.0.13"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("public-write:10.0.0.13");
     }
 
     @Test
@@ -240,6 +269,16 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void attachmentPath_isClassifiedByItsDecodedForm() throws Exception {
+        mockMvc.perform(get(URI.create("/api/v1/%61ttachments/" + DOCUMENT_ID + "/%75rl"))
+                        .remoteAddress("10.0.4.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("download:10.0.4.3");
+    }
+
+    @Test
     void attachmentPath_whenRejected_returnsTooManyRequests() throws Exception {
         rateLimiter.allowed = false;
 
@@ -265,6 +304,50 @@ class RateLimitFilterTest {
         assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.5.1", "upload:" + callerId);
         assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
         assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void workspaceUploadPath_consumesCallerAndAddressBuckets() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post("/api/v1/workspaces/current/attachments").remoteAddress("10.0.6.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.6.1", "upload:" + callerId);
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void workspaceUploadPath_withEncodedPrefix_staysOnTheUploadBudget() throws Exception {
+        // The raw URI differs from the route the controller sees, so the match has to
+        // happen on the decoded path: an escape must not skip the disk-filling budget.
+        // The URI form rather than get(String): the string form re-encodes the escape.
+        UUID callerId = authenticate();
+
+        mockMvc.perform(
+                post(URI.create("/api/v1/%77orkspaces/current/attachments")).remoteAddress("10.0.6.2"));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("upload:" + callerId);
+    }
+
+    @Test
+    void workspaceUploadPath_withTrailingSlash_staysOnTheUploadBudget() throws Exception {
+        // Spring Boot rejects trailing slashes on the route, but a 404 must still not
+        // bypass the upload bucket on the way there.
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post("/api/v1/workspaces/current/attachments/").remoteAddress("10.0.6.4"));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("upload:" + callerId);
+    }
+
+    @Test
+    void workspaceAdministrationPaths_stayUnlimited() throws Exception {
+        mockMvc.perform(get("/api/v1/workspaces/current").remoteAddress("10.0.6.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
     }
 
     @Test
@@ -710,6 +793,24 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void ipv6AddressesInTheSameSlash64ShareOneBucket() throws Exception {
+        String id = "11111111-1111-1111-1111-111111111111";
+
+        // A subscriber controls the whole /64; rotating the host bits must not hand out
+        // a fresh rate-limit budget per address.
+        mockMvc.perform(get("/api/v1/documents/{id}/public", id).remoteAddress("2001:db8:1:2:aaaa::1"))
+                .andExpect(status().isOk());
+        String firstKey = rateLimiter.lastKey;
+        mockMvc.perform(get("/api/v1/documents/{id}/public", id).remoteAddress("2001:db8:1:2:bbbb::2"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo(firstKey);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/public", id).remoteAddress("2001:db8:1:3::1"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isNotEqualTo(firstKey);
+    }
+
+    @Test
     void publicNestedPath_isNotRateLimited() throws Exception {
         mockMvc.perform(get("/api/v1/documents/11111111-1111-1111-1111-111111111111/public/children/extra")
                         .remoteAddress("10.0.1.2"))
@@ -732,8 +833,8 @@ class RateLimitFilterTest {
     @Test
     void xForwardedForHeader_usesRightmostUntrustedHop_whenRemoteAddressIsTrustedProxy() throws Exception {
         // Configure 10.0.0.1 as a trusted proxy so X-Forwarded-For is honoured
-        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
-        filter.initTrustedProxies();
+        ReflectionTestUtils.setField(clientIpResolver, "trustedProxiesRaw", "10.0.0.1");
+        clientIpResolver.initTrustedProxies();
 
         // Typical chain: the client, then the trusted hop that appended its own address.
         mockMvc.perform(post("/api/v1/auth/login")
@@ -746,8 +847,8 @@ class RateLimitFilterTest {
 
     @Test
     void xForwardedForHeader_ignoresClientSuppliedLeadingEntries() throws Exception {
-        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
-        filter.initTrustedProxies();
+        ReflectionTestUtils.setField(clientIpResolver, "trustedProxiesRaw", "10.0.0.1");
+        clientIpResolver.initTrustedProxies();
 
         // The caller prepended 9.9.9.9; the trusted hop appended the real peer address.
         // Rotating the spoofed entry must not hand out a fresh budget per request.
@@ -766,8 +867,8 @@ class RateLimitFilterTest {
 
     @Test
     void xForwardedForHeader_fallsBackToPeer_whenEveryHopIsATrustedProxy() throws Exception {
-        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1, 10.0.0.2");
-        filter.initTrustedProxies();
+        ReflectionTestUtils.setField(clientIpResolver, "trustedProxiesRaw", "10.0.0.1, 10.0.0.2");
+        clientIpResolver.initTrustedProxies();
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Forwarded-For", "10.0.0.2, 10.0.0.1")
@@ -778,14 +879,15 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void xForwardedForHeader_skipsGarbageHops() throws Exception {
-        ReflectionTestUtils.setField(filter, "trustedProxiesRaw", "10.0.0.1");
-        filter.initTrustedProxies();
+    void xForwardedForHeader_skipsHostnamesAndGarbage() throws Exception {
+        ReflectionTestUtils.setField(clientIpResolver, "trustedProxiesRaw", "10.0.0.1");
+        clientIpResolver.initTrustedProxies();
 
-        // A garbage hop must not become the bucket key: it is skipped and the
-        // rightmost valid untrusted address keys the request.
+        // A hostname or garbage hop must not become the bucket key (and must never reach
+        // InetAddress.getByName, which would turn it into a blocking DNS lookup): it is
+        // skipped and the rightmost valid untrusted address keys the request.
         mockMvc.perform(post("/api/v1/auth/login")
-                        .header("X-Forwarded-For", "evil, 203.0.113.5, 10.0.0.1")
+                        .header("X-Forwarded-For", "attacker-slow-dns.example.com, evil, 203.0.113.5, 10.0.0.1")
                         .remoteAddress("10.0.0.1"))
                 .andExpect(status().isOk());
 
@@ -811,6 +913,67 @@ class RateLimitFilterTest {
 
         assertThat(rateLimiter.invocationCount).isEqualTo(before + 3);
         assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.3.1");
+    }
+
+    @Test
+    void onboardingRead_usesThePublicReadBucket() throws Exception {
+        // The instance-status read runs before any credential exists, so it must not
+        // fall through to unlimited: it joins browsing's budget.
+        mockMvc.perform(get("/api/v1/instance/status").remoteAddress("10.0.7.1"))
+                .andExpect(status().isOk());
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.1");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(120);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+    }
+
+    @Test
+    void onboardingRead_withTrailingSlash_usesThePublicReadBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/instance/status/").remoteAddress("10.0.7.6"));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.6");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(120);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void headOnOnboardingRead_usesTheReadBucket() throws Exception {
+        mockMvc.perform(head("/api/v1/instance/status").remoteAddress("10.0.7.3"));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.3");
+    }
+
+    @Test
+    void onboardingPath_isClassifiedByItsDecodedForm() throws Exception {
+        // Same escape-proofing as the icon bucket: an escaped prefix must not skip the
+        // budget. The URI form rather than get(String) avoids re-encoding the escape.
+        mockMvc.perform(get(URI.create("/api/v1/%69nstance/status")).remoteAddress("10.0.7.2"));
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.2");
+    }
+
+    @Test
+    void onboardingWrites_areNotRateLimited() throws Exception {
+        // Only the read is public, so a write must not spend the read budget it
+        // cannot legitimately consume.
+        mockMvc.perform(post("/api/v1/instance/status").remoteAddress("10.0.7.4"))
+                .andExpect(status().isMethodNotAllowed());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
+    void onboardingRead_whenRejected_returnsTooManyRequests() throws Exception {
+        rateLimiter.allowed = false;
+
+        mockMvc.perform(get("/api/v1/instance/status").remoteAddress("10.0.7.5"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.success").value(false));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.5");
     }
 
     private static final class StubRateLimiter implements RateLimiter {
@@ -902,6 +1065,21 @@ class RateLimitFilterTest {
 
         @PostMapping("/api/v1/documents/{id}/attachments")
         ResponseEntity<String> uploadAttachment(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/workspaces/current")
+        ResponseEntity<String> currentWorkspace() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/instance/status")
+        ResponseEntity<String> instanceStatus() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @PostMapping("/api/v1/workspaces/current/attachments")
+        ResponseEntity<String> uploadWorkspaceIcon() {
             return ResponseEntity.ok("ok");
         }
 

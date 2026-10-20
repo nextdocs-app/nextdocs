@@ -1,6 +1,8 @@
 package com.nextdocs.api.attachment.service;
 
 import com.nextdocs.api.attachment.AttachmentContentTypes;
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.AttachmentVisibility;
 import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.dto.response.AttachmentUrlResponse;
@@ -12,8 +14,6 @@ import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
-import com.nextdocs.api.document.entity.Document;
-import com.nextdocs.api.document.service.PermissionService;
 import jakarta.annotation.PostConstruct;
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -23,6 +23,7 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
@@ -39,9 +40,13 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Owns the attachment lifecycle: store on upload (EDIT access required), hand out short-lived
- * signed URLs (read access required, or ANYONE_WITH_LINK for anonymous viewers), and clean up
- * files when documents are permanently removed.
+ * Owns the attachment lifecycle: store on upload, hand out short-lived signed URLs (read
+ * access required, or ANYONE_WITH_LINK for anonymous viewers), and clean up files when the
+ * owning document is permanently removed or a workspace icon is replaced. Which scope an
+ * attachment belongs to changes the authorization (one {@link AttachmentAccessPolicy}),
+ * the foreign key it is bound to (one {@link AttachmentScopeBinder}), and whether the
+ * upload must be a raster image (workspace uploads can only become the icon); storage,
+ * quota, hashing, and signing stay scope-blind.
  *
  * <p>Blocks store the host-independent path {@code /api/v1/attachments/{id}} — never an absolute
  * or signed URL — so documents stay portable between self-hosted deployments and no perishable
@@ -60,7 +65,8 @@ public class AttachmentService {
 
     private final AttachmentRepository attachmentRepository;
     private final UserRepository userRepository;
-    private final PermissionService permissionService;
+    private final AttachmentAccessPolicy accessPolicy;
+    private final AttachmentScopeBinder scopeBinder;
     private final AttachmentStorage attachmentStorage;
     private final AttachmentSigner attachmentSigner;
     private final AttachmentQuotaService quotaService;
@@ -84,9 +90,21 @@ public class AttachmentService {
      * API. The quota reservation and the metadata insert are each their own short
      * transaction, and any failure between them reclaims both the file and the reservation.
      */
-    public AttachmentResponse upload(UUID userId, UUID documentId, MultipartFile file) {
-        Document document = permissionService.requireEditAccess(userId, documentId);
+    public AttachmentResponse upload(UUID userId, AttachmentScope scope, MultipartFile file) {
+        accessPolicy.requireUpload(userId, scope);
+        return uploadAuthorized(userId, scope, file);
+    }
 
+    /**
+     * Stores an upload under the caller's own workspace. Owner only; the workspace is
+     * resolved once here instead of by every caller before the upload.
+     */
+    public AttachmentResponse uploadWorkspaceAttachment(UUID userId, MultipartFile file) {
+        UUID workspaceId = accessPolicy.requireWorkspaceUpload(userId);
+        return uploadAuthorized(userId, AttachmentScope.workspace(workspaceId), file);
+    }
+
+    private AttachmentResponse uploadAuthorized(UUID userId, AttachmentScope scope, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "The uploaded file must not be empty.");
         }
@@ -111,11 +129,17 @@ public class AttachmentService {
             // labels. Runs before the quota reservation so spoofed uploads never churn
             // quota.
             String resolvedContentType = resolveContentType(sanitizedDeclaredType, probe.head());
+            // The only workspace upload is the icon, and adoption re-sniffs the bytes.
+            // Rejecting here too keeps an abandoned PDF/ZIP out of storage and quota.
+            if (scope.kind() == AttachmentScope.Kind.WORKSPACE
+                    && !AttachmentContentTypes.INLINE_RASTER_IMAGE_TYPES.contains(resolvedContentType)) {
+                throw new ApiException(ErrorCode.VALIDATION_FAILED, AttachmentContentTypes.UNSUPPORTED_RASTER_MESSAGE);
+            }
 
             User uploader = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
             UUID attachmentId = UUID.randomUUID();
-            String storageKey = document.getId() + "/" + attachmentId;
+            String storageKey = scope.id() + "/" + attachmentId;
 
             // Reserve before touching the disk so an over-quota upload leaves nothing behind,
             // and before the write so the reservation is committed by its own short transaction.
@@ -135,18 +159,16 @@ public class AttachmentService {
                     reservedBytes = stored.sizeBytes();
                 }
 
-                Attachment attachment = Attachment.builder()
+                Attachment.AttachmentBuilder builder = Attachment.builder()
                         .id(attachmentId)
-                        .document(document)
                         .uploadedBy(uploader)
                         .fileName(sanitizeFileName(file.getOriginalFilename()))
                         .contentType(resolvedContentType)
                         .sizeBytes(stored.sizeBytes())
                         .storageKey(storageKey)
-                        .sha256(stored.sha256())
-                        .build();
-
-                Attachment saved = attachmentMetadataWriter.insert(attachment);
+                        .sha256(stored.sha256());
+                Attachment saved = attachmentMetadataWriter.insert(
+                        scopeBinder.bind(builder, scope).build());
                 return toResponse(saved);
             } catch (RuntimeException ex) {
                 // Never leave bytes on disk that no database row points at, and never hold
@@ -234,14 +256,15 @@ public class AttachmentService {
     /**
      * Issues a signed download URL for an attachment the caller may read.
      *
-     * @param userId caller id, or {@code null} for anonymous viewers (public documents only)
+     * @param userId caller id, or {@code null} for anonymous viewers (shared documents and
+     *     public workspace branding only)
      */
     @Transactional(readOnly = true)
     public AttachmentUrlResponse resolveUrl(UUID userId, UUID attachmentId) {
         Attachment attachment =
                 attachmentRepository.findById(attachmentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-        requireDownloadPermission(userId, attachment.getDocument());
+        accessPolicy.requireDownload(userId, attachment);
 
         AttachmentSigner.SignedUrl signedUrl = attachmentSigner.sign(attachmentId);
         return new AttachmentUrlResponse(
@@ -287,6 +310,60 @@ public class AttachmentService {
         quotaService.releaseForDocuments(documentIds);
     }
 
+    /**
+     * Workspace-scoped uploads created before {@code cutoff}. The abandoned-icon sweep
+     * keeps the one the workspace's icon references and deletes the rest.
+     */
+    @Transactional(readOnly = true)
+    public List<Attachment> findWorkspaceUploadsCreatedBefore(OffsetDateTime cutoff) {
+        return attachmentRepository.findByWorkspaceIsNotNullAndCreatedAtBefore(cutoff);
+    }
+
+    /**
+     * Makes a workspace upload anonymously readable. Called when the workspace icon adopts
+     * it: an upload nobody applied is an unfinished edit and stays private, so a guessed id
+     * cannot read an abandoned file before the sweep deletes it. A missing row or one
+     * outside {@code workspaceId} is a no-op, like {@link #deleteWorkspaceUpload}.
+     */
+    @Transactional
+    public void publishWorkspaceUpload(UUID workspaceId, UUID attachmentId) {
+        Attachment attachment = findWorkspaceUpload(workspaceId, attachmentId);
+        if (attachment == null) {
+            return;
+        }
+        attachment.setVisibility(AttachmentVisibility.PUBLIC);
+    }
+
+    /**
+     * Deletes a workspace-scoped upload and hands its bytes back to the uploader's quota.
+     *
+     * <p>Workspaces have no purge path like documents do, so replacing or clearing a
+     * workspace icon has to clean up after itself here. A missing row is a no-op, and a
+     * row outside {@code workspaceId} is left alone: callers must not be able to name a
+     * file into or out of a workspace they are not cleaning up.
+     */
+    @Transactional
+    public void deleteWorkspaceUpload(UUID workspaceId, UUID attachmentId) {
+        Attachment attachment = findWorkspaceUpload(workspaceId, attachmentId);
+        if (attachment == null) {
+            return;
+        }
+        attachmentRepository.delete(attachment);
+        quotaService.release(attachment.getUploadedBy().getId(), attachment.getSizeBytes());
+        deleteStoredFilesAfterCommit(List.of(attachment.getStorageKey()));
+    }
+
+    /** The row only when it is workspace-scoped and belongs to {@code workspaceId}. */
+    private Attachment findWorkspaceUpload(UUID workspaceId, UUID attachmentId) {
+        Attachment attachment = attachmentRepository.findById(attachmentId).orElse(null);
+        if (attachment == null
+                || attachment.getWorkspace() == null
+                || !attachment.getWorkspace().getId().equals(workspaceId)) {
+            return null;
+        }
+        return attachment;
+    }
+
     @Transactional
     public int deleteForDocuments(Collection<UUID> documentIds) {
         if (documentIds == null || documentIds.isEmpty()) {
@@ -328,30 +405,6 @@ public class AttachmentService {
             return;
         }
         deleteStoredFiles(keys);
-    }
-
-    private void requireDownloadPermission(UUID userId, Document document) {
-        if (document.getDeletedAt() != null) {
-            // Trashed documents stay readable (read-only) only for callers in the trash access
-            // chain; anonymous viewers never see them, matching GET /documents/{id}.
-            if (userId == null || permissionService.resolveTrashAccess(userId, document.getId()) == null) {
-                throw new ApiException(ErrorCode.NOT_FOUND);
-            }
-            return;
-        }
-        if (userId == null) {
-            // Anonymous viewers resolve through the effective (possibly inherited) share-link
-            // grant, matching GET /documents/{id}/public and access-check. Checking only the
-            // owning document's own generalAccessMode would 404 attachments on children of a
-            // shared folder.
-            if (permissionService.resolvePublicAccess(document.getId()) == null) {
-                throw new ApiException(ErrorCode.NOT_FOUND);
-            }
-            return;
-        }
-        if (permissionService.resolveAccess(userId, document.getId()) == null) {
-            throw new ApiException(ErrorCode.NOT_FOUND);
-        }
     }
 
     /**
@@ -438,7 +491,9 @@ public class AttachmentService {
     private AttachmentResponse toResponse(Attachment attachment) {
         return new AttachmentResponse(
                 attachment.getId(),
-                attachment.getDocument().getId(),
+                attachment.getDocument() == null
+                        ? null
+                        : attachment.getDocument().getId(),
                 attachment.getFileName(),
                 attachment.getContentType(),
                 attachment.getSizeBytes(),

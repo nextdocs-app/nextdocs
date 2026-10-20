@@ -3,7 +3,6 @@ package com.nextdocs.api.auth.security;
 import com.nextdocs.api.auth.security.ratelimit.RateLimiter;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,15 +10,11 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.web.util.matcher.IpAddressMatcher;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -33,7 +28,8 @@ import tools.jackson.databind.ObjectMapper;
  * budget as credentialed or write traffic:
  * - {@code auth:<ip>} — /api/v1/auth/* (login/signup/refresh), strict default budget.
  * - {@code public-read:<ip>} — anonymous reads: GET .../public, /public/path,
- *   /public/children and anonymous GET .../access-check, .../my-access.
+ *   /public/children, anonymous GET .../access-check, .../my-access, plus the
+ *   onboarding read /api/v1/instance/status.
  * - {@code icons:<ip>} — builtin icon catalog, bundle, and glyphs
  *   (GET|HEAD /api/v1/icons[/{name},/bundle]). Separate from public-read: the
  *   bundle is ~830KB, so sharing the 120/min browsing bucket would let one
@@ -44,8 +40,9 @@ import tools.jackson.databind.ObjectMapper;
  *   on bytes read rather than on the declared Content-Length which chunked
  *   uploads omit).
  * - {@code upload-ip:<ip>} + {@code upload:<userId>} — authenticated attachment uploads
- *   (POST .../attachments). Consumes both buckets so neither one account nor one
- *   egress address can queue disk-filling requests. A declared body over the multipart
+ *   (POST .../attachments: document blocks and the workspace icon). Consumes both
+ *   buckets so neither one account nor one egress address can queue disk-filling
+ *   requests. A declared body over the multipart
  *   ceiling is rejected before the container buffers it, and because the multipart
  *   parser reads the same stream the filter would consume, uploads without a declared
  *   Content-Length are rejected outright rather than bounded by a byte-counting read.
@@ -75,6 +72,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
     private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
+    private static final String WORKSPACE_PATH_PREFIX = "/api/v1/workspaces/";
+    private static final String WORKSPACE_ATTACHMENTS_REMAINDER = "current/attachments";
+    private static final String INSTANCE_STATUS_PATH = "/api/v1/instance/status";
     private static final String ICON_CATALOG_PATH = "/api/v1/icons";
     private static final String ICON_PATH_PREFIX = "/api/v1/icons/";
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
@@ -83,6 +83,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
+    private final ClientIpResolver clientIpResolver;
     private final int publicReadMaxRequests;
     private final Duration publicReadWindow;
     private final int publicWriteMaxRequests;
@@ -99,6 +100,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     public RateLimitFilter(
             RateLimiter rateLimiter,
             ObjectMapper objectMapper,
+            ClientIpResolver clientIpResolver,
             @Value("${app.rate-limit.public-read-max-requests:120}") int publicReadMaxRequests,
             @Value("${app.rate-limit.public-read-window-seconds:60}") long publicReadWindowSeconds,
             @Value("${app.rate-limit.public-write-max-requests:20}") int publicWriteMaxRequests,
@@ -113,6 +115,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
+        this.clientIpResolver = clientIpResolver;
         this.publicReadMaxRequests = publicReadMaxRequests;
         this.publicReadWindow = Duration.ofSeconds(publicReadWindowSeconds);
         this.publicWriteMaxRequests = publicWriteMaxRequests;
@@ -130,29 +133,6 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.uploadMaxDeclaredBytes = DataSize.parse(maxRequestSize).toBytes();
     }
 
-    /**
-     * Comma-separated list of trusted proxy IPs or CIDRs whose
-     * X-Forwarded-For header is accepted, e.g.
-     * 10.0.0.0/8,172.16.0.0/12. Empty by default (no trusted proxies).
-     */
-    @Value("${app.rate-limit.trusted-proxies:}")
-    private String trustedProxiesRaw;
-
-    private List<IpAddressMatcher> trustedProxyMatchers = List.of();
-
-    @PostConstruct
-    void initTrustedProxies() {
-        if (trustedProxiesRaw == null || trustedProxiesRaw.isBlank()) {
-            trustedProxyMatchers = List.of();
-            return;
-        }
-        trustedProxyMatchers = Arrays.stream(trustedProxiesRaw.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isBlank())
-                .map(IpAddressMatcher::new)
-                .collect(Collectors.toList());
-    }
-
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -163,27 +143,31 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        String ip = resolveClientIp(request);
+        String ip = clientIpResolver.resolve(request);
+        // IPv6 is bucketed per /64: one client controls that whole prefix and would
+        // otherwise get a fresh bucket for every address it rotates through.
+        String bucketIp = ClientIpResolver.bucketKey(ip);
 
         RateLimiter.Decision decision;
         if (verdict.perCaller()) {
             // Uploads consume two budgets: the address (shared NAT) and the identified
             // caller (one account). Either refusing refuses the request.
-            RateLimiter.Decision ipDecision =
-                    rateLimiter.allowRequest(verdict.bucketPrefix() + ip, verdict.maxRequests(), verdict.window());
+            RateLimiter.Decision ipDecision = rateLimiter.allowRequest(
+                    verdict.bucketPrefix() + bucketIp, verdict.maxRequests(), verdict.window());
             UUID callerId = authenticatedCallerId();
             RateLimiter.Decision callerDecision = callerId == null
                     ? ipDecision
                     : rateLimiter.allowRequest("upload:" + callerId, verdict.maxRequests(), verdict.window());
             decision = ipDecision.allowed() ? callerDecision : ipDecision;
         } else if (verdict.useDefaultBudget()) {
-            decision = rateLimiter.allowRequest(verdict.bucketPrefix() + ip);
+            decision = rateLimiter.allowRequest(verdict.bucketPrefix() + bucketIp);
         } else {
-            decision = rateLimiter.allowRequest(verdict.bucketPrefix() + ip, verdict.maxRequests(), verdict.window());
+            decision = rateLimiter.allowRequest(
+                    verdict.bucketPrefix() + bucketIp, verdict.maxRequests(), verdict.window());
         }
 
         if (!decision.allowed()) {
-            String maskedIp = maskIp(ip);
+            String maskedIp = ClientIpResolver.maskIp(ip);
             log.warn("Rate limit exceeded for IP: {}", maskedIp);
             // Advertising the window length would park a well-behaved client far longer
             // than it needs to wait - buckets refill greedily, so the next token is due
@@ -198,7 +182,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // via getParameter/getParts instead, so they would bypass the byte
         // ceiling. Reject non-JSON before any body is read or parsed.
         if (verdict.maxBodyBytes() > 0 && !isJsonContentType(request.getContentType())) {
-            log.warn("Rejected non-JSON anonymous write from IP: {}", maskIp(ip));
+            log.warn("Rejected non-JSON anonymous write from IP: {}", ClientIpResolver.maskIp(ip));
             writeError(response, HttpServletResponse.SC_UNSUPPORTED_MEDIA_TYPE, UNSUPPORTED_MEDIA_TYPE_MSG);
             return;
         }
@@ -211,7 +195,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             log.warn(
                     "Rejected oversized {} from IP: {}",
                     verdict.perCaller() ? "upload" : "anonymous write",
-                    maskIp(ip));
+                    ClientIpResolver.maskIp(ip));
             // An oversized upload is the same event the multipart ceiling reports, so it
             // carries the same message; an anonymous write is a JSON snapshot, not a file.
             writeError(
@@ -230,7 +214,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (verdict.perCaller()
                 && request.getContentLengthLong() < 0
                 && isMultipartContentType(request.getContentType())) {
-            log.warn("Rejected upload without a declared Content-Length from IP: {}", maskIp(ip));
+            log.warn("Rejected upload without a declared Content-Length from IP: {}", ClientIpResolver.maskIp(ip));
             writeError(response, 413, MISSING_UPLOAD_LENGTH_MSG);
             return;
         }
@@ -243,7 +227,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (verdict.maxBodyBytes() > 0) {
             HttpServletRequest bounded = readBoundedBody(request, verdict.maxBodyBytes());
             if (bounded == null) {
-                log.warn("Rejected oversized anonymous write from IP: {}", maskIp(ip));
+                log.warn("Rejected oversized anonymous write from IP: {}", ClientIpResolver.maskIp(ip));
                 writeError(response, 413, OVER_LIMIT_BODY_MSG);
                 return;
             }
@@ -377,9 +361,28 @@ public class RateLimitFilter extends OncePerRequestFilter {
      * An absent verdict ({@code limited=false}) passes through untouched.
      */
     private Verdict classify(HttpServletRequest request) {
-        String uri = request.getRequestURI();
+        // Decode once: the container routes on the decoded path, so a percent-escaped
+        // prefix must not select a different bucket than the endpoint it addresses.
+        String uri = decodePath(request.getRequestURI());
         if (uri.startsWith(AUTH_PATH_PREFIX)) {
             return Verdict.defaultBudget("auth:");
+        }
+
+        // Workspace routes are membership administration behind a JWT: unlimited,
+        // except the icon upload, the one write that can consume unbounded disk.
+        if (uri.startsWith(WORKSPACE_PATH_PREFIX)) {
+            if ("POST".equalsIgnoreCase(request.getMethod())
+                    && stripTrailingSlashes(uri.substring(WORKSPACE_PATH_PREFIX.length()))
+                            .equals(WORKSPACE_ATTACHMENTS_REMAINDER)) {
+                return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
+            }
+            return Verdict.unlimited();
+        }
+
+        // The instance-status read is unauthenticated, so it joins the browsing budget
+        // instead of falling through to unlimited.
+        if (isPublicOnboardingRead(request, uri)) {
+            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         // Signed-URL issuance and the signed download are reachable anonymously, so they
@@ -389,10 +392,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // bucket so one document open - a hundred-image doc mints ~100 URLs in a ~2s
             // burst - or a video scrub cannot exhaust the read budget that also serves
             // share-link browsing. Two tabs behind one NAT double that burst.
-            if (isSignedDownload(request)) {
+            if (isSignedDownload(request, uri)) {
                 return Verdict.customBudget("download:", downloadMaxRequests, downloadWindow);
             }
-            if (isSignedUrlMint(request)) {
+            if (isSignedUrlMint(request, uri)) {
                 // Minting is permission-checked and, for a verified caller, as cheap to
                 // trust as access-check below; anonymous mints join the download budget
                 // because browser media tags cannot send an Authorization header.
@@ -408,7 +411,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             // Builtin icon catalog, bundle, and glyphs are static reads on
             // their own budget — never unlimited, never shared with share-link
             // browsing (see the class javadoc for the bandwidth math).
-            if (isIconRead(request)) {
+            if (isIconRead(request, uri)) {
                 return Verdict.customBudget("icons:", iconMaxRequests, iconWindow);
             }
             return Verdict.unlimited();
@@ -416,27 +419,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
         String middle = uri.substring(PUBLIC_DOCUMENT_PATH_PREFIX.length());
 
-        String decodedMiddle;
-        try {
-            decodedMiddle = UriUtils.decode(middle, StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException ignored) {
-            return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
-        }
-
-        if (decodedMiddle.isBlank() || decodedMiddle.contains("%")) {
+        if (middle.isBlank() || middle.contains("%")) {
             return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         // Strip trailing slash(es) so /public/ matches /public
-        while (decodedMiddle.endsWith("/")) {
-            decodedMiddle = decodedMiddle.substring(0, decodedMiddle.length() - 1);
-        }
-        if (decodedMiddle.isBlank()) {
+        middle = stripTrailingSlashes(middle);
+        if (middle.isBlank()) {
             return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 
         String method = request.getMethod();
-        String[] parts = decodedMiddle.split("/");
+        String[] parts = middle.split("/");
         if (!parts[0].isBlank() && parts.length == 2 && parts[1].equals("public")) {
             // Match /api/v1/documents/{id}/public for reads (GET) and
             // anonymous share-link saves (PATCH).
@@ -498,12 +492,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
      * /api/v1/%69cons/bundle} escaped the icon budget entirely. Only reads exist on these
      * routes, so a write must not spend the read bucket either.
      */
-    private static boolean isIconRead(HttpServletRequest request) {
+    private static boolean isIconRead(HttpServletRequest request, String path) {
         String method = request.getMethod();
         if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
             return false;
         }
-        String path = decodePath(request.getRequestURI());
         return path.equals(ICON_CATALOG_PATH) || path.startsWith(ICON_PATH_PREFIX);
     }
 
@@ -516,23 +509,32 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/file}, no nested or trailing segments. */
-    private static boolean isSignedDownload(HttpServletRequest request) {
+    /** Exactly {@code GET|HEAD /api/v1/instance/status}. */
+    private static boolean isPublicOnboardingRead(HttpServletRequest request, String decodedPath) {
         String method = request.getMethod();
         if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
             return false;
         }
-        String remainder = request.getRequestURI().substring(ATTACHMENT_PATH_PREFIX.length());
+        return stripTrailingSlashes(decodedPath).equals(INSTANCE_STATUS_PATH);
+    }
+
+    /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/file}, no nested or trailing segments. */
+    private static boolean isSignedDownload(HttpServletRequest request, String path) {
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
+            return false;
+        }
+        String remainder = path.substring(ATTACHMENT_PATH_PREFIX.length());
         return remainder.endsWith("/file") && remainder.indexOf('/') == remainder.length() - 5;
     }
 
     /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/url}, no nested or trailing segments. */
-    private static boolean isSignedUrlMint(HttpServletRequest request) {
+    private static boolean isSignedUrlMint(HttpServletRequest request, String path) {
         String method = request.getMethod();
         if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
             return false;
         }
-        String remainder = request.getRequestURI().substring(ATTACHMENT_PATH_PREFIX.length());
+        String remainder = path.substring(ATTACHMENT_PATH_PREFIX.length());
         return remainder.endsWith("/url") && remainder.indexOf('/') == remainder.length() - 4;
     }
 
@@ -593,107 +595,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Client address used as the rate-limit bucket key.
-     *
-     * X-Forwarded-For is client-supplied until a trusted hop appends the peer address
-     * to it, so the leftmost entry is spoofable: rotating it would hand every request a
-     * fresh budget. Read the list right to left instead - skipping the hops our own
-     * infrastructure appended (the trusted proxies) - and use the first address that is
-     * not a trusted proxy. The trusted list must only contain proxies; a CIDR that also
-     * covers real clients would let those clients spoof the entry we stop at.
-     */
-    private String resolveClientIp(HttpServletRequest request) {
-        String remoteAddr = normalizeIp(request.getRemoteAddr());
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded == null || forwarded.isBlank() || !isTrustedProxy(request.getRemoteAddr())) {
-            return remoteAddr;
+    /** Removes trailing slashes so a trailing-slash request cannot skip its bucket. */
+    private static String stripTrailingSlashes(String path) {
+        int end = path.length();
+        while (end > 0 && path.charAt(end - 1) == '/') {
+            end--;
         }
-
-        String[] hops = forwarded.split(",");
-        for (int i = hops.length - 1; i >= 0; i--) {
-            String candidate = normalizeIp(hops[i].trim());
-            // A garbage hop must not become the bucket key (or be forwarded):
-            // skip anything that is not an IP literal and fall back to the peer.
-            if (!candidate.isEmpty() && isIpLiteral(candidate) && !isTrustedProxy(candidate)) {
-                return candidate;
-            }
-        }
-        // Every hop was a trusted proxy (or the header was empty): key on the peer.
-        return remoteAddr;
-    }
-
-    static String normalizeIp(String ip) {
-        if (ip == null) {
-            return "";
-        }
-        String trimmed = ip.trim();
-        if (trimmed.regionMatches(true, 0, "::ffff:", 0, 7)) {
-            return trimmed.substring(7);
-        }
-        return trimmed;
-    }
-
-    private boolean isTrustedProxy(String remoteAddr) {
-        String normalized = normalizeIp(remoteAddr);
-        return trustedProxyMatchers.stream().anyMatch(m -> m.matches(remoteAddr) || m.matches(normalized));
-    }
-
-    /**
-     * True for IPv4 dotted quads and IPv6 literals (which always contain a colon).
-     * Hostnames and garbage never come from a proxy's appended peer address, so
-     * they are skipped rather than keying a rate-limit bucket. Colon alone is
-     * not enough: garbage like "abc:def" must not become a bucket key.
-     */
-    private static boolean isIpLiteral(String candidate) {
-        if (candidate.contains(":")) {
-            // IPv6 hex digits, colons, dots (IPv4-mapped) and zone ids only.
-            for (int i = 0; i < candidate.length(); i++) {
-                char c = candidate.charAt(i);
-                if (c == ':' || c == '.' || c == '%') {
-                    continue;
-                }
-                if (Character.digit(c, 16) == -1) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        String[] octets = candidate.split("\\.", -1);
-        if (octets.length != 4) {
-            return false;
-        }
-        for (String octet : octets) {
-            if (octet.isEmpty() || octet.length() > 3) {
-                return false;
-            }
-            for (int i = 0; i < octet.length(); i++) {
-                if (!Character.isDigit(octet.charAt(i))) {
-                    return false;
-                }
-            }
-            if (Integer.parseInt(octet) > 255) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    static String maskIp(String rawIp) {
-        String ip = normalizeIp(rawIp);
-        if (ip.isBlank()) {
-            return "unknown";
-        }
-        // IPv4: mask last octet (e.g. 192.168.1.100 → 192.168.1.xxx)
-        int lastDot = ip.lastIndexOf('.');
-        if (lastDot != -1 && !ip.contains(":")) {
-            return ip.substring(0, lastDot) + ".xxx";
-        }
-        // IPv6: mask last segment (e.g. 2001:db8::1 → 2001:db8::xxxx)
-        int lastColon = ip.lastIndexOf(':');
-        if (lastColon != -1) {
-            return ip.substring(0, lastColon + 1) + "xxxx";
-        }
-        return "unknown";
+        return path.substring(0, end);
     }
 }

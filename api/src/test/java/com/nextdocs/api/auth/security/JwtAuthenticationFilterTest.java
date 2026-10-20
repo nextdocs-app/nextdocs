@@ -8,7 +8,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -32,14 +34,14 @@ class JwtAuthenticationFilterTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @Mock
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     private JwtAuthenticationFilter filter;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        filter = new JwtAuthenticationFilter(jwtTokenProvider, userRepository);
+        filter = new JwtAuthenticationFilter(jwtTokenProvider, memberRepository);
         mockMvc = MockMvcBuilders.standaloneSetup(new AuthCheckController())
                 .addFilters(filter)
                 .build();
@@ -59,15 +61,10 @@ class JwtAuthenticationFilterTest {
     @Test
     void requestWithValidToken_populatesSecurityContext() throws Exception {
         UUID userId = UUID.randomUUID();
-        User user = User.builder()
-                .email("alice@example.com")
-                .displayName("Alice")
-                .passwordHash("hash")
-                .build();
-        user.setId(userId);
+        User user = user(userId, "alice@example.com", "Alice", true);
 
         when(jwtTokenProvider.extractUserId("validtoken")).thenReturn(userId);
-        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(memberRepository.findByUserId(userId)).thenReturn(Optional.of(member(user)));
 
         mockMvc.perform(get("/check").header("Authorization", "Bearer validtoken"))
                 .andExpect(status().isOk());
@@ -90,16 +87,25 @@ class JwtAuthenticationFilterTest {
     @Test
     void requestForInactiveUser_doesNotPopulateSecurityContext() throws Exception {
         UUID userId = UUID.randomUUID();
-        User inactiveUser = User.builder()
-                .email("disabled@example.com")
-                .displayName("Disabled")
-                .passwordHash("hash")
-                .build();
-        inactiveUser.setId(userId);
-        inactiveUser.setActive(false);
+        User inactiveUser = user(userId, "disabled@example.com", "Disabled", false);
 
         when(jwtTokenProvider.extractUserId("validtoken")).thenReturn(userId);
-        when(userRepository.findById(userId)).thenReturn(Optional.of(inactiveUser));
+        when(memberRepository.findByUserId(userId)).thenReturn(Optional.of(member(inactiveUser)));
+
+        mockMvc.perform(get("/check").header("Authorization", "Bearer validtoken"))
+                .andExpect(status().isOk());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void requestForRemovedMember_doesNotPopulateSecurityContext() throws Exception {
+        // Removal deletes the membership; the account is deactivated too, but the
+        // missing membership alone must already refuse the token.
+        UUID userId = UUID.randomUUID();
+
+        when(jwtTokenProvider.extractUserId("validtoken")).thenReturn(userId);
+        when(memberRepository.findByUserId(userId)).thenReturn(Optional.empty());
 
         mockMvc.perform(get("/check").header("Authorization", "Bearer validtoken"))
                 .andExpect(status().isOk());
@@ -113,6 +119,21 @@ class JwtAuthenticationFilterTest {
                 .andExpect(status().isOk());
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    private static User user(UUID id, String email, String displayName, boolean active) {
+        User user = User.builder()
+                .email(email)
+                .displayName(displayName)
+                .passwordHash("hash")
+                .build();
+        user.setId(id);
+        user.setActive(active);
+        return user;
+    }
+
+    private static WorkspaceMember member(User user) {
+        return WorkspaceMember.builder().user(user).role(WorkspaceRole.MEMBER).build();
     }
 
     @RestController

@@ -9,12 +9,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.nextdocs.api.auth.dto.response.AuthResponse;
 import com.nextdocs.api.auth.dto.response.UserResponse;
 import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.auth.service.AuthService;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.workspace.dto.response.WorkspaceInvitePreviewResponse;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.service.WorkspaceInviteService;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,13 +43,16 @@ class AuthControllerTest {
     @MockitoBean
     private AuthService authService;
 
+    @MockitoBean
+    private WorkspaceInviteService inviteService;
+
     /** Required by JwtAuthenticationFilter (loaded in the web slice). */
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
 
     /** Required by JwtAuthenticationFilter. */
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     private User testUser;
     private UserPrincipal testPrincipal;
@@ -117,6 +124,79 @@ class AuthControllerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error").value(ErrorCode.EMAIL_ALREADY_EXISTS.defaultMessage()));
+    }
+
+    @Test
+    void register_withoutInvite_returns403WithInvitationMessage() throws Exception {
+        when(authService.register(any(), any(), any()))
+                .thenThrow(new ApiException(ErrorCode.REGISTRATION_INVITE_REQUIRED));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "email": "alice@example.com",
+                            "displayName": "Alice",
+                            "password": "password123"
+                        }
+                        """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.REGISTRATION_INVITE_REQUIRED.defaultMessage()));
+    }
+
+    @Test
+    void previewInvite_success_returnsInvitedDetailsWithoutAuthentication() throws Exception {
+        when(inviteService.preview("invite-token"))
+                .thenReturn(new WorkspaceInvitePreviewResponse(
+                        "jane@example.com",
+                        "NextDocs",
+                        WorkspaceRole.MEMBER,
+                        OffsetDateTime.now().plusDays(7)));
+
+        mockMvc.perform(post("/api/v1/auth/invite/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "token": "invite-token"
+                        }
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.email").value("jane@example.com"))
+                .andExpect(jsonPath("$.data.workspaceName").value("NextDocs"))
+                .andExpect(jsonPath("$.data.role").value("MEMBER"))
+                .andExpect(jsonPath("$.data.expiresAt").exists());
+    }
+
+    @Test
+    void previewInvite_invalidToken_returns403() throws Exception {
+        when(inviteService.preview("stale-token")).thenThrow(new ApiException(ErrorCode.INVALID_INVITE));
+
+        mockMvc.perform(post("/api/v1/auth/invite/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "token": "stale-token"
+                        }
+                        """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.INVALID_INVITE.defaultMessage()));
+    }
+
+    @Test
+    void previewInvite_blankToken_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/invite/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "token": ""
+                        }
+                        """))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(inviteService);
     }
 
     @Test

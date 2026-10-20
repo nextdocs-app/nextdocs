@@ -15,7 +15,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
@@ -24,6 +23,7 @@ import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -54,7 +54,7 @@ class DocumentSharingControllerTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @MockitoBean
-    private UserRepository userRepository;
+    private WorkspaceMemberRepository memberRepository;
 
     private UserPrincipal principal;
     private UUID userId;
