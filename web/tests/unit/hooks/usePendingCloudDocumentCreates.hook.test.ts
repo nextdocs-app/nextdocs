@@ -10,6 +10,7 @@ jest.mock('../../../services/document.service', () => {
     ...actual,
     documentService: {
       ...actual.documentService,
+      getCurrentUserId: jest.fn(() => 'user-1'),
       loadDocument: jest.fn(),
       createCloudDocument: jest.fn(),
       saveDocument: jest.fn(),

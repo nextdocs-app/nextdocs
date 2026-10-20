@@ -39,11 +39,13 @@ describe('useYjsPersistence', () => {
   let saveCloudDocumentSpy: jest.SpyInstance;
   let updateCloudIconCoverSpy: jest.SpyInstance;
   let emitLocalDocumentsChangedSpy: jest.SpyInstance;
+  let getCurrentUserIdSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     window.localStorage.clear();
+    getCurrentUserIdSpy = jest.spyOn(documentService, 'getCurrentUserId').mockReturnValue('user-1');
     loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     saveCloudDocumentSpy = jest
@@ -73,6 +75,7 @@ describe('useYjsPersistence', () => {
     saveCloudDocumentSpy.mockRestore();
     updateCloudIconCoverSpy.mockRestore();
     emitLocalDocumentsChangedSpy.mockRestore();
+    getCurrentUserIdSpy.mockRestore();
   });
 
   function createTestStore() {

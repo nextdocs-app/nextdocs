@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
-import { listPendingCloudCreates } from '@/lib/pending-cloud-create.util';
+import { listPendingCloudCreates, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { documentService } from '@/services/document.service';
 
 jest.mock('../../../lib/document-id.util', () => ({
@@ -102,6 +102,28 @@ describe('resolveRootDocumentId', () => {
     expect(listPendingCloudCreates('user-1')).toEqual([
       expect.objectContaining({ id: 'generated-local-id', parentId: null }),
     ]);
+  });
+
+  it('leaves a pending local document to the replay queue', async () => {
+    const pendingMeta = { ...createdMeta, title: 'Pending child' };
+    (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+      { id: 'pending-child', meta: pendingMeta },
+    ]);
+    (documentService.loadDocument as jest.Mock).mockResolvedValue({
+      ydoc: createdYDoc,
+      meta: pendingMeta,
+    });
+    queuePendingCloudCreate({ id: 'pending-child', userId: 'user-1', parentId: 'parent-1' });
+
+    await expect(
+      resolveRootDocumentId({
+        isAuthenticated: true,
+        accessToken: 'token-1',
+        userId: 'user-1',
+      })
+    ).resolves.toBe('pending-child');
+
+    expect(documentService.createCloudDocument).not.toHaveBeenCalled();
   });
 
   it('uses a provided title when creating a new cloud root document', async () => {

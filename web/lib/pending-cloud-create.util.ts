@@ -225,6 +225,12 @@ export async function flushPendingCloudCreate(
       entry.parentId
     );
 
+    if (documentService.getCurrentUserId() !== entry.userId) {
+      // The account switched while the create was in flight; caching these
+      // bytes now would file them under the new account.
+      return 'retry';
+    }
+
     try {
       await documentService.saveDocument(entry.id, local.ydoc, created.meta, {
         touchUpdatedAt: false,

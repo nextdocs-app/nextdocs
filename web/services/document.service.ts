@@ -409,6 +409,10 @@ class DocumentService {
     return doc !== undefined;
   }
 
+  public getCurrentUserId(): string | null {
+    return indexedDBService.getUserId();
+  }
+
   public async getAllDocumentsMeta(): Promise<
     { id: string; meta: DocumentMeta; origin?: StoredDocument['origin'] }[]
   > {

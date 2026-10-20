@@ -2,7 +2,7 @@
 
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { generateDocumentId } from '@/lib/document-id.util';
-import { queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { toSortableTimestamp } from '@/lib/timestamp.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
@@ -156,6 +156,10 @@ export async function resolveRootDocumentId(
     }
 
     if (mostRecentLocalDocument) {
+      // The queue owns a pending create; migrating it here would drop its parent.
+      if (getPendingCloudCreate(mostRecentLocalDocument.id, options.userId ?? null)) {
+        return mostRecentLocalDocument.id;
+      }
       return await migrateLocalDocumentToCloud(mostRecentLocalDocument, accessToken);
     }
 

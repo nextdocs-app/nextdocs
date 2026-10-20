@@ -21,6 +21,7 @@ jest.mock('../../../services/document.service', () => {
     ...actual,
     documentService: {
       ...actual.documentService,
+      getCurrentUserId: jest.fn(() => 'user-1'),
       loadDocument: jest.fn(),
       createCloudDocument: jest.fn(),
       saveDocument: jest.fn(),
@@ -213,6 +214,46 @@ describe('pending cloud creates', () => {
     createCloudDocument.mockRejectedValue(new DocumentServiceApiError('Unauthorized', 401));
 
     await expect(flushPendingCloudCreate('stale-token', entry)).resolves.toBe('retry');
+    expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+  });
+
+  it('keeps a child queued while its pending parent waits to replay', async () => {
+    queuePendingCloudCreate({ id: 'parent', userId: 'user-1', parentId: null });
+    const child = {
+      id: 'child',
+      userId: 'user-1',
+      parentId: 'parent',
+      queuedAt: '2026-01-01T00:00:01.000Z',
+    };
+    queuePendingCloudCreate(child);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(flushPendingCloudCreate('token', child)).resolves.toBe('retry');
+
+    expect(createCloudDocument).toHaveBeenCalledTimes(1);
+    expect(getPendingCloudCreate('child')).not.toBeNull();
+  });
+
+  it('does not cache a created document after the account changes', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockResolvedValue({
+      id: 'doc-1',
+      ydoc: localDocument.ydoc,
+      meta: localDocument.meta,
+    });
+    (documentService.getCurrentUserId as jest.Mock).mockReturnValueOnce('user-2');
+
+    await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('retry');
+
+    expect(saveDocument).not.toHaveBeenCalled();
     expect(getPendingCloudCreate('doc-1')).not.toBeNull();
   });
 
