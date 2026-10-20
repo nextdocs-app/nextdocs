@@ -81,7 +81,23 @@ export const fetchDocumentsThunk = createAsyncThunk<
 
     const expandedMode = keepExpanded && isShowingAll;
 
-    if (isAuthenticated && accessToken && !isCloudUnavailable) {
+    // Guests have no private workspace: share-link documents are listed by the
+    // Shared section, never as local "own" documents from the guest database.
+    if (!isAuthenticated || !accessToken) {
+      return {
+        documents: [],
+        ownerSharedDocuments: [],
+        hasMore: false,
+        ownerSharedHasMore: false,
+        isShowingAll: expandedMode,
+        nextCloudPage: 0,
+        localAllDocs: [],
+        localLoadedCount: 0,
+        degradedToLocal: false,
+      };
+    }
+
+    if (!isCloudUnavailable) {
       const pageSize = DOCS_PAGE_SIZE;
       try {
         const page = await documentService.listCloudDocuments(accessToken, 0, pageSize);
@@ -122,7 +138,9 @@ export const fetchDocumentsThunk = createAsyncThunk<
           ...ownerSharedDocuments.map((doc) => doc.id),
         ]);
 
-        const localPrivateDocs = allLocalDocs.filter((doc) => !sharedDocIds.has(doc.id));
+        const localPrivateDocs = allLocalDocs.filter(
+          (doc) => doc.origin !== 'public-link' && !sharedDocIds.has(doc.id)
+        );
         const initialCount = Math.min(DOCS_PAGE_SIZE, localPrivateDocs.length);
         const initialDocs = localPrivateDocs.slice(0, initialCount);
 
@@ -142,16 +160,15 @@ export const fetchDocumentsThunk = createAsyncThunk<
     }
 
     const docs = sortByUpdatedAtDesc(await documentService.getAllDocumentsMeta());
-    let privateDocs: LocalDocumentEntry[];
-    if (isAuthenticated && accessToken) {
-      const sharedDocIds = new Set([
-        ...sharedWithMeDocuments.map((doc) => doc.id),
-        ...ownerSharedDocuments.map((doc) => doc.id),
-      ]);
-      privateDocs = docs.filter((doc) => !sharedDocIds.has(doc.id));
-    } else {
-      privateDocs = docs;
-    }
+    const sharedDocIds = new Set([
+      ...sharedWithMeDocuments.map((doc) => doc.id),
+      ...ownerSharedDocuments.map((doc) => doc.id),
+    ]);
+    // Share-link mirrors are not this account's documents; a link opened while
+    // signed in must not surface a copy of someone else's page in Private.
+    const privateDocs = docs.filter(
+      (doc) => doc.origin !== 'public-link' && !sharedDocIds.has(doc.id)
+    );
 
     const initialCount = Math.min(DOCS_PAGE_SIZE, privateDocs.length);
     const initialDocs = privateDocs.slice(0, initialCount);

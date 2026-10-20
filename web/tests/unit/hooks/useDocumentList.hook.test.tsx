@@ -154,6 +154,14 @@ describe('useDocumentList', () => {
       },
     }));
 
+    // Local pagination only applies to an account's own documents; guests have
+    // no private list, so exercise the offline fallback of a signed-in session.
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      isInitializing: false,
+    });
+    listCloudDocumentsSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     getAllDocumentsMetaSpy.mockResolvedValue(docs);
 
     const { result } = renderHook(() => useDocumentList());
@@ -175,6 +183,12 @@ describe('useDocumentList', () => {
       },
     }));
 
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      isInitializing: false,
+    });
+    listCloudDocumentsSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     getAllDocumentsMetaSpy.mockResolvedValue(docs);
 
     const { result } = renderHook(() => useDocumentList());
