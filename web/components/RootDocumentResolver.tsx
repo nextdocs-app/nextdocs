@@ -25,6 +25,7 @@ export default function RootDocumentResolver() {
     }
 
     let cancelled = false;
+    let settled = false;
     hasResolvedRef.current = true;
 
     const run = async () => {
@@ -49,6 +50,8 @@ export default function RootDocumentResolver() {
         if (!cancelled) {
           hasResolvedRef.current = false;
         }
+      } finally {
+        settled = true;
       }
     };
 
@@ -56,6 +59,11 @@ export default function RootDocumentResolver() {
 
     return () => {
       cancelled = true;
+      // A dependency change cancels the in-flight resolution; let the next
+      // effect run instead of leaving the loading state stuck.
+      if (!settled) {
+        hasResolvedRef.current = false;
+      }
     };
   }, [isInitializing, isAuthenticated, accessToken, user?.id, router, isOnline]);
 

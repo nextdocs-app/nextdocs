@@ -170,6 +170,54 @@ describe('RootDocumentResolver', () => {
     expect(documentService.createCloudDocument).not.toHaveBeenCalled();
   });
 
+  it('retries resolution when the token changes before the first attempt settles', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (documentService.listCloudDocuments as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {})
+    );
+    (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
+      items: [{ id: 'cloud-latest', meta: defaultMeta }],
+      page: 0,
+      size: 1,
+      totalElements: 1,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    const store = configureStore({ reducer: { ui: uiReducer } });
+    const { rerender } = render(
+      <Provider store={store}>
+        <RootDocumentResolver />
+      </Provider>
+    );
+
+    await waitFor(() =>
+      expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-1', 0, 20)
+    );
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-2',
+      user: { id: 'user-1' },
+    });
+    rerender(
+      <Provider store={store}>
+        <RootDocumentResolver />
+      </Provider>
+    );
+
+    await waitFor(() => {
+      expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-2', 0, 20);
+      expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-latest');
+    });
+  });
+
   it('migrates the latest local document when the authenticated root has no cloud docs', async () => {
     const localYDoc = new Y.Doc();
     const localMeta = {
