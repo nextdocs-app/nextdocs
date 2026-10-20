@@ -236,10 +236,14 @@ public class SpaceService {
                 deleteDocuments);
     }
 
-    /** Member roster. Space member or workspace admin; link-only readers do not exist here. */
+    /**
+     * Member roster. Listed members and workspace admins only: a Public space grants
+     * content read to the whole workspace, and that is not the same as handing every
+     * reader the roster of who was deliberately added.
+     */
     @Transactional(readOnly = true)
     public List<SpaceMemberResponse> listMembers(UUID userId, UUID spaceId) {
-        spaceAccessService.requireRead(userId, spaceId);
+        spaceAccessService.requireRoster(userId, spaceId);
         return roster(spaceId);
     }
 

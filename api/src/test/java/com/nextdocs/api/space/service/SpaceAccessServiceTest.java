@@ -180,4 +180,44 @@ class SpaceAccessServiceTest {
         assertThat(accessService.requireRead(userId, space.getId()).accessLevel())
                 .isEqualTo(DocumentAccessLevel.VIEW);
     }
+
+    @Test
+    void requireRoster_admitsAListedMember() {
+        authorize(WorkspaceRole.MEMBER);
+        memberWithLevel(DocumentAccessLevel.VIEW);
+        when(memberRepository.existsBySpace_IdAndUser_Id(space.getId(), userId)).thenReturn(true);
+
+        assertThat(accessService.requireRoster(userId, space.getId()).accessLevel())
+                .isEqualTo(DocumentAccessLevel.VIEW);
+    }
+
+    @Test
+    void requireRoster_admitsAWorkspaceAdminWhoIsNotAMember() {
+        authorize(WorkspaceRole.OWNER);
+
+        assertThat(accessService.requireRoster(userId, space.getId()).workspaceAdmin())
+                .isTrue();
+    }
+
+    @Test
+    void requireRoster_rejectsAPublicReaderWhoIsNotAMember() {
+        authorize(WorkspaceRole.MEMBER);
+        space.setAccessMode(SpaceAccessMode.PUBLIC);
+
+        // Reading the space is allowed, enumerating who is in it is not.
+        assertThat(accessService.requireRead(userId, space.getId()).accessLevel())
+                .isEqualTo(DocumentAccessLevel.VIEW);
+        assertThatThrownBy(() -> accessService.requireRoster(userId, space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
+    void requireRoster_masksAnInvisibleSpaceAsNotFound() {
+        authorize(WorkspaceRole.MEMBER);
+
+        assertThatThrownBy(() -> accessService.requireRoster(userId, space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
 }

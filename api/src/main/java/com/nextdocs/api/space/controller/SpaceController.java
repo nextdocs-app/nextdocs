@@ -170,6 +170,9 @@ public class SpaceController {
                         responseCode = "200",
                         description = "Members returned"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Space is readable but the caller is not a member or an admin"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "404",
                         description = "Space not found or not visible to the caller")
             })
