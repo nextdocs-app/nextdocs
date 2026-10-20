@@ -490,7 +490,7 @@ describe('auth slice', () => {
       });
     });
 
-    it('removes expired session on initialization', async () => {
+    it('keeps an expired session identity so cached documents stay readable offline', async () => {
       const expiredSnapshot = {
         user: mockUser,
         accessToken: 'stale-token',
@@ -501,8 +501,11 @@ describe('auth slice', () => {
       await jest.isolateModulesAsync(async () => {
         const authModule = await import('../../../stores/auth/auth.slice');
         const store = configureStore({ reducer: { auth: authModule.default } });
-        expect(store.getState().auth.user).toBeNull();
-        expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+        // The refresh token may still be valid; a 401 on the next request is
+        // what ends the session. Dropping it here would blank the sidebar for
+        // an account whose access token expired while offline.
+        expect(store.getState().auth.user?.id).toBe(mockUser.id);
+        expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).not.toBeNull();
       });
     });
   });

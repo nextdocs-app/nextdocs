@@ -41,10 +41,14 @@ function readPersistedAuthSnapshot(): PersistedAuthSnapshot | null {
       return null;
     }
 
-    if (typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now()) {
-      window.sessionStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    if (typeof parsed.expiresAt !== 'number') {
       return null;
     }
+
+    // An expired access token does not mean the session is gone: the refresh
+    // cookie may still restore it. Dropping the snapshot here would hide this
+    // account's cached documents for the whole offline reload, so keep the
+    // identity and let the refresh (or a 401) decide.
 
     return {
       user: parsed.user,
