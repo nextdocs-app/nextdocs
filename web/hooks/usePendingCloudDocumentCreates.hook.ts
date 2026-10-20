@@ -29,6 +29,7 @@ export function usePendingCloudDocumentCreates(
 
     let disposed = false;
     let flushing = false;
+    let rerunRequested = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     function clearRetry(): void {
@@ -39,11 +40,16 @@ export function usePendingCloudDocumentCreates(
     }
 
     async function flush(): Promise<void> {
-      if (disposed || flushing || navigator.onLine === false) {
+      if (disposed || navigator.onLine === false) {
+        return;
+      }
+      if (flushing) {
+        rerunRequested = true;
         return;
       }
 
       flushing = true;
+      rerunRequested = false;
       clearRetry();
 
       try {
@@ -71,6 +77,10 @@ export function usePendingCloudDocumentCreates(
         }
       } finally {
         flushing = false;
+        if (rerunRequested && !disposed && retryTimer === undefined) {
+          rerunRequested = false;
+          void flush();
+        }
       }
     }
 

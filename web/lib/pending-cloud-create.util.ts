@@ -1,4 +1,3 @@
-import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { clearLocalDocumentParent } from '@/lib/local-tree.util';
 import { clearPendingIconCoverPatch, clearPendingSyncEdits } from '@/lib/offline-sync.util';
 import { DocumentServiceApiError, documentService } from '@/services/document.service';
@@ -9,6 +8,10 @@ const STORAGE_KEY_PREFIX = 'nextdocs:pending-cloud-create:';
 export const PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX = STORAGE_KEY_PREFIX;
 export const PENDING_CLOUD_CREATE_EVENT = 'nextdocs-pending-cloud-create-changed';
 export const PENDING_DOCUMENT_DISCARDED_EVENT = 'nextdocs-pending-document-discarded';
+
+// Only statuses that describe the request itself may delete a local document.
+// Anything else (401, 408, 429, 5xx, unknown) stays queued for another attempt.
+const PERMANENT_CREATE_FAILURE_STATUSES = new Set([400, 403, 404, 409, 410, 422]);
 
 export interface PendingCloudCreate {
   id: string;
@@ -180,7 +183,8 @@ export async function discardPendingDocument(id: string): Promise<void> {
 export async function flushPendingCloudCreate(
   accessToken: string,
   entry: PendingCloudCreate,
-  ancestry: ReadonlySet<string> = new Set()
+  ancestry: ReadonlySet<string> = new Set(),
+  parentCleared = false
 ): Promise<'created' | 'retry' | 'dropped'> {
   // A child created offline can be replayed before its parent, which is also
   // still local-only. The server would reject that create (unknown parent) and
@@ -245,19 +249,22 @@ export async function flushPendingCloudCreate(
     documentService.emitCloudDocumentsChanged();
     return 'created';
   } catch (error) {
-    // A stale token is not a verdict: replaying right after an offline reload
-    // usually carries a token the refresh is about to replace. Dropping the
-    // queue there would strand the document as local-only, invisible to every
-    // cloud read.
+    // A failed request is not a verdict on the document: only a permanent API
+    // rejection may discard the local copy. Unknown failures stay queued so a
+    // transient token, timeout, or connectivity problem can be replayed.
     if (
-      isConnectivityError(error) ||
-      (error instanceof DocumentServiceApiError && error.status === 401)
+      !(error instanceof DocumentServiceApiError) ||
+      !PERMANENT_CREATE_FAILURE_STATUSES.has(error.status)
     ) {
       return 'retry';
     }
 
-    // A permanent rejection (e.g. the parent is no longer writable) would
-    // otherwise retry forever. The caller discards the entry and its local copy.
+    // The parent may have been deleted or become unwritable while the child
+    // was local-only. Keep the document by retrying it at the root once.
+    if (entry.parentId && !parentCleared && (error.status === 403 || error.status === 404)) {
+      return flushPendingCloudCreate(accessToken, { ...entry, parentId: null }, ancestry, true);
+    }
+
     console.warn('Dropping pending document creation:', error);
     return 'dropped';
   }

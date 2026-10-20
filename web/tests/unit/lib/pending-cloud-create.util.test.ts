@@ -280,8 +280,8 @@ describe('pending cloud creates', () => {
     expect(listPendingCloudCreates('user-1')).toEqual([]);
   });
 
-  it.each([403, 404, 409])(
-    'reports a %i rejection so the caller can discard the queued document',
+  it.each([400, 403, 404, 409, 410, 422])(
+    'drops a permanent %i rejection for a root document',
     async (status) => {
       const entry = {
         id: 'doc-1',
@@ -297,6 +297,69 @@ describe('pending cloud creates', () => {
 
       await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('dropped');
       expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+    }
+  );
+
+  it.each([408, 429, 500])('retries a transient %i rejection', async (status) => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockRejectedValue(
+      new DocumentServiceApiError(`Transient with ${status}`, status)
+    );
+
+    await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('retry');
+    expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+  });
+
+  it('retries an unknown failure instead of discarding the document', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockRejectedValue(new Error('Unexpected parser failure'));
+
+    await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('retry');
+    expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+  });
+
+  it.each([403, 404])(
+    'retries a %i parent rejection at the root before dropping',
+    async (status) => {
+      const entry = {
+        id: 'doc-1',
+        userId: 'user-1',
+        parentId: 'parent-1',
+        queuedAt: '2026-01-01T00:00:00.000Z',
+      };
+      queuePendingCloudCreate(entry);
+      loadDocument.mockResolvedValue(localDocument);
+      createCloudDocument.mockRejectedValueOnce(
+        new DocumentServiceApiError(`Parent rejected with ${status}`, status)
+      );
+      createCloudDocument.mockResolvedValue({
+        id: 'doc-1',
+        ydoc: localDocument.ydoc,
+        meta: localDocument.meta,
+      });
+      saveDocument.mockResolvedValue(undefined);
+
+      await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('created');
+
+      expect(createCloudDocument.mock.calls.map(([, , , , , parentId]) => parentId)).toEqual([
+        'parent-1',
+        null,
+      ]);
+      expect(getPendingCloudCreate('doc-1')).toBeNull();
     }
   );
 

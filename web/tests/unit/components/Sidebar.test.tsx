@@ -441,6 +441,41 @@ it('queues the cloud create and opens in place when the API is unreachable', asy
   }
 });
 
+it('queues the cloud create when the access token is stale', async () => {
+  const user = userEvent.setup();
+  const mockYdoc = new Y.Doc();
+  (useAuth as jest.Mock).mockReturnValue({
+    user: { id: 'user-1' },
+    isAuthenticated: true,
+    accessToken: 'stale-token',
+    logout: mockLogout,
+  });
+  (documentService.createDocument as jest.Mock).mockResolvedValue({
+    ydoc: mockYdoc,
+    meta: { title: 'Untitled', createdAt: '...', updatedAt: '...' },
+  });
+  (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
+  (documentService.deleteDocument as jest.Mock).mockResolvedValue(undefined);
+  const staleToken = new DocumentServiceApiError('Unauthorized', 401);
+  // The automatic module mock does not run the error constructor, so restore
+  // the status the real class assigns.
+  Object.assign(staleToken, { status: 401 });
+  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(staleToken);
+
+  try {
+    render(<Sidebar />);
+    await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+    await waitFor(() => expect(listPendingCloudCreates('user-1')).toHaveLength(1));
+    expect(documentService.deleteDocument).not.toHaveBeenCalled();
+  } finally {
+    // clearAllMocks keeps implementations, so a rejection here would leak into
+    // later create tests.
+    (documentService.createCloudDocument as jest.Mock).mockReset();
+    window.localStorage.clear();
+  }
+});
+
 it('collapses and expands the document list', async () => {
   const user = userEvent.setup();
   render(<Sidebar />);

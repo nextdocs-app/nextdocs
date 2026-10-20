@@ -5,7 +5,7 @@ import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { useGuestSharedTree } from '@/hooks/useGuestSharedTree.hook';
-import { documentService } from '@/services/document.service';
+import { DocumentServiceApiError, documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
   selectRootLevelOwnerSharedDocumentIds,
@@ -563,7 +563,10 @@ function Sidebar() {
                 }
               }
             } catch (error) {
-              if (!isConnectivityError(error)) {
+              const shouldQueue =
+                isConnectivityError(error) ||
+                (error instanceof DocumentServiceApiError && error.status === 401);
+              if (!shouldQueue) {
                 // The server refused the create, so forget the copy: a node
                 // left behind would open a document that does not exist.
                 await discardPendingDocument(newId);

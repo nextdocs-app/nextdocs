@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
 import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { readPendingSyncEdits, writePendingSyncEdits } from '@/lib/offline-sync.util';
-import { documentService } from '@/services/document.service';
+import { DocumentServiceApiError, documentService } from '@/services/document.service';
 
 jest.mock('../../../services/document.service', () => {
   const actual = jest.requireActual('../../../services/document.service');
@@ -168,10 +168,40 @@ describe('usePendingCloudDocumentCreates', () => {
     expect(getPendingCloudCreate('doc-2')).toBeNull();
   });
 
+  it('flushes an entry queued while a flush is already running', async () => {
+    queuePendingCloudCreate({ id: 'doc-1', userId: 'user-1', parentId: null });
+
+    let resolveFirst!: (value: unknown) => void;
+    createCloudDocument.mockImplementation((_token, id) =>
+      id === 'doc-1'
+        ? new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+        : Promise.resolve({ id, ydoc: localDocument.ydoc, meta: localDocument.meta })
+    );
+
+    renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
+
+    await waitFor(() => expect(createCloudDocument).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      queuePendingCloudCreate({ id: 'doc-2', userId: 'user-1', parentId: null });
+    });
+
+    await act(async () => {
+      resolveFirst({ id: 'doc-1', ydoc: localDocument.ydoc, meta: localDocument.meta });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(createCloudDocument).toHaveBeenCalledTimes(2));
+    expect(getPendingCloudCreate('doc-1')).toBeNull();
+    expect(getPendingCloudCreate('doc-2')).toBeNull();
+  });
+
   it('discards a rejected create and its offline state', async () => {
     queuePendingCloudCreate({ id: 'doc-1', userId: 'user-1', parentId: null });
     writePendingSyncEdits('doc-1', 2);
-    createCloudDocument.mockRejectedValue(new Error('Forbidden'));
+    createCloudDocument.mockRejectedValue(new DocumentServiceApiError('Forbidden', 403));
 
     renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
 
