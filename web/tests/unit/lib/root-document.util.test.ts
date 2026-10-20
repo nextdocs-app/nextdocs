@@ -1,26 +1,31 @@
 import * as Y from 'yjs';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
+import { listPendingCloudCreates } from '@/lib/pending-cloud-create.util';
 import { documentService } from '@/services/document.service';
 
 jest.mock('../../../lib/document-id.util', () => ({
   generateDocumentId: jest.fn(() => 'generated-local-id'),
 }));
 
-jest.mock('../../../services/document.service', () => ({
-  documentService: {
-    getAllDocumentsMeta: jest.fn(),
-    loadDocument: jest.fn(),
-    listCloudDocuments: jest.fn(),
-    createCloudDocument: jest.fn(),
-    saveCloudDocument: jest.fn(),
-    deleteCloudDocumentPermanently: jest.fn(),
-    saveDocument: jest.fn(),
-    deleteDocument: jest.fn(),
-    createDocument: jest.fn(),
-    emitCloudDocumentsChanged: jest.fn(),
-    emitLocalDocumentsChanged: jest.fn(),
-  },
-}));
+jest.mock('../../../services/document.service', () => {
+  const actual = jest.requireActual('../../../services/document.service');
+  return {
+    ...actual,
+    documentService: {
+      getAllDocumentsMeta: jest.fn(),
+      loadDocument: jest.fn(),
+      listCloudDocuments: jest.fn(),
+      createCloudDocument: jest.fn(),
+      saveCloudDocument: jest.fn(),
+      deleteCloudDocumentPermanently: jest.fn(),
+      saveDocument: jest.fn(),
+      deleteDocument: jest.fn(),
+      createDocument: jest.fn(),
+      emitCloudDocumentsChanged: jest.fn(),
+      emitLocalDocumentsChanged: jest.fn(),
+    },
+  };
+});
 
 describe('resolveRootDocumentId', () => {
   const createdYDoc = new Y.Doc();
@@ -32,6 +37,7 @@ describe('resolveRootDocumentId', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([]);
     (documentService.loadDocument as jest.Mock).mockResolvedValue(null);
     (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
@@ -77,6 +83,25 @@ describe('resolveRootDocumentId', () => {
       expect.objectContaining({ title: 'Untitled' }),
       { touchUpdatedAt: false }
     );
+  });
+
+  it('creates the root locally and queues the cloud create when offline', async () => {
+    (documentService.listCloudDocuments as jest.Mock).mockRejectedValue(
+      new TypeError('Failed to fetch')
+    );
+
+    await expect(
+      resolveRootDocumentId({
+        isAuthenticated: true,
+        accessToken: 'token-offline',
+        userId: 'user-1',
+      })
+    ).resolves.toBe('generated-local-id');
+
+    expect(documentService.createCloudDocument).not.toHaveBeenCalled();
+    expect(listPendingCloudCreates('user-1')).toEqual([
+      expect.objectContaining({ id: 'generated-local-id', parentId: null }),
+    ]);
   });
 
   it('uses a provided title when creating a new cloud root document', async () => {

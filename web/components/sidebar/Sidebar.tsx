@@ -44,8 +44,16 @@ import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
+import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { generateDocumentId } from '@/lib/document-id.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
+import { clearLocalDocumentParent, setLocalDocumentParent } from '@/lib/local-tree.util';
+import {
+  discardPendingDocument,
+  getPendingCloudCreate,
+  PENDING_DOCUMENT_DISCARDED_EVENT,
+  queuePendingCloudCreate,
+} from '@/lib/pending-cloud-create.util';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 import {
   isSidebarDropAllowed,
@@ -54,6 +62,7 @@ import {
 } from '@/lib/sidebar-drop-rules';
 
 import {
+  addNode,
   fetchRootNodesThunk,
   fetchChildrenThunk,
   removeNode,
@@ -313,6 +322,10 @@ function Sidebar() {
       if (route.kind === 'private') {
         void dispatch(privateMoveDocumentThunk(args))
           .unwrap()
+          .then(() => {
+            // Keep the offline tree fallback in sync with the move.
+            setLocalDocumentParent(args.documentId, args.newParentId);
+          })
           .catch((error) => {
             console.error('Failed to move document:', error);
             dispatch(
@@ -330,6 +343,7 @@ function Sidebar() {
             }
             // The document left the private tree: drop it from that store and
             // refresh roots so section membership stays accurate.
+            clearLocalDocumentParent(args.documentId);
             dispatch(removeNode(args.documentId));
             await dispatch(fetchRootNodesThunk());
             await refresh(false);
@@ -479,32 +493,100 @@ function Sidebar() {
   const handleCreateFile = useCallback(
     async (parentId?: string) => {
       closeMobileNav();
+
+      // Guests only ever see documents shared with them; private documents
+      // need an account, so creation becomes a sign-in prompt.
+      if (!isAuthenticated || !accessToken) {
+        dispatch(setAuthModalOpen(true));
+        return;
+      }
+
       try {
         const newId = generateDocumentId();
         const created = await documentService.createDocument();
         await documentService.saveDocument(newId, created.ydoc, created.meta);
+        setLocalDocumentParent(newId, parentId ?? null);
 
-        if (isAuthenticated && accessToken) {
-          await documentService.createCloudDocument(
-            accessToken,
-            newId,
-            created.meta.title || 'Untitled',
-            created.ydoc,
-            created.meta.createdBy ?? null,
-            parentId ?? null
+        // Show the local copy immediately, under its real parent. The cloud
+        // refresh below (or the offline queue replay) reconciles it later.
+        if (!parentId || !sharedTreeNodes[parentId]) {
+          dispatch(
+            addNode({
+              id: newId,
+              title: created.meta.title || 'Untitled',
+              parentId: parentId ?? null,
+              orderKey: `local:${newId}`,
+              hasChildren: false,
+              effectiveAccessLevel: 'OWNER',
+              createdAt: created.meta.createdAt,
+              updatedAt: created.meta.updatedAt,
+              icon: created.meta.icon ?? null,
+            })
           );
-          void dispatch(fetchRootNodesThunk());
-          if (parentId) {
-            if (sharedTreeNodes[parentId]) {
-              void dispatch(fetchSharedChildrenThunk({ parentId }));
-            } else {
-              void dispatch(fetchChildrenThunk({ parentId }));
+        }
+
+        // The local copy exists first, so creation must not fail just because
+        // the cloud is unreachable. Queue the server-side create instead.
+        let queuedForCloud = false;
+
+        if (user?.id) {
+          const queueCreate = () => {
+            queuePendingCloudCreate({
+              id: newId,
+              userId: user.id,
+              parentId: parentId ?? null,
+            });
+            // The sidebar tree reads the cloud, so it needs a nudge to fall back
+            // to IndexedDB and show the copy that exists before the cloud row.
+            documentService.emitLocalDocumentsChanged();
+            queuedForCloud = true;
+          };
+
+          if (navigator.onLine === false) {
+            queueCreate();
+          } else {
+            try {
+              await documentService.createCloudDocument(
+                accessToken,
+                newId,
+                created.meta.title || 'Untitled',
+                created.ydoc,
+                created.meta.createdBy ?? null,
+                parentId ?? null
+              );
+              void dispatch(fetchRootNodesThunk());
+              if (parentId) {
+                if (sharedTreeNodes[parentId]) {
+                  void dispatch(fetchSharedChildrenThunk({ parentId }));
+                } else {
+                  void dispatch(fetchChildrenThunk({ parentId }));
+                }
+              }
+            } catch (error) {
+              if (!isConnectivityError(error)) {
+                // The server refused the create, so forget the copy: a node
+                // left behind would open a document that does not exist.
+                await discardPendingDocument(newId);
+                throw error;
+              }
+              queueCreate();
             }
           }
         }
 
         await refresh(false);
-        router.push(`/doc/${newId}`);
+
+        // Router navigation fetches an RSC payload, which cannot succeed
+        // offline. Use the existing in-place selection path in that case.
+        if (queuedForCloud || navigator.onLine === false) {
+          window.dispatchEvent(
+            new CustomEvent(OFFLINE_DOCUMENT_SELECT_EVENT, {
+              detail: { id: newId },
+            })
+          );
+        } else {
+          router.push(`/doc/${newId}`);
+        }
       } catch (error) {
         console.error('Failed to create document:', error);
         dispatch(
@@ -512,7 +594,16 @@ function Sidebar() {
         );
       }
     },
-    [router, refresh, isAuthenticated, accessToken, dispatch, sharedTreeNodes, closeMobileNav]
+    [
+      router,
+      refresh,
+      isAuthenticated,
+      accessToken,
+      user?.id,
+      dispatch,
+      sharedTreeNodes,
+      closeMobileNav,
+    ]
   );
 
   const handleSelectDocument = useCallback(
@@ -544,19 +635,53 @@ function Sidebar() {
         options && Object.prototype.hasOwnProperty.call(options, 'accessToken')
           ? (options.accessToken ?? null)
           : accessToken;
+      const nextIsAuthenticated = options?.isAuthenticated ?? isAuthenticated;
+
+      // A signed-out user has no private root; the home route shows the
+      // sign-in prompt instead of creating a guest document.
+      if (!nextIsAuthenticated || !nextAccessToken) {
+        router.replace('/');
+        return;
+      }
 
       const nextDocumentId = await resolveRootDocumentId({
-        isAuthenticated: options?.isAuthenticated ?? isAuthenticated,
+        isAuthenticated: nextIsAuthenticated,
         accessToken: nextAccessToken,
         excludedDocumentIds: options?.excludedDocumentIds,
+        userId: user?.id ?? null,
       });
 
-      router.replace(`/doc/${nextDocumentId}`);
+      router.replace(nextDocumentId ? `/doc/${nextDocumentId}` : '/');
     },
-    [router, isAuthenticated, accessToken]
+    [router, isAuthenticated, accessToken, user?.id]
   );
 
   useOfflineDocumentSelect(setOfflineSelectedDocumentId);
+
+  // The queue can discard a document from outside the sidebar (replay or an
+  // open editor), so the tree listens instead of leaving a ghost row behind.
+  useEffect(() => {
+    const handlePendingDocumentDiscarded = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string } | undefined>).detail;
+      if (!detail?.id) {
+        return;
+      }
+
+      dispatch(removeNode(detail.id));
+      dispatch(sharedRemoveNode(detail.id));
+    };
+
+    window.addEventListener(
+      PENDING_DOCUMENT_DISCARDED_EVENT,
+      handlePendingDocumentDiscarded as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        PENDING_DOCUMENT_DISCARDED_EVENT,
+        handlePendingDocumentDiscarded as EventListener
+      );
+    };
+  }, [dispatch]);
 
   useEffect(() => {
     if (!offlineSelectedDocumentId) {
@@ -793,6 +918,21 @@ function Sidebar() {
         return;
       }
 
+      // A document created offline has no cloud row to trash (and trashing it
+      // would 404). Dropping the queued create and the local copy is the whole
+      // delete for it.
+      if (getPendingCloudCreate(docId, user?.id ?? null)) {
+        await discardPendingDocument(docId);
+        dispatch(setDocActionsAnchor(null));
+
+        if (activeDocId === docId) {
+          await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
+        }
+
+        await refresh(false);
+        return;
+      }
+
       try {
         await documentService.moveCloudDocumentToTrash(docId, accessToken);
         dispatch(setDocActionsAnchor(null));
@@ -819,6 +959,7 @@ function Sidebar() {
       isAuthenticated,
       accessToken,
       activeDocId,
+      user?.id,
       navigateToResolvedRootDocument,
       refresh,
       refreshTrash,
@@ -1046,23 +1187,27 @@ function Sidebar() {
         {!isRailCollapsed && (
           <div className="ml-1">
             <SidebarTreeDndContext treeApi={sidebarTreeApi}>
-              <SidebarTree
-                excludedNodeIds={excludedNodeIds}
-                isOpen={isPrivateOpen}
-                onToggle={() => dispatch(togglePrivateOpen())}
-                activeDocId={activeDocId}
-                onSelectDocument={(docId) => {
-                  dispatch(setDocActionsAnchor(null));
-                  handleSelectDocument(docId);
-                }}
-                onCreateChild={(parentId) => {
-                  void handleCreateFile(parentId);
-                }}
-                isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-                docActionsAnchor={docActionsAnchor}
-                onToggleDocumentActions={handleToggleDocumentActions}
-                onShowAll={openAllDocumentsPanel}
-              />
+              {/* Guests have no private workspace: their only documents are
+                  share links, which the Shared section below lists. */}
+              {isAuthenticated && (
+                <SidebarTree
+                  excludedNodeIds={excludedNodeIds}
+                  isOpen={isPrivateOpen}
+                  onToggle={() => dispatch(togglePrivateOpen())}
+                  activeDocId={activeDocId}
+                  onSelectDocument={(docId) => {
+                    dispatch(setDocActionsAnchor(null));
+                    handleSelectDocument(docId);
+                  }}
+                  onCreateChild={(parentId) => {
+                    void handleCreateFile(parentId);
+                  }}
+                  isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+                  docActionsAnchor={docActionsAnchor}
+                  onToggleDocumentActions={handleToggleDocumentActions}
+                  onShowAll={openAllDocumentsPanel}
+                />
+              )}
 
               {isAuthenticated && (
                 <SharedTree

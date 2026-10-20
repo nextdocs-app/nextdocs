@@ -14,6 +14,7 @@ import type {
 } from '@/types/document.types';
 import type { TreeNode, TreeNodePage, MoveDocumentRequest } from '@/types/tree.types';
 import { getApiBaseUrl } from '@/lib/api-url.util';
+import { clearLocalDocumentParent, setLocalDocumentParents } from '@/lib/local-tree.util';
 import { parseApiEnvelope } from '@/services/api-envelope';
 import {
   sanitizeDocumentCover,
@@ -272,6 +273,10 @@ const MAX_SESSION_REGISTRY_SIZE = 500;
 class DocumentService {
   private originByDocId = new Map<string, StoredDocument['origin']>();
 
+  private hierarchyCache: { key: string; promise: Promise<void> } | null = null;
+
+  private hierarchyCacheEpoch = 0;
+
   private recordOrigin(id: string, origin: StoredDocument['origin']): void {
     if (this.originByDocId.has(id)) {
       this.originByDocId.delete(id);
@@ -282,11 +287,6 @@ class DocumentService {
       }
     }
     this.originByDocId.set(id, origin);
-  }
-
-  private normalizeCloudDocumentTitle(title: string | null | undefined): string {
-    const value = title?.trim();
-    return value ? value : 'Untitled';
   }
 
   public async loadDocument(id: string): Promise<DocumentLoadResult | null> {
@@ -341,6 +341,8 @@ class DocumentService {
   }
 
   public clearSessionRegistries(): void {
+    this.hierarchyCache = null;
+    this.hierarchyCacheEpoch += 1;
     this.originByDocId.clear();
     this.publicLinkSessionIds.clear();
   }
@@ -395,6 +397,7 @@ class DocumentService {
     this.publicLinkSessionIds.delete(id);
     try {
       await indexedDBService.deleteDocument(id);
+      clearLocalDocumentParent(id);
     } catch (error) {
       console.error('Failed to delete document:', error);
       throw error;
@@ -406,31 +409,15 @@ class DocumentService {
     return doc !== undefined;
   }
 
-  public async getOrCreateDocument(
-    id: string,
-    title?: string,
-    options?: { origin?: StoredDocument['origin'] }
-  ): Promise<DocumentLoadResult> {
-    const existing = await this.loadDocument(id);
-
-    if (existing) {
-      return existing;
-    }
-
-    const { ydoc, meta } = await this.createDocument(title);
-    await this.saveDocument(
-      id,
-      ydoc,
-      meta,
-      options?.origin ? { origin: options.origin } : undefined
-    );
-
-    return { ydoc, meta, origin: options?.origin };
-  }
-
   public async getAllDocumentsMeta(): Promise<
     { id: string; meta: DocumentMeta; origin?: StoredDocument['origin'] }[]
   > {
+    // There is no signed-out private workspace: the guest database only holds
+    // share-link mirrors, which never belong in a private listing.
+    if (indexedDBService.getUserId() === null) {
+      return [];
+    }
+
     try {
       const docs = await indexedDBService.getAllDocuments();
       // Share-link mirrors carry someone else's content: they live in the
@@ -510,26 +497,73 @@ class DocumentService {
     };
   }
 
+  /**
+   * The sidebar only fetches roots and expanded branches, so those calls alone
+   * leave most cached documents without a parent link for the offline fallback.
+   * Pull the flat private listing once per signed-in session and record the
+   * complete hierarchy.
+   */
+  public cachePrivateHierarchy(accessToken: string, cacheKey: string): Promise<void> {
+    if (this.hierarchyCache?.key === cacheKey) {
+      return this.hierarchyCache.promise;
+    }
+
+    const epoch = this.hierarchyCacheEpoch;
+    const promise = this.fetchPrivateHierarchy(accessToken, epoch).catch((error) => {
+      if (this.hierarchyCache?.promise === promise) {
+        this.hierarchyCache = null;
+      }
+      throw error;
+    });
+    this.hierarchyCache = { key: cacheKey, promise };
+    return promise;
+  }
+
+  private async fetchPrivateHierarchy(accessToken: string, epoch: number): Promise<void> {
+    const pageSize = 200;
+    let page = 0;
+
+    for (;;) {
+      const result = await this.listCloudDocuments(accessToken, page, pageSize, {
+        scope: 'private',
+      });
+      // A logout or identity change clears the map; do not repopulate it from
+      // a request started under the previous session.
+      if (epoch !== this.hierarchyCacheEpoch) {
+        return;
+      }
+      this.cacheParentLinks(result.items);
+
+      if (!result.hasMore || result.items.length === 0) {
+        return;
+      }
+      page += 1;
+    }
+  }
+
   public async listRootTreeNodes(accessToken: string, page = 0, size = 50): Promise<TreeNodePage> {
     const pageResult = await this.listCloudDocuments(accessToken, page, size, {
       parentId: 'root',
       scope: 'private',
     });
 
+    const items = pageResult.items.map((item) => ({
+      id: item.id,
+      title: item.meta.title,
+      parentId: item.parentId,
+      orderKey: item.orderKey ?? '',
+      hasChildren: item.hasChildren ?? false,
+      effectiveAccessLevel: sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER'),
+      createdAt: item.meta.createdAt,
+      updatedAt: item.meta.updatedAt,
+      // `toDocumentMeta` already sanitized, but re-validate at the tree
+      // boundary so a future caller passing unsanitized meta cannot reach render.
+      icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
+    }));
+    this.cacheParentLinks(items);
+
     return {
-      items: pageResult.items.map((item) => ({
-        id: item.id,
-        title: item.meta.title,
-        parentId: item.parentId,
-        orderKey: item.orderKey ?? '',
-        hasChildren: item.hasChildren ?? false,
-        effectiveAccessLevel: sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER'),
-        createdAt: item.meta.createdAt,
-        updatedAt: item.meta.updatedAt,
-        // `toDocumentMeta` already sanitized, but re-validate at the tree
-        // boundary so a future caller passing unsanitized meta cannot reach render.
-        icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
-      })),
+      items,
       page: pageResult.page,
       size: pageResult.size,
       totalElements: pageResult.totalElements,
@@ -548,18 +582,21 @@ class DocumentService {
       parentId,
     });
 
+    const items = pageResult.items.map((item) => ({
+      id: item.id,
+      title: item.meta.title,
+      parentId: item.parentId,
+      orderKey: item.orderKey ?? '',
+      hasChildren: item.hasChildren ?? false,
+      effectiveAccessLevel: sanitizeNullableAccessLevel(item.accessLevel),
+      createdAt: item.meta.createdAt,
+      updatedAt: item.meta.updatedAt,
+      icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
+    }));
+    this.cacheParentLinks(items);
+
     return {
-      items: pageResult.items.map((item) => ({
-        id: item.id,
-        title: item.meta.title,
-        parentId: item.parentId,
-        orderKey: item.orderKey ?? '',
-        hasChildren: item.hasChildren ?? false,
-        effectiveAccessLevel: sanitizeNullableAccessLevel(item.accessLevel),
-        createdAt: item.meta.createdAt,
-        updatedAt: item.meta.updatedAt,
-        icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
-      })),
+      items,
       page: pageResult.page,
       size: pageResult.size,
       totalElements: pageResult.totalElements,
@@ -616,6 +653,7 @@ class DocumentService {
     const ydoc = body.yjsState
       ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
       : createYjsDoc();
+    this.cacheParentLinks([{ id: body.id, parentId: body.parentId ?? null }]);
 
     return {
       ydoc,
@@ -665,10 +703,18 @@ class DocumentService {
             }
           );
 
-      return items.map((item) => ({
+      const crumbs = items.map((item) => ({
         ...item,
         icon: sanitizeDocumentIcon(item.icon) ?? null,
       }));
+
+      // Private breadcrumbs describe the same hierarchy the offline fallback
+      // has to rebuild. Public-link paths must not leak into that map.
+      if (accessToken) {
+        this.cacheParentLinks(crumbs);
+      }
+
+      return crumbs;
     });
   }
 
@@ -1083,54 +1129,6 @@ class DocumentService {
     this.emitCloudDocumentsChanged();
   }
 
-  public async getAllLocalDocuments(): Promise<StoredDocument[]> {
-    return indexedDBService.getAllDocuments();
-  }
-
-  public async getAllGuestDocuments(): Promise<StoredDocument[]> {
-    // Share-link mirrors must never be promoted: creating cloud copies of them
-    // would clone someone else's shared content into the new account.
-    const docs = await indexedDBService.getAllGuestDocuments();
-    return docs.filter((doc) => doc.origin !== 'public-link');
-  }
-
-  public async promoteGuestDocumentsToAccount(
-    accessToken: string,
-    docs: StoredDocument[]
-  ): Promise<string[]> {
-    const promotedIds = await Promise.all(
-      docs.map(async (doc) => {
-        const created = await this.createCloudDocument(
-          accessToken,
-          doc.id,
-          this.normalizeCloudDocumentTitle(doc.meta.title),
-          decodeYjsState(doc.yjsState),
-          doc.meta.createdBy ?? null
-        );
-
-        await this.saveDocument(doc.id, created.ydoc, created.meta, {
-          touchUpdatedAt: false,
-        });
-
-        return doc.id;
-      })
-    );
-
-    this.emitCloudDocumentsChanged();
-    this.emitLocalDocumentsChanged();
-    return promotedIds;
-  }
-
-  public async deleteLocalDocumentsByIds(ids: string[]): Promise<void> {
-    await Promise.all(ids.map((id) => indexedDBService.deleteDocument(id)));
-    this.emitLocalDocumentsChanged();
-  }
-
-  public async deleteGuestDocumentsByIds(ids: string[]): Promise<void> {
-    await indexedDBService.deleteGuestDocuments(ids);
-    this.emitLocalDocumentsChanged();
-  }
-
   public emitLocalDocumentsChanged(): void {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('local-documents-changed'));
@@ -1188,6 +1186,22 @@ class DocumentService {
     }
 
     return bytes;
+  }
+
+  /**
+   * The API is the only source of hierarchy for cloud documents, while
+   * IndexedDB stores no parent links. Remember the cloud relationships so an
+   * offline reload can rebuild the sidebar tree instead of rooting every
+   * cached subpage.
+   */
+  private cacheParentLinks(nodes: readonly { id: string; parentId?: string | null }[]): void {
+    if (nodes.length === 0) {
+      return;
+    }
+
+    setLocalDocumentParents(
+      nodes.map((node) => ({ id: node.id, parentId: node.parentId ?? null }))
+    );
   }
 
   private toDocumentMeta(doc: ApiDocument): DocumentMeta {

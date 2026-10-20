@@ -2,9 +2,20 @@ import 'fake-indexeddb/auto';
 import * as Y from 'yjs';
 import { documentService, iconCoverPatch } from '@/services/document.service';
 import { indexedDBService } from '@/services/indexed-db.service';
+import { getLocalDocumentParents } from '@/lib/local-tree.util';
 
 describe('document.service', () => {
+  beforeAll(() => {
+    // Private local listings require a signed-in database context.
+    indexedDBService.setUserId('document-service-test-user');
+  });
+
+  afterAll(() => {
+    indexedDBService.setUserId(null);
+  });
+
   beforeEach(async () => {
+    window.localStorage.clear();
     await indexedDBService.clearAllDocuments();
   });
 
@@ -134,44 +145,6 @@ describe('document.service', () => {
       const spy = jest.spyOn(indexedDBService, 'getDocument').mockRejectedValue(dbError);
 
       await expect(documentService.documentExists('test-id')).rejects.toThrow(
-        'IndexedDB read failed'
-      );
-
-      spy.mockRestore();
-    });
-  });
-
-  describe('getOrCreateDocument', () => {
-    it('should return existing document if found', async () => {
-      const { ydoc, meta } = await documentService.createDocument('Existing');
-      await documentService.saveDocument('test-id', ydoc, meta);
-
-      const result = await documentService.getOrCreateDocument('test-id');
-
-      expect(result.meta.title).toBe('Existing');
-    });
-
-    it('should create new document if not found', async () => {
-      const result = await documentService.getOrCreateDocument('new-id');
-
-      expect(result.ydoc).toBeInstanceOf(Y.Doc);
-      expect(result.meta.title).toBe('Untitled');
-
-      const stored = await indexedDBService.getDocument('new-id');
-      expect(stored).toBeDefined();
-    });
-
-    it('should create document with custom title', async () => {
-      const result = await documentService.getOrCreateDocument('new-id', 'Custom');
-
-      expect(result.meta.title).toBe('Custom');
-    });
-
-    it('should propagate errors from loadDocument', async () => {
-      const dbError = new Error('IndexedDB read failed');
-      const spy = jest.spyOn(indexedDBService, 'getDocument').mockRejectedValue(dbError);
-
-      await expect(documentService.getOrCreateDocument('test-id')).rejects.toThrow(
         'IndexedDB read failed'
       );
 
@@ -567,84 +540,6 @@ describe('document.service', () => {
     });
   });
 
-  describe('promoteGuestDocumentsToAccount', () => {
-    it('should cache promoted guest documents in the active user database', async () => {
-      const cloudYDoc = new Y.Doc();
-      const cloudMeta = {
-        title: 'Doc 1',
-        createdAt: '2024-01-02T00:00:00.000Z',
-        updatedAt: '2024-01-02T00:00:00.000Z',
-      };
-      const createCloudDocumentSpy = jest
-        .spyOn(documentService, 'createCloudDocument')
-        .mockResolvedValue({
-          id: 'id-1',
-          ydoc: cloudYDoc,
-          meta: cloudMeta,
-        });
-
-      const { ydoc, meta } = await documentService.createDocument('Doc 1');
-      await documentService.saveDocument('id-1', ydoc, meta);
-      const docs = await documentService.getAllLocalDocuments();
-      await indexedDBService.clearAllDocuments();
-
-      const result = await documentService.promoteGuestDocumentsToAccount('access-token', docs);
-
-      expect(result).toEqual(['id-1']);
-      expect(createCloudDocumentSpy).toHaveBeenCalledWith(
-        'access-token',
-        'id-1',
-        'Doc 1',
-        expect.any(Y.Doc),
-        null
-      );
-      const stored = await indexedDBService.getDocument('id-1');
-      expect(stored?.meta).toEqual(cloudMeta);
-
-      createCloudDocumentSpy.mockRestore();
-    });
-
-    it('should propagate create failures during promotion', async () => {
-      const createCloudDocumentSpy = jest
-        .spyOn(documentService, 'createCloudDocument')
-        .mockRejectedValue(new Error('Create failed'));
-
-      const { ydoc, meta } = await documentService.createDocument('Doc 1');
-      await documentService.saveDocument('id-1', ydoc, meta);
-      const docs = await documentService.getAllLocalDocuments();
-
-      await expect(
-        documentService.promoteGuestDocumentsToAccount('access-token', docs)
-      ).rejects.toThrow('Create failed');
-
-      createCloudDocumentSpy.mockRestore();
-    });
-  });
-
-  describe('deleteLocalDocumentsByIds', () => {
-    it('should remove matching local documents and emit change event', async () => {
-      const { ydoc: ydoc1, meta: meta1 } = await documentService.createDocument('Doc 1');
-      await documentService.saveDocument('id-1', ydoc1, meta1);
-
-      const { ydoc: ydoc2, meta: meta2 } = await documentService.createDocument('Doc 2');
-      await documentService.saveDocument('id-2', ydoc2, meta2);
-
-      const listener = jest.fn();
-      window.addEventListener('local-documents-changed', listener);
-
-      await documentService.deleteLocalDocumentsByIds(['id-1']);
-
-      const doc1 = await indexedDBService.getDocument('id-1');
-      const doc2 = await indexedDBService.getDocument('id-2');
-
-      expect(doc1).toBeUndefined();
-      expect(doc2).toBeDefined();
-      expect(listener).toHaveBeenCalled();
-
-      window.removeEventListener('local-documents-changed', listener);
-    });
-  });
-
   describe('getMyAccess', () => {
     it('should fetch and return document access including trashed status', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
@@ -917,6 +812,106 @@ describe('document.service', () => {
       const crumbs = await documentService.getDocumentBreadcrumbs('crumb-doc-evil');
 
       expect(crumbs[1].icon).toBeNull();
+    });
+  });
+
+  describe('offline hierarchy caching', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    function mockEnvelope(data: unknown): void {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = jest
+        .fn()
+        .mockResolvedValue({
+          ok: true,
+          json: async () => ({ success: true, data, error: null }),
+        } as Response) as typeof fetch;
+    }
+
+    it('caches every page of the private hierarchy once per signed-in user', async () => {
+      const page = (content: Record<string, unknown>[], number: number, last: boolean): Response =>
+        ({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              content,
+              totalElements: 3,
+              totalPages: 2,
+              size: 200,
+              number,
+              first: number === 0,
+              last,
+            },
+            error: null,
+          }),
+        }) as Response;
+      const doc = (id: string, parentId: string | null) => ({
+        id,
+        title: id,
+        parentId,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      });
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce(page([doc('parent', null), doc('child', 'parent')], 0, false))
+        .mockResolvedValueOnce(page([doc('grandchild', 'child')], 1, true));
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.cachePrivateHierarchy('token', 'warm-user');
+
+      const parents = getLocalDocumentParents();
+      expect(parents.get('child')).toBe('parent');
+      expect(parents.get('grandchild')).toBe('child');
+
+      await documentService.cachePrivateHierarchy('token', 'warm-user');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('remembers parents returned by a child tree fetch', async () => {
+      mockEnvelope({
+        content: [
+          {
+            id: 'child',
+            title: 'Child',
+            parentId: 'parent',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+        totalElements: 1,
+        totalPages: 1,
+        size: 50,
+        number: 0,
+        first: true,
+        last: true,
+      });
+
+      await documentService.listChildTreeNodes('parent', 'token');
+
+      expect(getLocalDocumentParents().get('child')).toBe('parent');
+    });
+
+    it('remembers authenticated breadcrumb parents but not public paths', async () => {
+      mockEnvelope([
+        { id: 'parent', title: 'Parent', parentId: null },
+        { id: 'child', title: 'Child', parentId: 'parent' },
+      ]);
+
+      await documentService.getDocumentBreadcrumbs('child', 'token');
+      expect(getLocalDocumentParents().get('child')).toBe('parent');
+
+      mockEnvelope([{ id: 'shared-child', title: 'Shared', parentId: 'shared-parent' }]);
+      await documentService.getDocumentBreadcrumbs('shared-child');
+      expect(getLocalDocumentParents().has('shared-child')).toBe(false);
     });
   });
 
@@ -1210,23 +1205,6 @@ describe('document.service', () => {
 
       const allMeta = await documentService.getAllDocumentsMeta();
       expect(allMeta.map((d) => d.id)).toEqual(['mine-1']);
-    });
-
-    it('should exclude public-link mirrors from login promotion', async () => {
-      const linked = await documentService.createDocument('Linked');
-      await documentService.saveDocument('link-1', linked.ydoc, linked.meta, {
-        origin: 'public-link',
-      });
-
-      expect(await documentService.getAllGuestDocuments()).toEqual([]);
-    });
-
-    it('should tag link-session documents created offline', async () => {
-      const result = await documentService.getOrCreateDocument('link-2', undefined, {
-        origin: 'public-link',
-      });
-      expect(result.origin).toBe('public-link');
-      expect((await documentService.loadDocument('link-2'))?.origin).toBe('public-link');
     });
 
     it('should cap publicLinkSessionIds to 500 entries with FIFO eviction', () => {

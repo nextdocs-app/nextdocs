@@ -1,5 +1,7 @@
+import { configureStore, type UnknownAction } from '@reduxjs/toolkit';
 import sidebarTreeReducer, {
   addNode,
+  fetchRootNodesThunk,
   removeNode,
   resetTree,
   setNodeExpanded,
@@ -8,7 +10,21 @@ import sidebarTreeReducer, {
   compareOrderKeys,
   type SidebarTreeState,
 } from '@/stores/sidebarTree/sidebarTree.slice';
+import { documentService } from '../../../../services/document.service';
+import { getLocalDocumentParents } from '../../../../lib/local-tree.util';
+import { queuePendingCloudCreate } from '../../../../lib/pending-cloud-create.util';
 import type { TreeNode } from '@/types/tree.types';
+
+jest.mock('../../../../services/document.service', () => ({
+  documentService: {
+    listRootTreeNodes: jest.fn(),
+    cachePrivateHierarchy: jest.fn().mockResolvedValue(undefined),
+    getAllDocumentsMeta: jest.fn(),
+  },
+}));
+jest.mock('../../../../lib/local-tree.util', () => ({
+  getLocalDocumentParents: jest.fn(),
+}));
 
 describe('sidebarTree.slice', () => {
   const initialState: SidebarTreeState = {
@@ -311,6 +327,150 @@ describe('sidebarTree.slice', () => {
       expect(state.nodes['root-1']).toBeUndefined();
       expect(state.nodes['child-2']).toBeUndefined();
       expect(state.nodes).toEqual({});
+    });
+  });
+
+  describe('degraded local roots', () => {
+    const localDoc = (id: string, title: string, updatedAt: string) => ({
+      id,
+      meta: { title, createdAt: '2024-01-01T10:00:00Z', updatedAt },
+    });
+
+    // The thunk is typed against the full RootState; these tests mount only the
+    // slices it reads.
+    async function dispatchFetch(
+      store: { dispatch: (action: UnknownAction) => unknown },
+      params?: { background?: boolean }
+    ): Promise<void> {
+      await store.dispatch(fetchRootNodesThunk(params) as unknown as UnknownAction);
+    }
+
+    it('nests an offline-created child under a parent that is merged later', async () => {
+      (documentService.listRootTreeNodes as jest.Mock).mockRejectedValue(new Error('offline'));
+      // UpdatedAt order puts the new child before the parent it was created in.
+      (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+        localDoc('child', 'Child', '2024-01-02T10:00:00Z'),
+        localDoc('parent', 'Parent', '2024-01-01T10:00:00Z'),
+      ]);
+      (getLocalDocumentParents as jest.Mock).mockReturnValue(new Map([['child', 'parent']]));
+
+      const store = configureStore({
+        reducer: {
+          auth: () => ({ accessToken: 'token-1', user: { id: 'user-1' } }),
+          sidebarTree: sidebarTreeReducer,
+        },
+      });
+
+      await dispatchFetch(store);
+
+      const state = store.getState().sidebarTree;
+      expect(state.rootIds).toEqual(['parent']);
+      expect(state.nodes['parent'].children).toEqual(['child']);
+      expect(state.nodes['child'].parentId).toBe('parent');
+    });
+
+    it('keeps a pending offline-created child visible under its cloud parent', async () => {
+      (documentService.listRootTreeNodes as jest.Mock).mockResolvedValue({
+        items: [
+          {
+            id: 'parent',
+            title: 'Parent',
+            parentId: null,
+            orderKey: 'a0',
+            hasChildren: true,
+            effectiveAccessLevel: 'OWNER',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+            icon: null,
+          },
+        ],
+        hasMore: false,
+        page: 0,
+      });
+      (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+        localDoc('child', 'Child', '2024-01-02T10:00:00Z'),
+      ]);
+      (getLocalDocumentParents as jest.Mock).mockReturnValue(new Map([['child', 'parent']]));
+      queuePendingCloudCreate({ id: 'child', userId: 'user-1', parentId: 'parent' });
+
+      const store = configureStore({
+        reducer: {
+          auth: () => ({ accessToken: 'token-1', user: { id: 'user-1' } }),
+          sidebarTree: sidebarTreeReducer,
+        },
+      });
+
+      try {
+        await dispatchFetch(store);
+
+        const state = store.getState().sidebarTree;
+        expect(state.rootIds).toEqual(['parent']);
+        expect(state.nodes['parent'].children).toEqual(['child']);
+        expect(state.nodes['child'].parentId).toBe('parent');
+        expect(documentService.cachePrivateHierarchy).toHaveBeenCalledWith('token-1', 'user-1');
+      } finally {
+        window.localStorage.removeItem('nextdocs:pending-cloud-creates');
+      }
+    });
+
+    it('keeps a cached nested document under its cloud parent when it has no local link', async () => {
+      (documentService.listRootTreeNodes as jest.Mock).mockRejectedValue(new Error('offline'));
+      (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+        localDoc('nested', 'Nested', '2024-01-01T10:00:00Z'),
+      ]);
+      (getLocalDocumentParents as jest.Mock).mockReturnValue(new Map());
+
+      const store = configureStore({
+        reducer: {
+          auth: () => ({ accessToken: 'token-1', user: { id: 'user-1' } }),
+          sidebarTree: sidebarTreeReducer,
+        },
+        preloadedState: {
+          sidebarTree: {
+            nodes: {
+              root: {
+                id: 'root',
+                title: 'Root',
+                parentId: null,
+                orderKey: 'a0',
+                hasChildren: true,
+                effectiveAccessLevel: 'OWNER' as const,
+                isExpanded: true,
+                isLoading: false,
+                children: ['nested'],
+                childrenLoaded: true,
+                createdAt: '2024-01-01T10:00:00Z',
+                updatedAt: '2024-01-01T10:00:00Z',
+              },
+              nested: {
+                id: 'nested',
+                title: 'Nested',
+                parentId: 'root',
+                orderKey: 'a1',
+                hasChildren: false,
+                effectiveAccessLevel: 'OWNER' as const,
+                isExpanded: false,
+                isLoading: false,
+                children: [],
+                childrenLoaded: false,
+                createdAt: '2024-01-01T10:00:00Z',
+                updatedAt: '2024-01-01T10:00:00Z',
+              },
+            },
+            rootIds: ['root'],
+            isRootLoading: false,
+            rootHasMore: false,
+            rootPage: 0,
+          },
+        },
+      });
+
+      await dispatchFetch(store, { background: true });
+
+      const state = store.getState().sidebarTree;
+      expect(state.rootIds).toEqual(['root']);
+      expect(state.nodes['nested'].parentId).toBe('root');
+      expect(state.nodes['root'].children).toEqual(['nested']);
     });
   });
 });

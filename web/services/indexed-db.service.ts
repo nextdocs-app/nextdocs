@@ -109,7 +109,6 @@ class IndexedDBService {
   }
 
   private ensureDocumentsStore(db: IDBPDatabase): void {
-    // Keep guest and user DB schema bootstrap logic in one place.
     if (!db.objectStoreNames.contains(DOCUMENTS_STORE)) {
       const store = db.createObjectStore(DOCUMENTS_STORE, {
         keyPath: 'id',
@@ -178,53 +177,6 @@ class IndexedDBService {
     } catch (error) {
       console.error('Failed to clear documents:', error);
       throw error;
-    }
-  }
-
-  /**
-   * Specifically targets the legacy/guest database ('nextdocs-db') to find
-   * documents created before the user logged in.
-   */
-  public async getAllGuestDocuments(): Promise<StoredDocument[]> {
-    if (!this.isSupported) {
-      return [];
-    }
-
-    try {
-      const guestDb = await openDB('nextdocs-db', DB_VERSION, {
-        upgrade: (db) => {
-          this.ensureDocumentsStore(db);
-        },
-      });
-
-      const docs = await guestDb.getAll(DOCUMENTS_STORE);
-      guestDb.close();
-      return docs;
-    } catch (error) {
-      console.error('Failed to get guest documents:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Deletes documents from the guest database by ID.
-   */
-  public async deleteGuestDocuments(ids: string[]): Promise<void> {
-    if (!this.isSupported || ids.length === 0) {
-      return;
-    }
-
-    try {
-      const guestDb = await openDB('nextdocs-db', DB_VERSION, {
-        upgrade: (db) => {
-          this.ensureDocumentsStore(db);
-        },
-      });
-      const tx = guestDb.transaction(DOCUMENTS_STORE, 'readwrite');
-      await Promise.all([...ids.map((id) => tx.store.delete(id)), tx.done]);
-      guestDb.close();
-    } catch (error) {
-      console.error('Failed to delete guest documents:', error);
     }
   }
 

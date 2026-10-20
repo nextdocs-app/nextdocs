@@ -9,7 +9,13 @@ import documentReducer, {
 import type { DocumentMeta } from '@/types/document.types';
 import { useYjsPersistence } from '@/hooks/useYjsPersistence.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
-import { mergePendingIconCoverPatch, readPendingIconCoverPatch } from '@/lib/offline-sync.util';
+import {
+  mergePendingIconCoverPatch,
+  readPendingIconCoverPatch,
+  readPendingSyncEdits,
+  writePendingSyncEdits,
+} from '@/lib/offline-sync.util';
+import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -269,6 +275,90 @@ describe('useYjsPersistence', () => {
       expect(savePublicDocumentSpy).not.toHaveBeenCalled();
     } finally {
       savePublicDocumentSpy.mockRestore();
+    }
+  });
+
+  it('creates the queued cloud document before saving edits to it', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Born offline',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    loadDocumentSpy.mockResolvedValue({ ydoc, meta });
+    const createCloudDocumentSpy = jest
+      .spyOn(documentService, 'createCloudDocument')
+      .mockResolvedValue({ id: 'offline-doc', ydoc, meta });
+    const emitCloudDocumentsChangedSpy = jest
+      .spyOn(documentService, 'emitCloudDocumentsChanged')
+      .mockImplementation(() => {});
+    queuePendingCloudCreate({ id: 'offline-doc', userId: 'user-1', parentId: null });
+
+    try {
+      renderHook(() => useYjsPersistence('offline-doc', ydoc, meta), { wrapper });
+
+      const fragment = ydoc.getXmlFragment('blocknote');
+      fragment.push([new Y.XmlElement('paragraph')]);
+
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+
+      await waitFor(() => {
+        expect(saveCloudDocumentSpy).toHaveBeenCalled();
+      });
+
+      // A PATCH before the POST would 404, so the create has to land first.
+      expect(createCloudDocumentSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        saveCloudDocumentSpy.mock.invocationCallOrder[0]
+      );
+      expect(getPendingCloudCreate('offline-doc')).toBeNull();
+    } finally {
+      createCloudDocumentSpy.mockRestore();
+      emitCloudDocumentsChangedSpy.mockRestore();
+    }
+  });
+
+  it('discards a rejected pending create instead of pinning its edits offline', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Rejected offline draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    loadDocumentSpy.mockResolvedValue({ ydoc, meta });
+    const deleteDocumentSpy = jest
+      .spyOn(documentService, 'deleteDocument')
+      .mockResolvedValue(undefined);
+    const createCloudDocumentSpy = jest
+      .spyOn(documentService, 'createCloudDocument')
+      .mockRejectedValue(new DocumentServiceApiError('Forbidden', 403));
+    queuePendingCloudCreate({ id: 'offline-doc', userId: 'user-1', parentId: null });
+    writePendingSyncEdits('offline-doc', 1);
+
+    try {
+      renderHook(() => useYjsPersistence('offline-doc', ydoc, meta), { wrapper });
+
+      await waitFor(() => expect(deleteDocumentSpy).toHaveBeenCalledWith('offline-doc'));
+
+      expect(getPendingCloudCreate('offline-doc')).toBeNull();
+      expect(readPendingSyncEdits('offline-doc')).toBe(0);
+      expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
+    } finally {
+      deleteDocumentSpy.mockRestore();
+      createCloudDocumentSpy.mockRestore();
     }
   });
 

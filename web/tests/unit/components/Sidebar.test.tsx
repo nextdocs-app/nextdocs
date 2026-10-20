@@ -11,11 +11,12 @@ import uiReducer from '../../../stores/ui/ui.slice';
 import userEvent from '@testing-library/user-event';
 import Sidebar from '../../../components/sidebar';
 import { useDocumentList } from '../../../hooks/useDocumentList.hook';
-import { documentService } from '../../../services/document.service';
+import { DocumentServiceApiError, documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
+import { listPendingCloudCreates } from '../../../lib/pending-cloud-create.util';
 import { resolveRootDocumentId } from '../../../lib/root-document.util';
 import * as Y from 'yjs';
 
@@ -50,6 +51,19 @@ const mockTreeNodes = {
   },
 };
 
+const signedInAuthState = {
+  ...authReducer(undefined, { type: '@@init' }),
+  user: {
+    displayName: 'Alice',
+    id: '1',
+    email: 'a@b.com',
+    avatarUrl: null,
+    emailVerified: false,
+  },
+  accessToken: 'token-1',
+  isInitializing: false,
+};
+
 const render = (
   ui: React.ReactElement,
   store: unknown = configureStore({
@@ -62,6 +76,7 @@ const render = (
       documentList: documentListReducer,
     },
     preloadedState: {
+      auth: signedInAuthState,
       sidebarTree: {
         nodes: mockTreeNodes,
         rootIds: ['id-1', 'id-2'],
@@ -80,6 +95,18 @@ const render = (
     ...options,
   });
 };
+
+// A tree row exposes its title plus aria-labelled action buttons, so title
+// lookups match both; the row is the draggable one.
+function getTreeNodeRow(name: RegExp, root: HTMLElement = document.body): HTMLElement {
+  const row = within(root)
+    .getAllByRole('button', { name })
+    .find((element) => element.getAttribute('aria-roledescription') === 'draggable');
+  if (!row) {
+    throw new Error(`No tree row matching ${name}`);
+  }
+  return row;
+}
 
 jest.mock('../../../hooks/useDocumentList.hook');
 jest.mock('next/navigation');
@@ -154,9 +181,15 @@ function setupDefault() {
   });
   (useTheme as jest.Mock).mockReturnValue({ resolvedTheme: 'light' });
   (useAuth as jest.Mock).mockReturnValue({
-    user: null,
-    isAuthenticated: false,
-    accessToken: null,
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+      emailVerified: false,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
     logout: mockLogout,
   });
   (resolveRootDocumentId as jest.Mock).mockResolvedValue('resolved-root-id');
@@ -167,7 +200,17 @@ function setupDefault() {
   }
   if (documentService.listRootTreeNodes) {
     (documentService.listRootTreeNodes as jest.Mock).mockResolvedValue({
-      items: [],
+      items: mockDocs.map((doc, index) => ({
+        id: doc.id,
+        title: doc.meta.title,
+        parentId: null,
+        orderKey: `a${index}`,
+        hasChildren: false,
+        effectiveAccessLevel: 'OWNER',
+        createdAt: doc.meta.createdAt,
+        updatedAt: doc.meta.updatedAt,
+        icon: null,
+      })),
       hasMore: false,
       page: 0,
     });
@@ -187,14 +230,14 @@ beforeEach(() => {
 
 it('renders the document list', () => {
   render(<Sidebar />);
-  expect(screen.getByRole('button', { name: /Doc 1/i })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /Untitled/i })).toBeInTheDocument();
+  expect(getTreeNodeRow(/Doc 1/i)).toBeInTheDocument();
+  expect(getTreeNodeRow(/Untitled/i)).toBeInTheDocument();
 });
 
 it('navigates to the selected document', async () => {
   const user = userEvent.setup();
   render(<Sidebar />);
-  await user.click(screen.getByRole('button', { name: /Untitled/i }));
+  await user.click(getTreeNodeRow(/Untitled/i));
   expect(mockPush).toHaveBeenCalledWith('/doc/id-2');
 });
 
@@ -210,7 +253,7 @@ it('dispatches offline document select event instead of route navigation when br
 
   try {
     render(<Sidebar />);
-    await user.click(screen.getByRole('button', { name: /Untitled/i }));
+    await user.click(getTreeNodeRow(/Untitled/i));
 
     expect(mockPush).not.toHaveBeenCalled();
     expect(dispatchEventSpy).toHaveBeenCalledWith(
@@ -231,8 +274,8 @@ it('dispatches offline document select event instead of route navigation when br
 it('updates sidebar active focus from offline document selection event without route change', () => {
   render(<Sidebar />);
 
-  const docOneButton = screen.getByRole('button', { name: /Doc 1/i });
-  const docTwoButton = screen.getByRole('button', { name: /Untitled/i });
+  const docOneButton = getTreeNodeRow(/Doc 1/i);
+  const docTwoButton = getTreeNodeRow(/Untitled/i);
 
   expect(docOneButton).toHaveClass('bg-sidebar-accent/70');
   expect(docTwoButton).not.toHaveClass('bg-sidebar-accent/70');
@@ -247,6 +290,39 @@ it('updates sidebar active focus from offline document selection event without r
 
   expect(docTwoButton).toHaveClass('bg-sidebar-accent/70');
   expect(docOneButton).not.toHaveClass('bg-sidebar-accent/70');
+});
+
+it('drops the local copy when the server rejects the create', async () => {
+  const user = userEvent.setup();
+  (useAuth as jest.Mock).mockReturnValue({
+    user: { id: 'user-1' },
+    isAuthenticated: true,
+    accessToken: 'token',
+    logout: mockLogout,
+  });
+  (documentService.createDocument as jest.Mock).mockResolvedValue({
+    ydoc: new Y.Doc(),
+    meta: { title: 'Untitled', createdAt: '...', updatedAt: '...' },
+  });
+  (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
+  (documentService.deleteDocument as jest.Mock).mockResolvedValue(undefined);
+  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(
+    new DocumentServiceApiError('Forbidden', 403)
+  );
+
+  try {
+    render(<Sidebar />);
+    await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+    await waitFor(() => expect(documentService.deleteDocument).toHaveBeenCalled());
+    // A node left behind would open a document the account does not have.
+    expect(document.querySelectorAll('[aria-roledescription="draggable"]')).toHaveLength(2);
+    expect(listPendingCloudCreates('user-1')).toEqual([]);
+  } finally {
+    // clearAllMocks keeps implementations, so a rejection here would leak into
+    // the create tests below.
+    (documentService.createCloudDocument as jest.Mock).mockReset();
+  }
 });
 
 it('creates a new document and navigates to it', async () => {
@@ -269,6 +345,102 @@ it('creates a new document and navigates to it', async () => {
   });
 });
 
+it('creates and opens a document in place when offline', async () => {
+  const user = userEvent.setup();
+  const mockYdoc = new Y.Doc();
+  (useAuth as jest.Mock).mockReturnValue({
+    user: { id: 'user-1' },
+    isAuthenticated: true,
+    accessToken: 'token',
+    logout: mockLogout,
+  });
+  (documentService.createDocument as jest.Mock).mockClear();
+  (documentService.saveDocument as jest.Mock).mockClear();
+  (documentService.createCloudDocument as jest.Mock).mockClear();
+  mockPush.mockClear();
+  (documentService.createDocument as jest.Mock).mockResolvedValue({
+    ydoc: mockYdoc,
+    meta: { title: 'Untitled', createdAt: '...', updatedAt: '...' },
+  });
+  (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
+  const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+  const originalOnLine = navigator.onLine;
+  Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: false });
+
+  try {
+    render(<Sidebar />);
+    await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+    await waitFor(() => {
+      expect(documentService.saveDocument).toHaveBeenCalled();
+    });
+
+    const newId = (documentService.saveDocument as jest.Mock).mock.calls[0][0];
+    const offlineEvent = dispatchEventSpy.mock.calls
+      .map(([event]) => event as Event)
+      .find((event) => event.type === OFFLINE_DOCUMENT_SELECT_EVENT) as CustomEvent | undefined;
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(documentService.createCloudDocument).not.toHaveBeenCalled();
+    expect(offlineEvent?.detail).toEqual({ id: newId });
+    expect(listPendingCloudCreates('user-1')).toEqual([
+      expect.objectContaining({ id: newId, userId: 'user-1', parentId: null }),
+    ]);
+  } finally {
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: originalOnLine,
+    });
+    window.localStorage.clear();
+    dispatchEventSpy.mockRestore();
+  }
+});
+
+it('queues the cloud create and opens in place when the API is unreachable', async () => {
+  const user = userEvent.setup();
+  const mockYdoc = new Y.Doc();
+  (useAuth as jest.Mock).mockReturnValue({
+    user: { id: 'user-1' },
+    isAuthenticated: true,
+    accessToken: 'token',
+    logout: mockLogout,
+  });
+  (documentService.createDocument as jest.Mock).mockClear();
+  (documentService.saveDocument as jest.Mock).mockClear();
+  (documentService.createCloudDocument as jest.Mock).mockClear();
+  mockPush.mockClear();
+  (documentService.createDocument as jest.Mock).mockResolvedValue({
+    ydoc: mockYdoc,
+    meta: { title: 'Untitled', createdAt: '...', updatedAt: '...' },
+  });
+  (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
+  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(
+    new TypeError('Failed to fetch')
+  );
+  const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+
+  try {
+    render(<Sidebar />);
+    await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+    await waitFor(() => {
+      expect(documentService.createCloudDocument).toHaveBeenCalled();
+      expect(listPendingCloudCreates('user-1')).toHaveLength(1);
+    });
+
+    const newId = (documentService.saveDocument as jest.Mock).mock.calls[0][0];
+    const offlineEvent = dispatchEventSpy.mock.calls
+      .map(([event]) => event as Event)
+      .find((event) => event.type === OFFLINE_DOCUMENT_SELECT_EVENT) as CustomEvent | undefined;
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(offlineEvent?.detail).toEqual({ id: newId });
+  } finally {
+    window.localStorage.clear();
+    dispatchEventSpy.mockRestore();
+  }
+});
+
 it('collapses and expands the document list', async () => {
   const user = userEvent.setup();
   render(<Sidebar />);
@@ -277,10 +449,20 @@ it('collapses and expands the document list', async () => {
   expect(screen.queryByRole('button', { name: /Doc 1/i })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: /Private/i }));
-  expect(screen.getByRole('button', { name: /Doc 1/i })).toBeInTheDocument();
+  expect(getTreeNodeRow(/Doc 1/i)).toBeInTheDocument();
 });
 
+function useGuestAuth() {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: null,
+    isAuthenticated: false,
+    accessToken: null,
+    logout: mockLogout,
+  });
+}
+
 it('dispatches auth modal open action when "Log in" is selected from the account menu', async () => {
+  useGuestAuth();
   const store = configureStore({
     reducer: {
       sidebar: sidebarReducer,
@@ -318,18 +500,15 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
   await user.click(screen.getByRole('button', { name: /Alice/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log out/i }));
   expect(mockLogout).toHaveBeenCalledTimes(1);
-  await waitFor(() => {
-    expect(resolveRootDocumentId).toHaveBeenCalledWith({
-      isAuthenticated: false,
-      accessToken: null,
-      excludedDocumentIds: undefined,
-    });
-  });
-  expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
+  // Signed out there is no private root to resolve; the home route prompts
+  // for sign-in instead of creating a guest document.
+  expect(resolveRootDocumentId).not.toHaveBeenCalled();
+  expect(mockReplace).toHaveBeenCalledWith('/');
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
 it('opens the settings modal when "Settings" is selected from the account menu', async () => {
+  useGuestAuth();
   const user = userEvent.setup();
   render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
@@ -339,6 +518,7 @@ it('opens the settings modal when "Settings" is selected from the account menu',
 });
 
 it('closes the account menu when Escape is pressed', async () => {
+  useGuestAuth();
   const user = userEvent.setup();
   render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
@@ -408,7 +588,7 @@ it('opens all documents panel with search and closes with back', async () => {
   expect(within(dialog).getByPlaceholderText(/Search documents/i)).toBeInTheDocument();
 
   await user.type(within(dialog).getByPlaceholderText(/Search documents/i), 'Doc 1');
-  expect(within(dialog).getByRole('button', { name: /Doc 1/i })).toBeInTheDocument();
+  expect(getTreeNodeRow(/Doc 1/i, dialog)).toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: /Back/i }));
   expect(screen.queryByRole('dialog', { name: /Private documents/i })).not.toBeInTheDocument();
@@ -687,6 +867,7 @@ it('moves a document to trash from row actions menu', async () => {
     isAuthenticated: true,
     accessToken: 'token-1',
     excludedDocumentIds: ['id-1'],
+    userId: '1',
   });
   expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   expect(mockRefresh).toHaveBeenCalled();
@@ -844,6 +1025,7 @@ it('renders private panel with hasMore true when there are fewer than 7 private 
       documentList: documentListReducer,
     },
     preloadedState: {
+      auth: signedInAuthState,
       sidebarTree: {
         nodes: sparseNodes,
         rootIds: ['sparse-1', 'sparse-2'],
@@ -1168,6 +1350,7 @@ it('permanently deletes a document from trash panel after confirmation', async (
     isAuthenticated: true,
     accessToken: 'token-1',
     excludedDocumentIds: ['id-1'],
+    userId: '1',
   });
   expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   expect(mockRefresh).toHaveBeenCalled();
@@ -1419,6 +1602,7 @@ it('resolves a replacement document when leaving the active shared document', as
       isAuthenticated: true,
       accessToken: 'token-1',
       excludedDocumentIds: ['shared-collab-1'],
+      userId: '1',
     });
     expect(mockReplace).toHaveBeenCalledWith('/doc/resolved-root-id');
   });
@@ -2078,6 +2262,15 @@ function makeGuestStore(options: {
   });
 }
 
+function mockGuestAuth() {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: null,
+    isAuthenticated: false,
+    accessToken: null,
+    logout: mockLogout,
+  });
+}
+
 function makeGuestDocumentList(documents: unknown[] = []) {
   (useDocumentList as jest.Mock).mockReturnValue({
     documents,
@@ -2107,6 +2300,7 @@ function makeGuestDocumentList(documents: unknown[] = []) {
 
 it('expands a guest shared document through the anonymous children endpoint', async () => {
   const user = userEvent.setup();
+  mockGuestAuth();
   makeGuestDocumentList();
   (useParams as jest.Mock).mockReturnValue({ id: 'guest-root' });
   (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
@@ -2149,6 +2343,7 @@ it('expands a guest shared document through the anonymous children endpoint', as
 });
 
 it('shows the Shared section skeleton while guest roots are still loading', () => {
+  mockGuestAuth();
   makeGuestDocumentList();
   (useParams as jest.Mock).mockReturnValue({ id: 'guest-pending' });
   // Never resolves: the guest section stays in its first-load state.
@@ -2164,6 +2359,7 @@ it('shows the Shared section skeleton while guest roots are still loading', () =
 });
 
 it('hides the \"Add a document inside\" button from a guest with EDIT access', async () => {
+  mockGuestAuth();
   makeGuestDocumentList();
 
   const store = makeGuestStore({
@@ -2185,7 +2381,8 @@ it('hides the \"Add a document inside\" button from a guest with EDIT access', a
   expect(screen.queryByRole('button', { name: /Add a document inside/i })).not.toBeInTheDocument();
 });
 
-it('keeps the \"Add a document inside\" button on a guest\'s own local documents', () => {
+it('does not render a private section for a guest', () => {
+  mockGuestAuth();
   makeGuestDocumentList();
 
   const store = makeGuestStore({
@@ -2201,12 +2398,14 @@ it('keeps the \"Add a document inside\" button on a guest\'s own local documents
 
   render(<Sidebar />, store);
 
-  // Guests still create documents locally; only the shared section loses the
-  // affordance it could never honour.
-  expect(screen.getByRole('button', { name: /Add a document inside/i })).toBeInTheDocument();
+  // Guests have no private workspace: creating documents needs an account, so
+  // only the Shared section (share-link documents) is offered.
+  expect(screen.queryByRole('button', { name: /Private/i })).not.toBeInTheDocument();
+  expect(screen.queryByText('Local Owner Doc')).not.toBeInTheDocument();
 });
 
 it('marks guest shared rows as non-draggable', () => {
+  mockGuestAuth();
   makeGuestDocumentList();
 
   const store = makeGuestStore({

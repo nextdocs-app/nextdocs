@@ -24,9 +24,7 @@ export const store = configureStore({
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {
-        ignoredActions: ['ui/setLocalDocsToPromote'],
-        ignoredActionPaths: ['payload.localDocsToPromote', 'meta.arg.cacheSyncInFlight'],
-        ignoredPaths: ['ui.localDocsToPromote'],
+        ignoredActionPaths: ['meta.arg.cacheSyncInFlight'],
       },
     }).prepend(authListenerMiddleware.middleware),
 });

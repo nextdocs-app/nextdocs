@@ -25,6 +25,11 @@ import {
   readPendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
+import {
+  discardPendingDocument,
+  flushPendingCloudCreate,
+  getPendingCloudCreate,
+} from '@/lib/pending-cloud-create.util';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -38,7 +43,7 @@ export function useYjsPersistence(
 ) {
   const dispatch = useAppDispatch();
   const { isSaving, lastSaved } = useAppSelector((state) => state.document);
-  const { isAuthenticated, accessToken } = useAuth();
+  const { isAuthenticated, accessToken, user } = useAuth();
   const { isOnline } = useNetworkStatus();
   const { trigger: triggerBackoff, clear: clearBackoff, isInBackoff } = useCloudBackoff();
 
@@ -123,6 +128,21 @@ export function useYjsPersistence(
       dispatch(setSaving(true));
       dispatch(setError(null));
 
+      // The document may have been born offline: create the cloud row before
+      // any PATCH, or the queued edits would 404 and stay stranded.
+      const pendingCreate = getPendingCloudCreate(documentId, user?.id ?? null);
+      if (pendingCreate) {
+        const result = await flushPendingCloudCreate(accessToken, pendingCreate);
+        if (result === 'retry') {
+          triggerBackoff();
+          return;
+        }
+        if (result === 'dropped') {
+          await discardPendingDocument(documentId);
+          return;
+        }
+      }
+
       // Prefer the locally cached snapshot during reconnect to avoid syncing stale in-memory state.
       const localSnapshot = await documentService.loadDocument(documentId);
       const sourceYDoc = localSnapshot?.ydoc ?? ydoc;
@@ -190,6 +210,7 @@ export function useYjsPersistence(
     isReadOnly,
     isAuthenticated,
     accessToken,
+    user?.id,
     canPersistCloud,
     isOnline,
     dispatch,
@@ -245,8 +266,35 @@ export function useYjsPersistence(
         dispatch(setSaving(true));
         dispatch(setError(null));
 
+        // A document created offline has no cloud row yet. Create it before the
+        // PATCH below, which would otherwise 404 and strand the edit.
+        const pendingCreate =
+          isAuthenticated && accessToken && canPersistCloud
+            ? getPendingCloudCreate(documentId, user?.id ?? null)
+            : null;
+        let cloudRowReady = pendingCreate === null;
+
+        if (pendingCreate && accessToken && isOnline && !isInBackoff()) {
+          const result = await flushPendingCloudCreate(accessToken, pendingCreate);
+          if (result === 'created') {
+            cloudRowReady = true;
+          } else if (result === 'retry') {
+            triggerBackoff();
+          } else {
+            // The server refused the create. Keeping the copy and its pending
+            // counter would pin the editor to a cloud row that cannot exist.
+            await discardPendingDocument(documentId);
+            return;
+          }
+        }
+
         const canAttemptCloudSave =
-          isAuthenticated && accessToken && canPersistCloud && isOnline && !isInBackoff();
+          isAuthenticated &&
+          accessToken &&
+          canPersistCloud &&
+          isOnline &&
+          !isInBackoff() &&
+          cloudRowReady;
         // Anonymous share-link editors persist snapshots through the public
         // endpoint (the link is the capability). View/comment links stay
         // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
@@ -374,6 +422,7 @@ export function useYjsPersistence(
     dispatch,
     isAuthenticated,
     accessToken,
+    user?.id,
     isOnline,
     isReadOnly,
     canPersistCloud,
