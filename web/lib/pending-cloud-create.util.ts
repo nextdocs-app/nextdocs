@@ -1,7 +1,7 @@
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { clearLocalDocumentParent } from '@/lib/local-tree.util';
 import { clearPendingIconCoverPatch, clearPendingSyncEdits } from '@/lib/offline-sync.util';
-import { documentService } from '@/services/document.service';
+import { DocumentServiceApiError, documentService } from '@/services/document.service';
 
 // One key per entry: two tabs creating documents offline must not overwrite
 // each other's queue with a whole-array read-modify-write.
@@ -239,7 +239,14 @@ export async function flushPendingCloudCreate(
     documentService.emitCloudDocumentsChanged();
     return 'created';
   } catch (error) {
-    if (isConnectivityError(error)) {
+    // A stale token is not a verdict: replaying right after an offline reload
+    // usually carries a token the refresh is about to replace. Dropping the
+    // queue there would strand the document as local-only, invisible to every
+    // cloud read.
+    if (
+      isConnectivityError(error) ||
+      (error instanceof DocumentServiceApiError && error.status === 401)
+    ) {
       return 'retry';
     }
 

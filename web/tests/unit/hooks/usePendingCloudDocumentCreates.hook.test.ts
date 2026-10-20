@@ -66,6 +66,27 @@ describe('usePendingCloudDocumentCreates', () => {
     await waitFor(() => expect(createCloudDocument).toHaveBeenCalled());
   });
 
+  it('stops replaying an entry the queue cannot forget', async () => {
+    queuePendingCloudCreate({ id: 'doc-1', userId: 'user-1', parentId: null });
+    // A queue remove that cannot be persisted leaves the entry behind; the
+    // flush must not spin on it for the rest of the session.
+    const removeItem = jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+
+    try {
+      renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
+
+      await waitFor(() => expect(createCloudDocument).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(createCloudDocument).toHaveBeenCalledTimes(1);
+    } finally {
+      removeItem.mockRestore();
+    }
+  });
+
   it('flushes a create queued by another tab', async () => {
     renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
 

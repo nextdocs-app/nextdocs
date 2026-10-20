@@ -47,7 +47,12 @@ export function usePendingCloudDocumentCreates(
       clearRetry();
 
       try {
-        while (!disposed) {
+        // Bounded: a queue remove that cannot be persisted would otherwise
+        // replay the same entry forever, hammering the create endpoint.
+        let remaining = listPendingCloudCreates(uid).length;
+        while (!disposed && remaining > 0) {
+          remaining -= 1;
+
           const [entry] = listPendingCloudCreates(uid);
           if (!entry) {
             break;

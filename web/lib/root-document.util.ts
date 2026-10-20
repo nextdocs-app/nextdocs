@@ -192,7 +192,9 @@ export async function resolveRootDocumentId(
       return mostRecentLocalDocument.id;
     }
 
-    const id = await persistLocalDocument(await createLocalDocumentSnapshot(options.title));
+    const id = await persistLocalDocument(
+      await createLocalDocumentSnapshot(normalizeDocumentTitle(options.title))
+    );
     if (options.userId) {
       queuePendingCloudCreate({ id, userId: options.userId, parentId: null });
     }

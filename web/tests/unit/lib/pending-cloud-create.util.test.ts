@@ -199,6 +199,46 @@ describe('pending cloud creates', () => {
     expect(getPendingCloudCreate('doc-1')).not.toBeNull();
   });
 
+  it('keeps the entry when the token is stale', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    // A 401 right after an offline reload is the refresh still in flight; the
+    // queue must survive it, or the document never reaches the account.
+    createCloudDocument.mockRejectedValue(new DocumentServiceApiError('Unauthorized', 401));
+
+    await expect(flushPendingCloudCreate('stale-token', entry)).resolves.toBe('retry');
+    expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+  });
+
+  it('creates a pending parent before its pending child', async () => {
+    queuePendingCloudCreate({ id: 'parent', userId: 'user-1', parentId: null });
+    const child = {
+      id: 'child',
+      userId: 'user-1',
+      parentId: 'parent',
+      queuedAt: '2026-01-01T00:00:01.000Z',
+    };
+    queuePendingCloudCreate(child);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockImplementation(async (_token, id) => ({
+      id,
+      ydoc: localDocument.ydoc,
+      meta: localDocument.meta,
+    }));
+    saveDocument.mockResolvedValue(undefined);
+
+    await expect(flushPendingCloudCreate('token', child)).resolves.toBe('created');
+
+    expect(createCloudDocument.mock.calls.map(([, id]) => id)).toEqual(['parent', 'child']);
+    expect(listPendingCloudCreates('user-1')).toEqual([]);
+  });
+
   it.each([403, 404, 409])(
     'reports a %i rejection so the caller can discard the queued document',
     async (status) => {
