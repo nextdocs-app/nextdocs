@@ -218,6 +218,10 @@ describe('auth slice', () => {
 
   it('refreshSessionThunk/rejected resets the coalescing state and drops the persisted session when unauthorized', async () => {
     window.sessionStorage.clear();
+    window.localStorage.setItem(
+      'nextdocs:pending-cloud-create:doc-offline',
+      JSON.stringify({ id: 'doc-offline', userId: 'user-1', parentId: null })
+    );
     window.sessionStorage.setItem(
       AUTH_SESSION_STORAGE_KEY,
       JSON.stringify({
@@ -234,16 +238,25 @@ describe('auth slice', () => {
       isInitializing: false,
     });
 
-    const result = await store.dispatch(refreshSessionThunk());
-    const { auth } = store.getState();
+    try {
+      const result = await store.dispatch(refreshSessionThunk());
+      const { auth } = store.getState();
 
-    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
-    expect(auth.isRefreshing).toBe(false);
-    expect(auth.lastSilentRefreshAt).toBeNull();
-    expect(auth.user).toBeNull();
-    expect(auth.accessToken).toBeNull();
-    expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
-    expect(clearLocalUserData).toHaveBeenCalledTimes(1);
+      expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+      expect(auth.isRefreshing).toBe(false);
+      expect(auth.lastSilentRefreshAt).toBeNull();
+      expect(auth.user).toBeNull();
+      expect(auth.accessToken).toBeNull();
+      expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+      // Expiry must not wipe local documents or the offline create queue.
+      expect(clearLocalUserData).not.toHaveBeenCalled();
+      expect(
+        window.localStorage.getItem('nextdocs:pending-cloud-create:doc-offline')
+      ).not.toBeNull();
+      expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
+    } finally {
+      window.localStorage.clear();
+    }
   });
 
   it('refreshSessionThunk/rejected retains state on network error and only changes isInitializing if true', async () => {

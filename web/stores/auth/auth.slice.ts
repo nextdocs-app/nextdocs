@@ -147,7 +147,9 @@ export const refreshSessionThunk = createAsyncThunk<
     } catch (err: unknown) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         attachmentService.resetAttachmentUrlCache();
-        await clearLocalUserData();
+        // An expired session is not a logout: keep the account's local
+        // documents and queued offline creates so they can replay after the
+        // same user signs in again.
         indexedDBService.setUserId(null);
         return rejectWithValue('unauthorized');
       }
