@@ -1,0 +1,137 @@
+package com.nextdocs.api.space.service;
+
+import com.nextdocs.api.common.exception.ApiException;
+import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.repository.SpaceMemberRepository;
+import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.service.WorkspaceAccessService;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Resolves the caller's standing in a space and enforces the gates.
+ *
+ * <p>Levels are read from the database on every request — never from a token — so a
+ * demotion or removal applies to the very next call. A space the caller cannot see is
+ * masked as 404, mirroring {@link WorkspaceAccessService}, so a non-member cannot
+ * distinguish "no space" from "not allowed".
+ *
+ * <p>Two axes stay deliberately separate:
+ *
+ * <ul>
+ *   <li><b>Content</b> — {@code accessLevel}, which is what a page inside the space
+ *       resolves. A workspace admin who is not a space member has no content access:
+ *       seeing pages is not an administrative act.
+ *   <li><b>Administration</b> — a space {@code OWNER}, plus any workspace owner or
+ *       admin. The workspace escape hatch is what keeps a space administrable after
+ *       its last owner leaves the instance, since the last-owner rule forbids removing
+ *       that owner but cannot forbid off-boarding them from the workspace.
+ * </ul>
+ */
+@Service
+@RequiredArgsConstructor
+public class SpaceAccessService {
+
+    private final SpaceRepository spaceRepository;
+    private final SpaceMemberRepository memberRepository;
+    private final WorkspaceAccessService workspaceAccessService;
+
+    /** A resolved space plus the caller's content level (null when none) and workspace role. */
+    public record SpaceContext(Space space, WorkspaceRole workspaceRole, DocumentAccessLevel accessLevel) {
+
+        /** Workspace owner or admin: may administer every space of the workspace. */
+        public boolean workspaceAdmin() {
+            return workspaceRole.canManageMembers();
+        }
+
+        /** May rename, re-share, delete, and manage members. */
+        public boolean canAdminister() {
+            return workspaceAdmin() || accessLevel == DocumentAccessLevel.OWNER;
+        }
+    }
+
+    /**
+     * Loads the space and the caller's level, or 404 for a space of another workspace.
+     * Never gates: callers choose the gate, so one load serves read and admin paths.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext load(UUID userId, UUID spaceId) {
+        WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(userId);
+        Space space = spaceRepository
+                .findByIdAndWorkspace_Id(spaceId, membership.workspace().getId())
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        return new SpaceContext(space, membership.member().getRole(), resolveLevel(userId, space));
+    }
+
+    /**
+     * Content read. A Public space answers with its everyone-else level for any member
+     * of the workspace; a Custom space only for listed members. Workspace admins pass
+     * so they can administer a space they are not part of.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext requireRead(UUID userId, UUID spaceId) {
+        SpaceContext context = load(userId, spaceId);
+        if (context.accessLevel() == null && !context.workspaceAdmin()) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        return context;
+    }
+
+    /**
+     * Content read that never falls back to workspace administration. Page listings and
+     * page content go through this gate: an admin who is not a member may manage a space
+     * but must not read the titles and bodies inside it.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext requireContentRead(UUID userId, UUID spaceId) {
+        SpaceContext context = load(userId, spaceId);
+        if (context.accessLevel() == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        return context;
+    }
+
+    /** Content write. Workspace admins are not exempt: adding content is not administration. */
+    @Transactional(readOnly = true)
+    public SpaceContext requireEdit(UUID userId, UUID spaceId) {
+        SpaceContext context = load(userId, spaceId);
+        if (context.accessLevel() == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        if (!context.accessLevel().allowsEdit()) {
+            throw new ApiException(ErrorCode.FORBIDDEN);
+        }
+        return context;
+    }
+
+    /**
+     * Space ownership: the space {@code OWNER} level, or a workspace owner/admin.
+     * A caller with no standing at all gets 404 rather than 403 so a Custom space's
+     * existence is not confirmed to strangers.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext requireAdministration(UUID userId, UUID spaceId) {
+        SpaceContext context = load(userId, spaceId);
+        if (context.canAdminister()) {
+            return context;
+        }
+        throw new ApiException(context.accessLevel() == null ? ErrorCode.NOT_FOUND : ErrorCode.FORBIDDEN);
+    }
+
+    /** The caller's content level for a loaded space, or null when none. */
+    @Transactional(readOnly = true)
+    public DocumentAccessLevel resolveLevel(UUID userId, Space space) {
+        return memberRepository
+                .findBySpace_IdAndUser_Id(space.getId(), userId)
+                .map(SpaceMember::getAccessLevel)
+                .orElseGet(
+                        () -> space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null);
+    }
+}

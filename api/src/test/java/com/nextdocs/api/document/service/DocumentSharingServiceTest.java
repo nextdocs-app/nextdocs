@@ -29,6 +29,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -61,6 +62,9 @@ class DocumentSharingServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
     private DocumentSharingService sharingService;
 
     @BeforeEach
@@ -70,7 +74,8 @@ class DocumentSharingServiceTest {
                 collaboratorRepository,
                 userDocumentOrderRepository,
                 userRepository,
-                permissionService);
+                permissionService,
+                spaceAccessService);
     }
 
     @Test

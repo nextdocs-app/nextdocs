@@ -2,6 +2,7 @@ package com.nextdocs.api.document.entity;
 
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.space.entity.Space;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -91,6 +92,15 @@ public class Document {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_id")
     private Document parent;
+
+    /**
+     * The space this page is filed into, or null for the caller's Private and Shared
+     * sections. A space anchors at a root page (V24's chk_documents_space_root); its
+     * descendants inherit the space grant through the parent chain.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "space_id")
+    private Space space;
 
     @Column(name = "sibling_order_key")
     private String siblingOrderKey;

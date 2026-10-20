@@ -25,6 +25,7 @@ import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -84,6 +85,9 @@ class WorkspaceServiceTest {
     @Mock
     private InstanceLockRepository instanceLockRepository;
 
+    @Mock
+    private SpaceMemberRepository spaceMemberRepository;
+
     private WorkspaceService workspaceService;
     private Workspace workspace;
     private UUID workspaceId;
@@ -101,7 +105,8 @@ class WorkspaceServiceTest {
                 accessService,
                 new PageIconValidator(iconCatalog, attachmentRepository, attachmentStorage),
                 attachmentService,
-                instanceLockRepository);
+                instanceLockRepository,
+                spaceMemberRepository);
         workspaceId = UUID.randomUUID();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
         owner = user("owner@example.com", "Owner");
@@ -749,6 +754,9 @@ class WorkspaceServiceTest {
         verify(userRepository).save(target);
         assertThat(target.isActive()).isFalse();
         verify(refreshTokenRepository).revokeAllForUser(target.getId());
+        // Space memberships go with the workspace membership, so no stale space grant
+        // keeps resolving for the removed account.
+        verify(spaceMemberRepository).deleteByUser_Id(target.getId());
     }
 
     @Test

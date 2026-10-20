@@ -90,6 +90,22 @@ public class PageIconValidator {
         return new ValidatedIcon(type, value, validateColor(type, request.color()));
     }
 
+    /**
+     * Validates an icon for a space. Uploads are rejected rather than silently unsupported:
+     * an uploaded icon must belong to an attachment scope, and spaces do not own attachments
+     * yet (a space upload would have nowhere to be scoped, swept, or quota-counted).
+     */
+    public ValidatedIcon validateSpaceIcon(PageIconRequest request) {
+        if (request == null) {
+            return null;
+        }
+        if (request.type() != null && !request.type().isBlank() && parseType(request.type()) == PageIconType.UPLOAD) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED, "Space icons must be an emoji, a builtin icon, or an https link.");
+        }
+        return validateIcon(request, null);
+    }
+
     /** Parses a case-insensitive icon source name; unknown values are a validation error. */
     public static PageIconType parseType(String raw) {
         try {

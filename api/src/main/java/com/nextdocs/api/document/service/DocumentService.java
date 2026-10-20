@@ -22,6 +22,8 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
@@ -90,6 +92,7 @@ public class DocumentService {
     private final AttachmentService attachmentService;
     private final DocumentIconCoverApplier iconCoverApplier;
     private final WorkspaceService workspaceService;
+    private final SpaceAccessService spaceAccessService;
 
     @Autowired
     @Lazy
@@ -137,6 +140,14 @@ public class DocumentService {
 
     @Transactional
     public CreateDocumentResult insertDocument(UUID userId, DocumentCreateRequest request) {
+        // Pure request validation first: a page cannot be rooted in a space and nested under
+        // a parent at once, and rejecting it needs no lookup.
+        if (request.spaceId() != null && request.parentId() != null) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED,
+                    "A page cannot be created inside a space and under a parent at once; "
+                            + "create it at the space root and nest it there.");
+        }
         User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
         String yjsState = request.yjsState();
 
@@ -151,6 +162,12 @@ public class DocumentService {
 
         Document parent = null;
         String siblingOrderKey = null;
+        Space space = null;
+        if (request.spaceId() != null) {
+            // Creating content is content write, so a workspace admin who is not a space
+            // member is not exempt: the space grant has to allow editing.
+            space = spaceAccessService.requireEdit(userId, request.spaceId()).space();
+        }
         if (request.parentId() != null) {
             parent = permissionService.requireEditAccess(userId, request.parentId());
             // The purge walk, breadcrumbs, and access resolution all assume chains of
@@ -175,6 +192,7 @@ public class DocumentService {
                 .yjsState(decodeBase64State(yjsState))
                 .createdBy(request.createdBy())
                 .parent(parent)
+                .space(space)
                 .siblingOrderKey(siblingOrderKey)
                 .build();
 
@@ -198,8 +216,9 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
-    public Page<DocumentResponse> list(UUID userId, String parentId, String scope, Boolean trashed, Pageable pageable) {
-        return queryHelper.list(userId, parentId, scope, trashed, pageable);
+    public Page<DocumentResponse> list(
+            UUID userId, String parentId, String scope, Boolean trashed, String spaceId, Pageable pageable) {
+        return queryHelper.list(userId, parentId, scope, trashed, spaceId, pageable);
     }
 
     @Transactional(readOnly = true)
@@ -591,13 +610,23 @@ public class DocumentService {
         }
 
         Document document = permissionService.requireEditAccess(userId, documentId);
+        trashSubtree(document);
+    }
+
+    /**
+     * Soft-deletes a page and its active descendants. The caller owns the permission
+     * check: {@link #delete} runs it for the ordinary route, and space deletion trashes
+     * the pages it was told to delete on the strength of the space-ownership check.
+     */
+    @Transactional
+    public void trashSubtree(Document document) {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         document.setDeletedAt(now);
-        userDocumentOrderRepository.deleteByDocument_Id(documentId);
+        userDocumentOrderRepository.deleteByDocument_Id(document.getId());
         documentRepository.save(document);
 
         // Cascade soft delete to all active descendants
-        List<Document> descendants = collectAllDescendants(documentId);
+        List<Document> descendants = collectAllDescendants(document.getId());
         for (Document descendant : descendants) {
             if (descendant.getDeletedAt() == null) {
                 descendant.setDeletedAt(now);
@@ -605,6 +634,46 @@ public class DocumentService {
                 documentRepository.save(descendant);
             }
         }
+    }
+
+    /**
+     * Files a root page into a space. Requires EDIT on the page and space administration:
+     * moving a page into a space changes who can read it, which is a sharing decision.
+     * The owner keeps the page; access to it now flows from the space.
+     */
+    @Transactional
+    public DocumentResponse assignSpace(UUID userId, UUID documentId, UUID spaceId) {
+        Document document = permissionService.requireEditAccess(userId, documentId);
+        if (document.getParent() != null) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Only root pages can live in a space. Move the page to the root first.");
+        }
+        Space space = spaceAccessService.requireAdministration(userId, spaceId).space();
+        if (document.getSpace() != null) {
+            if (document.getSpace().getId().equals(spaceId)) {
+                return toResponse(document, true, userId);
+            }
+            throw new ApiException(ErrorCode.CONFLICT, "The page already belongs to another space.");
+        }
+        document.setSpace(space);
+        return toResponse(documentRepository.save(document), true, userId);
+    }
+
+    /**
+     * Detaches a page from the space it names, returning it to the owner's Private
+     * section. Requires EDIT on the page and administration of that space.
+     */
+    @Transactional
+    public void clearSpace(UUID userId, UUID documentId, UUID spaceId) {
+        Document document = permissionService.requireEditAccess(userId, documentId);
+        Space space = document.getSpace();
+        if (space == null || !space.getId().equals(spaceId)) {
+            throw new ApiException(ErrorCode.NOT_FOUND, "The page is not in this space.");
+        }
+        spaceAccessService.requireAdministration(userId, spaceId);
+        document.setSpace(null);
+        documentRepository.save(document);
     }
 
     public DocumentResponse restore(UUID userId, UUID documentId) {
@@ -960,6 +1029,7 @@ public class DocumentService {
                                 : null)
                         : null,
                 document.getParent() != null ? document.getParent().getId() : null,
+                document.getSpace() != null ? document.getSpace().getId() : null,
                 orderKey,
                 hasChildren,
                 hasCollaborators,

@@ -12,6 +12,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -67,6 +68,7 @@ public class WorkspaceService {
     private final PageIconValidator pageIconValidator;
     private final AttachmentService attachmentService;
     private final InstanceLockRepository instanceLockRepository;
+    private final SpaceMemberRepository spaceMemberRepository;
 
     /**
      * How long an uploaded icon may sit unapplied before the nightly sweep deletes it.
@@ -268,6 +270,10 @@ public class WorkspaceService {
      * Removal deletes the membership, deactivates the account, and revokes its refresh
      * tokens: access checks read membership on every request, so the removed user is
      * locked out immediately. A later invite for the same email reactivates the account.
+     *
+     * <p>Space memberships go with it. A space left without an owner stays administrable
+     * through the workspace owner/admin override, so off-boarding never needs to be
+     * refused for the sake of a space.
      */
     @Transactional
     public List<WorkspaceMemberResponse> removeMember(UUID actorId, UUID targetUserId) {
@@ -296,6 +302,7 @@ public class WorkspaceService {
 
         User targetUser = target.getUser();
         memberRepository.delete(target);
+        spaceMemberRepository.deleteByUser_Id(targetUserId);
         targetUser.setActive(false);
         userRepository.save(targetUser);
         refreshTokenRepository.revokeAllForUser(targetUserId);

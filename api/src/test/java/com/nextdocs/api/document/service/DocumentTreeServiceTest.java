@@ -23,6 +23,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.space.entity.Space;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -88,6 +89,7 @@ class DocumentTreeServiceTest {
                 .id(docId)
                 .user(user)
                 .title("Doc")
+                .space(Space.builder().id(UUID.randomUUID()).name("Engineering").build())
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
@@ -128,6 +130,8 @@ class DocumentTreeServiceTest {
         // Verify ONLY owner root order was deleted, preserving collaborator Shared orders
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(user.getId(), docId);
         verify(userDocumentOrderRepository, never()).deleteByDocument_Id(docId);
+        // A space anchors at a root page, so reparenting leaves it behind.
+        assertNull(doc.getSpace());
     }
 
     @Test

@@ -32,6 +32,7 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -83,6 +84,9 @@ class DocumentServiceIconCoverTest {
     @Mock
     private WorkspaceService workspaceService;
 
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
     private DocumentService documentService;
 
     @BeforeEach
@@ -103,7 +107,8 @@ class DocumentServiceIconCoverTest {
                 queryHelper,
                 attachmentService,
                 applier,
-                workspaceService);
+                workspaceService,
+                spaceAccessService);
     }
 
     @Test
@@ -115,6 +120,7 @@ class DocumentServiceIconCoverTest {
                 "Doc",
                 "AQID",
                 "Alice",
+                null,
                 null,
                 null,
                 null,
@@ -145,7 +151,16 @@ class DocumentServiceIconCoverTest {
         UUID userId = UUID.randomUUID();
         when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Doc", "AQID", null, null, null, null, new PageIconRequest("builtin", "no-such-icon"), null);
+                null,
+                "Doc",
+                "AQID",
+                null,
+                null,
+                null,
+                null,
+                null,
+                new PageIconRequest("builtin", "no-such-icon"),
+                null);
 
         ApiException ex = assertThrows(ApiException.class, () -> documentService.create(userId, request));
 

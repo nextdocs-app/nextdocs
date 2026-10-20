@@ -52,12 +52,17 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
             @org.springframework.data.repository.query.Param("documentIds") java.util.Collection<UUID> documentIds);
 
     /**
-     * Whether a strict ancestor grants this user identity access. The V13 function deliberately
-     * ignores {@code deleted_at} while {@code DocumentSharingService#loadAncestors} stops at the
-     * first trashed ancestor: a NO_ACCESS breakpoint only exists to shadow a grant, so it has to
-     * survive the trash of that grant and re-arm when the ancestor is restored, even though the
-     * sharing view stops advertising the trashed chain in the meantime. The divergence is
-     * intended and pinned by {@code PublicAccessMigrationPostgresTest}.
+     * Whether a grant outside this document's own collaborator row lets the user in: an
+     * ancestor's ownership or collaborator row, or — since V25 — the space anchoring the
+     * tree root (including the document's own space, which is why the space root page
+     * answers true). Link grants never count: they are capabilities, not identities.
+     *
+     * <p>The V13 function deliberately ignores {@code deleted_at} while
+     * {@code DocumentSharingService#loadAncestors} stops at the first trashed ancestor: a
+     * NO_ACCESS breakpoint only exists to shadow a grant, so it has to survive the trash of
+     * that grant and re-arm when the ancestor is restored, even though the sharing view
+     * stops advertising the trashed chain in the meantime. The divergence is intended and
+     * pinned by {@code PublicAccessMigrationPostgresTest}.
      */
     @org.springframework.data.jpa.repository.Query(
             value = "SELECT has_positive_ancestor_grant(:userId, :documentId)",

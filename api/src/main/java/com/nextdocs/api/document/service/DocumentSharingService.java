@@ -19,6 +19,7 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -45,6 +46,7 @@ public class DocumentSharingService {
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final SpaceAccessService spaceAccessService;
 
     @Autowired
     @Lazy
@@ -285,9 +287,9 @@ public class DocumentSharingService {
 
         if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
             // Breakpoints shadow identity-channel grants only: hasPositiveAncestorGrant
-            // counts ownership and non-NO_ACCESS collaborator rows (V13) and ignores
-            // link grants, so a NO_ACCESS row is stored only when an ancestor identity
-            // grant exists to shadow. The anonymous link channel
+            // counts ownership, non-NO_ACCESS collaborator rows (V13), and the space
+            // anchoring the tree root (V25), and ignores link grants, so a NO_ACCESS row
+            // is stored only when an identity grant exists to shadow. The anonymous link channel
             // (resolve_public_access) ignores collaborator rows by design, but for
             // the affected user resolve_effective_access returns NULL at a
             // NO_ACCESS row even under an ancestor link grant: revocation revokes all.
@@ -781,7 +783,34 @@ public class DocumentSharingService {
         if (collaboratorRepository.hasPositiveAncestorGrant(requesterId, doc.getId())) {
             return;
         }
+        if (hasSpaceGrant(requesterId, doc)) {
+            return;
+        }
         throw new ApiException(ErrorCode.NOT_FOUND);
+    }
+
+    /**
+     * A space grant is an identity grant: a space member already sees the space roster, so
+     * hiding this page's roster from them would be theatre. Link-only readers still get
+     * nothing, which is why this walks to the space anchor instead of trusting
+     * {@code resolveAccess} — its link grants are capabilities, not identities.
+     */
+    private boolean hasSpaceGrant(UUID userId, Document doc) {
+        Document root = doc;
+        if (doc.getParent() != null) {
+            List<UUID> chain = documentRepository.findAncestorChainIds(doc.getId());
+            if (chain.isEmpty()) {
+                return false;
+            }
+            root = documentRepository.findById(chain.get(chain.size() - 1)).orElse(null);
+            if (root == null) {
+                return false;
+            }
+        }
+        if (root.getSpace() == null) {
+            return false;
+        }
+        return spaceAccessService.resolveLevel(userId, root.getSpace()) != null;
     }
 
     private record AncestorContext(
