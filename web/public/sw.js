@@ -9,10 +9,12 @@
  * next launch, so a tab open across a deploy never asks for a chunk from the
  * build the new worker just deleted.
  */
-const VERSION = 'nextdocs-v4';
+const VERSION = 'nextdocs-v5';
 const PAGE_CACHE = `${VERSION}-pages`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const CACHE_NAMES = new Set([PAGE_CACHE, ASSET_CACHE]);
+const PAGE_CACHE_LIMIT = 50;
+const ASSET_CACHE_LIMIT = 200;
 
 const PAGE_PRECACHE_URLS = ['/', '/offline', '/manifest.webmanifest'];
 const ASSET_PRECACHE_URLS = [
@@ -39,6 +41,16 @@ function isStaticAsset(pathname) {
     pathname.startsWith('/icons/') ||
     /\.(?:css|js|mjs|woff2?|ttf|otf|png|svg|ico|webp|avif|jpg|jpeg|gif)$/.test(pathname)
   );
+}
+
+// Cache.keys() is insertion order, so dropping from the front evicts the
+// oldest entries first.
+async function trimCache(cache, limit) {
+  const keys = await cache.keys();
+  const excess = keys.length - limit;
+  if (excess <= 0) return;
+
+  await Promise.all(keys.slice(0, excess).map((key) => cache.delete(key)));
 }
 
 self.addEventListener('install', (event) => {
@@ -111,7 +123,10 @@ async function networkFirstPage(request) {
     const response = await fetch(request);
     if (response.ok && response.type === 'basic') {
       // A cache write failure (e.g. quota) must not replace the live response.
-      await cache.put(request, response.clone()).catch(() => {});
+      await cache
+        .put(request, response.clone())
+        .then(() => trimCache(cache, PAGE_CACHE_LIMIT))
+        .catch(() => {});
     }
     return response;
   } catch {
@@ -141,7 +156,10 @@ async function cacheFirstAsset(request) {
 
   const response = await fetch(request);
   if (response.ok && response.type === 'basic') {
-    await cache.put(request, response.clone()).catch(() => {});
+    await cache
+      .put(request, response.clone())
+      .then(() => trimCache(cache, ASSET_CACHE_LIMIT))
+      .catch(() => {});
   }
   return response;
 }
@@ -157,7 +175,10 @@ async function cachePage(url) {
   try {
     const response = await fetch(request);
     if (response.ok && response.type === 'basic') {
-      await cache.put(request, response.clone()).catch(() => {});
+      await cache
+        .put(request, response.clone())
+        .then(() => trimCache(cache, PAGE_CACHE_LIMIT))
+        .catch(() => {});
     }
   } catch {
     // Lost the connection before the page could be cached.

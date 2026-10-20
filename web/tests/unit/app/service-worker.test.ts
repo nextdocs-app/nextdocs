@@ -67,6 +67,14 @@ class FakeCache {
     this.entries.set(request.url, response.clone());
   }
 
+  async keys(): Promise<FakeRequest[]> {
+    return [...this.entries.keys()].map((url) => new FakeRequest(url));
+  }
+
+  async delete(request: FakeRequest): Promise<boolean> {
+    return this.entries.delete(this.key(request));
+  }
+
   async match(
     request: FakeRequest | string,
     options: { ignoreSearch?: boolean } = {}
@@ -189,8 +197,8 @@ describe('service worker', () => {
 
     await worker.dispatch('install', {});
 
-    const pageCache = worker.caches.get('nextdocs-v4-pages');
-    const assetCache = worker.caches.get('nextdocs-v4-assets');
+    const pageCache = worker.caches.get('nextdocs-v5-pages');
+    const assetCache = worker.caches.get('nextdocs-v5-assets');
     expect(await pageCache?.match('/')).toBeDefined();
     expect(await pageCache?.match('/offline')).toBeDefined();
     expect(await pageCache?.match('/manifest.webmanifest')).toBeDefined();
@@ -202,13 +210,13 @@ describe('service worker', () => {
   it('drops old nextdocs caches on activate but leaves other apps alone', async () => {
     const worker = createWorker();
     await worker.caches.set('nextdocs-v3-pages', new FakeCache());
-    await worker.caches.set('nextdocs-v4-pages', new FakeCache());
+    await worker.caches.set('nextdocs-v5-pages', new FakeCache());
     await worker.caches.set('other-app-cache', new FakeCache());
 
     await worker.dispatch('activate', {});
 
     expect(worker.deleted).toContain('nextdocs-v3-pages');
-    expect(worker.deleted).not.toContain('nextdocs-v4-pages');
+    expect(worker.deleted).not.toContain('nextdocs-v5-pages');
     expect(worker.deleted).not.toContain('other-app-cache');
     expect(worker.claim).toHaveBeenCalledTimes(1);
   });
@@ -224,14 +232,30 @@ describe('service worker', () => {
     await expect(event.respondWith.mock.calls[0][0]).resolves.toMatchObject({
       ok: true,
     });
-    const pageCache = worker.caches.get('nextdocs-v4-pages');
+    const pageCache = worker.caches.get('nextdocs-v5-pages');
     expect(await pageCache?.match(request)).toBeDefined();
+  });
+
+  it('evicts the oldest cached pages once the page cache is full', async () => {
+    fetchMock.mockResolvedValue(new FakeResponse('page'));
+    const worker = createWorker();
+
+    for (let index = 0; index < 51; index += 1) {
+      const event = fetchEvent(new FakeRequest(`/doc/${index}`, { mode: 'navigate' }));
+      worker.listeners.get('fetch')?.(event);
+      await event.respondWith.mock.calls[0][0];
+    }
+
+    const pageCache = worker.caches.get('nextdocs-v5-pages');
+    expect(await pageCache?.keys()).toHaveLength(50);
+    expect(await pageCache?.match('/doc/0')).toBeUndefined();
+    expect(await pageCache?.match('/doc/50')).toBeDefined();
   });
 
   it('falls back to a cached page with the same path when the network fails', async () => {
     const worker = createWorker();
     const pageCache = new FakeCache();
-    worker.caches.set('nextdocs-v4-pages', pageCache);
+    worker.caches.set('nextdocs-v5-pages', pageCache);
     await pageCache.put(new FakeRequest('/doc/1'), new FakeResponse('cached page'));
 
     fetchMock.mockRejectedValue(new Error('offline'));
@@ -249,7 +273,7 @@ describe('service worker', () => {
   it('serves the offline page when neither the network nor the route is cached', async () => {
     const worker = createWorker();
     const pageCache = new FakeCache();
-    worker.caches.set('nextdocs-v4-pages', pageCache);
+    worker.caches.set('nextdocs-v5-pages', pageCache);
     await pageCache.put(new FakeRequest('/offline'), new FakeResponse('offline page'));
 
     fetchMock.mockRejectedValue(new Error('offline'));
@@ -305,7 +329,7 @@ describe('service worker', () => {
 
     await worker.dispatch('message', event);
 
-    const pageCache = worker.caches.get('nextdocs-v4-pages');
+    const pageCache = worker.caches.get('nextdocs-v5-pages');
     expect(await pageCache?.match('/doc/42')).toBeDefined();
 
     fetchMock.mockClear();
