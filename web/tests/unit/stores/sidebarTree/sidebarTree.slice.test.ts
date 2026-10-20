@@ -409,7 +409,56 @@ describe('sidebarTree.slice', () => {
         expect(state.nodes['child'].parentId).toBe('parent');
         expect(documentService.cachePrivateHierarchy).toHaveBeenCalledWith('token-1', 'user-1');
       } finally {
-        window.localStorage.removeItem('nextdocs:pending-cloud-creates');
+        window.localStorage.removeItem('nextdocs:pending-cloud-create:child');
+      }
+    });
+
+    it('restores a pending root that a cloud refresh detached', async () => {
+      (documentService.listRootTreeNodes as jest.Mock).mockResolvedValue({
+        items: [],
+        hasMore: false,
+        page: 0,
+      });
+      (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+        localDoc('pending-root', 'Pending root', '2024-01-02T10:00:00Z'),
+      ]);
+      (getLocalDocumentParents as jest.Mock).mockReturnValue(new Map());
+      queuePendingCloudCreate({ id: 'pending-root', userId: 'user-1', parentId: null });
+
+      const store = configureStore({
+        reducer: {
+          auth: () => ({ accessToken: 'token-1', user: { id: 'user-1' } }),
+          sidebarTree: sidebarTreeReducer,
+        },
+        preloadedState: {
+          sidebarTree: {
+            ...initialState,
+            nodes: {
+              'pending-root': {
+                id: 'pending-root',
+                title: 'Pending root',
+                parentId: null,
+                orderKey: 'local:pending-root',
+                hasChildren: false,
+                effectiveAccessLevel: 'OWNER' as const,
+                isExpanded: false,
+                isLoading: false,
+                children: [],
+                childrenLoaded: false,
+                createdAt: '2024-01-02T10:00:00Z',
+                updatedAt: '2024-01-02T10:00:00Z',
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        await dispatchFetch(store);
+
+        expect(store.getState().sidebarTree.rootIds).toEqual(['pending-root']);
+      } finally {
+        window.localStorage.removeItem('nextdocs:pending-cloud-create:pending-root');
       }
     });
 

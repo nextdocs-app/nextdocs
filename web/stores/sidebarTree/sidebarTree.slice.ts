@@ -146,8 +146,12 @@ function mergeDegradedLocalNodes(state: SidebarTreeState, rawNodes: TreeNode[]):
 
     // A null parentId only proves "no locally recorded parent". Cached copies
     // of nested cloud documents are in the payload without a local link, so
-    // their placement must survive instead of being re-rooted.
-    if (!freshIds.has(node.id) && rawNode.parentId === null) {
+    // their placement must survive instead of being re-rooted. A pending node
+    // that the last cloud refresh detached still needs to come back to the root.
+    const attached =
+      (node.parentId !== null && state.nodes[node.parentId]?.children.includes(node.id) === true) ||
+      state.rootIds.includes(node.id);
+    if (!freshIds.has(node.id) && rawNode.parentId === null && attached) {
       continue;
     }
 
