@@ -199,6 +199,19 @@ class SpaceServiceTest {
     }
 
     @Test
+    void listMembers_returnsTheRosterThroughTheRosterGate() {
+        when(spaceAccessService.requireRoster(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(memberRepository.findAllBySpace_IdOrderByCreatedAtAsc(space.getId()))
+                .thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
+
+        List<SpaceMemberResponse> roster = spaceService.listMembers(actorId, space.getId());
+
+        assertThat(roster).extracting(SpaceMemberResponse::email).containsExactly("owner@example.com");
+        assertThat(roster).extracting(SpaceMemberResponse::accessLevel).containsExactly(DocumentAccessLevel.OWNER);
+    }
+
+    @Test
     void getSpace_projectsTheCallersLevelAndCounts() {
         when(spaceAccessService.requireRead(actorId, space.getId()))
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));

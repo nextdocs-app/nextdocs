@@ -98,6 +98,21 @@ public class SpaceAccessService {
         return context;
     }
 
+    /**
+     * Roster access: a listed member, or a workspace admin. A Public space grants content
+     * read to every workspace member, but who is in the space is not content: a reader who
+     * is not a member gets 403 rather than a list of names. The space itself is visible to
+     * them, so masking this as 404 would lie about the space's existence.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext requireRoster(UUID userId, UUID spaceId) {
+        SpaceContext context = requireRead(userId, spaceId);
+        if (context.workspaceAdmin() || memberRepository.existsBySpace_IdAndUser_Id(spaceId, userId)) {
+            return context;
+        }
+        throw new ApiException(ErrorCode.FORBIDDEN);
+    }
+
     /** Content write. Workspace admins are not exempt: adding content is not administration. */
     @Transactional(readOnly = true)
     public SpaceContext requireEdit(UUID userId, UUID spaceId) {
