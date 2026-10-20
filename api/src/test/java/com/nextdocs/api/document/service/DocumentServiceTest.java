@@ -36,6 +36,7 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.nio.charset.StandardCharsets;
@@ -88,6 +89,9 @@ class DocumentServiceTest {
     @Mock
     private WorkspaceService workspaceService;
 
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
     private DocumentProperties documentProperties;
 
     private DocumentService documentService;
@@ -106,7 +110,8 @@ class DocumentServiceTest {
                 queryHelper,
                 attachmentService,
                 iconCoverApplier,
-                workspaceService);
+                workspaceService,
+                spaceAccessService);
     }
 
     @Test
@@ -331,7 +336,7 @@ class DocumentServiceTest {
                 .displayName("Alice")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -358,7 +363,7 @@ class DocumentServiceTest {
                 .displayName("Alice")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -392,7 +397,7 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
@@ -421,7 +426,7 @@ class DocumentServiceTest {
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
@@ -441,7 +446,7 @@ class DocumentServiceTest {
                 .displayName("Alice")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "My Doc", "AQID", "Alice", null, null, null, null, null);
+                new DocumentCreateRequest(null, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(eq(userId), any()))
@@ -744,13 +749,13 @@ class DocumentServiceTest {
                 .build();
 
         Page<DocumentResponse> page = new PageImpl<>(List.of());
-        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(false), any()))
+        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(false), eq(null), any()))
                 .thenReturn(page);
 
-        Page<DocumentResponse> result = documentService.list(userId, null, "all", false, null);
+        Page<DocumentResponse> result = documentService.list(userId, null, "all", false, null, null);
 
         assertEquals(0, result.getContent().size());
-        verify(queryHelper).list(eq(userId), eq(null), eq("all"), eq(false), any());
+        verify(queryHelper).list(eq(userId), eq(null), eq("all"), eq(false), eq(null), any());
     }
 
     @Test
@@ -857,7 +862,7 @@ class DocumentServiceTest {
         User host = User.builder().id(hostOwnerId).build();
         Document parent = Document.builder().id(parentId).user(host).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Jerry", parentId, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Jerry", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
                 .thenReturn(Optional.of(User.builder().id(creatorId).build()));
@@ -884,7 +889,7 @@ class DocumentServiceTest {
         User creator = User.builder().id(creatorId).build();
         Document parent = Document.builder().id(parentId).user(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -906,7 +911,7 @@ class DocumentServiceTest {
         User creator = User.builder().id(creatorId).build();
         Document parent = Document.builder().id(parentId).user(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -932,7 +937,7 @@ class DocumentServiceTest {
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Retry", "AQID", "Jerry", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "Retry", "AQID", "Jerry", null, null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
                 .thenReturn(Optional.of(User.builder().id(creatorId).build()));
@@ -957,7 +962,7 @@ class DocumentServiceTest {
                 .title("Hosted")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Squat", "AQID", "Stranger", null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "Squat", "AQID", "Stranger", null, null, null, null, null, null);
 
         when(userRepository.findById(strangerId))
                 .thenReturn(Optional.of(User.builder().id(strangerId).build()));
@@ -988,7 +993,7 @@ class DocumentServiceTest {
                 .siblingOrderKey("a0")
                 .build();
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Child", "AQID", "Alice", parentId, prevSiblingId, nextSiblingId, null, null);
+                null, "Child", "AQID", "Alice", parentId, null, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
@@ -1006,7 +1011,7 @@ class DocumentServiceTest {
         UUID nextSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Root Doc", "AQID", "Alice", null, prevSiblingId, nextSiblingId, null, null);
+                null, "Root Doc", "AQID", "Alice", null, null, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1028,8 +1033,8 @@ class DocumentServiceTest {
         UUID userId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
-        DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, prevSiblingId, null, null, null);
+        DocumentCreateRequest request = new DocumentCreateRequest(
+                null, "Root Doc", "AQID", "Alice", null, null, prevSiblingId, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1048,8 +1053,8 @@ class DocumentServiceTest {
         UUID userId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
         User user = User.builder().id(userId).build();
-        DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Root Doc", "AQID", "Alice", null, null, nextSiblingId, null, null);
+        DocumentCreateRequest request = new DocumentCreateRequest(
+                null, "Root Doc", "AQID", "Alice", null, null, null, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId))
@@ -1285,7 +1290,7 @@ class DocumentServiceTest {
         User user = User.builder().id(userId).build();
         UUID explicitId = UUID.randomUUID();
         DocumentCreateRequest request = new DocumentCreateRequest(
-                explicitId, "Retried Title", "eWFz", "Anonymous", null, null, null, null, null);
+                explicitId, "Retried Title", "eWFz", "Anonymous", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(userId, explicitId))
@@ -1673,10 +1678,10 @@ class DocumentServiceTest {
                 null,
                 null,
                 null);
-        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(true), any()))
+        when(queryHelper.list(eq(userId), eq(null), eq("all"), eq(true), eq(null), any()))
                 .thenReturn(new PageImpl<>(List.of(trashedResponse)));
 
-        Page<DocumentResponse> result = documentService.list(userId, null, "all", true, null);
+        Page<DocumentResponse> result = documentService.list(userId, null, "all", true, null, null);
 
         assertEquals(1, result.getContent().size());
         assertNotNull(result.getContent().get(0).deletedAt());

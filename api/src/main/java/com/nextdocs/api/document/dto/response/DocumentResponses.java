@@ -47,6 +47,15 @@ public final class DocumentResponses {
                 deletedAt,
                 purgeAt,
                 DocumentIconCoverMapper.toIconResponse(document),
-                DocumentIconCoverMapper.toCoverResponse(document));
+                DocumentIconCoverMapper.toCoverResponse(document),
+                spaceIdOf(document));
+    }
+
+    /**
+     * The space anchor, or null. Reading the id off a lazy association does not
+     * initialize the proxy, so listing pages never pays a select per row.
+     */
+    private static UUID spaceIdOf(Document document) {
+        return document.getSpace() != null ? document.getSpace().getId() : null;
     }
 }

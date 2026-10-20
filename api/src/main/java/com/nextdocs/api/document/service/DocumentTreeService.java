@@ -132,6 +132,10 @@ public class DocumentTreeService {
 
             doc.setParent(newParent);
             doc.setSiblingOrderKey(newSiblingOrderKey);
+            // A space anchors at a root page only (V24's chk_documents_space_root). Moving a
+            // page under another page therefore leaves the space: the page's new home is the
+            // host tree, whose access chain governs it from here.
+            doc.setSpace(null);
             Document saved = documentRepository.saveAndFlush(doc);
 
             // Reparenting to a new parent: delete the owner's root UserDocumentOrder row.

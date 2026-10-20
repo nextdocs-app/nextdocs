@@ -10,6 +10,7 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.HashMap;
@@ -38,15 +39,31 @@ public class DocumentListQueryHelper {
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
+    private final SpaceAccessService spaceAccessService;
 
     @Transactional(readOnly = true)
-    public Page<DocumentResponse> list(UUID userId, String parentId, String scope, Boolean trashed, Pageable pageable) {
+    public Page<DocumentResponse> list(
+            UUID userId, String parentId, String scope, Boolean trashed, String spaceId, Pageable pageable) {
         boolean trashedOnly = Boolean.TRUE.equals(trashed);
+        boolean hasSpaceParam = spaceId != null && !spaceId.isBlank();
+        String normalizedScope =
+                scope != null && !scope.isBlank() ? scope.trim().toLowerCase() : "all";
+
+        // scope=space is a root listing of one space, so the pairing is checked before
+        // any query: a stray spaceId on another scope silently ignoring it would list the
+        // wrong section, and a missing one would list every root page as if it were a space.
+        if (hasSpaceParam && !"space".equals(normalizedScope)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "spaceId is only valid with scope=space.");
+        }
+        if ("space".equals(normalizedScope) && !hasSpaceParam) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "spaceId is required when scope=space.");
+        }
+
         if (trashedOnly) {
             if (parentId != null && !parentId.trim().isEmpty()) {
                 throw new ApiException(ErrorCode.VALIDATION_FAILED, "parentId cannot be combined with trashed=true");
             }
-            if (scope != null && !scope.isBlank() && !"all".equalsIgnoreCase(scope.trim())) {
+            if (!"all".equals(normalizedScope)) {
                 throw new ApiException(ErrorCode.VALIDATION_FAILED, "scope cannot be combined with trashed=true");
             }
             return listTrashed(userId, pageable);
@@ -55,13 +72,17 @@ public class DocumentListQueryHelper {
         if (parentId != null) {
             String trimmedParentId = parentId.trim();
             if ("root".equalsIgnoreCase(trimmedParentId)) {
-                return listRootDocuments(userId, scope, pageable);
+                return listRootDocuments(userId, normalizedScope, spaceId, pageable);
             }
 
-            return listChildDocuments(userId, trimmedParentId, scope, pageable);
+            return listChildDocuments(userId, trimmedParentId, normalizedScope, pageable);
         }
 
-        return listFlatDocuments(userId, scope, pageable);
+        if ("space".equals(normalizedScope)) {
+            return listRootDocuments(userId, normalizedScope, spaceId, pageable);
+        }
+
+        return listFlatDocuments(userId, normalizedScope, pageable);
     }
 
     private Page<DocumentResponse> listTrashed(UUID userId, Pageable pageable) {
@@ -96,9 +117,13 @@ public class DocumentListQueryHelper {
         });
     }
 
-    private Page<DocumentResponse> listRootDocuments(UUID userId, String scope, Pageable pageable) {
+    private Page<DocumentResponse> listRootDocuments(UUID userId, String scope, String spaceId, Pageable pageable) {
         String normalizedScope =
                 scope != null && !scope.isBlank() ? scope.trim().toLowerCase() : "all";
+
+        if ("space".equals(normalizedScope)) {
+            return listSpaceRootDocuments(userId, parseSpaceId(spaceId), pageable);
+        }
 
         if ("shared".equals(normalizedScope)) {
             Page<Object[]> rows = documentRepository.findSharedRootDocuments(userId, pageable);
@@ -200,7 +225,52 @@ public class DocumentListQueryHelper {
 
         throw new ApiException(
                 ErrorCode.VALIDATION_FAILED,
-                "Invalid scope value for root documents: " + scope + ". Must be 'private', 'shared', or 'all'.");
+                "Invalid scope value for root documents: " + scope
+                        + ". Must be 'private', 'shared', 'space', or 'all'.");
+    }
+
+    /**
+     * Root pages filed into one space, in the caller's personal order. Gated on content
+     * read only: a workspace admin who is not a member may administer the space but must
+     * not enumerate the pages inside it.
+     */
+    private Page<DocumentResponse> listSpaceRootDocuments(UUID userId, UUID spaceId, Pageable pageable) {
+        spaceAccessService.requireContentRead(userId, spaceId);
+
+        Page<Document> page = documentRepository.findSpaceRootDocuments(userId, spaceId, pageable);
+        List<Document> docs = page.getContent();
+        if (docs.isEmpty()) {
+            return new PageImpl<>(List.of(), pageable, page.getTotalElements());
+        }
+
+        List<UUID> docIds = docs.stream().map(Document::getId).toList();
+        Map<UUID, String> orderKeys = fetchUserOrderKeys(userId, docIds);
+        Map<UUID, Long> childCounts = fetchChildCounts(docIds);
+        Set<UUID> collaboratorDocIds = new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
+        List<UUID> nonOwnedIds = docs.stream()
+                .filter(d -> !d.getUser().getId().equals(userId))
+                .map(Document::getId)
+                .toList();
+        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, nonOwnedIds);
+
+        return page.map(doc -> {
+            boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
+            boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
+            DocumentAccessLevel access = doc.getUser().getId().equals(userId)
+                    ? DocumentAccessLevel.OWNER
+                    : accessLevels.getOrDefault(doc.getId(), null);
+
+            return DocumentResponses.of(
+                    doc, null, orderKeys.get(doc.getId()), hasChildren, hasCollaborators, access, null, null);
+        });
+    }
+
+    private static UUID parseSpaceId(String raw) {
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "Invalid spaceId format: " + raw);
+        }
     }
 
     private Page<DocumentResponse> listChildDocuments(

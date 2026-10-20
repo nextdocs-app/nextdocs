@@ -30,6 +30,11 @@ public record DocumentCreateRequest(
         @Schema(description = "Parent document ID. Null creates the document at root level.")
         UUID parentId,
 
+        @Schema(
+                description = "Space to file the new root page into. Requires EDIT access to the space; "
+                        + "cannot be combined with parentId. Null creates the page in the caller's Private section.")
+        UUID spaceId,
+
         @Schema(description = "ID of the sibling immediately before this document's initial position.")
         UUID prevSiblingId,
 

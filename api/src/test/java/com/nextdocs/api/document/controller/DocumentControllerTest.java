@@ -179,7 +179,7 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
-        when(documentService.list(eq(userId), eq(null), eq("all"), eq(null), any()))
+        when(documentService.list(eq(userId), eq(null), eq("all"), eq(null), eq(null), any()))
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents").with(user(principal)))
@@ -210,7 +210,7 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
-        when(documentService.list(eq(userId), eq("root"), eq("private"), eq(null), any()))
+        when(documentService.list(eq(userId), eq("root"), eq("private"), eq(null), eq(null), any()))
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents")
@@ -244,7 +244,7 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
-        when(documentService.list(eq(userId), eq("root"), eq("shared"), eq(null), any()))
+        when(documentService.list(eq(userId), eq("root"), eq("shared"), eq(null), eq(null), any()))
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents")
@@ -279,7 +279,7 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 50), 1);
-        when(documentService.list(eq(userId), eq(parentId.toString()), eq("all"), eq(null), any()))
+        when(documentService.list(eq(userId), eq(parentId.toString()), eq("all"), eq(null), eq(null), any()))
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents")
@@ -311,7 +311,7 @@ class DocumentControllerTest {
                 null);
 
         Page<DocumentResponse> page = new PageImpl<>(List.of(response), PageRequest.of(0, 20), 1);
-        when(documentService.list(eq(userId), eq(null), eq("all"), eq(true), any()))
+        when(documentService.list(eq(userId), eq(null), eq("all"), eq(true), eq(null), any()))
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/v1/documents").param("trashed", "true").with(user(principal)))
@@ -518,6 +518,7 @@ class DocumentControllerTest {
         DocumentResponse response = new DocumentResponse(
                 documentId,
                 "Public Doc",
+                null,
                 null,
                 null,
                 null,

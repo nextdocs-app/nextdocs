@@ -67,6 +67,7 @@ public class DocumentController {
             description = "Returns a paged list of documents filtered by parentId, scope, and trashed. "
                     + "Use parentId=root for root-level documents, or parentId=<UUID> for direct children. "
                     + "Use scope=private for unshared owned documents, scope=shared for shared documents, "
+                    + "scope=space together with spaceId for the root pages of one space, "
                     + "or scope=all for all owned documents. Use trashed=true for trash.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -85,8 +86,10 @@ public class DocumentController {
             @RequestParam(required = false) String parentId,
             @RequestParam(required = false, defaultValue = "all") String scope,
             @RequestParam(required = false) Boolean trashed,
+            @RequestParam(required = false) String spaceId,
             @PageableDefault(size = 20) Pageable pageable) {
-        Page<DocumentResponse> page = documentService.list(principal.getId(), parentId, scope, trashed, pageable);
+        Page<DocumentResponse> page =
+                documentService.list(principal.getId(), parentId, scope, trashed, spaceId, pageable);
         return ResponseEntity.ok(ApiResponse.ok(PagedResponse.from(page)));
     }
 

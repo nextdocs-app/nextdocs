@@ -14,6 +14,7 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -45,6 +46,9 @@ class DocumentListQueryHelperTest {
 
     @Mock
     private PermissionService permissionService;
+
+    @Mock
+    private SpaceAccessService spaceAccessService;
 
     @InjectMocks
     private DocumentListQueryHelper queryHelper;
@@ -79,7 +83,7 @@ class DocumentListQueryHelperTest {
         when(documentRepository.countNonTrashedChildrenByParentIds(any()))
                 .thenReturn(List.<Object[]>of(new Object[] {root1.getId(), 2L}));
 
-        Page<DocumentResponse> result = queryHelper.list(userId, "root", "private", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "private", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse item = result.getContent().get(0);
@@ -119,7 +123,7 @@ class DocumentListQueryHelperTest {
         when(permissionService.resolveAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(sharedWithMe.getId(), DocumentAccessLevel.EDIT));
 
-        Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, null, pageable);
 
         assertEquals(2, result.getContent().size());
         DocumentResponse doc1 = result.getContent().get(0);
@@ -166,7 +170,7 @@ class DocumentListQueryHelperTest {
         when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "user-order-1"}));
 
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse doc = result.getContent().get(0);
@@ -208,7 +212,7 @@ class DocumentListQueryHelperTest {
         when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.of());
 
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse doc = result.getContent().get(0);
@@ -249,7 +253,7 @@ class DocumentListQueryHelperTest {
                 .thenReturn(java.util.Map.of(
                         sharedChild.getId(), DocumentAccessLevel.VIEW, sharedParentId, DocumentAccessLevel.VIEW));
 
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse doc = result.getContent().get(0);
@@ -266,7 +270,7 @@ class DocumentListQueryHelperTest {
 
         when(documentRepository.findPrivateRootDocuments(userId, pageable)).thenReturn(emptyPageWithTotals);
 
-        Page<DocumentResponse> result = queryHelper.list(userId, "root", "private", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "private", null, null, pageable);
 
         assertTrue(result.getContent().isEmpty());
         assertEquals(25, result.getTotalElements());
@@ -293,7 +297,7 @@ class DocumentListQueryHelperTest {
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
 
-        Page<DocumentResponse> result = queryHelper.list(userId, parentId.toString(), "all", null, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, parentId.toString(), "all", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse item = result.getContent().get(0);
@@ -310,13 +314,14 @@ class DocumentListQueryHelperTest {
         UUID parentId = UUID.randomUUID();
         assertThrows(
                 ApiException.class,
-                () -> queryHelper.list(userId, parentId.toString(), "shared", null, PageRequest.of(0, 20)));
+                () -> queryHelper.list(userId, parentId.toString(), "shared", null, null, PageRequest.of(0, 20)));
     }
 
     @Test
     void list_childrenWithInvalidParentIdFormat_throwsValidationFailed() {
         assertThrows(
-                ApiException.class, () -> queryHelper.list(userId, "invalid-uuid", "all", null, PageRequest.of(0, 20)));
+                ApiException.class,
+                () -> queryHelper.list(userId, "invalid-uuid", "all", null, null, PageRequest.of(0, 20)));
     }
 
     @Test
@@ -338,7 +343,7 @@ class DocumentListQueryHelperTest {
         when(permissionService.resolveTrashAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(trashedDoc.getId(), DocumentAccessLevel.OWNER));
 
-        Page<DocumentResponse> result = queryHelper.list(userId, null, null, true, pageable);
+        Page<DocumentResponse> result = queryHelper.list(userId, null, null, true, null, pageable);
 
         assertEquals(1, result.getContent().size());
         DocumentResponse item = result.getContent().get(0);
@@ -346,5 +351,92 @@ class DocumentListQueryHelperTest {
         assertNotNull(item.deletedAt());
         assertNotNull(item.purgeAt());
         assertEquals(DocumentAccessLevel.OWNER, item.accessLevel());
+    }
+
+    // --- scope=space ---
+
+    private com.nextdocs.api.space.entity.Space spaceWith(UUID spaceId) {
+        return com.nextdocs.api.space.entity.Space.builder()
+                .id(spaceId)
+                .name("Engineering")
+                .build();
+    }
+
+    @Test
+    void list_spaceScope_returnsTheSpacesRootPages() {
+        UUID spaceId = UUID.randomUUID();
+        Document page = Document.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .title("Space Page")
+                .space(spaceWith(spaceId))
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 50);
+        when(spaceAccessService.requireContentRead(userId, spaceId))
+                .thenReturn(new com.nextdocs.api.space.service.SpaceAccessService.SpaceContext(
+                        spaceWith(spaceId),
+                        com.nextdocs.api.workspace.entity.WorkspaceRole.MEMBER,
+                        DocumentAccessLevel.OWNER));
+        when(documentRepository.findSpaceRootDocuments(userId, spaceId, pageable))
+                .thenReturn(new PageImpl<>(List.of(page), pageable, 1));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {page.getId(), "a1"}));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "space", null, spaceId.toString(), pageable);
+
+        assertEquals(1, result.getContent().size());
+        DocumentResponse item = result.getContent().get(0);
+        assertEquals("Space Page", item.title());
+        assertEquals("a1", item.orderKey());
+        assertEquals(spaceId, item.spaceId());
+    }
+
+    @Test
+    void list_spaceScopeWithoutASpaceId_throwsValidationFailed() {
+        assertThrows(
+                ApiException.class, () -> queryHelper.list(userId, "root", "space", null, null, PageRequest.of(0, 20)));
+        assertThrows(
+                ApiException.class, () -> queryHelper.list(userId, "root", "space", null, "  ", PageRequest.of(0, 20)));
+    }
+
+    @Test
+    void list_spaceIdWithAnotherScope_throwsValidationFailed() {
+        assertThrows(
+                ApiException.class,
+                () -> queryHelper.list(
+                        userId, null, "all", null, UUID.randomUUID().toString(), PageRequest.of(0, 20)));
+    }
+
+    @Test
+    void list_spaceScopeWithTrashed_throwsValidationFailed() {
+        assertThrows(
+                ApiException.class,
+                () -> queryHelper.list(
+                        userId, null, "space", true, UUID.randomUUID().toString(), PageRequest.of(0, 20)));
+    }
+
+    @Test
+    void list_spaceScopeWithParentId_throwsValidationFailed() {
+        assertThrows(
+                ApiException.class,
+                () -> queryHelper.list(
+                        userId,
+                        UUID.randomUUID().toString(),
+                        "space",
+                        null,
+                        UUID.randomUUID().toString(),
+                        PageRequest.of(0, 20)));
+    }
+
+    @Test
+    void list_spaceScopeWithAMalformedSpaceId_throwsValidationFailed() {
+        assertThrows(
+                ApiException.class,
+                () -> queryHelper.list(userId, "root", "space", null, "not-a-uuid", PageRequest.of(0, 20)));
     }
 }

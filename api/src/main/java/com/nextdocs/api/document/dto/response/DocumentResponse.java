@@ -17,6 +17,11 @@ public record DocumentResponse(
         @Schema(description = "Parent document ID, null for root-level")
         UUID parentId,
 
+        @Schema(
+                description = "Space this root page is filed into; null for Private and Shared pages. "
+                        + "Nested pages do not repeat the space: walk to the root.")
+        UUID spaceId,
+
         @Schema(description = "Fractional ordering key") String orderKey,
 
         @Schema(description = "Whether this document has active non-trashed children")
@@ -53,6 +58,8 @@ public record DocumentResponse(
      * Member and list projection: workspace branding is only disclosed on a public share
      * page, so everything that is not {@code GET /api/v1/documents/{id}/public} calls this
      * factory instead of passing a null branding argument at each construction.
+     *
+     * <p>This overload carries no space: Private and Shared pages, and every test fixture.
      */
     public static DocumentResponse withoutBranding(
             UUID id,
@@ -70,11 +77,49 @@ public record DocumentResponse(
             OffsetDateTime purgeAt,
             DocumentIconResponse icon,
             DocumentCoverResponse cover) {
+        return withoutBranding(
+                id,
+                title,
+                yjsState,
+                parentId,
+                orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
+                createdBy,
+                createdAt,
+                updatedAt,
+                deletedAt,
+                purgeAt,
+                icon,
+                cover,
+                null);
+    }
+
+    /** As above, carrying the space a root page is filed into. */
+    public static DocumentResponse withoutBranding(
+            UUID id,
+            String title,
+            String yjsState,
+            UUID parentId,
+            String orderKey,
+            boolean hasChildren,
+            boolean hasCollaborators,
+            DocumentAccessLevel accessLevel,
+            String createdBy,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            OffsetDateTime deletedAt,
+            OffsetDateTime purgeAt,
+            DocumentIconResponse icon,
+            DocumentCoverResponse cover,
+            UUID spaceId) {
         return new DocumentResponse(
                 id,
                 title,
                 yjsState,
                 parentId,
+                spaceId,
                 orderKey,
                 hasChildren,
                 hasCollaborators,

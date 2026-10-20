@@ -50,10 +50,13 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d.id FROM Document d WHERE d.parent.id IN :parentIds")
     List<UUID> findIdsByParent_IdIn(@Param("parentIds") Collection<UUID> parentIds);
 
-    // Private root documents owned by userId without collaborators with personal navigation order
+    // Private root documents owned by userId without collaborators with personal navigation order.
+    // Space pages are excluded: a page filed into a space is listed under that space, not in
+    // the Private section, and the predicate is what keeps existing pages where they are
+    // (space_id stays null unless a page was explicitly created in or attached to a space).
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
+            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
             + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
@@ -61,18 +64,51 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // All owned root documents (private + owner-shared) owned by userId with personal navigation order
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL "
+            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findAllRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
     // Shared root documents (shared with userId OR owned by userId with collaborators)
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.deletedAt IS NULL "
+            + "WHERE d.deletedAt IS NULL AND d.space IS NULL "
             + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
             + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS))) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
+
+    // Root pages filed into one space, in the caller's personal navigation order.
+    //
+    // Gated on the effective level per page, not just on space membership: a NO_ACCESS
+    // breakpoint on one page must hide that page from the space listing too, or the sidebar
+    // would advertise a page that answers 404. The same expression PUBLIC_CHILDREN_SQL uses
+    // keeps the readable set narrow. A constant so the PostgreSQL test runs this exact text.
+    String SPACE_PAGES_SQL = "SELECT d.* FROM documents d "
+            + "LEFT JOIN user_document_orders udo "
+            + "       ON udo.document_id = d.id AND udo.user_id = :userId "
+            + "WHERE d.space_id = :spaceId AND d.parent_id IS NULL AND d.deleted_at IS NULL "
+            + "AND resolve_effective_access(:userId, d.id) IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER') "
+            + "ORDER BY udo.order_key ASC NULLS LAST, d.created_at ASC, d.id ASC";
+
+    String SPACE_PAGES_COUNT_SQL = "SELECT COUNT(*) FROM documents d "
+            + "WHERE d.space_id = :spaceId AND d.parent_id IS NULL AND d.deleted_at IS NULL "
+            + "AND resolve_effective_access(:userId, d.id) IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER')";
+
+    @Query(value = SPACE_PAGES_SQL, countQuery = SPACE_PAGES_COUNT_SQL, nativeQuery = true)
+    Page<Document> findSpaceRootDocuments(
+            @Param("userId") UUID userId, @Param("spaceId") UUID spaceId, Pageable pageable);
+
+    long countBySpace_IdAndDeletedAtIsNull(UUID spaceId);
+
+    /**
+     * Active root pages of one space, entities rather than a projection: deleting a space
+     * trashes each of them through the ordinary cascade, which needs the row itself.
+     */
+    List<Document> findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(UUID spaceId);
+
+    @Query("SELECT d.space.id, COUNT(d) FROM Document d "
+            + "WHERE d.space.id IN :spaceIds AND d.deletedAt IS NULL GROUP BY d.space.id")
+    List<Object[]> countNonTrashedBySpaceIds(@Param("spaceIds") Collection<UUID> spaceIds);
 
     // Sibling max key among direct children under a parent
     @Query("SELECT MAX(d.siblingOrderKey) FROM Document d "
