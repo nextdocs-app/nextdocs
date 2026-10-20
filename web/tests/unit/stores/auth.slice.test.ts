@@ -67,7 +67,6 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           user: null,
           accessToken: null,
           expiresAt: null,
-          lastAuthAction: null,
           lastSilentRefreshAt: null,
           isLoading: false,
           isInitializing: true,

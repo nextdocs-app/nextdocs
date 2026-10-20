@@ -94,7 +94,6 @@ const initialState: AuthState = {
   user: persistedAuth?.user ?? null,
   accessToken: persistedAuth?.accessToken ?? null,
   expiresAt: persistedAuth?.expiresAt ?? null,
-  lastAuthAction: null,
   lastSilentRefreshAt: null,
   isLoading: false,
   isInitializing: true,
@@ -195,14 +194,12 @@ const authSlice = createSlice({
       state.user = user;
       state.accessToken = accessToken;
       state.expiresAt = Date.now() + expiresIn * 1000;
-      state.lastAuthAction = null;
       state.error = null;
     },
     clearAuth(state) {
       state.user = null;
       state.accessToken = null;
       state.expiresAt = null;
-      state.lastAuthAction = null;
       state.lastSilentRefreshAt = null;
       state.error = null;
     },
@@ -224,7 +221,6 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.lastAuthAction = 'login';
         state.error = null;
       })
       .addCase(loginThunk.rejected, (state, action) => {
@@ -242,7 +238,6 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.lastAuthAction = 'register';
         state.error = null;
       })
       .addCase(registerThunk.rejected, (state, action) => {
@@ -258,7 +253,6 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.lastAuthAction = null;
         // Stamp the coalescing window on success only: a failed attempt must
         // stay retryable, or a transient error would leave the session expired
         // for the rest of the interval.
@@ -279,7 +273,6 @@ const authSlice = createSlice({
           state.user = null;
           state.accessToken = null;
           state.expiresAt = null;
-          state.lastAuthAction = null;
           state.lastSilentRefreshAt = null;
         }
         if (state.isInitializing) {
@@ -291,7 +284,6 @@ const authSlice = createSlice({
       state.user = null;
       state.accessToken = null;
       state.expiresAt = null;
-      state.lastAuthAction = null;
       state.lastSilentRefreshAt = null;
       state.error = null;
     });

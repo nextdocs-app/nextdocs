@@ -645,7 +645,6 @@ it('renders skeleton rows instead of a loading badge while loading more in the d
           user: null,
           accessToken: 'test-token',
           expiresAt: null,
-          lastAuthAction: null,
           isLoading: false,
           isInitializing: false,
           error: null,

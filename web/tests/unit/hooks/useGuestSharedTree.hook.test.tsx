@@ -26,7 +26,6 @@ describe('useGuestSharedTree', () => {
           user: null,
           accessToken: null,
           expiresAt: null,
-          lastAuthAction: null,
           lastSilentRefreshAt: null,
           isLoading: false,
           isInitializing: false,
