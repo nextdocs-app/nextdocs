@@ -218,6 +218,38 @@ describe('RootDocumentResolver', () => {
     });
   });
 
+  it('offers a retry when resolution fails instead of leaving a permanent spinner', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (documentService.listCloudDocuments as jest.Mock)
+      .mockRejectedValueOnce(new Error('Server exploded'))
+      .mockResolvedValueOnce({
+        items: [{ id: 'cloud-latest', meta: defaultMeta }],
+        page: 0,
+        size: 1,
+        totalElements: 1,
+        totalPages: 1,
+        hasMore: false,
+      });
+
+    renderResolver();
+
+    const retry = await screen.findByRole('button', { name: /try again/i });
+    expect(screen.queryByText(/Loading document/)).not.toBeInTheDocument();
+
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-latest');
+    });
+    consoleErrorSpy.mockRestore();
+  });
+
   it('migrates the latest local document when the authenticated root has no cloud docs', async () => {
     const localYDoc = new Y.Doc();
     const localMeta = {

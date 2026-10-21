@@ -18,11 +18,18 @@ export default function RootDocumentResolver() {
   const { isOnline } = useNetworkStatus();
   const hasResolvedRef = useRef(false);
   const [offlineDocumentId, setOfflineDocumentId] = useState<string | null>(null);
+  // A failed resolution used to fall back to the loading state with nothing to
+  // retry it, so the shell spun forever. Hold the failure until the user (or a
+  // reconnect) asks again.
+  const [resolveFailed, setResolveFailed] = useState(false);
+  const [retryTrigger, setRetryTrigger] = useState(0);
 
   useEffect(() => {
     if (isInitializing || !isAuthenticated || !accessToken || hasResolvedRef.current) {
       return;
     }
+
+    setResolveFailed(false);
 
     let cancelled = false;
     let settled = false;
@@ -49,6 +56,7 @@ export default function RootDocumentResolver() {
         console.error('Failed to resolve root document:', error);
         if (!cancelled) {
           hasResolvedRef.current = false;
+          setResolveFailed(true);
         }
       } finally {
         settled = true;
@@ -65,7 +73,7 @@ export default function RootDocumentResolver() {
         hasResolvedRef.current = false;
       }
     };
-  }, [isInitializing, isAuthenticated, accessToken, user?.id, router, isOnline]);
+  }, [isInitializing, isAuthenticated, accessToken, user?.id, router, isOnline, retryTrigger]);
 
   if (!isInitializing && !isAuthenticated) {
     return (
@@ -82,6 +90,26 @@ export default function RootDocumentResolver() {
             className="mt-5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90"
           >
             Sign in
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (resolveFailed) {
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="max-w-sm text-center">
+          <h1 className="text-xl font-semibold text-foreground">Unable to open your workspace</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The server did not respond as expected. Check your connection and try again.
+          </p>
+          <button
+            type="button"
+            onClick={() => setRetryTrigger((value) => value + 1)}
+            className="mt-5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90"
+          >
+            Try again
           </button>
         </div>
       </div>
