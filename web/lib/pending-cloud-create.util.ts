@@ -198,7 +198,10 @@ export async function flushPendingCloudCreate(
       const parentResult = await flushPendingCloudCreate(accessToken, pendingParent, nextAncestry);
       if (parentResult !== 'created') {
         if (parentResult === 'dropped') {
+          // The parent is gone, but refusing it says nothing about this child:
+          // create the child at the root instead of deleting it too.
           await discardPendingDocument(pendingParent.id);
+          return flushPendingCloudCreate(accessToken, { ...entry, parentId: null }, ancestry, true);
         }
         return parentResult;
       }

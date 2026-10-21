@@ -280,6 +280,35 @@ describe('pending cloud creates', () => {
     expect(listPendingCloudCreates('user-1')).toEqual([]);
   });
 
+  it('creates the child at the root when its pending parent is refused', async () => {
+    queuePendingCloudCreate({ id: 'parent', userId: 'user-1', parentId: null });
+    const child = {
+      id: 'child',
+      userId: 'user-1',
+      parentId: 'parent',
+      queuedAt: '2026-01-01T00:00:01.000Z',
+    };
+    queuePendingCloudCreate(child);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockImplementation(async (_token, id) => {
+      if (id === 'parent') {
+        throw new DocumentServiceApiError('Bad request', 400);
+      }
+      return { id, ydoc: localDocument.ydoc, meta: localDocument.meta };
+    });
+
+    // Refusing the parent must not discard the child: it is a separate document
+    // the user wrote, and it can live at the root.
+    await expect(flushPendingCloudCreate('token', child)).resolves.toBe('created');
+
+    expect(createCloudDocument.mock.calls.map(([, id, , , , parentId]) => [id, parentId])).toEqual([
+      ['parent', null],
+      ['child', null],
+    ]);
+    expect(getPendingCloudCreate('child')).toBeNull();
+    expect(getPendingCloudCreate('parent')).toBeNull();
+  });
+
   it.each([400, 403, 404, 409, 410, 422])(
     'drops a permanent %i rejection for a root document',
     async (status) => {
