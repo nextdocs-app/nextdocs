@@ -154,8 +154,14 @@ export function removePendingCloudCreate(id: string): void {
  * parent link, and any offline edits waiting for a cloud row that will never
  * exist. Without this a rejected create leaves a ghost the sidebar can list
  * again after a degraded tree fetch.
+ *
+ * `announce` marks a discard the user did not ask for, so the UI can say why a
+ * page they wrote disappeared.
  */
-export async function discardPendingDocument(id: string): Promise<void> {
+export async function discardPendingDocument(
+  id: string,
+  options?: { announce?: boolean }
+): Promise<void> {
   removePendingCloudCreate(id);
   clearPendingSyncEdits(id);
   clearPendingIconCoverPatch(id);
@@ -170,7 +176,8 @@ export async function discardPendingDocument(id: string): Promise<void> {
   documentService.emitLocalDocumentsChanged();
 
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(PENDING_DOCUMENT_DISCARDED_EVENT, { detail: { id } }));
+    const detail = { id, announce: options?.announce ?? false };
+    window.dispatchEvent(new CustomEvent(PENDING_DOCUMENT_DISCARDED_EVENT, { detail }));
   }
 }
 
@@ -200,7 +207,7 @@ export async function flushPendingCloudCreate(
         if (parentResult === 'dropped') {
           // The parent is gone, but refusing it says nothing about this child:
           // create the child at the root instead of deleting it too.
-          await discardPendingDocument(pendingParent.id);
+          await discardPendingDocument(pendingParent.id, { announce: true });
           return flushPendingCloudCreate(accessToken, { ...entry, parentId: null }, ancestry, true);
         }
         return parentResult;

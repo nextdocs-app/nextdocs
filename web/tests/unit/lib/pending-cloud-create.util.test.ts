@@ -4,6 +4,7 @@ import {
   getPendingCloudCreate,
   listPendingCloudCreates,
   PENDING_CLOUD_CREATE_EVENT,
+  PENDING_DOCUMENT_DISCARDED_EVENT,
   queuePendingCloudCreate,
   removePendingCloudCreate,
 } from '@/lib/pending-cloud-create.util';
@@ -142,6 +143,24 @@ describe('pending cloud creates', () => {
     expect(readPendingIconCoverPatch('doc-1')).toBeNull();
     expect(deleteDocument).toHaveBeenCalledWith('doc-1');
     expect(documentService.emitLocalDocumentsChanged).toHaveBeenCalled();
+  });
+
+  it('flags a discard the user did not ask for', async () => {
+    queuePendingCloudCreate({ id: 'doc-1', userId: 'user-1', parentId: null });
+    queuePendingCloudCreate({ id: 'doc-2', userId: 'user-1', parentId: null });
+    const listener = jest.fn();
+    window.addEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, listener);
+
+    // A refusal removes a page the user wrote without being asked; a delete they
+    // clicked must not be announced as a failure.
+    await discardPendingDocument('doc-1', { announce: true });
+    await discardPendingDocument('doc-2');
+
+    expect(listener.mock.calls.map(([event]) => event.detail)).toEqual([
+      { id: 'doc-1', announce: true },
+      { id: 'doc-2', announce: false },
+    ]);
+    window.removeEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, listener);
   });
 
   it('notifies listeners when the queue changes', () => {

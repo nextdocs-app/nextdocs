@@ -72,7 +72,7 @@ export function usePendingCloudDocumentCreates(
             break;
           }
           if (result === 'dropped') {
-            await discardPendingDocument(entry.id);
+            await discardPendingDocument(entry.id, { announce: true });
           }
         }
       } finally {

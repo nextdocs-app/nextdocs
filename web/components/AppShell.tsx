@@ -11,6 +11,8 @@ import { setMobileNavOpen } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
+import { PENDING_DOCUMENT_DISCARDED_EVENT } from '@/lib/pending-cloud-create.util';
+import { addToast } from '@/stores/toasts/toasts.slice';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
@@ -28,6 +30,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     return () => document.body.classList.remove('nd-mobile-nav-open');
   }, [isMobileLayout, isMobileNavOpen]);
+
+  // A discard the user did not ask for deletes a page they wrote. The row
+  // disappearing is the symptom; saying why turns it from a bug into an answer.
+  useEffect(() => {
+    const handleDiscarded = (event: Event) => {
+      const detail = (event as CustomEvent<{ announce?: boolean } | undefined>).detail;
+      if (!detail?.announce) {
+        return;
+      }
+
+      dispatch(
+        addToast({
+          type: 'error',
+          message:
+            'A page created offline could not be saved to your account and was removed from this device.',
+        })
+      );
+    };
+
+    window.addEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, handleDiscarded);
+    return () => window.removeEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, handleDiscarded);
+  }, [dispatch]);
 
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {

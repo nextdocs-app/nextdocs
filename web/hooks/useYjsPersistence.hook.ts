@@ -138,7 +138,7 @@ export function useYjsPersistence(
           return;
         }
         if (result === 'dropped') {
-          await discardPendingDocument(documentId);
+          await discardPendingDocument(documentId, { announce: true });
           return;
         }
       }
@@ -283,7 +283,7 @@ export function useYjsPersistence(
           } else {
             // The server refused the create. Keeping the copy and its pending
             // counter would pin the editor to a cloud row that cannot exist.
-            await discardPendingDocument(documentId);
+            await discardPendingDocument(documentId, { announce: true });
             return;
           }
         }
