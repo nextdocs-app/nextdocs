@@ -202,9 +202,28 @@ async function cachePage(url) {
   }
 }
 
+// Logout keeps the shell (home, offline page, manifest) but forgets which
+// documents this browser visited: page cache keys carry document ids.
+async function clearPrivatePages() {
+  const cache = await caches.open(PAGE_CACHE);
+  const keys = await cache.keys();
+  await Promise.all(
+    keys
+      .filter((key) => !PINNED_PAGE_URLS.has(new URL(key.url).pathname))
+      .map((key) => cache.delete(key))
+  );
+}
+
 self.addEventListener('message', (event) => {
   const { data } = event;
-  if (!data || data.type !== 'CACHE_PAGE' || typeof data.url !== 'string') return;
+  if (!data) return;
+
+  if (data.type === 'CLEAR_PRIVATE_PAGES') {
+    event.waitUntil(clearPrivatePages());
+    return;
+  }
+
+  if (data.type !== 'CACHE_PAGE' || typeof data.url !== 'string') return;
 
   let url;
   try {

@@ -87,6 +87,15 @@ function clearPersistedAuthSnapshot(): void {
   window.sessionStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
 }
 
+/** Page cache keys hold document ids, so they must not outlive the session. */
+function clearCachedDocumentPages(): void {
+  if (typeof navigator === 'undefined') {
+    return;
+  }
+
+  navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_PRIVATE_PAGES' });
+}
+
 const persistedAuth = readPersistedAuthSnapshot();
 indexedDBService.setUserId(persistedAuth?.user?.id ?? null);
 
@@ -230,6 +239,7 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
     }
     attachmentService.resetAttachmentUrlCache();
     await clearLocalUserData();
+    clearCachedDocumentPages();
     indexedDBService.setUserId(null);
     documentService.clearSessionRegistries();
   }

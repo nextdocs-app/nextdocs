@@ -388,6 +388,23 @@ describe('service worker', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('forgets visited document pages on logout but keeps the shell', async () => {
+    const worker = createWorker();
+    const pageCache = new FakeCache();
+    worker.caches.set(cacheName('pages'), pageCache);
+    for (const path of ['/', '/offline', '/manifest.webmanifest', '/doc/1', '/doc/2']) {
+      await pageCache.put(new FakeRequest(path), new FakeResponse(path));
+    }
+
+    await worker.dispatch('message', { data: { type: 'CLEAR_PRIVATE_PAGES' } });
+
+    expect(await pageCache.match('/')).toBeDefined();
+    expect(await pageCache.match('/offline')).toBeDefined();
+    expect(await pageCache.match('/manifest.webmanifest')).toBeDefined();
+    expect(await pageCache.match('/doc/1')).toBeUndefined();
+    expect(await pageCache.match('/doc/2')).toBeUndefined();
+  });
+
   it('caches same-origin pages announced by in-app navigation', async () => {
     fetchMock.mockResolvedValue(new FakeResponse('navigated page'));
     const worker = createWorker();

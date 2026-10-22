@@ -296,6 +296,24 @@ describe('auth slice', () => {
     expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
   });
 
+  it('forgets visited document pages on logout', async () => {
+    const postMessage = jest.fn();
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { controller: { postMessage } },
+    });
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+
+    try {
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      await store.dispatch(logoutThunk());
+
+      expect(postMessage).toHaveBeenCalledWith({ type: 'CLEAR_PRIVATE_PAGES' });
+    } finally {
+      Reflect.deleteProperty(navigator, 'serviceWorker');
+    }
+  });
+
   it('loginThunk/fulfilled clears signed attachment URLs cached by a previous session', async () => {
     const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
     (authApiService.login as jest.Mock).mockResolvedValue(mockAuthResponse);
