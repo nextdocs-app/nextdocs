@@ -32,6 +32,11 @@ import {
 } from '@/lib/document-meta-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
+import {
+  getPendingCloudCreate,
+  PENDING_CLOUD_CREATE_EVENT,
+  PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX,
+} from '@/lib/pending-cloud-create.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import { getRealtimeUrl } from '@/lib/api-url.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
@@ -184,22 +189,14 @@ async function resolveGuestAccessLevel(
 }
 
 async function resolveLocalFallbackDocument(
-  id: string,
-  options: { createIfMissing: boolean }
+  id: string
 ): Promise<{ id: string; result: DocumentLoadResult }> {
   const localById = await documentService.loadDocument(id);
   if (localById) {
     return { id, result: localById };
   }
 
-  if (!options.createIfMissing) {
-    throw new OfflineDocumentUnavailableError('This document is not available in local cache.');
-  }
-
-  return {
-    id,
-    result: await documentService.getOrCreateDocument(id),
-  };
+  throw new OfflineDocumentUnavailableError('This document is not available in local cache.');
 }
 
 export function useDocument(documentId: string, options?: UseDocumentOptions) {
@@ -242,6 +239,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
+  // A queued create means this id has no cloud row yet: the realtime server and
+  // /my-access would only see "not found". Track the queue so both wait it out.
+  const [hasPendingCloudCreate, setHasPendingCloudCreate] = useState(
+    () => getPendingCloudCreate(id, user?.id ?? null) !== null
+  );
   const lastLoadContextKeyRef = useRef<string | null>(null);
   const updateMetaSeqRef = useRef(0);
   // Latest committed meta for the Yjs title observer (avoids stale closures
@@ -359,23 +361,67 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   }, [resolvedDocumentId]);
 
   useEffect(() => {
+    const syncPendingCloudCreate = () => {
+      setHasPendingCloudCreate(getPendingCloudCreate(id, user?.id ?? null) !== null);
+    };
+
+    // Another tab replays the queued create; only its storage event reaches
+    // this tab, and without it the document would wait for a row that exists.
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key.startsWith(PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX)) {
+        syncPendingCloudCreate();
+      }
+    };
+
+    syncPendingCloudCreate();
+    window.addEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [id, user?.id]);
+
+  useEffect(() => {
     if (!isAuthenticated || isInitializing || errorState === null || ydoc !== null || isLoading) {
       return;
     }
 
     const retryLoad = () => {
+      // A restricted verdict earned while the cloud row was still queued is
+      // stale once the entry is gone; clear it so the retry can reach the row.
+      if (
+        errorState.kind === 'restricted' &&
+        getPendingCloudCreate(id, user?.id ?? null) === null
+      ) {
+        setErrorState(null);
+        dispatch(setError(null));
+      }
       clearCloudReadBackoff();
       setRetryTrigger((prev) => prev + 1);
     };
 
     window.addEventListener('cloud-documents-changed', retryLoad);
     window.addEventListener('local-documents-changed', retryLoad);
+    window.addEventListener(PENDING_CLOUD_CREATE_EVENT, retryLoad);
 
     return () => {
       window.removeEventListener('cloud-documents-changed', retryLoad);
       window.removeEventListener('local-documents-changed', retryLoad);
+      window.removeEventListener(PENDING_CLOUD_CREATE_EVENT, retryLoad);
     };
-  }, [isAuthenticated, isInitializing, errorState, ydoc, isLoading, clearCloudReadBackoff]);
+  }, [
+    isAuthenticated,
+    isInitializing,
+    errorState,
+    ydoc,
+    isLoading,
+    id,
+    user?.id,
+    dispatch,
+    clearCloudReadBackoff,
+  ]);
 
   useEffect(() => {
     if (isInitializing) {
@@ -425,6 +471,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         const pendingSyncEditsForRequestedDoc =
           isAuthenticated && token ? readPendingSyncEdits(id) : 0;
         const hasPendingSyncForRequestedDoc = pendingSyncEditsForRequestedDoc > 0;
+        // A doc created offline has no cloud row yet; reading it would 404 and
+        // trip the restricted state. Keep serving the local copy until the
+        // queued create lands.
+        const hasPendingCloudCreateForRequestedDoc =
+          isAuthenticated && token ? getPendingCloudCreate(id, user?.id ?? null) !== null : false;
 
         dispatch(setLoading(true));
         dispatch(setError(null));
@@ -438,13 +489,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         // document. Kept apart from the access level: an edit-level or comment-level guest
         // is still a guest, and only viewer-level used to be treated as one.
         let loadedFromShareLink = false;
-        const canAttemptCloudRead = !isCloudReadInBackoff() && !hasPendingSyncForRequestedDoc;
+        const canAttemptCloudRead =
+          !isCloudReadInBackoff() &&
+          !hasPendingSyncForRequestedDoc &&
+          !hasPendingCloudCreateForRequestedDoc;
 
         if (isAuthenticated && token) {
           if (!canAttemptCloudRead) {
-            const fallback = await resolveLocalFallbackDocument(id, {
-              createIfMissing: false,
-            });
+            const fallback = await resolveLocalFallbackDocument(id);
             effectiveId = fallback.id;
             result = fallback.result;
           } else {
@@ -471,9 +523,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 triggerCloudReadBackoff();
               }
 
-              const fallback = await resolveLocalFallbackDocument(id, {
-                createIfMissing: false,
-              });
+              const fallback = await resolveLocalFallbackDocument(id);
               effectiveId = fallback.id;
               result = fallback.result;
             }
@@ -510,54 +560,49 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           } else {
             const localResult = await documentService.loadDocument(id);
 
+            // Guests have no private workspace. A local record that is not a
+            // share-link mirror is a leftover from the removed guest flow and
+            // must not be opened for reading or editing.
             if (localResult && localResult.origin !== 'public-link') {
-              result = localResult;
-            } else {
-              const isKnownPublicLink =
-                localResult?.origin === 'public-link' || documentService.isPublicLinkDocument(id);
-              // Reaching this branch means any local copy is a share-link mirror, and a
-              // fresh fetch below is the link's document: neither is this device's own.
-              loadedFromShareLink = localResult !== null || isKnownPublicLink;
-              try {
-                result = await documentService.getPublicDocument(id);
-                documentService.notePublicLinkDocument(id);
-                loadedFromShareLink = true;
-                guestAccessLevel = await resolveGuestAccessLevel(id, {
-                  payloadLevel: result.accessLevel,
-                });
-              } catch (publicErr) {
-                if (isConnectivityError(publicErr)) {
-                  if (localResult) {
-                    result = localResult;
-                    guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
-                  } else {
-                    // No local mirror, known link or not: recreating a blank
-                    // EDIT copy offline would let a guest fabricate writes
-                    // that later hit the public endpoint, so deny the opening
-                    // instead of inventing an editable document.
-                    throw new OfflineDocumentUnavailableError(
-                      'This shared document has not been opened on this device yet.'
-                    );
-                  }
-                } else if (
-                  publicErr instanceof DocumentServiceApiError &&
-                  publicErr.status === 403
-                ) {
-                  enterRestrictedState(effectiveId, publicErr.status);
-                  return;
-                } else if (
-                  publicErr instanceof DocumentServiceApiError &&
-                  publicErr.status === 404
-                ) {
-                  if (isKnownPublicLink) {
-                    enterRestrictedState(effectiveId, publicErr.status);
-                    return;
-                  }
-                  result = await documentService.getOrCreateDocument(id);
-                  guestAccessLevel = 'EDIT';
+              enterRestrictedState(effectiveId, 404);
+              return;
+            }
+
+            const isKnownPublicLink =
+              localResult?.origin === 'public-link' || documentService.isPublicLinkDocument(id);
+            // Any local copy here is a share-link mirror, and a fresh fetch
+            // below is the link's document: neither is this device's own.
+            loadedFromShareLink = localResult !== null || isKnownPublicLink;
+            try {
+              result = await documentService.getPublicDocument(id);
+              documentService.notePublicLinkDocument(id);
+              loadedFromShareLink = true;
+              guestAccessLevel = await resolveGuestAccessLevel(id, {
+                payloadLevel: result.accessLevel,
+              });
+            } catch (publicErr) {
+              if (isConnectivityError(publicErr)) {
+                if (localResult) {
+                  result = localResult;
+                  guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
                 } else {
-                  throw publicErr;
+                  // No local mirror: recreating a blank EDIT copy offline would
+                  // let a guest fabricate writes that later hit the public
+                  // endpoint, so deny the opening instead.
+                  throw new OfflineDocumentUnavailableError(
+                    'This shared document has not been opened on this device yet.'
+                  );
                 }
+              } else if (
+                publicErr instanceof DocumentServiceApiError &&
+                (publicErr.status === 403 || publicErr.status === 404)
+              ) {
+                // No account fallback: a guest cannot create a private
+                // document for an id that is not a share link.
+                enterRestrictedState(effectiveId, publicErr.status);
+                return;
+              } else {
+                throw publicErr;
               }
             }
           }
@@ -576,7 +621,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             isAuthenticated &&
             token &&
             !isCloudReadInBackoff() &&
-            !hasPendingSyncForRequestedDoc
+            !hasPendingSyncForRequestedDoc &&
+            !hasPendingCloudCreateForRequestedDoc
           ) {
             try {
               const myAccess = await documentService.getMyAccess(effectiveId, token);
@@ -726,6 +772,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // connecting would trigger a 1008 close followed by a spurious "access restricted"
       // error for the document owner.
       !!meta?.deletedAt ||
+      // The cloud row does not exist until the queued create replays, so the
+      // realtime access check would 404 and lock the document.
+      hasPendingCloudCreate ||
       isCloudReadInBackoff() ||
       !canConnectRealtime
     ) {
@@ -904,6 +953,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isAuthenticated,
     isGuestRealtimeLevelKnown,
     meta?.deletedAt,
+    hasPendingCloudCreate,
     isCloudReadInBackoff,
     refresh,
     dispatch,
@@ -1009,6 +1059,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       !resolvedDocumentId ||
       resolvedDocumentId !== currentDocumentId ||
       !!meta?.deletedAt ||
+      hasPendingCloudCreate || // No cloud row yet; /my-access would answer "not found".
       isRealtimeConnected // Skip polling if we have an active realtime WebSocket connection
     ) {
       return;
@@ -1142,6 +1193,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     // title keystroke/save while realtime was down, coupling API load to
     // typing cadence.
     meta?.deletedAt,
+    hasPendingCloudCreate,
     dispatch,
     isCloudReadInBackoff,
     refresh,

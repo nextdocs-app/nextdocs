@@ -11,6 +11,8 @@ import {
 } from '@/lib/document-access.util';
 import { readPendingIconCoverPatch, readPendingSyncEdits } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
+import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { WebsocketProvider } from 'y-websocket';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -64,7 +66,6 @@ jest.mock('y-websocket', () => ({
 }));
 
 describe('useDocument', () => {
-  let getOrCreateDocumentSpy: jest.SpyInstance;
   let getCloudDocumentSpy: jest.SpyInstance;
   let getPublicDocumentSpy: jest.SpyInstance;
   let getMyAccessSpy: jest.SpyInstance;
@@ -84,9 +85,6 @@ describe('useDocument', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    getOrCreateDocumentSpy = jest
-      .spyOn(documentService, 'getOrCreateDocument')
-      .mockImplementation(jest.fn());
     getCloudDocumentSpy = jest
       .spyOn(documentService, 'getCloudDocument')
       .mockImplementation(jest.fn());
@@ -130,8 +128,10 @@ describe('useDocument', () => {
       .spyOn(documentService, 'checkAccess')
       .mockRejectedValue(new Error('the guest path should not need an access check'));
     (useAuth as jest.Mock).mockReturnValue({
-      isAuthenticated: false,
-      accessToken: null,
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      isInitializing: false,
+      user: { id: 'user-1' },
       refresh: mockRefreshSession,
     });
     (useNetworkStatus as jest.Mock).mockReturnValue({
@@ -142,7 +142,6 @@ describe('useDocument', () => {
 
   afterEach(() => {
     window.localStorage.clear();
-    getOrCreateDocumentSpy.mockRestore();
     getCloudDocumentSpy.mockRestore();
     getPublicDocumentSpy.mockRestore();
     getMyAccessSpy.mockRestore();
@@ -175,6 +174,16 @@ describe('useDocument', () => {
     };
   }
 
+  /** Share-link tests run without an account; private docs need one now. */
+  function useGuestAuth() {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      isInitializing: false,
+      refresh: mockRefreshSession,
+    });
+  }
+
   afterEach(() => {
     setYDoc(null);
   });
@@ -187,7 +196,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -201,12 +210,15 @@ describe('useDocument', () => {
     expect(result.current.ydoc).toBe(ydoc);
     expect(result.current.meta).toEqual(meta);
     expect(result.current.error).toBeNull();
-    expect(getOrCreateDocumentSpy).toHaveBeenCalledWith('test-id');
+    expect(getCloudDocumentSpy).toHaveBeenCalledWith('test-id', 'token-1', {
+      includeTrashed: true,
+    });
     // A document this device owns is not someone else's share link.
     expect(result.current.isGuestShareLink).toBe(false);
   });
 
   it('should load shared public document in guest mode as read-only', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Shared Document',
@@ -225,13 +237,14 @@ describe('useDocument', () => {
     });
 
     expect(getPublicDocumentSpy).toHaveBeenCalledWith('shared-id');
-    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
     expect(result.current.isGuestShareLink).toBe(true);
   });
 
   it('takes the guest access level from the public payload without a second access check', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Comment-only Share',
@@ -261,6 +274,7 @@ describe('useDocument', () => {
   });
 
   it('lets a guest write when the share link payload grants edit', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Editable Share',
@@ -287,6 +301,7 @@ describe('useDocument', () => {
   });
 
   it('should load public cloud document for guest direct doc URL when no local copy exists', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Public Shared Document',
@@ -307,12 +322,13 @@ describe('useDocument', () => {
 
     expect(loadDocumentSpy).toHaveBeenCalledWith('shared-public-id');
     expect(getPublicDocumentSpy).toHaveBeenCalledWith('shared-public-id');
-    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.accessLevel).toBe('VIEW');
     expect(result.current.isReadOnly).toBe(true);
   });
 
   it('should revalidate a cached share-link mirror instead of trusting it as local', async () => {
+    useGuestAuth();
     const staleYdoc = new Y.Doc();
     const staleMeta = {
       title: 'Stale Mirror',
@@ -347,6 +363,7 @@ describe('useDocument', () => {
   });
 
   it('should not invent a writable blank doc for a known share link opened offline', async () => {
+    useGuestAuth();
     const isPublicLinkSpy = jest
       .spyOn(documentService, 'isPublicLinkDocument')
       .mockReturnValue(true);
@@ -364,7 +381,7 @@ describe('useDocument', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
     expect(result.current.meta).toBeNull();
     expect(result.current.errorState).toMatchObject({ title: 'Document unavailable offline' });
 
@@ -373,7 +390,7 @@ describe('useDocument', () => {
   });
 
   it('should handle load errors', async () => {
-    getOrCreateDocumentSpy.mockRejectedValue(new Error('Load failed'));
+    getCloudDocumentSpy.mockRejectedValue(new Error('Load failed'));
 
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -403,7 +420,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -454,7 +471,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -484,7 +501,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -515,7 +532,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -553,7 +570,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -598,7 +615,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -637,7 +654,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -670,7 +687,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -717,7 +734,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -755,7 +772,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -813,7 +830,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -862,7 +879,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -910,7 +927,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -1042,6 +1059,7 @@ describe('useDocument', () => {
   });
 
   it('should persist updateIcon through updatePublicIconCover for an edit-level guest', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Editable Share',
@@ -1497,7 +1515,6 @@ describe('useDocument', () => {
       touchUpdatedAt: false,
       origin: 'local',
     });
-    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
   });
 
   it('should fallback to local document when authenticated cloud fetch fails due to connectivity', async () => {
@@ -1641,7 +1658,6 @@ describe('useDocument', () => {
     });
 
     expect(result.current.errorState?.title).toBe('Document unavailable offline');
-    expect(getOrCreateDocumentSpy).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
   });
@@ -1685,6 +1701,113 @@ describe('useDocument', () => {
     expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
     expect(result.current.errorState).toBeNull();
 
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('waits for a queued cloud create before polling access or connecting realtime', async () => {
+    const offlineId = '11111111-2222-4333-8444-555555555555';
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    queuePendingCloudCreate({ id: offlineId, userId: 'user-1', parentId: null });
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument(offlineId), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.meta?.title).toBe('Offline Draft');
+    expect(getCloudDocumentSpy).not.toHaveBeenCalled();
+    // No cloud row yet: /my-access answers {allowed:false} and a realtime
+    // connect answers 1008, both of which would lock the page for good.
+    expect(getMyAccessSpy).not.toHaveBeenCalled();
+    expect(WebsocketProvider).not.toHaveBeenCalled();
+
+    removePendingCloudCreate(offlineId);
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledWith(offlineId, 'token-1');
+    });
+    expect(WebsocketProvider).toHaveBeenCalled();
+  });
+
+  it('stops waiting for a queued create replayed by another tab', async () => {
+    const offlineId = '11111111-2222-4333-8444-555555555555';
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    queuePendingCloudCreate({ id: offlineId, userId: 'user-1', parentId: null });
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument(offlineId), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(getMyAccessSpy).not.toHaveBeenCalled();
+
+    // The other tab owned the key: this tab only sees it disappear through the
+    // storage event, so the queue notification never fires here.
+    window.localStorage.removeItem(`nextdocs:pending-cloud-create:${offlineId}`);
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: `nextdocs:pending-cloud-create:${offlineId}` })
+      );
+    });
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledWith(offlineId, 'token-1');
+    });
+  });
+
+  it('retries a restricted document once its queued create is no longer pending', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const recoveredYdoc = new Y.Doc();
+    const recoveredMeta = {
+      title: 'Recovered Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    getCloudDocumentSpy
+      .mockRejectedValueOnce(new DocumentServiceApiError('Not found', 404))
+      .mockResolvedValueOnce({ ydoc: recoveredYdoc, meta: recoveredMeta });
+
+    const { result } = renderHook(() => useDocument('queued-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.errorState?.kind).toBe('restricted');
+    });
+
+    act(() => {
+      queuePendingCloudCreate({ id: 'queued-id', userId: 'user-1', parentId: null });
+    });
+    act(() => {
+      removePendingCloudCreate('queued-id');
+    });
+
+    await waitFor(() => {
+      expect(result.current.meta?.title).toBe('Recovered Offline Draft');
+    });
+
+    expect(result.current.errorState).toBeNull();
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
     consoleErrorSpy.mockRestore();
   });
 
@@ -1872,7 +1995,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({ ydoc, meta });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
     updateMetadataSpy.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
@@ -1896,6 +2019,7 @@ describe('useDocument', () => {
   });
 
   it('should send Untitled from a guest that clears the title on a share link', async () => {
+    useGuestAuth();
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Editable Share',
@@ -2183,7 +2307,7 @@ describe('useDocument', () => {
   it('should not update metadata if meta is null', async () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    getOrCreateDocumentSpy.mockRejectedValue(new Error('Failed'));
+    getCloudDocumentSpy.mockRejectedValue(new Error('Failed'));
 
     const { result } = renderHook(() => useDocument('test-id'), { wrapper: createWrapper() });
 
@@ -2210,7 +2334,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({
+    getCloudDocumentSpy.mockResolvedValue({
       ydoc,
       meta,
     });
@@ -2263,7 +2387,7 @@ describe('useDocument', () => {
       resolveFirst = resolve;
     });
 
-    getOrCreateDocumentSpy
+    getCloudDocumentSpy
       .mockReturnValueOnce(firstPromise)
       .mockResolvedValueOnce({ ydoc: ydoc2, meta: meta2 });
 
@@ -2309,7 +2433,7 @@ describe('useDocument', () => {
     const loadPromise = new Promise<{ ydoc: Y.Doc; meta: typeof meta }>((resolve) => {
       resolveLoad = resolve;
     });
-    getOrCreateDocumentSpy.mockReturnValue(loadPromise);
+    getCloudDocumentSpy.mockReturnValue(loadPromise);
 
     const { unmount } = renderHook(() => useDocument('test-id'), {
       wrapper: createWrapper(),
@@ -2321,7 +2445,7 @@ describe('useDocument', () => {
 
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
 
-    expect(getOrCreateDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(getCloudDocumentSpy).toHaveBeenCalledTimes(1);
   });
 
   it('should return a stable updateMeta reference across re-renders', async () => {
@@ -2332,7 +2456,7 @@ describe('useDocument', () => {
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
-    getOrCreateDocumentSpy.mockResolvedValue({ ydoc, meta });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
     updateMetadataSpy.mockResolvedValue(undefined);
 
     const store = createTestStore();

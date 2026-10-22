@@ -2,6 +2,7 @@
 
 import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { generateDocumentId } from '@/lib/document-id.util';
+import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { toSortableTimestamp } from '@/lib/timestamp.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
@@ -22,6 +23,7 @@ export interface ResolveRootDocumentOptions {
   accessToken: string | null;
   excludedDocumentIds?: string[];
   title?: string;
+  userId?: string | null;
 }
 
 function normalizeDocumentTitle(title: string | undefined): string {
@@ -95,10 +97,6 @@ async function persistLocalDocument(snapshot: LocalDocumentSnapshot): Promise<st
   return snapshot.id;
 }
 
-async function createLocalDocument(title?: string): Promise<string> {
-  return persistLocalDocument(await createLocalDocumentSnapshot(title));
-}
-
 async function migrateLocalDocumentToCloud(
   localDoc: LocalLoadedDocument,
   accessToken: string
@@ -134,65 +132,76 @@ async function getMostRecentCloudDocumentId(
   return mostRecentCloudDocument?.id ?? null;
 }
 
-export async function resolveRootDocumentId(options: ResolveRootDocumentOptions): Promise<string> {
+export async function resolveRootDocumentId(
+  options: ResolveRootDocumentOptions
+): Promise<string | null> {
+  // Guests have no private workspace: they reach documents only through a
+  // share link, so there is no root document to resolve for them.
+  if (!options.isAuthenticated || !options.accessToken) {
+    return null;
+  }
+
+  const accessToken = options.accessToken;
   const excludedDocumentIds = new Set(options.excludedDocumentIds ?? []);
   const mostRecentLocalDocument = await getMostRecentLocalDocument(excludedDocumentIds);
 
-  if (options.isAuthenticated && options.accessToken) {
-    try {
-      const mostRecentCloudDocumentId = await getMostRecentCloudDocumentId(
-        options.accessToken,
-        excludedDocumentIds
-      );
+  try {
+    const mostRecentCloudDocumentId = await getMostRecentCloudDocumentId(
+      accessToken,
+      excludedDocumentIds
+    );
 
-      if (mostRecentCloudDocumentId) {
-        return mostRecentCloudDocumentId;
-      }
+    if (mostRecentCloudDocumentId) {
+      return mostRecentCloudDocumentId;
+    }
 
-      if (mostRecentLocalDocument) {
-        return await migrateLocalDocumentToCloud(mostRecentLocalDocument, options.accessToken);
-      }
-
-      const normalizedTitle = normalizeDocumentTitle(options.title);
-      const localSnapshot = await createLocalDocumentSnapshot(normalizedTitle);
-      const createdCloudDocument = await documentService.createCloudDocument(
-        options.accessToken,
-        localSnapshot.id,
-        normalizedTitle,
-        localSnapshot.ydoc,
-        localSnapshot.meta.createdBy ?? null
-      );
-
-      try {
-        await documentService.saveDocument(
-          localSnapshot.id,
-          localSnapshot.ydoc,
-          createdCloudDocument.meta,
-          { touchUpdatedAt: false }
-        );
-      } catch (cacheError) {
-        console.warn('Failed to cache newly created cloud document locally:', cacheError);
-      }
-
-      documentService.emitCloudDocumentsChanged();
-      documentService.emitLocalDocumentsChanged();
-      return createdCloudDocument.id;
-    } catch (error) {
-      if (!isConnectivityError(error)) {
-        throw error;
-      }
-
-      if (mostRecentLocalDocument) {
+    if (mostRecentLocalDocument) {
+      // The queue owns a pending create; migrating it here would drop its parent.
+      if (getPendingCloudCreate(mostRecentLocalDocument.id, options.userId ?? null)) {
         return mostRecentLocalDocument.id;
       }
-
-      return persistLocalDocument(await createLocalDocumentSnapshot(options.title));
+      return await migrateLocalDocumentToCloud(mostRecentLocalDocument, accessToken);
     }
-  }
 
-  if (mostRecentLocalDocument) {
-    return mostRecentLocalDocument.id;
-  }
+    const normalizedTitle = normalizeDocumentTitle(options.title);
+    const localSnapshot = await createLocalDocumentSnapshot(normalizedTitle);
+    const createdCloudDocument = await documentService.createCloudDocument(
+      accessToken,
+      localSnapshot.id,
+      normalizedTitle,
+      localSnapshot.ydoc,
+      localSnapshot.meta.createdBy ?? null
+    );
 
-  return createLocalDocument();
+    try {
+      await documentService.saveDocument(
+        localSnapshot.id,
+        localSnapshot.ydoc,
+        createdCloudDocument.meta,
+        { touchUpdatedAt: false }
+      );
+    } catch (cacheError) {
+      console.warn('Failed to cache newly created cloud document locally:', cacheError);
+    }
+
+    documentService.emitCloudDocumentsChanged();
+    documentService.emitLocalDocumentsChanged();
+    return createdCloudDocument.id;
+  } catch (error) {
+    if (!isConnectivityError(error)) {
+      throw error;
+    }
+
+    if (mostRecentLocalDocument) {
+      return mostRecentLocalDocument.id;
+    }
+
+    const id = await persistLocalDocument(
+      await createLocalDocumentSnapshot(normalizeDocumentTitle(options.title))
+    );
+    if (options.userId) {
+      queuePendingCloudCreate({ id, userId: options.userId, parentId: null });
+    }
+    return id;
+  }
 }

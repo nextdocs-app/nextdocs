@@ -1,8 +1,13 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import * as Y from 'yjs';
 import RootDocumentResolver from '../../../components/RootDocumentResolver';
+import uiReducer from '../../../stores/ui/ui.slice';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 import { documentService } from '../../../services/document.service';
+import { getPendingCloudCreate } from '../../../lib/pending-cloud-create.util';
 import { useRouter } from 'next/navigation';
 
 jest.mock('next/navigation', () => ({
@@ -13,25 +18,40 @@ jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(),
 }));
 
+jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
+  useNetworkStatus: jest.fn(),
+}));
+
+jest.mock('../../../components/editor', () => ({
+  __esModule: true,
+  default: ({ documentId }: { documentId: string }) => (
+    <div data-testid="offline-editor">{documentId}</div>
+  ),
+}));
+
 jest.mock('../../../lib/document-id.util', () => ({
   generateDocumentId: jest.fn(() => 'generated-local-id'),
 }));
 
-jest.mock('../../../services/document.service', () => ({
-  documentService: {
-    getAllDocumentsMeta: jest.fn(),
-    loadDocument: jest.fn(),
-    listCloudDocuments: jest.fn(),
-    createCloudDocument: jest.fn(),
-    saveCloudDocument: jest.fn(),
-    deleteCloudDocumentPermanently: jest.fn(),
-    saveDocument: jest.fn(),
-    deleteDocument: jest.fn(),
-    createDocument: jest.fn(),
-    emitCloudDocumentsChanged: jest.fn(),
-    emitLocalDocumentsChanged: jest.fn(),
-  },
-}));
+jest.mock('../../../services/document.service', () => {
+  const actual = jest.requireActual('../../../services/document.service');
+  return {
+    DocumentServiceApiError: actual.DocumentServiceApiError,
+    documentService: {
+      getAllDocumentsMeta: jest.fn(),
+      loadDocument: jest.fn(),
+      listCloudDocuments: jest.fn(),
+      createCloudDocument: jest.fn(),
+      saveCloudDocument: jest.fn(),
+      deleteCloudDocumentPermanently: jest.fn(),
+      saveDocument: jest.fn(),
+      deleteDocument: jest.fn(),
+      createDocument: jest.fn(),
+      emitCloudDocumentsChanged: jest.fn(),
+      emitLocalDocumentsChanged: jest.fn(),
+    },
+  };
+});
 
 describe('RootDocumentResolver', () => {
   const mockReplace = jest.fn();
@@ -41,6 +61,16 @@ describe('RootDocumentResolver', () => {
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
   };
+
+  function renderResolver() {
+    const store = configureStore({ reducer: { ui: uiReducer } });
+    render(
+      <Provider store={store}>
+        <RootDocumentResolver />
+      </Provider>
+    );
+    return store;
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -55,6 +85,12 @@ describe('RootDocumentResolver', () => {
       accessToken: null,
     });
 
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: true,
+      isOffline: false,
+    });
+
+    window.localStorage.clear();
     (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([]);
     (documentService.loadDocument as jest.Mock).mockResolvedValue(null);
     (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
@@ -80,75 +116,36 @@ describe('RootDocumentResolver', () => {
     });
   });
 
-  it('should route guest users to the most recently edited local document', async () => {
-    const localYDoc = new Y.Doc();
-    const localMeta = {
-      title: 'Recent local',
-      createdAt: '2024-01-02T00:00:00.000Z',
-      updatedAt: '2024-01-03T00:00:00.000Z',
-    };
+  it('shows the sign-in prompt for guests instead of creating a local document', async () => {
+    const store = renderResolver();
 
-    (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
-      {
-        id: 'local-old',
-        meta: {
-          title: 'Old local',
-          createdAt: '2024-01-01T00:00:00.000Z',
-          updatedAt: '2024-01-01T00:00:00.000Z',
-        },
-      },
-      {
-        id: 'local-recent',
-        meta: localMeta,
-      },
-    ]);
-    (documentService.loadDocument as jest.Mock).mockResolvedValue({
-      ydoc: localYDoc,
-      meta: localMeta,
-    });
-
-    render(<RootDocumentResolver />);
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/doc/local-recent');
-    });
-
+    expect(await screen.findByRole('button', { name: /^Sign in$/i })).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
     expect(documentService.createDocument).not.toHaveBeenCalled();
+    expect(documentService.getAllDocumentsMeta).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
+    expect(store.getState().ui.isAuthModalOpen).toBe(true);
   });
 
-  it('should create a new local document at root when guest has no documents', async () => {
-    const createdYDoc = new Y.Doc();
-    const createdMeta = {
-      title: 'Untitled',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-    };
+  it('does not route guests to a leftover local document', async () => {
+    (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+      { id: 'local-recent', meta: { ...defaultMeta, title: 'Old guest doc' } },
+    ]);
 
-    (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([]);
-    (documentService.createDocument as jest.Mock).mockResolvedValue({
-      ydoc: createdYDoc,
-      meta: createdMeta,
-    });
+    renderResolver();
 
-    render(<RootDocumentResolver />);
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/doc/generated-local-id');
-    });
-
-    expect(documentService.saveDocument).toHaveBeenCalledWith(
-      'generated-local-id',
-      createdYDoc,
-      createdMeta,
-      { touchUpdatedAt: false }
-    );
+    await screen.findByRole('button', { name: /^Sign in$/i });
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(documentService.loadDocument).not.toHaveBeenCalled();
   });
 
-  it('should route authenticated users to latest cloud document when available', async () => {
+  it('routes authenticated users to the latest cloud document when available', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isInitializing: false,
       isAuthenticated: true,
       accessToken: 'token-1',
+      user: { id: 'user-1' },
     });
     (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
       items: [
@@ -164,7 +161,7 @@ describe('RootDocumentResolver', () => {
       hasMore: false,
     });
 
-    render(<RootDocumentResolver />);
+    renderResolver();
 
     await waitFor(() => {
       expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-latest');
@@ -173,7 +170,87 @@ describe('RootDocumentResolver', () => {
     expect(documentService.createCloudDocument).not.toHaveBeenCalled();
   });
 
-  it('should migrate latest local document when authenticated root has no cloud docs', async () => {
+  it('retries resolution when the token changes before the first attempt settles', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (documentService.listCloudDocuments as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {})
+    );
+    (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
+      items: [{ id: 'cloud-latest', meta: defaultMeta }],
+      page: 0,
+      size: 1,
+      totalElements: 1,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    const store = configureStore({ reducer: { ui: uiReducer } });
+    const { rerender } = render(
+      <Provider store={store}>
+        <RootDocumentResolver />
+      </Provider>
+    );
+
+    await waitFor(() =>
+      expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-1', 0, 20)
+    );
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-2',
+      user: { id: 'user-1' },
+    });
+    rerender(
+      <Provider store={store}>
+        <RootDocumentResolver />
+      </Provider>
+    );
+
+    await waitFor(() => {
+      expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-2', 0, 20);
+      expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-latest');
+    });
+  });
+
+  it('offers a retry when resolution fails instead of leaving a permanent spinner', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (documentService.listCloudDocuments as jest.Mock)
+      .mockRejectedValueOnce(new Error('Server exploded'))
+      .mockResolvedValueOnce({
+        items: [{ id: 'cloud-latest', meta: defaultMeta }],
+        page: 0,
+        size: 1,
+        totalElements: 1,
+        totalPages: 1,
+        hasMore: false,
+      });
+
+    renderResolver();
+
+    const retry = await screen.findByRole('button', { name: /try again/i });
+    expect(screen.queryByText(/Loading document/)).not.toBeInTheDocument();
+
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/doc/cloud-latest');
+    });
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('migrates the latest local document when the authenticated root has no cloud docs', async () => {
     const localYDoc = new Y.Doc();
     const localMeta = {
       title: 'Recent local',
@@ -185,6 +262,7 @@ describe('RootDocumentResolver', () => {
       isInitializing: false,
       isAuthenticated: true,
       accessToken: 'token-2',
+      user: { id: 'user-1' },
     });
     (documentService.listCloudDocuments as jest.Mock).mockResolvedValue({
       items: [],
@@ -207,7 +285,7 @@ describe('RootDocumentResolver', () => {
       meta: localMeta,
     });
 
-    render(<RootDocumentResolver />);
+    renderResolver();
 
     await waitFor(() => {
       expect(mockReplace).toHaveBeenCalledWith('/doc/local-recent');
@@ -227,5 +305,27 @@ describe('RootDocumentResolver', () => {
       { touchUpdatedAt: false }
     );
     expect(documentService.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('opens a local document in place when offline instead of routing', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: false,
+      isAuthenticated: true,
+      accessToken: 'token-3',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+    (documentService.listCloudDocuments as jest.Mock).mockRejectedValue(
+      new TypeError('Failed to fetch')
+    );
+
+    renderResolver();
+
+    expect(await screen.findByTestId('offline-editor')).toHaveTextContent('generated-local-id');
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(getPendingCloudCreate('generated-local-id', 'user-1')).not.toBeNull();
   });
 });

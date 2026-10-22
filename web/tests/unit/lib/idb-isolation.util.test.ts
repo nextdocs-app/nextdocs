@@ -36,6 +36,7 @@ describe('clearLocalUserData', () => {
 
     // Seed localStorage with a mix of nextdocs and foreign keys
     localStorage.setItem('nextdocs:pending-sync:doc-abc', '3');
+    localStorage.setItem('nextdocs:pending-cloud-create:doc-offline', '{"id":"doc-offline"}');
     localStorage.setItem('nextdocs:document-access:doc-abc', 'EDIT');
     localStorage.setItem('nextdocs:document-access:doc-xyz', 'VIEW');
     localStorage.setItem('other-app:unrelated-key', 'keep-me');
@@ -57,6 +58,7 @@ describe('clearLocalUserData', () => {
     await clearLocalUserData();
 
     expect(localStorage.getItem('nextdocs:pending-sync:doc-abc')).toBeNull();
+    expect(localStorage.getItem('nextdocs:pending-cloud-create:doc-offline')).toBeNull();
     expect(localStorage.getItem('nextdocs:document-access:doc-abc')).toBeNull();
     expect(localStorage.getItem('nextdocs:document-access:doc-xyz')).toBeNull();
   });

@@ -81,7 +81,23 @@ export const fetchDocumentsThunk = createAsyncThunk<
 
     const expandedMode = keepExpanded && isShowingAll;
 
-    if (isAuthenticated && accessToken && !isCloudUnavailable) {
+    // Guests have no private workspace: share-link documents are listed by the
+    // Shared section, never as local "own" documents from the guest database.
+    if (!isAuthenticated || !accessToken) {
+      return {
+        documents: [],
+        ownerSharedDocuments: [],
+        hasMore: false,
+        ownerSharedHasMore: false,
+        isShowingAll: expandedMode,
+        nextCloudPage: 0,
+        localAllDocs: [],
+        localLoadedCount: 0,
+        degradedToLocal: false,
+      };
+    }
+
+    if (!isCloudUnavailable) {
       const pageSize = DOCS_PAGE_SIZE;
       try {
         const page = await documentService.listCloudDocuments(accessToken, 0, pageSize);
@@ -122,6 +138,8 @@ export const fetchDocumentsThunk = createAsyncThunk<
           ...ownerSharedDocuments.map((doc) => doc.id),
         ]);
 
+        // getAllDocumentsMeta already excludes share-link mirrors; only the
+        // shared-section ids still need removing here.
         const localPrivateDocs = allLocalDocs.filter((doc) => !sharedDocIds.has(doc.id));
         const initialCount = Math.min(DOCS_PAGE_SIZE, localPrivateDocs.length);
         const initialDocs = localPrivateDocs.slice(0, initialCount);
@@ -142,23 +160,20 @@ export const fetchDocumentsThunk = createAsyncThunk<
     }
 
     const docs = sortByUpdatedAtDesc(await documentService.getAllDocumentsMeta());
-    let privateDocs: LocalDocumentEntry[];
-    if (isAuthenticated && accessToken) {
-      const sharedDocIds = new Set([
-        ...sharedWithMeDocuments.map((doc) => doc.id),
-        ...ownerSharedDocuments.map((doc) => doc.id),
-      ]);
-      privateDocs = docs.filter((doc) => !sharedDocIds.has(doc.id));
-    } else {
-      privateDocs = docs;
-    }
+    const sharedDocIds = new Set([
+      ...sharedWithMeDocuments.map((doc) => doc.id),
+      ...ownerSharedDocuments.map((doc) => doc.id),
+    ]);
+    // Share-link mirrors are filtered out by getAllDocumentsMeta; only the
+    // shared-section ids still need removing here.
+    const privateDocs = docs.filter((doc) => !sharedDocIds.has(doc.id));
 
     const initialCount = Math.min(DOCS_PAGE_SIZE, privateDocs.length);
     const initialDocs = privateDocs.slice(0, initialCount);
 
     return {
       documents: initialDocs,
-      ownerSharedDocuments: isAuthenticated && accessToken ? [...ownerSharedDocuments] : [],
+      ownerSharedDocuments: [...ownerSharedDocuments],
       hasMore: privateDocs.length > initialDocs.length,
       ownerSharedHasMore: false,
       isShowingAll: expandedMode,

@@ -93,8 +93,21 @@ export function SidebarTree({
   );
 
   // The section only renders the first SIDEBAR_VISIBLE_COUNT roots; the rest
-  // are reachable through the "Show More" row which opens the full panel.
-  const renderedRootIds = visibleRootIds.slice(0, SIDEBAR_VISIBLE_COUNT);
+  // are reachable through the "Show More" row which opens the full panel. The
+  // open document keeps its row: a page created offline can sort last and would
+  // otherwise disappear behind "Show More" while its editor is on screen.
+  const renderedRootIds = useMemo(() => {
+    const visible = visibleRootIds.slice(0, SIDEBAR_VISIBLE_COUNT);
+    if (
+      activeDocId &&
+      visibleRootIds.includes(activeDocId) &&
+      !visible.includes(activeDocId) &&
+      SIDEBAR_VISIBLE_COUNT > 0
+    ) {
+      return [activeDocId, ...visible.slice(0, SIDEBAR_VISIBLE_COUNT - 1)];
+    }
+    return visible;
+  }, [visibleRootIds, activeDocId]);
 
   // Show More is derived after filtering excluded nodes; backend hasMore is not used for the
   // collapsed button (which is purely about truncated visible count). For the panel's infinite

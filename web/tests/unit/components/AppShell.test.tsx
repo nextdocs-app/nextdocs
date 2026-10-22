@@ -1,195 +1,104 @@
-import { fireEvent, render as baseRender, screen, waitFor } from '@testing-library/react';
-import React from 'react';
-import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
-import uiReducer from '../../../stores/ui/ui.slice';
-import sidebarReducer from '../../../stores/sidebar/sidebar.slice';
-import toastsReducer from '../../../stores/toasts/toasts.slice';
-import * as Y from 'yjs';
-import { AppShell, getDocsEligibleForAccountMove } from '../../../components/AppShell';
-import { documentService } from '../../../services/document.service';
+import { act, render } from '@testing-library/react';
+import { AppShell } from '../../../components/AppShell';
 import { useAuth } from '../../../hooks/useAuth.hook';
-import type { StoredDocument } from '../../../types/document.types';
+import { usePendingCloudDocumentCreates } from '../../../hooks/usePendingCloudDocumentCreates.hook';
+import { PENDING_DOCUMENT_DISCARDED_EVENT } from '../../../lib/pending-cloud-create.util';
+import { addToast } from '../../../stores/toasts/toasts.slice';
 
-jest.mock('../../../hooks/useAuth.hook', () => ({
-  useAuth: jest.fn(),
+jest.mock('../../../components/sidebar', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../components/AuthModal', () => ({ AuthModal: () => null }));
+jest.mock('../../../components/ToastContainer', () => ({ ToastContainer: () => null }));
+jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: () => false }));
+jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
+jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
+  usePendingCloudDocumentCreates: jest.fn(),
+}));
+const mockDispatch = jest.fn();
+jest.mock('../../../stores/hooks', () => ({
+  useAppDispatch: () => mockDispatch,
+  useAppSelector: () => false,
 }));
 
-jest.mock('../../../stores/auth/auth.slice', () => ({
-  refreshSessionThunk: () => ({ type: 'auth/refreshSession/pending' }),
+const mockReplace = jest.fn();
+let mockPathname = '/doc/doc-1';
+jest.mock('next/navigation', () => ({
+  usePathname: () => mockPathname,
+  useRouter: () => ({ replace: mockReplace }),
 }));
 
-jest.mock('../../../components/sidebar', () => ({
-  __esModule: true,
-  default: () => <aside data-testid="sidebar" />,
-}));
-
-jest.mock('../../../components/AuthModal', () => ({
-  AuthModal: () => <div data-testid="auth-modal" />,
-}));
-
-jest.mock('../../../components/LocalDocsPromotionModal', () => ({
-  LocalDocsPromotionModal: ({ onDiscardLocalData }: { onDiscardLocalData: () => void }) => (
-    <button type="button" onClick={onDiscardLocalData}>
-      Discard local data
-    </button>
-  ),
-}));
-
-jest.mock('../../../components/RegistrationSyncOverlay', () => ({
-  RegistrationSyncOverlay: () => <div data-testid="registration-sync-overlay" />,
-}));
-
-const render = (ui: React.ReactElement) => {
-  const store = configureStore({
-    reducer: {
-      ui: uiReducer,
-      sidebar: sidebarReducer,
-      toasts: toastsReducer,
-    },
-    middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware({
-        serializableCheck: {
-          ignoredActions: ['ui/setLocalDocsToPromote'],
-          ignoredActionPaths: ['payload.localDocsToPromote'],
-          ignoredPaths: ['ui.localDocsToPromote'],
-        },
-      }),
+function announceDiscard(announce: boolean, id = 'doc-1') {
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent(PENDING_DOCUMENT_DISCARDED_EVENT, { detail: { id, announce } })
+    );
   });
-  return baseRender(<Provider store={store}>{ui}</Provider>);
-};
-
-function createStoredDocument(id: string, title: string, hasContent: boolean): StoredDocument {
-  const ydoc = new Y.Doc();
-
-  if (hasContent) {
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
-  }
-
-  const yjsState = Y.encodeStateAsUpdate(ydoc);
-
-  return {
-    id,
-    meta: {
-      title,
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-    },
-    yjsState,
-    version: 1,
-  };
 }
 
-describe('getDocsEligibleForAccountMove', () => {
-  it('filters out empty untitled placeholders', () => {
-    const docs = [
-      createStoredDocument('empty-untitled', 'Untitled', false),
-      createStoredDocument('untitled-with-content', 'Untitled', true),
-      createStoredDocument('named-empty', 'Project notes', false),
-    ];
-
-    const eligible = getDocsEligibleForAccountMove(docs);
-
-    expect(eligible.map((doc) => doc.id)).toEqual(['untitled-with-content', 'named-empty']);
-  });
-
-  it('treats blank titles as untitled for filtering', () => {
-    const docs = [
-      createStoredDocument('blank-title-empty', '   ', false),
-      createStoredDocument('blank-title-content', '   ', true),
-    ];
-
-    const eligible = getDocsEligibleForAccountMove(docs);
-
-    expect(eligible.map((doc) => doc.id)).toEqual(['blank-title-content']);
-  });
-});
-
-describe('AppShell local guest document promotion', () => {
-  let getAllGuestDocumentsSpy: jest.SpyInstance;
-  let deleteGuestDocumentsByIdsSpy: jest.SpyInstance;
-
+describe('AppShell', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    window.localStorage.clear();
+    mockPathname = '/doc/doc-1';
+    mockReplace.mockClear();
+  });
 
+  it('wires the offline create replay to the signed-in session', () => {
     (useAuth as jest.Mock).mockReturnValue({
       user: { id: 'user-1' },
-      isTokenExpiringSoon: false,
-      isAuthenticated: true,
       accessToken: 'token-1',
-      lastAuthAction: 'login',
+      isTokenExpiringSoon: false,
     });
-
-    getAllGuestDocumentsSpy = jest.spyOn(documentService, 'getAllGuestDocuments');
-    deleteGuestDocumentsByIdsSpy = jest
-      .spyOn(documentService, 'deleteGuestDocumentsByIds')
-      .mockResolvedValue(undefined);
-    jest.spyOn(documentService, 'promoteGuestDocumentsToAccount').mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    window.localStorage.clear();
-    getAllGuestDocumentsSpy.mockRestore();
-    deleteGuestDocumentsByIdsSpy.mockRestore();
-    jest.restoreAllMocks();
-  });
-
-  it('cleans up empty untitled guest documents without deleting promotable drafts', async () => {
-    getAllGuestDocumentsSpy.mockResolvedValue([
-      createStoredDocument('empty-untitled', 'Untitled', false),
-      createStoredDocument('named-empty', 'Project notes', false),
-    ]);
 
     render(
       <AppShell>
-        <div>Editor</div>
+        <div>content</div>
       </AppShell>
     );
 
-    await waitFor(() => {
-      expect(deleteGuestDocumentsByIdsSpy).toHaveBeenCalledWith(['empty-untitled']);
-    });
-
-    expect(deleteGuestDocumentsByIdsSpy).not.toHaveBeenCalledWith(['named-empty']);
+    expect(usePendingCloudDocumentCreates).toHaveBeenCalledWith('user-1', 'token-1');
   });
 
-  it('discards promotable local drafts through the guest-document delete path', async () => {
-    getAllGuestDocumentsSpy.mockResolvedValue([
-      createStoredDocument('named-empty', 'Project notes', false),
-    ]);
+  it('says why a page the user wrote disappeared', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
 
     render(
       <AppShell>
-        <div>Editor</div>
+        <div>content</div>
       </AppShell>
     );
 
-    const discardButton = await screen.findByRole('button', { name: 'Discard local data' });
+    announceDiscard(false);
+    expect(mockDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: addToast.type }));
 
-    fireEvent.click(discardButton);
-
-    await waitFor(() => {
-      expect(deleteGuestDocumentsByIdsSpy).toHaveBeenCalledWith(['named-empty']);
-    });
+    announceDiscard(true);
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: addToast.type,
+        payload: expect.objectContaining({ type: 'error' }),
+      })
+    );
   });
-});
 
-describe('AppShell layout', () => {
-  it('renders .nd-app-shell-main with a scrollable content area', () => {
-    const { container } = render(
+  it('leaves the page whose local copy was discarded', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+
+    render(
       <AppShell>
-        <div data-testid="test-editor">Editor Content</div>
+        <div>content</div>
       </AppShell>
     );
 
-    const main = container.querySelector('main.nd-app-shell-main');
-    expect(main).toBeInTheDocument();
-    expect(main).toHaveClass('flex-1');
+    announceDiscard(true, 'another-doc');
+    expect(mockReplace).not.toHaveBeenCalled();
 
-    const scrollContainer = container.querySelector('.overflow-y-auto');
-    expect(scrollContainer).toBeInTheDocument();
-    expect(scrollContainer).toContainElement(screen.getByTestId('test-editor'));
+    announceDiscard(true);
+    expect(mockReplace).toHaveBeenCalledWith('/');
   });
 });

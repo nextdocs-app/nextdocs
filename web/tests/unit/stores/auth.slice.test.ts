@@ -67,8 +67,8 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           user: null,
           accessToken: null,
           expiresAt: null,
-          lastAuthAction: null,
           lastSilentRefreshAt: null,
+          sessionId: 0,
           isLoading: false,
           isInitializing: true,
           error: null,
@@ -169,13 +169,22 @@ describe('auth slice', () => {
     expect(store.getState().auth.error).toBe('Email already exists');
   });
 
-  it('refreshSessionThunk/pending leaves isLoading false and defers the throttle stamp', () => {
-    (authApiService.refresh as jest.Mock).mockImplementation(() => new Promise(() => {}));
+  it('refreshSessionThunk/pending leaves isLoading false and defers the throttle stamp', async () => {
+    let resolveRefresh!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock).mockImplementation(
+      () =>
+        new Promise<AuthApiResponse>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
     const store = makeStore();
-    store.dispatch(refreshSessionThunk());
+    const pending = store.dispatch(refreshSessionThunk());
     expect(store.getState().auth.isLoading).toBe(false);
     // An in-flight attempt is not a completed one: the window opens on success.
     expect(store.getState().auth.lastSilentRefreshAt).toBeNull();
+
+    resolveRefresh(mockAuthResponse);
+    await pending;
   });
 
   it('refreshSessionThunk retries a generic failure instead of throttling it', async () => {
@@ -216,6 +225,48 @@ describe('auth slice', () => {
     expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
   });
 
+  it('refreshSessionThunk/rejected resets the coalescing state and drops the persisted session when unauthorized', async () => {
+    window.sessionStorage.clear();
+    window.localStorage.setItem(
+      'nextdocs:pending-cloud-create:doc-offline',
+      JSON.stringify({ id: 'doc-offline', userId: 'user-1', parentId: null })
+    );
+    window.sessionStorage.setItem(
+      AUTH_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        user: mockUser,
+        accessToken: 'stale',
+        expiresAt: Date.now() + 1000 * 60,
+      })
+    );
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('Revoked', 403));
+    const store = makeStore({
+      user: mockUser,
+      accessToken: 'stale',
+      lastSilentRefreshAt: Date.now() - 60_000,
+      isInitializing: false,
+    });
+
+    try {
+      const result = await store.dispatch(refreshSessionThunk());
+      const { auth } = store.getState();
+
+      expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+      expect(auth.lastSilentRefreshAt).toBeNull();
+      expect(auth.user).toBeNull();
+      expect(auth.accessToken).toBeNull();
+      expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+      // Expiry must not wipe local documents or the offline create queue.
+      expect(clearLocalUserData).not.toHaveBeenCalled();
+      expect(
+        window.localStorage.getItem('nextdocs:pending-cloud-create:doc-offline')
+      ).not.toBeNull();
+      expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
+    } finally {
+      window.localStorage.clear();
+    }
+  });
+
   it('refreshSessionThunk/rejected retains state on network error and only changes isInitializing if true', async () => {
     (authApiService.refresh as jest.Mock).mockRejectedValue(new Error('Network error'));
 
@@ -243,6 +294,24 @@ describe('auth slice', () => {
     // Security: local user data must be wiped even when the API call fails.
     expect(clearLocalUserData).toHaveBeenCalledTimes(1);
     expect(indexedDBService.setUserId).toHaveBeenCalledWith(null);
+  });
+
+  it('forgets visited document pages on logout', async () => {
+    const postMessage = jest.fn();
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { controller: { postMessage } },
+    });
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+
+    try {
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      await store.dispatch(logoutThunk());
+
+      expect(postMessage).toHaveBeenCalledWith({ type: 'CLEAR_PRIVATE_PAGES' });
+    } finally {
+      Reflect.deleteProperty(navigator, 'serviceWorker');
+    }
   });
 
   it('loginThunk/fulfilled clears signed attachment URLs cached by a previous session', async () => {
@@ -429,6 +498,181 @@ describe('auth slice', () => {
     expect(store.getState().auth.lastSilentRefreshAt).toBe(stamp);
   });
 
+  it('refreshSessionThunk shares one request between parallel dispatches', async () => {
+    // An expired reload fires the mount refresh and the auto-refresh effect in
+    // the same tick. Two rotations of one refresh cookie read as token reuse,
+    // so the second dispatch must join the request already in flight.
+    let resolveRefresh!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock).mockImplementation(
+      () =>
+        new Promise<AuthApiResponse>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const first = store.dispatch(refreshSessionThunk());
+    const second = store.dispatch(refreshSessionThunk());
+
+    expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+
+    resolveRefresh(mockAuthResponse);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    // Both callers get the token: aborting the waiter would surface the 401
+    // that triggered it even though a fresh token just arrived.
+    expect(refreshSessionThunk.fulfilled.match(firstResult)).toBe(true);
+    expect(refreshSessionThunk.fulfilled.match(secondResult)).toBe(true);
+    expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hand one account a refresh started for another', async () => {
+    // A rotation that outlives a logout and a login must not be reused: its
+    // response carries the previous account's identity and tokens.
+    const otherUser = { ...mockUser, id: 'user-2' };
+    let resolveFirst!: (response: AuthApiResponse) => void;
+    let resolveSecond!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveSecond = resolve;
+          })
+      );
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const first = store.dispatch(refreshSessionThunk());
+    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, user: otherUser }));
+
+    const second = store.dispatch(refreshSessionThunk());
+    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
+
+    resolveSecond({ ...mockAuthResponse, user: otherUser, accessToken: 'token-for-user-2' });
+    expect(refreshSessionThunk.fulfilled.match(await second)).toBe(true);
+    expect(store.getState().auth.user?.id).toBe('user-2');
+    expect(store.getState().auth.accessToken).toBe('token-for-user-2');
+
+    resolveFirst(mockAuthResponse);
+    expect(refreshSessionThunk.rejected.match(await first)).toBe(true);
+    expect(store.getState().auth.user?.id).toBe('user-2');
+    expect(store.getState().auth.accessToken).toBe('token-for-user-2');
+  });
+
+  it('starts a new refresh for the same account after logout and sign-in', async () => {
+    let resolveFirst!: (response: AuthApiResponse) => void;
+    let resolveSecond!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveSecond = resolve;
+          })
+      );
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const first = store.dispatch(refreshSessionThunk());
+    await store.dispatch(logoutThunk());
+    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, accessToken: 'relogin-token' }));
+
+    const second = store.dispatch(refreshSessionThunk());
+    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
+
+    resolveSecond({ ...mockAuthResponse, accessToken: 'fresh-token' });
+    expect(refreshSessionThunk.fulfilled.match(await second)).toBe(true);
+    expect(store.getState().auth.accessToken).toBe('fresh-token');
+
+    // The pre-logout rotation belongs to the previous session, even though the
+    // account id is the same.
+    resolveFirst(mockAuthResponse);
+    expect(refreshSessionThunk.rejected.match(await first)).toBe(true);
+    expect(store.getState().auth.accessToken).toBe('fresh-token');
+  });
+
+  it('does not let a failed refresh from a logged-out session sign out the next one', async () => {
+    let rejectFirst!: (error: unknown) => void;
+    let resolveSecond!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((_resolve, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveSecond = resolve;
+          })
+      );
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const first = store.dispatch(refreshSessionThunk());
+    await store.dispatch(logoutThunk());
+    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, accessToken: 'relogin-token' }));
+
+    const second = store.dispatch(refreshSessionThunk());
+    resolveSecond({ ...mockAuthResponse, accessToken: 'fresh-token' });
+    await second;
+
+    const { lastSilentRefreshAt: throttleStamp, sessionId: freshSessionId } = store.getState().auth;
+    expect(throttleStamp).not.toBeNull();
+    const setUserId = indexedDBService.setUserId as jest.Mock;
+    const setUserIdCalls = setUserId.mock.calls.length;
+
+    // Logout revoked the old refresh cookie, so the pre-logout rotation fails
+    // after the new session has already refreshed successfully.
+    rejectFirst(new ApiError('Revoked', 401));
+    const result = await first;
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(result.payload).toBe('stale');
+    const { auth } = store.getState();
+    expect(auth.user?.id).toBe('user-1');
+    expect(auth.accessToken).toBe('fresh-token');
+    expect(auth.sessionId).toBe(freshSessionId);
+    expect(auth.lastSilentRefreshAt).toBe(throttleStamp);
+    expect(setUserId.mock.calls).toHaveLength(setUserIdCalls);
+  });
+
+  it('drops a refresh that resolves after logout', async () => {
+    let resolveRefresh!: (response: AuthApiResponse) => void;
+    (authApiService.refresh as jest.Mock).mockImplementation(
+      () =>
+        new Promise<AuthApiResponse>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+    (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+    const refresh = store.dispatch(refreshSessionThunk());
+    await store.dispatch(logoutThunk());
+    resolveRefresh(mockAuthResponse);
+    const result = await refresh;
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(store.getState().auth.user).toBeNull();
+    expect(store.getState().auth.accessToken).toBeNull();
+    // The session snapshot must stay gone: re-persisting it would restore the
+    // logged-out identity on the next reload.
+    expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+    const setUserId = indexedDBService.setUserId as jest.Mock;
+    expect(setUserId).not.toHaveBeenCalledWith('user-1');
+  });
+
   it('clearAuth wipes session registries', () => {
     const store = makeStore({ user: mockUser, accessToken: 'tok' });
     store.dispatch(clearAuth());
@@ -490,7 +734,7 @@ describe('auth slice', () => {
       });
     });
 
-    it('removes expired session on initialization', async () => {
+    it('keeps an expired session identity so cached documents stay readable offline', async () => {
       const expiredSnapshot = {
         user: mockUser,
         accessToken: 'stale-token',
@@ -501,8 +745,11 @@ describe('auth slice', () => {
       await jest.isolateModulesAsync(async () => {
         const authModule = await import('../../../stores/auth/auth.slice');
         const store = configureStore({ reducer: { auth: authModule.default } });
-        expect(store.getState().auth.user).toBeNull();
-        expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
+        // The refresh token may still be valid; a 401 on the next request is
+        // what ends the session. Dropping it here would blank the sidebar for
+        // an account whose access token expired while offline.
+        expect(store.getState().auth.user?.id).toBe(mockUser.id);
+        expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).not.toBeNull();
       });
     });
   });

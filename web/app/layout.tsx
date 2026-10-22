@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google';
 import '@/styles/globals.css';
 import { StoreProvider } from '@/stores/StoreProvider';
 import { AppShell } from '@/components/AppShell';
+import { ServiceWorkerRegistrar } from '@/components/ServiceWorkerRegistrar';
 
 const inter = Inter({
   variable: '--font-inter',
@@ -26,12 +27,26 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: 'cover',
   interactiveWidget: 'resizes-content',
+  // Matches the installed app's window chrome to the brand accent in light
+  // mode and to the shell background in dark mode.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#e78f80' },
+    { media: '(prefers-color-scheme: dark)', color: '#171615' },
+  ],
 };
 
 export const metadata: Metadata = {
   title: 'NextDocs',
   description:
     'An open-source block-based document editor for structured and collaborative writing.',
+  applicationName: 'NextDocs',
+  // iOS reads these instead of the web manifest: without them a home-screen
+  // shortcut opens in Safari with browser chrome instead of as a standalone app.
+  appleWebApp: {
+    capable: true,
+    title: 'NextDocs',
+    statusBarStyle: 'default',
+  },
   icons: {
     icon: [
       {
@@ -44,7 +59,13 @@ export const metadata: Metadata = {
       },
     ],
     shortcut: '/nextdocs-icon.svg',
-    apple: '/nextdocs-icon.png',
+    apple: [
+      {
+        url: '/icons/apple-touch-icon.png',
+        sizes: '180x180',
+        type: 'image/png',
+      },
+    ],
   },
 };
 
@@ -56,6 +77,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} antialiased`} suppressHydrationWarning>
       <head>
+        {/* Next emits the standardized `mobile-web-app-capable`; older iOS
+            versions still look for the Apple-prefixed variant. */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
         <script
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var t=localStorage.getItem('theme')||'system';var d=document.documentElement;var dark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(dark)d.classList.add('dark');d.setAttribute('data-theme',t);}catch(e){}})();`,
@@ -63,6 +87,7 @@ export default function RootLayout({
         />
       </head>
       <body>
+        <ServiceWorkerRegistrar />
         <StoreProvider>
           <AppShell>{children}</AppShell>
         </StoreProvider>

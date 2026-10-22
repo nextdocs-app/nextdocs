@@ -3,6 +3,8 @@ import { documentService } from '@/services/document.service';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
 import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
 import { applyNodeMeta, collectSubtreeIds } from '@/lib/tree-meta.util';
+import { getLocalDocumentParents } from '@/lib/local-tree.util';
+import { listPendingCloudCreates } from '@/lib/pending-cloud-create.util';
 import type { RootState } from '../store';
 import type { SidebarTreeNode, TreeNode, MoveDocumentRequest } from '@/types/tree.types';
 
@@ -54,8 +56,137 @@ export function toSidebarTreeNode(node: TreeNode, isExpanded = false): SidebarTr
   };
 }
 
+function buildLocalTreeNodes(
+  docs: {
+    id: string;
+    meta: { title: string; icon?: unknown; createdAt: string; updatedAt: string };
+  }[],
+  parents: ReadonlyMap<string, string | null>
+): TreeNode[] {
+  const localIds = new Set(docs.map((doc) => doc.id));
+  const childCounts = new Map<string, number>();
+  for (const [id, parentId] of parents) {
+    // The cache now covers cloud documents that may never have been opened on
+    // this device. Only cached children can be rendered, so only those should
+    // make their parent look expandable offline.
+    if (parentId && localIds.has(id)) {
+      childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
+    }
+  }
+
+  return docs.map((doc, index) => ({
+    id: doc.id,
+    title: normalizeDocumentTitle(doc.meta.title),
+    parentId: parents.get(doc.id) ?? null,
+    orderKey: makeLocalOrderKey(index),
+    hasChildren: (childCounts.get(doc.id) ?? 0) > 0,
+    effectiveAccessLevel: 'OWNER',
+    createdAt: doc.meta.createdAt,
+    updatedAt: doc.meta.updatedAt,
+    icon: sanitizeDocumentIcon(doc.meta.icon) ?? null,
+  }));
+}
+
+function sortRootIds(state: SidebarTreeState): void {
+  state.rootIds.sort((aId, bId) =>
+    compareOrderKeys(state.nodes[aId]?.orderKey ?? '', state.nodes[bId]?.orderKey ?? '')
+  );
+}
+
+function detachNode(state: SidebarTreeState, id: string): void {
+  const node = state.nodes[id];
+  if (!node) {
+    return;
+  }
+
+  if (node.parentId && state.nodes[node.parentId]) {
+    state.nodes[node.parentId].children = state.nodes[node.parentId].children.filter(
+      (childId) => childId !== id
+    );
+  } else {
+    state.rootIds = state.rootIds.filter((rootId) => rootId !== id);
+  }
+  node.parentId = null;
+}
+
+/**
+ * Merges a local-only tree into the one already on screen. Cloud documents are
+ * absent from the local payload, so replacing the roots would erase them; and
+ * a local child must attach to its parent instead of surfacing at the root.
+ */
+function mergeDegradedLocalNodes(state: SidebarTreeState, rawNodes: TreeNode[]): void {
+  const freshIds = new Set<string>();
+
+  // First pass: materialize every local node. Local listings are ordered by
+  // updatedAt, so a freshly created child is merged before its parent exists;
+  // placing nodes in this pass would root the child permanently.
+  for (const rawNode of rawNodes) {
+    const existing = state.nodes[rawNode.id];
+    if (existing) {
+      existing.title = normalizeDocumentTitle(rawNode.title);
+      existing.icon = sanitizeDocumentIcon(rawNode.icon) ?? null;
+      existing.createdAt = rawNode.createdAt;
+      existing.updatedAt = rawNode.updatedAt;
+      existing.hasChildren = existing.hasChildren || rawNode.hasChildren;
+      continue;
+    }
+
+    freshIds.add(rawNode.id);
+    state.nodes[rawNode.id] = toSidebarTreeNode({ ...rawNode, parentId: null });
+  }
+
+  // Second pass: attach each node under its parent. A parent that is neither in
+  // the local payload nor on screen (e.g. a document only known to the cloud)
+  // degrades to the root so the document stays reachable.
+  for (const rawNode of rawNodes) {
+    const node = state.nodes[rawNode.id];
+    if (!node) {
+      continue;
+    }
+
+    // A null parentId only proves "no locally recorded parent". Cached copies
+    // of nested cloud documents are in the payload without a local link, so
+    // their placement must survive instead of being re-rooted. A pending node
+    // that the last cloud refresh detached still needs to come back to the root.
+    const attached =
+      (node.parentId !== null && state.nodes[node.parentId]?.children.includes(node.id) === true) ||
+      state.rootIds.includes(node.id);
+    if (!freshIds.has(node.id) && rawNode.parentId === null && attached) {
+      continue;
+    }
+
+    const parentId = rawNode.parentId && state.nodes[rawNode.parentId] ? rawNode.parentId : null;
+    if (node.parentId !== parentId) {
+      detachNode(state, node.id);
+      node.parentId = parentId;
+    }
+
+    if (parentId) {
+      const parent = state.nodes[parentId];
+      parent.hasChildren = true;
+      parent.isExpanded = true;
+      if (!parent.children.includes(node.id)) {
+        parent.children.push(node.id);
+      }
+      parent.children.sort((aId, bId) =>
+        compareOrderKeys(state.nodes[aId]?.orderKey ?? '', state.nodes[bId]?.orderKey ?? '')
+      );
+    } else if (!state.rootIds.includes(node.id)) {
+      state.rootIds.push(node.id);
+    }
+  }
+
+  sortRootIds(state);
+}
+
 export const fetchRootNodesThunk = createAsyncThunk<
-  { nodes: TreeNode[]; hasMore: boolean; page: number },
+  {
+    nodes: TreeNode[];
+    hasMore: boolean;
+    page: number;
+    degradedToLocal?: boolean;
+    pendingLocalNodes?: TreeNode[];
+  },
   { page?: number; size?: number; append?: boolean; background?: boolean } | undefined,
   { state: RootState }
 >('sidebarTree/fetchRootNodes', async (params, { getState }) => {
@@ -65,45 +196,62 @@ export const fetchRootNodesThunk = createAsyncThunk<
   const size = params?.size ?? 50;
 
   if (!accessToken) {
-    const localDocs = await documentService.getAllDocumentsMeta();
-    const activeLocalDocs = localDocs.filter((d) => !d.meta.deletedAt);
-    const nodes: TreeNode[] = activeLocalDocs.map((d, index) => ({
-      id: d.id,
-      title: normalizeDocumentTitle(d.meta.title),
-      parentId: null,
-      orderKey: makeLocalOrderKey(index),
-      hasChildren: false,
-      effectiveAccessLevel: 'OWNER',
-      createdAt: d.meta.createdAt,
-      updatedAt: d.meta.updatedAt,
-      icon: sanitizeDocumentIcon(d.meta.icon) ?? null,
-    }));
-    return { nodes, hasMore: false, page: 0 };
+    // Signed-out users only get the Shared section (share-link documents).
+    // Private local documents are no longer created for guests, so there is
+    // nothing of theirs to list here.
+    return { nodes: [], hasMore: false, page: 0 };
   }
+
+  const userId = state.auth.user?.id;
 
   try {
     const result = await documentService.listRootTreeNodes(accessToken, page, size);
+
+    if (page === 0 && userId) {
+      // Tree fetches only cover visible branches. Cache the full private
+      // hierarchy in the background so cached subpages keep their nesting
+      // after an offline reload, even if the branch was never expanded.
+      // Deferred so a warmer failure can never turn a successful tree load
+      // into the degraded local fallback.
+      void Promise.resolve()
+        .then(() => documentService.cachePrivateHierarchy(accessToken, userId))
+        .catch((error) => {
+          console.warn('Failed to cache document hierarchy for offline use:', error);
+        });
+    }
+
+    // Documents created offline have no cloud row yet, so the cloud roots do
+    // not list them. Merge those local copies so they stay visible until the
+    // queued create lands (and if it never does).
+    let pendingLocalNodes: TreeNode[] | undefined;
+    if (userId) {
+      const pendingIds = new Set(listPendingCloudCreates(userId).map((entry) => entry.id));
+      if (pendingIds.size > 0) {
+        const localDocs = (await documentService.getAllDocumentsMeta()).filter(
+          (doc) => pendingIds.has(doc.id) && !doc.meta.deletedAt
+        );
+        if (localDocs.length > 0) {
+          pendingLocalNodes = buildLocalTreeNodes(localDocs, getLocalDocumentParents());
+        }
+      }
+    }
+
     return {
       nodes: result.items,
       hasMore: result.hasMore,
       page: result.page,
+      pendingLocalNodes,
     };
   } catch (err) {
     console.warn('Failed to fetch cloud tree nodes, falling back to local documents:', err);
     const localDocs = await documentService.getAllDocumentsMeta();
     const activeLocalDocs = localDocs.filter((d) => !d.meta.deletedAt);
-    const nodes: TreeNode[] = activeLocalDocs.map((d, index) => ({
-      id: d.id,
-      title: normalizeDocumentTitle(d.meta.title),
-      parentId: null,
-      orderKey: makeLocalOrderKey(index),
-      hasChildren: false,
-      effectiveAccessLevel: 'OWNER',
-      createdAt: d.meta.createdAt,
-      updatedAt: d.meta.updatedAt,
-      icon: sanitizeDocumentIcon(d.meta.icon) ?? null,
-    }));
-    return { nodes, hasMore: false, page: 0 };
+    return {
+      nodes: buildLocalTreeNodes(activeLocalDocs, getLocalDocumentParents()),
+      hasMore: false,
+      page: 0,
+      degradedToLocal: true,
+    };
   }
 });
 
@@ -119,9 +267,28 @@ export const fetchChildrenThunk = createAsyncThunk<
   }
 
   const result = await documentService.listChildTreeNodes(parentId, accessToken, 0, 50);
+
+  // A child created offline has no cloud row yet, so the server list cannot
+  // include it. The fulfilled reducer replaces the parent's children with this
+  // payload, which would otherwise drop the pending child from the tree (and
+  // from the root list it was never in) until the create replays.
+  let pendingChildren: TreeNode[] = [];
+  const userId = state.auth.user?.id;
+  if (userId) {
+    const pendingIds = new Set(listPendingCloudCreates(userId).map((entry) => entry.id));
+    if (pendingIds.size > 0) {
+      pendingChildren = buildLocalTreeNodes(
+        (await documentService.getAllDocumentsMeta()).filter(
+          (doc) => pendingIds.has(doc.id) && !doc.meta.deletedAt
+        ),
+        getLocalDocumentParents()
+      ).filter((node) => node.parentId === parentId);
+    }
+  }
+
   return {
     parentId,
-    children: result.items,
+    children: [...result.items, ...pendingChildren],
   };
 });
 
@@ -268,6 +435,11 @@ const sidebarTreeSlice = createSlice({
         state.rootHasMore = action.payload.hasMore;
         state.rootPage = action.payload.page;
 
+        if (action.payload.degradedToLocal) {
+          mergeDegradedLocalNodes(state, action.payload.nodes);
+          return;
+        }
+
         const newRootIds: string[] = [];
         for (const rawNode of action.payload.nodes) {
           newRootIds.push(rawNode.id);
@@ -289,6 +461,10 @@ const sidebarTreeSlice = createSlice({
           state.rootIds = [...state.rootIds, ...newRootIds.filter((id) => !existingSet.has(id))];
         } else {
           state.rootIds = newRootIds;
+        }
+
+        if (action.payload.pendingLocalNodes?.length) {
+          mergeDegradedLocalNodes(state, action.payload.pendingLocalNodes);
         }
       })
       .addCase(fetchRootNodesThunk.rejected, (state, action) => {

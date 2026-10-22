@@ -17,7 +17,7 @@ import { useAppDispatch } from '@/stores/hooks';
 import { setAuthModalOpen } from '@/stores/ui/ui.slice';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
-export default function Editor() {
+export default function Editor({ documentId: fixedDocumentId }: { documentId?: string } = {}) {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -27,7 +27,8 @@ export default function Editor() {
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const effectiveOfflineSelectedDocumentId =
     offlineSelectedDocumentId === routeDocumentId ? null : offlineSelectedDocumentId;
-  const effectiveDocumentId = effectiveOfflineSelectedDocumentId ?? routeDocumentId ?? '';
+  const effectiveDocumentId =
+    effectiveOfflineSelectedDocumentId ?? fixedDocumentId ?? routeDocumentId ?? '';
   const searchParamsString = searchParams.toString();
   const isSharedDocument = searchParams.get('share') === '1';
   const { isAuthenticated, accessToken, user } = useAuth();
