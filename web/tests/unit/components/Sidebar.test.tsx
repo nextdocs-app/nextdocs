@@ -2006,6 +2006,63 @@ it('shows "Show More" in the private section only when more than 7 root document
   expect(mockShowAllDocuments).toHaveBeenCalledTimes(1);
 });
 
+it('keeps the open document visible when it sorts past the visible root limit', async () => {
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    isSharedLoadingMore: false,
+    hasMore: false,
+    sharedHasMore: false,
+    isShowingAll: false,
+    isShowingAllShared: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  const manyRootIds = Array.from({ length: 9 }, (_, i) => `root-${i + 1}`);
+  const manyNodes = Object.fromEntries(
+    manyRootIds.map((id, i) => [id, { ...mockTreeNodes['id-1'], id, title: `Doc ${i + 1}` }])
+  );
+  (useParams as jest.Mock).mockReturnValue({ id: 'root-9' });
+
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      ui: uiReducer,
+    },
+    preloadedState: {
+      sidebarTree: {
+        nodes: manyNodes,
+        rootIds: manyRootIds,
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+
+  render(<Sidebar />, store);
+
+  expect(await screen.findByRole('button', { name: 'Doc 9' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Doc 1' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Doc 7' })).not.toBeInTheDocument();
+});
+
 it('does not show "Show More" in the private section when at most 7 root documents exist', () => {
   (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
