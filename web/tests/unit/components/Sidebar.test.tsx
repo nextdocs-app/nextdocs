@@ -306,9 +306,11 @@ it('drops the local copy when the server rejects the create', async () => {
   });
   (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
   (documentService.deleteDocument as jest.Mock).mockResolvedValue(undefined);
-  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(
-    new DocumentServiceApiError('Forbidden', 403)
-  );
+  const forbidden = new DocumentServiceApiError('Forbidden', 403);
+  // The automatic module mock does not run the error constructor, so restore
+  // the status the real class assigns.
+  Object.assign(forbidden, { status: 403 });
+  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(forbidden);
 
   try {
     render(<Sidebar />);
@@ -471,6 +473,39 @@ it('queues the cloud create when the access token is stale', async () => {
   } finally {
     // clearAllMocks keeps implementations, so a rejection here would leak into
     // later create tests.
+    (documentService.createCloudDocument as jest.Mock).mockReset();
+    window.localStorage.clear();
+  }
+});
+
+it('queues the cloud create when the response fails to parse', async () => {
+  const user = userEvent.setup();
+  const mockYdoc = new Y.Doc();
+  (useAuth as jest.Mock).mockReturnValue({
+    user: { id: 'user-1' },
+    isAuthenticated: true,
+    accessToken: 'token',
+    logout: mockLogout,
+  });
+  (documentService.createDocument as jest.Mock).mockResolvedValue({
+    ydoc: mockYdoc,
+    meta: { title: 'Untitled', createdAt: '...', updatedAt: '...' },
+  });
+  (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
+  (documentService.deleteDocument as jest.Mock).mockResolvedValue(undefined);
+  // A malformed body is not a verdict on the document: the local copy is the
+  // only one that exists, so it must stay queued for another attempt.
+  (documentService.createCloudDocument as jest.Mock).mockRejectedValue(
+    new Error('Unexpected token < in JSON')
+  );
+
+  try {
+    render(<Sidebar />);
+    await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+    await waitFor(() => expect(listPendingCloudCreates('user-1')).toHaveLength(1));
+    expect(documentService.deleteDocument).not.toHaveBeenCalled();
+  } finally {
     (documentService.createCloudDocument as jest.Mock).mockReset();
     window.localStorage.clear();
   }

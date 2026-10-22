@@ -13,6 +13,13 @@ export const PENDING_DOCUMENT_DISCARDED_EVENT = 'nextdocs-pending-document-disca
 // Anything else (401, 408, 429, 5xx, unknown) stays queued for another attempt.
 const PERMANENT_CREATE_FAILURE_STATUSES = new Set([400, 403, 404, 409, 410, 422]);
 
+/** True only when the server has definitively refused this document. */
+export function isPermanentCreateFailure(error: unknown): boolean {
+  return (
+    error instanceof DocumentServiceApiError && PERMANENT_CREATE_FAILURE_STATUSES.has(error.status)
+  );
+}
+
 export interface PendingCloudCreate {
   id: string;
   userId: string;
@@ -117,7 +124,16 @@ export function getPendingCloudCreate(
     return null;
   }
 
-  const entry = parseEntry(window.localStorage.getItem(getStorageKey(id)));
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(getStorageKey(id));
+  } catch {
+    // Blocked storage (privacy mode, disabled cookies) must read as "not queued"
+    // rather than throwing from a render-time initializer.
+    return null;
+  }
+
+  const entry = parseEntry(raw);
   if (!entry) {
     return null;
   }
@@ -193,6 +209,13 @@ export async function flushPendingCloudCreate(
   ancestry: ReadonlySet<string> = new Set(),
   parentCleared = false
 ): Promise<'created' | 'retry' | 'dropped'> {
+  // Queued work belongs to the account that queued it. A flush that outlives
+  // a logout or account switch must neither push this document into the new
+  // account nor discard the old account's only copy.
+  if (documentService.getCurrentUserId() !== entry.userId) {
+    return 'retry';
+  }
+
   // A child created offline can be replayed before its parent, which is also
   // still local-only. The server would reject that create (unknown parent) and
   // the queue would drop the child, so create ancestors first.
@@ -226,7 +249,7 @@ export async function flushPendingCloudCreate(
   }
 
   if (!local) {
-    return 'dropped';
+    return documentService.getCurrentUserId() === entry.userId ? 'dropped' : 'retry';
   }
 
   try {
@@ -262,17 +285,25 @@ export async function flushPendingCloudCreate(
     // A failed request is not a verdict on the document: only a permanent API
     // rejection may discard the local copy. Unknown failures stay queued so a
     // transient token, timeout, or connectivity problem can be replayed.
-    if (
-      !(error instanceof DocumentServiceApiError) ||
-      !PERMANENT_CREATE_FAILURE_STATUSES.has(error.status)
-    ) {
+    if (!isPermanentCreateFailure(error)) {
       return 'retry';
     }
 
     // The parent may have been deleted or become unwritable while the child
     // was local-only. Keep the document by retrying it at the root once.
-    if (entry.parentId && !parentCleared && (error.status === 403 || error.status === 404)) {
+    if (
+      entry.parentId &&
+      !parentCleared &&
+      error instanceof DocumentServiceApiError &&
+      (error.status === 403 || error.status === 404)
+    ) {
       return flushPendingCloudCreate(accessToken, { ...entry, parentId: null }, ancestry, true);
+    }
+
+    // Account changed while the request was in flight: the verdict belongs to
+    // the old session, so keep the entry for that session's next flush.
+    if (documentService.getCurrentUserId() !== entry.userId) {
+      return 'retry';
     }
 
     console.warn('Dropping pending document creation:', error);

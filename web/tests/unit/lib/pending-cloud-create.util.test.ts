@@ -254,6 +254,49 @@ describe('pending cloud creates', () => {
     expect(getPendingCloudCreate('child')).not.toBeNull();
   });
 
+  it('leaves a queued create alone when another account is signed in', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    (documentService.getCurrentUserId as jest.Mock).mockReturnValue('user-2');
+
+    try {
+      await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('retry');
+
+      expect(createCloudDocument).not.toHaveBeenCalled();
+      expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+    } finally {
+      (documentService.getCurrentUserId as jest.Mock).mockReturnValue('user-1');
+    }
+  });
+
+  it('keeps a permanently rejected create queued when the account changed mid-flight', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: null,
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockImplementation(async () => {
+      (documentService.getCurrentUserId as jest.Mock).mockReturnValue('user-2');
+      throw new DocumentServiceApiError('Bad request', 400);
+    });
+
+    try {
+      await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('retry');
+      expect(getPendingCloudCreate('doc-1')).not.toBeNull();
+    } finally {
+      (documentService.getCurrentUserId as jest.Mock).mockReturnValue('user-1');
+    }
+  });
+
   it('does not cache a created document after the account changes', async () => {
     const entry = {
       id: 'doc-1',
@@ -410,6 +453,58 @@ describe('pending cloud creates', () => {
       expect(getPendingCloudCreate('doc-1')).toBeNull();
     }
   );
+
+  it('stops a parent cycle instead of replaying it forever', async () => {
+    queuePendingCloudCreate({ id: 'a', userId: 'user-1', parentId: 'b' });
+    queuePendingCloudCreate({ id: 'b', userId: 'user-1', parentId: 'a' });
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockImplementation(async (_token, id) => ({
+      id,
+      ydoc: localDocument.ydoc,
+      meta: localDocument.meta,
+    }));
+    saveDocument.mockResolvedValue(undefined);
+
+    await expect(
+      flushPendingCloudCreate('token', {
+        id: 'b',
+        userId: 'user-1',
+        parentId: 'a',
+        queuedAt: '2026-01-01T00:00:01.000Z',
+      })
+    ).resolves.toBe('created');
+
+    expect(createCloudDocument.mock.calls.map(([, id]) => id)).toEqual(['a', 'b']);
+  });
+
+  it('stops retrying at the root when the server keeps refusing the parent', async () => {
+    const entry = {
+      id: 'doc-1',
+      userId: 'user-1',
+      parentId: 'parent-1',
+      queuedAt: '2026-01-01T00:00:00.000Z',
+    };
+    queuePendingCloudCreate(entry);
+    loadDocument.mockResolvedValue(localDocument);
+    createCloudDocument.mockRejectedValue(new DocumentServiceApiError('Forbidden', 403));
+
+    await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('dropped');
+
+    // One attempt at the parent, one at the root, then give up.
+    expect(createCloudDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats blocked storage as a missing queue entry', () => {
+    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+
+    try {
+      expect(getPendingCloudCreate('doc-1', 'user-1')).toBeNull();
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
 
   it('forgets a discarded document even when its local copy cannot be deleted', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});

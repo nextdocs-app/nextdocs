@@ -5,7 +5,7 @@ import { memo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { useGuestSharedTree } from '@/hooks/useGuestSharedTree.hook';
-import { DocumentServiceApiError, documentService } from '@/services/document.service';
+import { documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
   selectRootLevelOwnerSharedDocumentIds,
@@ -44,13 +44,13 @@ import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
-import { isConnectivityError } from '@/lib/cloud-connectivity.util';
 import { generateDocumentId } from '@/lib/document-id.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { clearLocalDocumentParent, setLocalDocumentParent } from '@/lib/local-tree.util';
 import {
   discardPendingDocument,
   getPendingCloudCreate,
+  isPermanentCreateFailure,
   PENDING_DOCUMENT_DISCARDED_EVENT,
   queuePendingCloudCreate,
 } from '@/lib/pending-cloud-create.util';
@@ -563,10 +563,10 @@ function Sidebar() {
                 }
               }
             } catch (error) {
-              const shouldQueue =
-                isConnectivityError(error) ||
-                (error instanceof DocumentServiceApiError && error.status === 401);
-              if (!shouldQueue) {
+              // Only a definitive refusal may delete the local copy. Everything
+              // else (offline, 401, 408, 429, 5xx, malformed response) stays
+              // queued, matching what a replayed create is allowed to discard.
+              if (isPermanentCreateFailure(error)) {
                 // The server refused the create, so forget the copy: a node
                 // left behind would open a document that does not exist.
                 await discardPendingDocument(newId);
