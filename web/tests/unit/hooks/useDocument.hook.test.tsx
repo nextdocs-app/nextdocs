@@ -1739,6 +1739,41 @@ describe('useDocument', () => {
     expect(WebsocketProvider).toHaveBeenCalled();
   });
 
+  it('stops waiting for a queued create replayed by another tab', async () => {
+    const offlineId = '11111111-2222-4333-8444-555555555555';
+    const localYdoc = new Y.Doc();
+    const localMeta = {
+      title: 'Offline Draft',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    };
+
+    queuePendingCloudCreate({ id: offlineId, userId: 'user-1', parentId: null });
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta: localMeta });
+
+    const { result } = renderHook(() => useDocument(offlineId), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    expect(getMyAccessSpy).not.toHaveBeenCalled();
+
+    // The other tab owned the key: this tab only sees it disappear through the
+    // storage event, so the queue notification never fires here.
+    window.localStorage.removeItem(`nextdocs:pending-cloud-create:${offlineId}`);
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: `nextdocs:pending-cloud-create:${offlineId}` })
+      );
+    });
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledWith(offlineId, 'token-1');
+    });
+  });
+
   it('retries a restricted document once its queued create is no longer pending', async () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const recoveredYdoc = new Y.Doc();

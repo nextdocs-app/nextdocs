@@ -32,7 +32,11 @@ import {
 } from '@/lib/document-meta-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
-import { getPendingCloudCreate, PENDING_CLOUD_CREATE_EVENT } from '@/lib/pending-cloud-create.util';
+import {
+  getPendingCloudCreate,
+  PENDING_CLOUD_CREATE_EVENT,
+  PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX,
+} from '@/lib/pending-cloud-create.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import { getRealtimeUrl } from '@/lib/api-url.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
@@ -361,11 +365,21 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       setHasPendingCloudCreate(getPendingCloudCreate(id, user?.id ?? null) !== null);
     };
 
+    // Another tab replays the queued create; only its storage event reaches
+    // this tab, and without it the document would wait for a row that exists.
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key.startsWith(PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX)) {
+        syncPendingCloudCreate();
+      }
+    };
+
     syncPendingCloudCreate();
     window.addEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+    window.addEventListener('storage', handleStorage);
 
     return () => {
       window.removeEventListener(PENDING_CLOUD_CREATE_EVENT, syncPendingCloudCreate);
+      window.removeEventListener('storage', handleStorage);
     };
   }, [id, user?.id]);
 
