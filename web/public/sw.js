@@ -1,18 +1,26 @@
 /*
  * NextDocs service worker.
  *
- * Bump VERSION whenever the precache list or caching strategy changes so old
- * caches are dropped on activate. Hashed `/_next/static` assets are immutable,
- * so they are precached with the shell and reused across deployments.
+ * Bump CACHE_SCHEMA whenever the precache list, cached entry layout, or caching
+ * strategy changes so old caches are dropped on activate. Hashed
+ * `/_next/static` assets are immutable, so they are precached with the shell
+ * and reused across deployments.
  *
  * Updates deliberately do not call skipWaiting: the new worker activates on the
  * next launch, so a tab open across a deploy never asks for a chunk from the
  * build the new worker just deleted.
  */
-const VERSION = 'nextdocs-v5';
-const PAGE_CACHE = `${VERSION}-pages`;
-const ASSET_CACHE = `${VERSION}-assets`;
-const CACHE_NAMES = new Set([PAGE_CACHE, ASSET_CACHE]);
+// Cache layout revision, not the app version: it is the number of times the
+// cache contract has changed incompatibly, so existing names must not change
+// while the same schema is in use.
+const CACHE_SCHEMA = 6;
+const PAGE_CACHE = `nextdocs-v${CACHE_SCHEMA}-pages`;
+const ASSET_CACHE = `nextdocs-v${CACHE_SCHEMA}-assets`;
+// Install-discovered shell assets live apart from the runtime asset cache so a
+// worker restart (which clears in-memory state) cannot evict the only chunks an
+// offline cold load needs.
+const SHELL_ASSET_CACHE = `nextdocs-v${CACHE_SCHEMA}-shell-assets`;
+const CACHE_NAMES = new Set([PAGE_CACHE, ASSET_CACHE, SHELL_ASSET_CACHE]);
 const PAGE_CACHE_LIMIT = 50;
 const ASSET_CACHE_LIMIT = 200;
 
@@ -23,6 +31,10 @@ const ASSET_PRECACHE_URLS = [
   '/icons/icon-maskable-512.png',
   '/icons/apple-touch-icon.png',
 ];
+
+// The shell routes must survive page-cache trimming: they are the only way an
+// offline cold load can boot. Runtime-cached routes fill the rest of the cache.
+const PINNED_PAGE_URLS = new Set(PAGE_PRECACHE_URLS);
 
 // Routes that must never be written to the cache: authenticated API traffic,
 // realtime upgrades, and share links (they can carry one-off access tokens).
@@ -45,19 +57,20 @@ function isStaticAsset(pathname) {
 
 // Cache.keys() is insertion order, so dropping from the front evicts the
 // oldest entries first.
-async function trimCache(cache, limit) {
+async function trimCache(cache, limit, pinnedUrls = new Set()) {
   const keys = await cache.keys();
   const excess = keys.length - limit;
   if (excess <= 0) return;
 
-  await Promise.all(keys.slice(0, excess).map((key) => cache.delete(key)));
+  const removable = keys.filter((key) => !pinnedUrls.has(new URL(key.url).pathname));
+  await Promise.all(removable.slice(0, excess).map((key) => cache.delete(key)));
 }
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const pageCache = await caches.open(PAGE_CACHE);
-      const assetCache = await caches.open(ASSET_CACHE);
+      const shellAssetCache = await caches.open(SHELL_ASSET_CACHE);
 
       // Add entries individually: one failed request must not abort the whole
       // install (and leave the app without a controlling worker).
@@ -90,7 +103,7 @@ self.addEventListener('install', (event) => {
       await Promise.all(
         [...assets].map(async (url) => {
           try {
-            await assetCache.add(new Request(url, { cache: 'reload' }));
+            await shellAssetCache.add(new Request(url, { cache: 'reload' }));
           } catch {
             // Best effort; the runtime strategies below still cache on demand.
           }
@@ -125,7 +138,7 @@ async function networkFirstPage(request) {
       // A cache write failure (e.g. quota) must not replace the live response.
       await cache
         .put(request, response.clone())
-        .then(() => trimCache(cache, PAGE_CACHE_LIMIT))
+        .then(() => trimCache(cache, PAGE_CACHE_LIMIT, PINNED_PAGE_URLS))
         .catch(() => {});
     }
     return response;
@@ -150,6 +163,10 @@ async function networkFirstPage(request) {
 }
 
 async function cacheFirstAsset(request) {
+  const shellCache = await caches.open(SHELL_ASSET_CACHE);
+  const shellCached = await shellCache.match(request);
+  if (shellCached) return shellCached;
+
   const cache = await caches.open(ASSET_CACHE);
   const cached = await cache.match(request);
   if (cached) return cached;
@@ -177,7 +194,7 @@ async function cachePage(url) {
     if (response.ok && response.type === 'basic') {
       await cache
         .put(request, response.clone())
-        .then(() => trimCache(cache, PAGE_CACHE_LIMIT))
+        .then(() => trimCache(cache, PAGE_CACHE_LIMIT, PINNED_PAGE_URLS))
         .catch(() => {});
     }
   } catch {

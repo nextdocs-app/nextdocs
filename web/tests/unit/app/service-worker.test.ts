@@ -8,6 +8,12 @@ import vm from 'vm';
 const ORIGIN = 'https://nextdocs.test';
 const workerSource = readFileSync(join(process.cwd(), 'public/sw.js'), 'utf8');
 
+// Read the schema from the worker instead of repeating its literal here, so a
+// cache migration only touches sw.js.
+const cacheSchema = /const CACHE_SCHEMA = (\d+);/.exec(workerSource)?.[1];
+if (!cacheSchema) throw new Error('CACHE_SCHEMA not found in public/sw.js');
+const cacheName = (kind: string) => `nextdocs-v${cacheSchema}-${kind}`;
+
 class FakeRequest {
   url: string;
   method: string;
@@ -111,9 +117,9 @@ interface WorkerHarness {
 
 const fetchMock = jest.fn();
 
-function createWorker(): WorkerHarness {
+function createWorker(initialCaches: Map<string, FakeCache> = new Map()): WorkerHarness {
   const listeners = new Map<string, (event: Record<string, unknown>) => void>();
-  const caches = new Map<string, FakeCache>();
+  const caches = initialCaches;
   const deleted: string[] = [];
   const claim = jest.fn().mockResolvedValue(undefined);
 
@@ -197,26 +203,26 @@ describe('service worker', () => {
 
     await worker.dispatch('install', {});
 
-    const pageCache = worker.caches.get('nextdocs-v5-pages');
-    const assetCache = worker.caches.get('nextdocs-v5-assets');
+    const pageCache = worker.caches.get(cacheName('pages'));
+    const shellAssetCache = worker.caches.get(cacheName('shell-assets'));
     expect(await pageCache?.match('/')).toBeDefined();
     expect(await pageCache?.match('/offline')).toBeDefined();
     expect(await pageCache?.match('/manifest.webmanifest')).toBeDefined();
-    expect(await assetCache?.match('/icons/icon-192.png')).toBeDefined();
-    expect(await assetCache?.match('/_next/static/chunks/app.js')).toBeDefined();
-    expect(await assetCache?.match('/icons/icon-512.png')).toBeUndefined();
+    expect(await shellAssetCache?.match('/icons/icon-192.png')).toBeDefined();
+    expect(await shellAssetCache?.match('/_next/static/chunks/app.js')).toBeDefined();
+    expect(await shellAssetCache?.match('/icons/icon-512.png')).toBeUndefined();
   });
 
   it('drops old nextdocs caches on activate but leaves other apps alone', async () => {
     const worker = createWorker();
     await worker.caches.set('nextdocs-v3-pages', new FakeCache());
-    await worker.caches.set('nextdocs-v5-pages', new FakeCache());
+    await worker.caches.set(cacheName('pages'), new FakeCache());
     await worker.caches.set('other-app-cache', new FakeCache());
 
     await worker.dispatch('activate', {});
 
     expect(worker.deleted).toContain('nextdocs-v3-pages');
-    expect(worker.deleted).not.toContain('nextdocs-v5-pages');
+    expect(worker.deleted).not.toContain(cacheName('pages'));
     expect(worker.deleted).not.toContain('other-app-cache');
     expect(worker.claim).toHaveBeenCalledTimes(1);
   });
@@ -232,7 +238,7 @@ describe('service worker', () => {
     await expect(event.respondWith.mock.calls[0][0]).resolves.toMatchObject({
       ok: true,
     });
-    const pageCache = worker.caches.get('nextdocs-v5-pages');
+    const pageCache = worker.caches.get(cacheName('pages'));
     expect(await pageCache?.match(request)).toBeDefined();
   });
 
@@ -246,16 +252,78 @@ describe('service worker', () => {
       await event.respondWith.mock.calls[0][0];
     }
 
-    const pageCache = worker.caches.get('nextdocs-v5-pages');
+    const pageCache = worker.caches.get(cacheName('pages'));
     expect(await pageCache?.keys()).toHaveLength(50);
     expect(await pageCache?.match('/doc/0')).toBeUndefined();
     expect(await pageCache?.match('/doc/50')).toBeDefined();
   });
 
+  it('keeps the precached shell and offline page when the page cache overflows', async () => {
+    fetchMock.mockImplementation(
+      async (request: FakeRequest) =>
+        new FakeResponse(request.url === `${ORIGIN}/` ? '<html></html>' : 'page')
+    );
+    const worker = createWorker();
+    await worker.dispatch('install', {});
+
+    for (let index = 0; index < 60; index += 1) {
+      const event = fetchEvent(new FakeRequest(`/doc/${index}`, { mode: 'navigate' }));
+      worker.listeners.get('fetch')?.(event);
+      await event.respondWith.mock.calls[0][0];
+    }
+
+    const pageCache = worker.caches.get(cacheName('pages'));
+    expect(await pageCache?.keys()).toHaveLength(50);
+    expect(await pageCache?.match('/')).toBeDefined();
+    expect(await pageCache?.match('/offline')).toBeDefined();
+    expect(await pageCache?.match('/doc/0')).toBeUndefined();
+  });
+
+  it('keeps precached icons while evicting runtime assets past the limit', async () => {
+    fetchMock.mockResolvedValue(new FakeResponse('asset'));
+    const worker = createWorker();
+    await worker.dispatch('install', {});
+
+    for (let index = 0; index < 210; index += 1) {
+      const event = fetchEvent(new FakeRequest(`/_next/static/chunks/${index}.js`));
+      worker.listeners.get('fetch')?.(event);
+      await event.respondWith.mock.calls[0][0];
+    }
+
+    const assetCache = worker.caches.get(cacheName('assets'));
+    const shellAssetCache = worker.caches.get(cacheName('shell-assets'));
+    expect(await assetCache?.keys()).toHaveLength(200);
+    expect(await shellAssetCache?.match('/icons/icon-192.png')).toBeDefined();
+    expect(await assetCache?.match('/_next/static/chunks/0.js')).toBeUndefined();
+    expect(await assetCache?.match('/_next/static/chunks/209.js')).toBeDefined();
+  });
+
+  it('serves install-discovered shell assets after a worker restart', async () => {
+    fetchMock.mockImplementation(
+      async (request: FakeRequest) =>
+        new FakeResponse(
+          request.url === `${ORIGIN}/`
+            ? '<html><script src="/_next/static/chunks/app.js"></script></html>'
+            : 'asset bytes'
+        )
+    );
+    const firstWorker = createWorker();
+    await firstWorker.dispatch('install', {});
+    fetchMock.mockClear();
+
+    const restartedWorker = createWorker(firstWorker.caches);
+    const event = fetchEvent(new FakeRequest('/_next/static/chunks/app.js'));
+    restartedWorker.listeners.get('fetch')?.(event);
+    const response = await event.respondWith.mock.calls[0][0];
+
+    await expect(response.text()).resolves.toBe('asset bytes');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('falls back to a cached page with the same path when the network fails', async () => {
     const worker = createWorker();
     const pageCache = new FakeCache();
-    worker.caches.set('nextdocs-v5-pages', pageCache);
+    worker.caches.set(cacheName('pages'), pageCache);
     await pageCache.put(new FakeRequest('/doc/1'), new FakeResponse('cached page'));
 
     fetchMock.mockRejectedValue(new Error('offline'));
@@ -273,7 +341,7 @@ describe('service worker', () => {
   it('serves the offline page when neither the network nor the route is cached', async () => {
     const worker = createWorker();
     const pageCache = new FakeCache();
-    worker.caches.set('nextdocs-v5-pages', pageCache);
+    worker.caches.set(cacheName('pages'), pageCache);
     await pageCache.put(new FakeRequest('/offline'), new FakeResponse('offline page'));
 
     fetchMock.mockRejectedValue(new Error('offline'));
@@ -329,7 +397,7 @@ describe('service worker', () => {
 
     await worker.dispatch('message', event);
 
-    const pageCache = worker.caches.get('nextdocs-v5-pages');
+    const pageCache = worker.caches.get(cacheName('pages'));
     expect(await pageCache?.match('/doc/42')).toBeDefined();
 
     fetchMock.mockClear();
