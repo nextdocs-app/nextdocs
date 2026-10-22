@@ -19,15 +19,27 @@ jest.mock('../../../stores/hooks', () => ({
   useAppSelector: () => false,
 }));
 
-function announceDiscard(announce: boolean) {
+const mockReplace = jest.fn();
+let mockPathname = '/doc/doc-1';
+jest.mock('next/navigation', () => ({
+  usePathname: () => mockPathname,
+  useRouter: () => ({ replace: mockReplace }),
+}));
+
+function announceDiscard(announce: boolean, id = 'doc-1') {
   act(() => {
     window.dispatchEvent(
-      new CustomEvent(PENDING_DOCUMENT_DISCARDED_EVENT, { detail: { id: 'doc-1', announce } })
+      new CustomEvent(PENDING_DOCUMENT_DISCARDED_EVENT, { detail: { id, announce } })
     );
   });
 }
 
 describe('AppShell', () => {
+  beforeEach(() => {
+    mockPathname = '/doc/doc-1';
+    mockReplace.mockClear();
+  });
+
   it('wires the offline create replay to the signed-in session', () => {
     (useAuth as jest.Mock).mockReturnValue({
       user: { id: 'user-1' },
@@ -68,5 +80,25 @@ describe('AppShell', () => {
         payload: expect.objectContaining({ type: 'error' }),
       })
     );
+  });
+
+  it('leaves the page whose local copy was discarded', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    announceDiscard(true, 'another-doc');
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    announceDiscard(true);
+    expect(mockReplace).toHaveBeenCalledWith('/');
   });
 });

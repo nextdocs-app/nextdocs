@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
 import { AuthModal } from '@/components/AuthModal';
 import { ToastContainer } from '@/components/ToastContainer';
@@ -16,6 +17,8 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
+  const pathname = usePathname();
+  const router = useRouter();
   const isAuthOpen = useAppSelector((state) => state.ui.isAuthModalOpen);
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isMobileLayout = useIsMobileLayout();
@@ -35,9 +38,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // disappearing is the symptom; saying why turns it from a bug into an answer.
   useEffect(() => {
     const handleDiscarded = (event: Event) => {
-      const detail = (event as CustomEvent<{ announce?: boolean } | undefined>).detail;
+      const detail = (event as CustomEvent<{ id?: string; announce?: boolean } | undefined>).detail;
       if (!detail?.announce) {
         return;
+      }
+
+      // The editor keeps its in-memory Y.Doc after the local copy is gone, so
+      // leave the deleted page instead of letting further typing vanish.
+      if (detail.id && pathname === `/doc/${detail.id}`) {
+        router.replace('/');
       }
 
       dispatch(
@@ -51,7 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     window.addEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, handleDiscarded);
     return () => window.removeEventListener(PENDING_DOCUMENT_DISCARDED_EVENT, handleDiscarded);
-  }, [dispatch]);
+  }, [dispatch, pathname, router]);
 
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {
