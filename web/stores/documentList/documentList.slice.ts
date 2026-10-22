@@ -138,9 +138,9 @@ export const fetchDocumentsThunk = createAsyncThunk<
           ...ownerSharedDocuments.map((doc) => doc.id),
         ]);
 
-        const localPrivateDocs = allLocalDocs.filter(
-          (doc) => doc.origin !== 'public-link' && !sharedDocIds.has(doc.id)
-        );
+        // getAllDocumentsMeta already excludes share-link mirrors; only the
+        // shared-section ids still need removing here.
+        const localPrivateDocs = allLocalDocs.filter((doc) => !sharedDocIds.has(doc.id));
         const initialCount = Math.min(DOCS_PAGE_SIZE, localPrivateDocs.length);
         const initialDocs = localPrivateDocs.slice(0, initialCount);
 
@@ -164,18 +164,16 @@ export const fetchDocumentsThunk = createAsyncThunk<
       ...sharedWithMeDocuments.map((doc) => doc.id),
       ...ownerSharedDocuments.map((doc) => doc.id),
     ]);
-    // Share-link mirrors are not this account's documents; a link opened while
-    // signed in must not surface a copy of someone else's page in Private.
-    const privateDocs = docs.filter(
-      (doc) => doc.origin !== 'public-link' && !sharedDocIds.has(doc.id)
-    );
+    // Share-link mirrors are filtered out by getAllDocumentsMeta; only the
+    // shared-section ids still need removing here.
+    const privateDocs = docs.filter((doc) => !sharedDocIds.has(doc.id));
 
     const initialCount = Math.min(DOCS_PAGE_SIZE, privateDocs.length);
     const initialDocs = privateDocs.slice(0, initialCount);
 
     return {
       documents: initialDocs,
-      ownerSharedDocuments: isAuthenticated && accessToken ? [...ownerSharedDocuments] : [],
+      ownerSharedDocuments: [...ownerSharedDocuments],
       hasMore: privateDocs.length > initialDocs.length,
       ownerSharedHasMore: false,
       isShowingAll: expandedMode,
