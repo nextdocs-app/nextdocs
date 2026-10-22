@@ -176,7 +176,6 @@ export function useAnchoredPanel({
     // Post-render measurement: the early return above guarantees this only runs
     // when an adjustment is needed, so it cannot loop. Re-runs on coords so a
     // scroll/resize reposition still flips above the trigger when needed.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCoords((prev) => (prev && prev.top !== nextTop ? { ...prev, top: nextTop } : prev));
   }, [isOpen, coords]);
 

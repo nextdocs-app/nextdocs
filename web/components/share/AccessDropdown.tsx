@@ -97,7 +97,6 @@ export function AccessDropdown<T extends string>({
         : Math.max(MENU_MARGIN, window.innerHeight - menuRect.height - MENU_MARGIN);
     // Post-render DOM measurement: the early return above guarantees this
     // only runs when an adjustment is needed, so it never loops.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCoords((prev) => (prev.top === nextTop ? prev : { ...prev, top: nextTop }));
   }, [open]);
 

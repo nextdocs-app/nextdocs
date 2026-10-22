@@ -13,6 +13,18 @@ const eslintConfig = defineConfig([
       react: { version: '19' },
     },
   },
+  {
+    // eslint-config-next 16.4 enables the React Compiler rules. The compiler is
+    // not part of this app's build yet, and its latest-ref/imperative-editor
+    // patterns trip them; keep those diagnostics advisory until the migration
+    // instead of blocking dependency updates on a behavioral refactor.
+    rules: {
+      'react-hooks/immutability': 'warn',
+      'react-hooks/preserve-manual-memoization': 'warn',
+      'react-hooks/refs': 'warn',
+      'react-hooks/set-state-in-effect': 'warn',
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
