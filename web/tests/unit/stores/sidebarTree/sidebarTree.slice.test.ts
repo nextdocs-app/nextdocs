@@ -1,6 +1,7 @@
 import { configureStore, type UnknownAction } from '@reduxjs/toolkit';
 import sidebarTreeReducer, {
   addNode,
+  fetchChildrenThunk,
   fetchRootNodesThunk,
   removeNode,
   resetTree,
@@ -18,6 +19,7 @@ import type { TreeNode } from '@/types/tree.types';
 jest.mock('../../../../services/document.service', () => ({
   documentService: {
     listRootTreeNodes: jest.fn(),
+    listChildTreeNodes: jest.fn(),
     cachePrivateHierarchy: jest.fn().mockResolvedValue(undefined),
     getAllDocumentsMeta: jest.fn(),
   },
@@ -410,6 +412,65 @@ describe('sidebarTree.slice', () => {
         expect(documentService.cachePrivateHierarchy).toHaveBeenCalledWith('token-1', 'user-1');
       } finally {
         window.localStorage.removeItem('nextdocs:pending-cloud-create:child');
+      }
+    });
+
+    it('keeps a pending offline-created child through a child fetch', async () => {
+      (documentService.listChildTreeNodes as jest.Mock).mockResolvedValue({
+        items: [
+          {
+            id: 'server-child',
+            title: 'Server child',
+            parentId: 'parent',
+            orderKey: 'a0',
+            hasChildren: false,
+            effectiveAccessLevel: 'OWNER',
+            createdAt: '2024-01-01T10:00:00Z',
+            updatedAt: '2024-01-01T10:00:00Z',
+            icon: null,
+          },
+        ],
+        hasMore: false,
+        page: 0,
+      });
+      (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
+        localDoc('pending-child', 'Pending child', '2024-01-02T10:00:00Z'),
+      ]);
+      (getLocalDocumentParents as jest.Mock).mockReturnValue(
+        new Map([['pending-child', 'parent']])
+      );
+      queuePendingCloudCreate({ id: 'pending-child', userId: 'user-1', parentId: 'parent' });
+
+      const store = configureStore({
+        reducer: {
+          auth: () => ({ accessToken: 'token-1', user: { id: 'user-1' } }),
+          sidebarTree: sidebarTreeReducer,
+        },
+      });
+      store.dispatch(
+        addNode({
+          id: 'parent',
+          title: 'Parent',
+          parentId: null,
+          orderKey: 'a0',
+          hasChildren: true,
+          effectiveAccessLevel: 'OWNER',
+          createdAt: '2024-01-01T10:00:00Z',
+          updatedAt: '2024-01-01T10:00:00Z',
+          icon: null,
+        })
+      );
+
+      try {
+        await store.dispatch(
+          fetchChildrenThunk({ parentId: 'parent' }) as unknown as UnknownAction
+        );
+
+        const state = store.getState().sidebarTree;
+        expect(state.nodes['parent'].children).toEqual(['server-child', 'pending-child']);
+        expect(state.nodes['pending-child'].parentId).toBe('parent');
+      } finally {
+        window.localStorage.removeItem('nextdocs:pending-cloud-create:pending-child');
       }
     });
 

@@ -267,9 +267,28 @@ export const fetchChildrenThunk = createAsyncThunk<
   }
 
   const result = await documentService.listChildTreeNodes(parentId, accessToken, 0, 50);
+
+  // A child created offline has no cloud row yet, so the server list cannot
+  // include it. The fulfilled reducer replaces the parent's children with this
+  // payload, which would otherwise drop the pending child from the tree (and
+  // from the root list it was never in) until the create replays.
+  let pendingChildren: TreeNode[] = [];
+  const userId = state.auth.user?.id;
+  if (userId) {
+    const pendingIds = new Set(listPendingCloudCreates(userId).map((entry) => entry.id));
+    if (pendingIds.size > 0) {
+      pendingChildren = buildLocalTreeNodes(
+        (await documentService.getAllDocumentsMeta()).filter(
+          (doc) => pendingIds.has(doc.id) && !doc.meta.deletedAt
+        ),
+        getLocalDocumentParents()
+      ).filter((node) => node.parentId === parentId);
+    }
+  }
+
   return {
     parentId,
-    children: result.items,
+    children: [...result.items, ...pendingChildren],
   };
 });
 
