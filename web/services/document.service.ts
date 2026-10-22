@@ -623,6 +623,10 @@ class DocumentService {
       }
     );
 
+    // The tree slices apply the server-returned node in moveDocumentThunk;
+    // the cached parent link is what keeps the move after an offline reload.
+    this.cacheParentLinks([{ id: body.id, parentId: body.parentId ?? null }]);
+
     // We don't need to do emitCloudDocumentsChanged() here. Both tree slices
     // apply the server-returned node + orderKey in moveDocumentThunk.fulfilled,
     // so a global refetch is redundant.
@@ -993,6 +997,10 @@ class DocumentService {
         `createCloudDocument: server returned ID "${body.id}" for requested ID "${id}".`
       );
     }
+
+    // Record the hierarchy the server accepted: a replay that retries at the
+    // root must also forget the parent link the local copy still carries.
+    this.cacheParentLinks([{ id: body.id, parentId: body.parentId ?? parentId ?? null }]);
 
     return {
       id: body.id,

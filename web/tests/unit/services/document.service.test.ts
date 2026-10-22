@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import * as Y from 'yjs';
 import { documentService, iconCoverPatch } from '@/services/document.service';
 import { indexedDBService } from '@/services/indexed-db.service';
-import { getLocalDocumentParents } from '@/lib/local-tree.util';
+import { getLocalDocumentParents, setLocalDocumentParent } from '@/lib/local-tree.util';
 
 describe('document.service', () => {
   beforeAll(() => {
@@ -269,6 +269,65 @@ describe('document.service', () => {
       expect(fetchMock.mock.calls[0][1]?.body).toContain('"id":"id-1"');
     });
 
+    it('remembers the parent the backend accepted', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'id-1',
+            title: 'Doc 1',
+            parentId: 'parent-1',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.createCloudDocument(
+        'access-token',
+        'id-1',
+        'Doc 1',
+        undefined,
+        undefined,
+        'parent-1'
+      );
+
+      expect(getLocalDocumentParents().get('id-1')).toBe('parent-1');
+    });
+
+    it('clears a stale parent link when a replay lands at the root', async () => {
+      setLocalDocumentParent('id-1', 'old-parent');
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'id-1',
+            title: 'Doc 1',
+            parentId: null,
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.createCloudDocument(
+        'access-token',
+        'id-1',
+        'Doc 1',
+        undefined,
+        undefined,
+        null
+      );
+
+      expect(getLocalDocumentParents().get('id-1')).toBeNull();
+    });
+
     it('should throw when backend returns a different id', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,
@@ -289,6 +348,45 @@ describe('document.service', () => {
       await expect(
         documentService.createCloudDocument('access-token', 'id-1', 'Doc 1')
       ).rejects.toThrow('server returned ID "server-id"');
+    });
+  });
+
+  describe('moveDocument', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+    });
+
+    it('remembers the new parent for an offline reload', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'doc-1',
+            title: 'Doc 1',
+            parentId: 'new-parent',
+            orderKey: 'a0',
+            createdAt: '2024-01-01T00:00:00.000Z',
+            updatedAt: '2024-01-01T00:00:00.000Z',
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.moveDocument(
+        'doc-1',
+        { newParentId: 'new-parent', prevSiblingId: null, nextSiblingId: null },
+        'access-token'
+      );
+
+      expect(getLocalDocumentParents().get('doc-1')).toBe('new-parent');
     });
   });
 
@@ -874,6 +972,53 @@ describe('document.service', () => {
 
       await documentService.cachePrivateHierarchy('token', 'warm-user');
       expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // The sweep is cached per account: a different user must not reuse it.
+      fetchMock.mockResolvedValueOnce(page([], 0, true));
+      await documentService.cachePrivateHierarchy('token', 'other-user');
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not repopulate the hierarchy from a sweep started before logout', async () => {
+      let resolvePage!: (response: Response) => void;
+      const fetchMock = jest.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolvePage = resolve;
+          })
+      );
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const sweep = documentService.cachePrivateHierarchy('token', 'warm-user');
+      documentService.clearSessionRegistries();
+      resolvePage({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            content: [
+              {
+                id: 'child',
+                title: 'Child',
+                parentId: 'parent',
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-01T00:00:00.000Z',
+              },
+            ],
+            totalElements: 1,
+            totalPages: 1,
+            size: 200,
+            number: 0,
+            first: true,
+            last: true,
+          },
+          error: null,
+        }),
+      } as Response);
+
+      await sweep;
+
+      expect(getLocalDocumentParents().has('child')).toBe(false);
     });
 
     it('remembers parents returned by a child tree fetch', async () => {
