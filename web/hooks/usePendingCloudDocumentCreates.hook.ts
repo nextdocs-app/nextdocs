@@ -11,6 +11,14 @@ import {
 } from '@/lib/pending-cloud-create.util';
 
 /**
+ * Reads connectivity through a function so TypeScript does not narrow the value
+ * to `true` after the guard at the top of the flush.
+ */
+function isBrowserOnline(): boolean {
+  return typeof navigator === 'undefined' || navigator.onLine !== false;
+}
+
+/**
  * Replays cloud creations queued while offline (or while the API was
  * unreachable). Mounted once at the app shell so a document that is not open
  * still reaches the account.
@@ -40,7 +48,7 @@ export function usePendingCloudDocumentCreates(
     }
 
     async function flush(): Promise<void> {
-      if (disposed || navigator.onLine === false) {
+      if (disposed || !isBrowserOnline()) {
         return;
       }
       if (flushing) {
@@ -52,6 +60,8 @@ export function usePendingCloudDocumentCreates(
       rerunRequested = false;
       clearRetry();
 
+      const retriedIds = new Set<string>();
+
       try {
         // Bounded: a queue remove that cannot be persisted would otherwise
         // replay the same entry forever, hammering the create endpoint.
@@ -59,21 +69,32 @@ export function usePendingCloudDocumentCreates(
         while (!disposed && remaining > 0) {
           remaining -= 1;
 
-          const [entry] = listPendingCloudCreates(uid);
+          if (!isBrowserOnline()) {
+            break;
+          }
+
+          const entry = listPendingCloudCreates(uid).find(
+            (candidate) => !retriedIds.has(candidate.id)
+          );
           if (!entry) {
             break;
           }
 
           const result = await flushPendingCloudCreate(token, entry);
           if (result === 'retry') {
-            if (!disposed) {
-              retryTimer = setTimeout(() => void flush(), CLOUD_BACKOFF_MS);
-            }
-            break;
+            // One document that must wait cannot block the rest of the queue.
+            // Defer it to the next pass and keep going.
+            retriedIds.add(entry.id);
+            continue;
           }
           if (result === 'dropped') {
             await discardPendingDocument(entry.id, { announce: true });
           }
+        }
+
+        // Every deferred entry shares one timer instead of scheduling its own.
+        if (!disposed && retriedIds.size > 0) {
+          retryTimer = setTimeout(() => void flush(), CLOUD_BACKOFF_MS);
         }
       } finally {
         flushing = false;

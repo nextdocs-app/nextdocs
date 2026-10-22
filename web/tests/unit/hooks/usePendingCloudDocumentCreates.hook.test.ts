@@ -88,6 +88,40 @@ describe('usePendingCloudDocumentCreates', () => {
     }
   });
 
+  it('keeps replaying later entries when an earlier one must wait', async () => {
+    window.localStorage.setItem(
+      'nextdocs:pending-cloud-create:doc-retry',
+      JSON.stringify({
+        id: 'doc-retry',
+        userId: 'user-1',
+        parentId: null,
+        queuedAt: '2026-01-01T00:00:00.000Z',
+      })
+    );
+    window.localStorage.setItem(
+      'nextdocs:pending-cloud-create:doc-ok',
+      JSON.stringify({
+        id: 'doc-ok',
+        userId: 'user-1',
+        parentId: null,
+        queuedAt: '2026-01-01T00:00:01.000Z',
+      })
+    );
+    createCloudDocument.mockImplementation((_token, id) =>
+      id === 'doc-retry'
+        ? Promise.reject(new DocumentServiceApiError('Server error', 500))
+        : Promise.resolve({ id, ydoc: localDocument.ydoc, meta: localDocument.meta })
+    );
+
+    renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
+
+    // The retried entry must not stop the entry queued behind it.
+    await waitFor(() => expect(createCloudDocument).toHaveBeenCalledTimes(2));
+    expect(createCloudDocument.mock.calls.map(([, id]) => id)).toEqual(['doc-retry', 'doc-ok']);
+    expect(getPendingCloudCreate('doc-retry')).not.toBeNull();
+    expect(getPendingCloudCreate('doc-ok')).toBeNull();
+  });
+
   it('flushes a create queued by another tab', async () => {
     renderHook(() => usePendingCloudDocumentCreates('user-1', 'token'));
 
