@@ -690,7 +690,7 @@ export function EditorContent({
 
   const toolbarBlockTypeSelectItems = useMemo(
     () => [
-      ...blockTypeSelectItems(editor.dictionary),
+      ...blockTypeSelectItems(editor),
       ...getMathBlockTypeSelectItems(editor),
       ...getDiagramBlockTypeSelectItems(editor),
       getAlertBlockTypeSelectItem(),
