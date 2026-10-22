@@ -95,7 +95,7 @@ const initialState: AuthState = {
   accessToken: persistedAuth?.accessToken ?? null,
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastSilentRefreshAt: null,
-  isRefreshing: false,
+  sessionId: 0,
   isLoading: false,
   isInitializing: true,
   error: null,
@@ -133,18 +133,64 @@ export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentia
   }
 );
 
+// Two rotations of the same refresh cookie make the API treat the second as
+// reuse and revoke the whole session, so every dispatch shares this request
+// instead of being aborted while it is in flight. The identity is part of the
+// share: a rotation that outlives a logout belongs to the account that asked
+// for it, and its response must never be applied to the next session.
+let inFlightRefresh: {
+  userId: string | null;
+  sessionId: number;
+  promise: Promise<AuthApiResponse>;
+} | null = null;
+
+function requestSessionRefresh(userId: string | null, sessionId: number): Promise<AuthApiResponse> {
+  if (inFlightRefresh?.userId === userId && inFlightRefresh.sessionId === sessionId) {
+    return inFlightRefresh.promise;
+  }
+
+  const promise = authApiService.refresh().finally(() => {
+    if (inFlightRefresh?.promise === promise) {
+      inFlightRefresh = null;
+    }
+  });
+  inFlightRefresh = { userId, sessionId, promise };
+  return promise;
+}
+
+function isStaleSession(state: AuthState, userId: string | null, sessionId: number): boolean {
+  return (state.user?.id ?? null) !== userId || state.sessionId !== sessionId;
+}
+
 export const refreshSessionThunk = createAsyncThunk<
   AuthApiResponse,
   void,
   { state: { auth: AuthState } }
 >(
   'auth/refresh',
-  async (_, { rejectWithValue }) => {
+  async (_, { getState, rejectWithValue }) => {
+    const { user, sessionId } = getState().auth;
+    const sessionUserId = user?.id ?? null;
     try {
-      const response = await authApiService.refresh();
+      const response = await requestSessionRefresh(sessionUserId, sessionId);
+      // A logout, account switch, or a fresh sign-in may have completed while
+      // the request was in flight. Applying the response now would restore the
+      // previous identity (and re-point IndexedDB at it) after its local data
+      // was wiped, or overwrite the session that replaced it.
+      const current = getState().auth;
+      if (isStaleSession(current, sessionUserId, sessionId)) {
+        return rejectWithValue('stale');
+      }
       indexedDBService.setUserId(response.user.id);
       return response;
     } catch (err: unknown) {
+      // The failure may belong to a session that was replaced while the request
+      // was in flight (logout + sign-in revokes the old refresh cookie). It must
+      // not sign out or re-point IndexedDB for the session that replaced it.
+      const current = getState().auth;
+      if (isStaleSession(current, sessionUserId, sessionId)) {
+        return rejectWithValue('stale');
+      }
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         attachmentService.resetAttachmentUrlCache();
         // An expired session is not a logout: keep the account's local
@@ -159,11 +205,7 @@ export const refreshSessionThunk = createAsyncThunk<
   {
     condition: (_, { getState }) => {
       const { auth } = getState();
-      // Two rotations of the same refresh cookie make the API treat the second
-      // as reuse and revoke the whole session, so share the request in flight.
-      if (auth.isRefreshing) {
-        return false;
-      }
+      // A completed refresh inside the window is reused rather than repeated.
       if (
         auth.lastSilentRefreshAt != null &&
         Date.now() - auth.lastSilentRefreshAt < SILENT_REFRESH_MIN_INTERVAL_MS
@@ -202,6 +244,7 @@ const authSlice = createSlice({
       state.user = user;
       state.accessToken = accessToken;
       state.expiresAt = Date.now() + expiresIn * 1000;
+      state.sessionId += 1;
       state.error = null;
     },
     clearAuth(state) {
@@ -209,6 +252,7 @@ const authSlice = createSlice({
       state.accessToken = null;
       state.expiresAt = null;
       state.lastSilentRefreshAt = null;
+      state.sessionId += 1;
       state.error = null;
     },
     clearError(state) {
@@ -229,6 +273,7 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
+        state.sessionId += 1;
         state.error = null;
       })
       .addCase(loginThunk.rejected, (state, action) => {
@@ -246,6 +291,7 @@ const authSlice = createSlice({
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
+        state.sessionId += 1;
         state.error = null;
       })
       .addCase(registerThunk.rejected, (state, action) => {
@@ -255,11 +301,9 @@ const authSlice = createSlice({
 
     builder
       .addCase(refreshSessionThunk.pending, (state) => {
-        state.isRefreshing = true;
         state.error = null;
       })
       .addCase(refreshSessionThunk.fulfilled, (state, action) => {
-        state.isRefreshing = false;
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
         state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
@@ -273,18 +317,20 @@ const authSlice = createSlice({
       })
       .addCase(refreshSessionThunk.rejected, (state, action) => {
         // A `condition` abort is not a failed refresh: the throttle window
-        // stays intact so the next dispatch outside the interval still
-        // coalesces correctly instead of firing on every-other call.
-        if (action.meta?.condition) {
+        // stays intact so a dispatch inside it does not refire on every call.
+        // A `stale` rejection came from a session that has already been
+        // replaced, so it must not clear the newer session's throttle or
+        // initializing state either.
+        if (action.meta?.condition || action.payload === 'stale') {
           return;
         }
-        state.isRefreshing = false;
         state.lastSilentRefreshAt = null;
         if (action.payload === 'unauthorized') {
           state.user = null;
           state.accessToken = null;
           state.expiresAt = null;
           state.lastSilentRefreshAt = null;
+          state.sessionId += 1;
         }
         if (state.isInitializing) {
           state.isInitializing = false;
@@ -296,6 +342,7 @@ const authSlice = createSlice({
       state.accessToken = null;
       state.expiresAt = null;
       state.lastSilentRefreshAt = null;
+      state.sessionId += 1;
       state.error = null;
     });
   },
