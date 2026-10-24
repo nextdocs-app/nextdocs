@@ -4,12 +4,8 @@ import {
   createListenerMiddleware,
   type PayloadAction,
 } from '@reduxjs/toolkit';
-import type {
-  AuthState,
-  LoginCredentials,
-  RegisterCredentials,
-  AuthApiResponse,
-} from './auth.types';
+import type { AuthState } from './auth.types';
+import type { AuthApiResponse, LoginCredentials, RegisterCredentials } from '@/types/auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
 import { attachmentService } from '@/services/attachment.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';

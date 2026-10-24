@@ -8,7 +8,7 @@ import {
   logoutThunk,
   refreshSessionThunk,
 } from '@/stores/auth/auth.slice';
-import type { LoginCredentials, RegisterCredentials } from '@/stores/auth/auth.types';
+import type { LoginCredentials, RegisterCredentials } from '@/types/auth.types';
 
 /**
  * Primary auth hook. Exposes auth state and typed action helpers.

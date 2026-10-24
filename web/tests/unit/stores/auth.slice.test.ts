@@ -11,7 +11,8 @@ import authReducer, {
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
 import { attachmentService } from '../../../services/attachment.service';
-import type { AuthApiResponse, AuthState } from '../../../stores/auth/auth.types';
+import type { AuthApiResponse } from '../../../types/auth.types';
+import type { AuthState } from '../../../stores/auth/auth.types';
 
 jest.mock('../../../services/auth.service', () => ({
   __esModule: true,
