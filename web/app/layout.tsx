@@ -1,9 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import '@/styles/globals.css';
-import { StoreProvider } from '@/stores/StoreProvider';
-import { AppShell } from '@/components/AppShell';
-import { ServiceWorkerRegistrar } from '@/components/ServiceWorkerRegistrar';
 
 const inter = Inter({
   variable: '--font-inter',
@@ -86,12 +83,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>
-        <ServiceWorkerRegistrar />
-        <StoreProvider>
-          <AppShell>{children}</AppShell>
-        </StoreProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
