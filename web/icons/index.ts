@@ -20,8 +20,6 @@ export { Check } from './Check';
 export { ChevronDown } from './ChevronDown';
 export { Close } from './Close';
 export { EditOff } from './EditOff';
-export { GitHub } from './GitHub';
-export { Google } from './Google';
 export { Lock } from './Lock';
 export { UserCircle } from './UserCircle';
 export { Plus } from './Plus';

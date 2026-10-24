@@ -4,7 +4,6 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useAppDispatch } from '@/stores/hooks';
 import { clearError } from '@/stores/auth/auth.slice';
 import { useAuth } from '@/hooks/useAuth.hook';
-import { GitHub, Google } from '@/icons';
 
 type Mode = 'login' | 'signup';
 
@@ -128,14 +127,6 @@ export function AuthModal({ onClose }: Props) {
             : 'Start for free. Fully open-source and self-hostable.'}
         </p>
 
-        {/* OAuth buttons */}
-        <div className="flex flex-col gap-2 mb-5">
-          <OAuthButton provider="google" />
-          <OAuthButton provider="github" />
-        </div>
-
-        <Divider />
-
         {/* Error */}
         {error && <p className="text-sm text-red-500 mb-4 px-1">{error}</p>}
 
@@ -222,16 +213,6 @@ export function AuthModal({ onClose }: Props) {
   );
 }
 
-function Divider() {
-  return (
-    <div className="flex items-center gap-3 mb-5">
-      <span className="flex-1 h-px bg-border" />
-      <span className="text-xs text-foreground/40">or</span>
-      <span className="flex-1 h-px bg-border" />
-    </div>
-  );
-}
-
 function Field({
   id,
   label,
@@ -265,21 +246,5 @@ function Field({
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground/30 outline-none focus:ring-1 focus:ring-foreground/30 transition"
       />
     </div>
-  );
-}
-
-function OAuthButton({ provider }: { provider: 'google' | 'github' }) {
-  return (
-    <button
-      type="button"
-      title="Coming soon"
-      disabled
-      className="w-full flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 sm:py-2 text-sm text-foreground/50 cursor-not-allowed opacity-60"
-    >
-      <span className="inline-flex h-[17px] w-[17px] flex-shrink-0 items-center justify-center">
-        {provider === 'google' ? <Google /> : <GitHub className="text-foreground/70" />}
-      </span>
-      Continue with {provider === 'google' ? 'Google' : 'GitHub'}
-    </button>
   );
 }
