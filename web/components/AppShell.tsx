@@ -1,9 +1,10 @@
 'use client';
 
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useSyncExternalStore } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
 import { ToastContainer } from '@/components/ToastContainer';
+import { WorkspaceEntry } from '@/components/WorkspaceEntry';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { refreshSessionThunk } from '@/stores/auth/auth.slice';
 import { setMobileNavOpen } from '@/stores/sidebar/sidebar.slice';
@@ -13,14 +14,21 @@ import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentC
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '@/lib/pending-cloud-create.util';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
+const emptySubscribe = () => () => {};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
   const pathname = usePathname();
   const router = useRouter();
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isMobileLayout = useIsMobileLayout();
+  const isHydrated = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
 
-  const { user, isTokenExpiringSoon, accessToken } = useAuth();
+  const { user, isTokenExpiringSoon, accessToken, isInitializing, isAuthenticated } = useAuth();
   usePendingCloudDocumentCreates(user?.id ?? null, accessToken);
 
   // Lock the page behind the drawer so the document cannot scroll under it.
@@ -70,6 +78,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       dispatch(refreshSessionThunk());
     }
   }, [isTokenExpiringSoon, dispatch]);
+
+  // `/` is the workspace entry: until the refresh settles, and for guests, it
+  // must not mount the sidebar or document surfaces. The client snapshot keeps
+  // a persisted session from changing the tree mid-hydration.
+  const isWorkspaceEntry = pathname === '/' && (!isHydrated || isInitializing || !isAuthenticated);
+
+  if (isWorkspaceEntry) {
+    return <WorkspaceEntry />;
+  }
 
   return (
     // `h-dvh` rather than `h-screen`: mobile browsers shrink the visual viewport

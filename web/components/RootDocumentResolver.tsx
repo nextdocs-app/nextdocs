@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
@@ -9,17 +9,10 @@ import { resolveRootDocumentId } from '@/lib/root-document.util';
 
 const OfflineEditor = dynamic(() => import('@/components/editor'), { ssr: false });
 
-const emptySubscribe = () => () => {};
-
 export default function RootDocumentResolver() {
   const router = useRouter();
   const { user, isAuthenticated, accessToken, isInitializing } = useAuth();
   const { isOnline } = useNetworkStatus();
-  const isHydrated = useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false
-  );
   const hasResolvedRef = useRef(false);
   const [offlineDocumentId, setOfflineDocumentId] = useState<string | null>(null);
   // A failed resolution used to fall back to the loading state with nothing to
@@ -79,34 +72,13 @@ export default function RootDocumentResolver() {
     };
   }, [isInitializing, isAuthenticated, accessToken, user?.id, router, isOnline, retryTrigger]);
 
-  // A static render hydrates with the store still initializing, but the first
-  // refresh can resolve mid-hydration. Hold the server's loading shell until
-  // both settle so the guest gate never replaces markup React is hydrating.
-  if (!isHydrated || isInitializing) {
+  // The workspace entry only mounts this resolver once a session exists, so a
+  // guest never reaches it. Keep the loading shell while the token refresh
+  // settles, matching what the server rendered.
+  if (isInitializing) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-sm text-muted-foreground">Loading document...</div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-sm text-center">
-          <h1 className="text-xl font-semibold text-foreground">Welcome to NextDocs</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to create and edit your own documents. Opening a shared link works without an
-            account.
-          </p>
-          <button
-            type="button"
-            onClick={() => router.push('/login')}
-            className="mt-5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90"
-          >
-            Sign in
-          </button>
-        </div>
       </div>
     );
   }

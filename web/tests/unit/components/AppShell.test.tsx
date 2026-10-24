@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { AppShell } from '../../../components/AppShell';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '../../../hooks/usePendingCloudDocumentCreates.hook';
@@ -7,6 +7,9 @@ import { addToast } from '../../../stores/toasts/toasts.slice';
 
 jest.mock('../../../components/sidebar', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../../components/ToastContainer', () => ({ ToastContainer: () => null }));
+jest.mock('../../../components/WorkspaceEntry', () => ({
+  WorkspaceEntry: () => <div>workspace-entry</div>,
+}));
 jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: () => false }));
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
 jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
@@ -99,5 +102,65 @@ describe('AppShell', () => {
 
     announceDiscard(true);
     expect(mockReplace).toHaveBeenCalledWith('/');
+  });
+
+  it('uses the workspace entry instead of the shell for a guest on the home route', () => {
+    mockPathname = '/';
+    (useAuth as jest.Mock).mockReturnValue({
+      user: null,
+      accessToken: null,
+      isTokenExpiringSoon: false,
+      isInitializing: false,
+      isAuthenticated: false,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    expect(screen.getByText('workspace-entry')).toBeInTheDocument();
+    expect(screen.queryByText('content')).not.toBeInTheDocument();
+  });
+
+  it('holds the workspace entry while a persisted session is still refreshing', () => {
+    mockPathname = '/';
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+      isInitializing: true,
+      isAuthenticated: true,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    expect(screen.getByText('workspace-entry')).toBeInTheDocument();
+    expect(screen.queryByText('content')).not.toBeInTheDocument();
+  });
+
+  it('renders the shell for a signed-in user on the home route', () => {
+    mockPathname = '/';
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+      isInitializing: false,
+      isAuthenticated: true,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    expect(screen.getByText('content')).toBeInTheDocument();
+    expect(screen.queryByText('workspace-entry')).not.toBeInTheDocument();
   });
 });

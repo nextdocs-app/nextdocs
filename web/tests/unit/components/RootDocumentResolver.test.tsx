@@ -51,7 +51,6 @@ jest.mock('../../../services/document.service', () => {
 });
 
 describe('RootDocumentResolver', () => {
-  const mockPush = jest.fn();
   const mockReplace = jest.fn();
 
   const defaultMeta = {
@@ -68,7 +67,6 @@ describe('RootDocumentResolver', () => {
     jest.clearAllMocks();
 
     (useRouter as jest.Mock).mockReturnValue({
-      push: mockPush,
       replace: mockReplace,
     });
 
@@ -109,19 +107,7 @@ describe('RootDocumentResolver', () => {
     });
   });
 
-  it('sends guests to the sign-in page instead of creating a local document', async () => {
-    renderResolver();
-
-    expect(await screen.findByRole('button', { name: /^Sign in$/i })).toBeInTheDocument();
-    expect(mockReplace).not.toHaveBeenCalled();
-    expect(documentService.createDocument).not.toHaveBeenCalled();
-    expect(documentService.getAllDocumentsMeta).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
-    expect(mockPush).toHaveBeenCalledWith('/login');
-  });
-
-  it('waits for session initialization before showing the guest gate', () => {
+  it('shows loading while the session initializes', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isInitializing: true,
       isAuthenticated: false,
@@ -131,19 +117,7 @@ describe('RootDocumentResolver', () => {
     renderResolver();
 
     expect(screen.getByText('Loading document...')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Sign in$/i })).not.toBeInTheDocument();
-  });
-
-  it('does not route guests to a leftover local document', async () => {
-    (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
-      { id: 'local-recent', meta: { ...defaultMeta, title: 'Old guest doc' } },
-    ]);
-
-    renderResolver();
-
-    await screen.findByRole('button', { name: /^Sign in$/i });
     expect(mockReplace).not.toHaveBeenCalled();
-    expect(documentService.loadDocument).not.toHaveBeenCalled();
   });
 
   it('routes authenticated users to the latest cloud document when available', async () => {
