@@ -32,7 +32,6 @@ import {
   NewDocument,
   Search,
   ChevronRight,
-  NextDocs,
   Close,
   CloseSidebar,
   OpenSidebar,
@@ -83,6 +82,7 @@ import {
 // Import sub-components
 import { SharedTree } from './SharedTree';
 import { SidebarTree } from './SidebarTree';
+import { SidebarBrand } from './SidebarBrand';
 import { ProfileMenuPopup } from './ProfileMenuPopup';
 import { DocumentActionsMenu } from './DocumentActionsMenu';
 import { DocumentsPanel } from './DocumentsPanel';
@@ -1108,17 +1108,8 @@ function Sidebar() {
         </div>
       ) : (
         <div className="flex items-center justify-between gap-2 p-2 pr-3">
-          <div className="flex items-center gap-2 py-1 px-1.5 rounded-sm cursor-pointer overflow-hidden">
-            <NextDocs className="w-[26px] h-[26px] flex-shrink-0" />
-            <span
-              className="text-[22px] mt-[2px] font-[600] leading-none whitespace-nowrap"
-              style={{
-                fontFamily: 'var(--font-serif)',
-                letterSpacing: '0.025em',
-              }}
-            >
-              NextDocs
-            </span>
+          <div className="flex min-w-0 items-center overflow-hidden">
+            <SidebarBrand name="NextDocs" />
           </div>
 
           {/*
