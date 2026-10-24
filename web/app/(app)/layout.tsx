@@ -1,6 +1,7 @@
 import { StoreProvider } from '@/stores/StoreProvider';
 import { AppShell } from '@/components/AppShell';
 import { ServiceWorkerRegistrar } from '@/components/ServiceWorkerRegistrar';
+import '@/styles/app.css';
 
 /**
  * The document application: sidebar, store, offline replay, and the PWA
