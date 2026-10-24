@@ -121,6 +121,19 @@ describe('RootDocumentResolver', () => {
     expect(mockPush).toHaveBeenCalledWith('/login');
   });
 
+  it('waits for session initialization before showing the guest gate', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isInitializing: true,
+      isAuthenticated: false,
+      accessToken: null,
+    });
+
+    renderResolver();
+
+    expect(screen.getByText('Loading document...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Sign in$/i })).not.toBeInTheDocument();
+  });
+
   it('does not route guests to a leftover local document', async () => {
     (documentService.getAllDocumentsMeta as jest.Mock).mockResolvedValue([
       { id: 'local-recent', meta: { ...defaultMeta, title: 'Old guest doc' } },
