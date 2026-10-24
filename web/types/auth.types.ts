@@ -17,6 +17,17 @@ export interface RegisterCredentials {
   email: string;
   displayName: string;
   password: string;
+  /** Present for invite sign-ups; omitted only by the first-account bootstrap. */
+  inviteToken?: string;
+}
+
+export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+export interface InvitePreview {
+  email: string;
+  workspaceName: string;
+  role: WorkspaceRole;
+  expiresAt: string;
 }
 
 export interface AuthApiResponse {

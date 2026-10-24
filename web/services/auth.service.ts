@@ -1,4 +1,9 @@
-import type { AuthApiResponse, LoginCredentials, RegisterCredentials } from '@/types/auth.types';
+import type {
+  AuthApiResponse,
+  InvitePreview,
+  LoginCredentials,
+  RegisterCredentials,
+} from '@/types/auth.types';
 import { apiRequest } from '@/services/api-client';
 
 export { ApiError } from '@/services/api-client';
@@ -17,6 +22,14 @@ export const authApiService = {
       },
       { includeRawBodyOnParseError: true }
     );
+  },
+
+  /** Resolves an invitation link; the token travels only in the request body. */
+  previewInvite(token: string): Promise<InvitePreview> {
+    return apiRequest<InvitePreview>('/api/v1/auth/invite/preview', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
   },
 
   login(credentials: LoginCredentials): Promise<AuthApiResponse> {

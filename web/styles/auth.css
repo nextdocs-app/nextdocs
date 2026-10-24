@@ -136,6 +136,8 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--nd-brand-foreground);
+  text-align: center;
+  text-decoration: none;
   transition:
     background-color 0.15s ease,
     opacity 0.15s ease;
@@ -166,6 +168,54 @@
   font-size: 13px;
   line-height: 1.6;
   color: var(--nd-auth-muted);
+}
+
+.nd-auth-card-actions {
+  margin-top: 24px;
+}
+
+.nd-auth-field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--nd-auth-muted);
+}
+
+/* Invitation summary shown above the join form. A definition list keeps the
+ * label/value pairing available to screen readers without extra ARIA. */
+.nd-auth-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+  border: 1px solid var(--nd-auth-line);
+  border-radius: 10px;
+  background: #fdfaf8;
+  padding: 14px 16px;
+}
+
+.nd-auth-invite-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+}
+
+.nd-auth-invite-label {
+  font-size: 13px;
+  color: var(--nd-auth-muted);
+}
+
+.nd-auth-invite-value {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-invite + .nd-auth-error {
+  margin-top: 18px;
+  margin-bottom: 0;
 }
 
 .nd-auth-link {

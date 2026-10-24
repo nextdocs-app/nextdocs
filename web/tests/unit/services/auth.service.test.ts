@@ -62,6 +62,55 @@ it('register POSTs to the correct endpoint', async () => {
   );
 });
 
+it('register forwards the invite token in the request body', async () => {
+  mockFetch.mockReturnValue(makeResponse(successBody));
+  await authApiService.register({
+    email: 'a@b.com',
+    displayName: 'Alice',
+    password: 'pw',
+    inviteToken: 'invite-token',
+  });
+  expect(mockFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/api/v1/auth/register'),
+    expect.objectContaining({
+      body: JSON.stringify({
+        email: 'a@b.com',
+        displayName: 'Alice',
+        password: 'pw',
+        inviteToken: 'invite-token',
+      }),
+    })
+  );
+});
+
+it('previewInvite POSTs the token in the body, never the URL', async () => {
+  mockFetch.mockReturnValue(
+    makeResponse({
+      success: true,
+      data: {
+        email: 'invitee@example.com',
+        workspaceName: 'Acme',
+        role: 'MEMBER',
+        expiresAt: '2030-01-15T12:00:00Z',
+      },
+      error: null,
+      message: null,
+    })
+  );
+
+  const result = await authApiService.previewInvite('invite-token');
+
+  expect(mockFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/api/v1/auth/invite/preview'),
+    expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ token: 'invite-token' }),
+    })
+  );
+  expect(mockFetch.mock.calls[0][0]).not.toContain('invite-token');
+  expect(result.workspaceName).toBe('Acme');
+});
+
 it('refresh sends credentials:include so the HTTP-only cookie is forwarded', async () => {
   mockFetch.mockReturnValue(makeResponse(successBody));
   await authApiService.refresh();
