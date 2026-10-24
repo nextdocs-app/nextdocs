@@ -2,13 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
-import {
-  loginThunk,
-  registerThunk,
-  logoutThunk,
-  refreshSessionThunk,
-} from '@/stores/auth/auth.slice';
-import type { LoginCredentials, RegisterCredentials } from '@/types/auth.types';
+import { logoutThunk, refreshSessionThunk } from '@/stores/auth/auth.slice';
 
 /**
  * Primary auth hook. Exposes auth state and typed action helpers.
@@ -31,16 +25,6 @@ export function useAuth() {
     return () => clearInterval(id);
   }, []);
 
-  const login = useCallback(
-    (credentials: LoginCredentials) => dispatch(loginThunk(credentials)),
-    [dispatch]
-  );
-
-  const register = useCallback(
-    (credentials: RegisterCredentials) => dispatch(registerThunk(credentials)),
-    [dispatch]
-  );
-
   const logout = useCallback(() => dispatch(logoutThunk()), [dispatch]);
 
   const refresh = useCallback(() => dispatch(refreshSessionThunk()), [dispatch]);
@@ -59,8 +43,6 @@ export function useAuth() {
     isInitializing,
     isTokenExpiringSoon,
     error,
-    login,
-    register,
     logout,
     refresh,
   };

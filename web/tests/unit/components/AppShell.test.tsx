@@ -6,7 +6,6 @@ import { PENDING_DOCUMENT_DISCARDED_EVENT } from '../../../lib/pending-cloud-cre
 import { addToast } from '../../../stores/toasts/toasts.slice';
 
 jest.mock('../../../components/sidebar', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../../components/AuthModal', () => ({ AuthModal: () => null }));
 jest.mock('../../../components/ToastContainer', () => ({ ToastContainer: () => null }));
 jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: () => false }));
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));

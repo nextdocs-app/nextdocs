@@ -1,9 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
 import * as Y from 'yjs';
 import RootDocumentResolver from '../../../components/RootDocumentResolver';
-import uiReducer from '../../../stores/ui/ui.slice';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 import { documentService } from '../../../services/document.service';
@@ -54,6 +51,7 @@ jest.mock('../../../services/document.service', () => {
 });
 
 describe('RootDocumentResolver', () => {
+  const mockPush = jest.fn();
   const mockReplace = jest.fn();
 
   const defaultMeta = {
@@ -63,19 +61,14 @@ describe('RootDocumentResolver', () => {
   };
 
   function renderResolver() {
-    const store = configureStore({ reducer: { ui: uiReducer } });
-    render(
-      <Provider store={store}>
-        <RootDocumentResolver />
-      </Provider>
-    );
-    return store;
+    render(<RootDocumentResolver />);
   }
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     (useRouter as jest.Mock).mockReturnValue({
+      push: mockPush,
       replace: mockReplace,
     });
 
@@ -116,8 +109,8 @@ describe('RootDocumentResolver', () => {
     });
   });
 
-  it('shows the sign-in prompt for guests instead of creating a local document', async () => {
-    const store = renderResolver();
+  it('sends guests to the sign-in page instead of creating a local document', async () => {
+    renderResolver();
 
     expect(await screen.findByRole('button', { name: /^Sign in$/i })).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
@@ -125,7 +118,7 @@ describe('RootDocumentResolver', () => {
     expect(documentService.getAllDocumentsMeta).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
-    expect(store.getState().ui.isAuthModalOpen).toBe(true);
+    expect(mockPush).toHaveBeenCalledWith('/login');
   });
 
   it('does not route guests to a leftover local document', async () => {
@@ -189,12 +182,7 @@ describe('RootDocumentResolver', () => {
       hasMore: false,
     });
 
-    const store = configureStore({ reducer: { ui: uiReducer } });
-    const { rerender } = render(
-      <Provider store={store}>
-        <RootDocumentResolver />
-      </Provider>
-    );
+    const { rerender } = render(<RootDocumentResolver />);
 
     await waitFor(() =>
       expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-1', 0, 20)
@@ -206,11 +194,7 @@ describe('RootDocumentResolver', () => {
       accessToken: 'token-2',
       user: { id: 'user-1' },
     });
-    rerender(
-      <Provider store={store}>
-        <RootDocumentResolver />
-      </Provider>
-    );
+    rerender(<RootDocumentResolver />);
 
     await waitFor(() => {
       expect(documentService.listCloudDocuments).toHaveBeenCalledWith('token-2', 0, 20);

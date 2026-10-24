@@ -531,25 +531,34 @@ function useGuestAuth() {
   });
 }
 
-it('dispatches auth modal open action when "Log in" is selected from the account menu', async () => {
+it('sends a guest to the sign-in page from the account menu', async () => {
   useGuestAuth();
-  const store = configureStore({
-    reducer: {
-      sidebar: sidebarReducer,
-      sidebarTree: sidebarTreeReducer,
-      sharedTree: sharedTreeReducer,
-      ui: uiReducer,
-    },
-  });
-  const dispatchSpy = jest.spyOn(store, 'dispatch');
+  // Reading a shared document as a guest: signing in returns them here.
+  window.history.replaceState(null, '', '/doc/shared-doc?share=1');
   const user = userEvent.setup();
-  render(<Sidebar />, store);
+  render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log in/i }));
-  expect(dispatchSpy).toHaveBeenCalledWith(
-    expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
+  expect(mockPush).toHaveBeenCalledWith(
+    `/login?next=${encodeURIComponent('/doc/shared-doc?share=1')}`
   );
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  window.history.replaceState(null, '', '/');
+});
+
+it('sends a guest to the sign-in page instead of creating a document', async () => {
+  useGuestAuth();
+  window.history.replaceState(null, '', '/doc/shared-doc?share=1');
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+  expect(mockPush).toHaveBeenCalledWith(
+    `/login?next=${encodeURIComponent('/doc/shared-doc?share=1')}`
+  );
+  expect(documentService.createDocument).not.toHaveBeenCalled();
+  window.history.replaceState(null, '', '/');
 });
 
 it('calls logout when "Log out" is selected from the account menu', async () => {

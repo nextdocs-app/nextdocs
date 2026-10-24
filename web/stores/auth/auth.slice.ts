@@ -5,7 +5,7 @@ import {
   type PayloadAction,
 } from '@reduxjs/toolkit';
 import type { AuthState } from './auth.types';
-import type { AuthApiResponse, LoginCredentials, RegisterCredentials } from '@/types/auth.types';
+import type { AuthApiResponse } from '@/types/auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
 import { attachmentService } from '@/services/attachment.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
@@ -105,38 +105,6 @@ const initialState: AuthState = {
   isInitializing: true,
   error: null,
 };
-
-export const loginThunk = createAsyncThunk<AuthApiResponse, LoginCredentials>(
-  'auth/login',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const response = await authApiService.login(credentials);
-      // A signed URL cached for a previous session must never leak into this one.
-      attachmentService.resetAttachmentUrlCache();
-      indexedDBService.setUserId(response.user.id);
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Login failed.';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentials>(
-  'auth/register',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const response = await authApiService.register(credentials);
-      // A signed URL cached for a previous session must never leak into this one.
-      attachmentService.resetAttachmentUrlCache();
-      indexedDBService.setUserId(response.user.id);
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Registration failed.';
-      return rejectWithValue(message);
-    }
-  }
-);
 
 // Two rotations of the same refresh cookie make the API treat the second as
 // reuse and revoke the whole session, so every dispatch shares this request
@@ -270,42 +238,6 @@ const authSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(loginThunk.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(loginThunk.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.user = action.payload.user;
-        state.accessToken = action.payload.accessToken;
-        state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.sessionId += 1;
-        state.error = null;
-      })
-      .addCase(loginThunk.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = (action.payload as string) ?? 'Login failed.';
-      });
-
-    builder
-      .addCase(registerThunk.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(registerThunk.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.user = action.payload.user;
-        state.accessToken = action.payload.accessToken;
-        state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.sessionId += 1;
-        state.error = null;
-      })
-      .addCase(registerThunk.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = (action.payload as string) ?? 'Registration failed.';
-      });
-
-    builder
       .addCase(refreshSessionThunk.pending, (state) => {
         state.error = null;
       })
@@ -378,11 +310,15 @@ authListenerMiddleware.startListening({
   },
 });
 authListenerMiddleware.startListening({
-  predicate: (action) =>
-    loginThunk.fulfilled.match(action) ||
-    registerThunk.fulfilled.match(action) ||
-    refreshSessionThunk.fulfilled.match(action),
+  actionCreator: refreshSessionThunk.fulfilled,
   effect: async (_action, listenerApi) => {
+    const previousUser = (listenerApi.getOriginalState() as { auth: AuthState }).auth.user;
+    const nextUser = (listenerApi.getState() as { auth: AuthState }).auth.user;
+    // A rotated token keeps the same identity and its per-identity cache keys;
+    // only a refresh that boots (or switches) the account invalidates URLs.
+    if ((previousUser?.id ?? null) !== (nextUser?.id ?? null)) {
+      attachmentService.resetAttachmentUrlCache();
+    }
     documentService.clearSessionRegistries();
     persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
   },

@@ -3,11 +3,9 @@
 import { Suspense, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
-import { AuthModal } from '@/components/AuthModal';
 import { ToastContainer } from '@/components/ToastContainer';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { refreshSessionThunk } from '@/stores/auth/auth.slice';
-import { setAuthModalOpen } from '@/stores/ui/ui.slice';
 import { setMobileNavOpen } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
@@ -19,7 +17,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
   const pathname = usePathname();
   const router = useRouter();
-  const isAuthOpen = useAppSelector((state) => state.ui.isAuthModalOpen);
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isMobileLayout = useIsMobileLayout();
 
@@ -65,10 +62,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Run exactly once on mount to restore session from the refresh-token cookie
   useEffect(() => {
     dispatch(refreshSessionThunk());
-
-    const handleOpenAuth = () => dispatch(setAuthModalOpen(true));
-    window.addEventListener('open-auth-modal', handleOpenAuth);
-    return () => window.removeEventListener('open-auth-modal', handleOpenAuth);
   }, [dispatch]);
 
   // Auto-refresh token just before it expires to prevent UX drops
@@ -105,7 +98,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Suspense>{children}</Suspense>
         </div>
       </main>
-      {isAuthOpen && <AuthModal onClose={() => dispatch(setAuthModalOpen(false))} />}
       <ToastContainer />
     </div>
   );

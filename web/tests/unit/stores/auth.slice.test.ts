@@ -1,7 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit';
 import authReducer, {
-  loginThunk,
-  registerThunk,
   refreshSessionThunk,
   logoutThunk,
   clearAuth,
@@ -18,11 +16,8 @@ jest.mock('../../../services/auth.service', () => ({
   __esModule: true,
   ...jest.requireActual('../../../services/auth.service'),
   authApiService: {
-    login: jest.fn(),
-    register: jest.fn(),
     refresh: jest.fn(),
     logout: jest.fn(),
-    getMe: jest.fn(),
   },
 }));
 
@@ -121,53 +116,6 @@ describe('auth slice', () => {
     expect(auth.accessToken).toBeNull();
     expect(auth.expiresAt).toBeNull();
     expect(auth.error).toBeNull();
-  });
-
-  it('loginThunk/pending sets isLoading=true and clears any prior error', () => {
-    (authApiService.login as jest.Mock).mockImplementation(() => new Promise(() => {}));
-    const store = makeStore({ error: 'previous error' });
-    store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
-    expect(store.getState().auth.isLoading).toBe(true);
-    expect(store.getState().auth.error).toBeNull();
-  });
-
-  it('loginThunk/fulfilled populates user and access token', async () => {
-    (authApiService.login as jest.Mock).mockResolvedValue(mockAuthResponse);
-    const store = makeStore();
-    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
-    const { auth } = store.getState();
-    expect(auth.isLoading).toBe(false);
-    expect(auth.user).toEqual(mockUser);
-    expect(auth.accessToken).toBe('access-token-123');
-    expect(auth.error).toBeNull();
-    expect(indexedDBService.setUserId).toHaveBeenCalledWith('user-1');
-  });
-
-  it('loginThunk/rejected records the error message', async () => {
-    (authApiService.login as jest.Mock).mockRejectedValue(new Error('Invalid credentials'));
-    const store = makeStore();
-    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'wrong' }));
-    const { auth } = store.getState();
-    expect(auth.isLoading).toBe(false);
-    expect(auth.user).toBeNull();
-    expect(auth.error).toBe('Invalid credentials');
-  });
-
-  it('registerThunk/fulfilled populates user and access token', async () => {
-    (authApiService.register as jest.Mock).mockResolvedValue(mockAuthResponse);
-    const store = makeStore();
-    await store.dispatch(registerThunk({ email: 'a@b.com', displayName: 'Alice', password: 'pw' }));
-    const { auth } = store.getState();
-    expect(auth.user).toEqual(mockUser);
-    expect(auth.error).toBeNull();
-    expect(indexedDBService.setUserId).toHaveBeenCalledWith('user-1');
-  });
-
-  it('registerThunk/rejected records the error message', async () => {
-    (authApiService.register as jest.Mock).mockRejectedValue(new Error('Email already exists'));
-    const store = makeStore();
-    await store.dispatch(registerThunk({ email: 'a@b.com', displayName: 'Alice', password: 'pw' }));
-    expect(store.getState().auth.error).toBe('Email already exists');
   });
 
   it('refreshSessionThunk/pending leaves isLoading false and defers the throttle stamp', async () => {
@@ -315,28 +263,6 @@ describe('auth slice', () => {
     }
   });
 
-  it('loginThunk/fulfilled clears signed attachment URLs cached by a previous session', async () => {
-    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
-    (authApiService.login as jest.Mock).mockResolvedValue(mockAuthResponse);
-    const store = makeStore();
-
-    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
-
-    expect(resetSpy).toHaveBeenCalledTimes(1);
-    resetSpy.mockRestore();
-  });
-
-  it('registerThunk/fulfilled clears cached signed attachment URLs', async () => {
-    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
-    (authApiService.register as jest.Mock).mockResolvedValue(mockAuthResponse);
-    const store = makeStore();
-
-    await store.dispatch(registerThunk({ email: 'a@b.com', displayName: 'Alice', password: 'pw' }));
-
-    expect(resetSpy).toHaveBeenCalledTimes(1);
-    resetSpy.mockRestore();
-  });
-
   it('setAuthFromResponse clears cached signed attachment URLs for the new identity', () => {
     const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
     const store = makeStore();
@@ -398,14 +324,17 @@ describe('auth slice', () => {
     resetSpy.mockRestore();
   });
 
-  it('loginThunk/rejected does not clear the cache', async () => {
+  it('refreshSessionThunk/fulfilled clears the cache when the refresh boots a new identity', async () => {
+    // A cold load starts with no user; the refresh cookie supplies one, so
+    // links minted for the guest or a previous account must not survive.
     const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
-    (authApiService.login as jest.Mock).mockRejectedValue(new ApiError('Bad credentials', 401));
+    (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
     const store = makeStore();
 
-    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'wrong' }));
+    await store.dispatch(refreshSessionThunk());
 
-    expect(resetSpy).not.toHaveBeenCalled();
+    expect(store.getState().auth.user?.id).toBe('user-1');
+    expect(resetSpy).toHaveBeenCalledTimes(1);
     resetSpy.mockRestore();
   });
 
@@ -420,7 +349,7 @@ describe('auth slice', () => {
     resetSpy.mockRestore();
   });
 
-  it('a login never serves the previous session’s minted URL', async () => {
+  it('a refresh never serves the previous session’s minted URL', async () => {
     const storedUrl = '/api/v1/attachments/11111111-2222-4333-8444-555555555555';
     const fetchMock = jest
       .fn()
@@ -444,14 +373,14 @@ describe('auth slice', () => {
       });
     global.fetch = fetchMock as unknown as typeof fetch;
     attachmentService.resetAttachmentUrlCache();
-    (authApiService.login as jest.Mock).mockResolvedValue({
+    (authApiService.refresh as jest.Mock).mockResolvedValue({
       ...mockAuthResponse,
       accessToken: 'token-b',
     });
     const store = makeStore();
 
     const first = await attachmentService.resolveAttachmentUrl(storedUrl, 'token-a');
-    await store.dispatch(loginThunk({ email: 'a@b.com', password: 'pw' }));
+    await store.dispatch(refreshSessionThunk());
     const second = await attachmentService.resolveAttachmentUrl(storedUrl, 'token-b');
 
     expect(first).toContain('sig=aaa');

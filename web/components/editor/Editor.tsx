@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { DocToolbar } from '@/components/DocToolbar';
 import { DocumentErrorPanel } from '@/components/DocumentErrorPanel';
@@ -14,12 +14,12 @@ import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { EMPTY_COMMENT_STATS } from './comment.utils';
 import { EditorContent } from './EditorContent';
 import { useAppDispatch } from '@/stores/hooks';
-import { setAuthModalOpen } from '@/stores/ui/ui.slice';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
 export default function Editor({ documentId: fixedDocumentId }: { documentId?: string } = {}) {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const idParam = params?.id;
   const routeDocumentId = Array.isArray(idParam) ? idParam[0] : idParam;
@@ -76,9 +76,11 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
 
   const dispatch = useAppDispatch();
 
-  const openAuthModal = useCallback(() => {
-    dispatch(setAuthModalOpen(true));
-  }, [dispatch]);
+  const goToSignIn = useCallback(() => {
+    // Return the guest to this share link (not the workspace root) after sign-in.
+    const next = `${pathname ?? '/'}${searchParamsString ? `?${searchParamsString}` : ''}`;
+    router.push(`/login?next=${encodeURIComponent(next)}`);
+  }, [pathname, router, searchParamsString]);
 
   const [isRestoring, setIsRestoring] = useState(false);
 
@@ -188,6 +190,11 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
   );
 
   if (errorState) {
+    // A visitor whose session lapsed lands here, not a stranger only: without a
+    // way back to sign-in the panel is a dead end on a document URL. Someone
+    // who is signed in already needs access granted, not another sign-in.
+    const canSignIn = errorState.kind === 'restricted' && !isAuthenticated;
+
     return (
       <DocumentErrorPanel
         tone={errorState.kind === 'restricted' ? 'restricted' : 'error'}
@@ -195,6 +202,8 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         description={errorState.description}
         detail={errorState.responseMessage}
         statusCode={errorState.statusCode}
+        actionLabel={canSignIn ? 'Sign in' : undefined}
+        onAction={canSignIn ? goToSignIn : undefined}
       />
     );
   }
@@ -232,7 +241,7 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         isOffline={isOffline}
         pendingEdits={pendingEdits}
         showGuestNotice={showGuestNotice}
-        onGuestNoticeCtaClick={openAuthModal}
+        onGuestNoticeCtaClick={goToSignIn}
         showTrashNotice={isTrashedDocument}
         canManageTrash={canManageTrash}
         canManageSharing={accessLevel === 'OWNER'}

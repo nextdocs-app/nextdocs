@@ -5,15 +5,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
-import { useAppDispatch } from '@/stores/hooks';
-import { setAuthModalOpen } from '@/stores/ui/ui.slice';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 
 const OfflineEditor = dynamic(() => import('@/components/editor'), { ssr: false });
 
 export default function RootDocumentResolver() {
   const router = useRouter();
-  const dispatch = useAppDispatch();
   const { user, isAuthenticated, accessToken, isInitializing } = useAuth();
   const { isOnline } = useNetworkStatus();
   const hasResolvedRef = useRef(false);
@@ -86,7 +83,7 @@ export default function RootDocumentResolver() {
           </p>
           <button
             type="button"
-            onClick={() => dispatch(setAuthModalOpen(true))}
+            onClick={() => router.push('/login')}
             className="mt-5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90"
           >
             Sign in

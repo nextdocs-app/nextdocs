@@ -21,7 +21,6 @@ import {
   setDocActionsAnchor,
 } from '@/stores/sidebar/sidebar.slice';
 import {
-  setAuthModalOpen,
   setSettingsModalOpen,
   setAccountMenuOpen,
   setPermanentDeleteTarget,
@@ -490,6 +489,13 @@ function Sidebar() {
     () => false
   );
 
+  // Guests sign in from here; carrying this route back (path and share params)
+  // returns them to the document they were reading instead of the root.
+  const goToSignIn = useCallback(() => {
+    const next = `${window.location.pathname}${window.location.search}`;
+    router.push(`/login?next=${encodeURIComponent(next)}`);
+  }, [router]);
+
   const handleCreateFile = useCallback(
     async (parentId?: string) => {
       closeMobileNav();
@@ -497,7 +503,7 @@ function Sidebar() {
       // Guests only ever see documents shared with them; private documents
       // need an account, so creation becomes a sign-in prompt.
       if (!isAuthenticated || !accessToken) {
-        dispatch(setAuthModalOpen(true));
+        goToSignIn();
         return;
       }
 
@@ -599,6 +605,7 @@ function Sidebar() {
     },
     [
       router,
+      goToSignIn,
       refresh,
       isAuthenticated,
       accessToken,
@@ -1315,9 +1322,9 @@ function Sidebar() {
               accessToken: null,
             });
           }}
-          onOpenAuth={() => {
+          onSignIn={() => {
             dispatch(setAccountMenuOpen(false));
-            dispatch(setAuthModalOpen(true));
+            goToSignIn();
           }}
           style={profileMenuStyle}
           popupRef={accountMenuPopupRef}
