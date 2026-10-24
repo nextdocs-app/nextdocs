@@ -2,8 +2,6 @@ import { configureStore } from '@reduxjs/toolkit';
 import authReducer, {
   refreshSessionThunk,
   logoutThunk,
-  clearAuth,
-  setAuthFromResponse,
   authListenerMiddleware,
   AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
@@ -65,9 +63,7 @@ function makeStore(preloadedAuth?: Partial<AuthState>) {
           expiresAt: null,
           lastSilentRefreshAt: null,
           sessionId: 0,
-          isLoading: false,
           isInitializing: true,
-          error: null,
           ...preloadedAuth,
         },
       }
@@ -88,37 +84,9 @@ describe('auth slice', () => {
     expect(auth.isInitializing).toBe(true);
     expect(auth.user).toBeNull();
     expect(auth.accessToken).toBeNull();
-    expect(auth.isLoading).toBe(false);
   });
 
-  it('setAuthFromResponse computes expiresAt as now + expiresIn seconds', () => {
-    const before = Date.now();
-    const store = makeStore();
-    store.dispatch(setAuthFromResponse(mockAuthResponse));
-    const after = Date.now();
-    const { auth } = store.getState();
-    expect(auth.user).toEqual(mockUser);
-    expect(auth.accessToken).toBe('access-token-123');
-    expect(auth.expiresAt).toBeGreaterThanOrEqual(before + 3600 * 1000);
-    expect(auth.expiresAt).toBeLessThanOrEqual(after + 3600 * 1000);
-  });
-
-  it('clearAuth wipes user, token, and error', () => {
-    const store = makeStore({
-      user: mockUser,
-      accessToken: 'tok',
-      expiresAt: 999999,
-      error: 'stale',
-    });
-    store.dispatch(clearAuth());
-    const { auth } = store.getState();
-    expect(auth.user).toBeNull();
-    expect(auth.accessToken).toBeNull();
-    expect(auth.expiresAt).toBeNull();
-    expect(auth.error).toBeNull();
-  });
-
-  it('refreshSessionThunk/pending leaves isLoading false and defers the throttle stamp', async () => {
+  it('refreshSessionThunk/pending leaves the throttle stamp untouched', async () => {
     let resolveRefresh!: (response: AuthApiResponse) => void;
     (authApiService.refresh as jest.Mock).mockImplementation(
       () =>
@@ -128,7 +96,6 @@ describe('auth slice', () => {
     );
     const store = makeStore();
     const pending = store.dispatch(refreshSessionThunk());
-    expect(store.getState().auth.isLoading).toBe(false);
     // An in-flight attempt is not a completed one: the window opens on success.
     expect(store.getState().auth.lastSilentRefreshAt).toBeNull();
 
@@ -261,26 +228,6 @@ describe('auth slice', () => {
     } finally {
       Reflect.deleteProperty(navigator, 'serviceWorker');
     }
-  });
-
-  it('setAuthFromResponse clears cached signed attachment URLs for the new identity', () => {
-    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
-    const store = makeStore();
-
-    store.dispatch(setAuthFromResponse(mockAuthResponse));
-
-    expect(resetSpy).toHaveBeenCalledTimes(1);
-    resetSpy.mockRestore();
-  });
-
-  it('clearAuth clears cached signed attachment URLs', () => {
-    const resetSpy = jest.spyOn(attachmentService, 'resetAttachmentUrlCache');
-    const store = makeStore({ user: mockUser, accessToken: 'tok', expiresAt: 99999 });
-
-    store.dispatch(clearAuth());
-
-    expect(resetSpy).toHaveBeenCalledTimes(1);
-    resetSpy.mockRestore();
   });
 
   it('refreshSessionThunk/rejected clears cached attachment URLs when unauthorized', async () => {
@@ -456,45 +403,7 @@ describe('auth slice', () => {
     expect(authApiService.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('does not hand one account a refresh started for another', async () => {
-    // A rotation that outlives a logout and a login must not be reused: its
-    // response carries the previous account's identity and tokens.
-    const otherUser = { ...mockUser, id: 'user-2' };
-    let resolveFirst!: (response: AuthApiResponse) => void;
-    let resolveSecond!: (response: AuthApiResponse) => void;
-    (authApiService.refresh as jest.Mock)
-      .mockImplementationOnce(
-        () =>
-          new Promise<AuthApiResponse>((resolve) => {
-            resolveFirst = resolve;
-          })
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise<AuthApiResponse>((resolve) => {
-            resolveSecond = resolve;
-          })
-      );
-    const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
-
-    const first = store.dispatch(refreshSessionThunk());
-    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, user: otherUser }));
-
-    const second = store.dispatch(refreshSessionThunk());
-    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
-
-    resolveSecond({ ...mockAuthResponse, user: otherUser, accessToken: 'token-for-user-2' });
-    expect(refreshSessionThunk.fulfilled.match(await second)).toBe(true);
-    expect(store.getState().auth.user?.id).toBe('user-2');
-    expect(store.getState().auth.accessToken).toBe('token-for-user-2');
-
-    resolveFirst(mockAuthResponse);
-    expect(refreshSessionThunk.rejected.match(await first)).toBe(true);
-    expect(store.getState().auth.user?.id).toBe('user-2');
-    expect(store.getState().auth.accessToken).toBe('token-for-user-2');
-  });
-
-  it('starts a new refresh for the same account after logout and sign-in', async () => {
+  it('starts a new refresh after logout instead of reusing the pre-logout rotation', async () => {
     let resolveFirst!: (response: AuthApiResponse) => void;
     let resolveSecond!: (response: AuthApiResponse) => void;
     (authApiService.refresh as jest.Mock)
@@ -514,7 +423,6 @@ describe('auth slice', () => {
 
     const first = store.dispatch(refreshSessionThunk());
     await store.dispatch(logoutThunk());
-    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, accessToken: 'relogin-token' }));
 
     const second = store.dispatch(refreshSessionThunk());
     expect(authApiService.refresh).toHaveBeenCalledTimes(2);
@@ -551,7 +459,6 @@ describe('auth slice', () => {
 
     const first = store.dispatch(refreshSessionThunk());
     await store.dispatch(logoutThunk());
-    store.dispatch(setAuthFromResponse({ ...mockAuthResponse, accessToken: 'relogin-token' }));
 
     const second = store.dispatch(refreshSessionThunk());
     resolveSecond({ ...mockAuthResponse, accessToken: 'fresh-token' });
@@ -603,15 +510,12 @@ describe('auth slice', () => {
     expect(setUserId).not.toHaveBeenCalledWith('user-1');
   });
 
-  it('clearAuth wipes session registries', () => {
-    const store = makeStore({ user: mockUser, accessToken: 'tok' });
-    store.dispatch(clearAuth());
-    expect(documentService.clearSessionRegistries).toHaveBeenCalled();
-  });
-
-  it('setAuthFromResponse wipes guest session registries on login', () => {
+  it('refresh wipes session registries so guest mirrors do not leak', async () => {
+    (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
     const store = makeStore();
-    store.dispatch(setAuthFromResponse(mockAuthResponse));
+
+    await store.dispatch(refreshSessionThunk());
+
     expect(documentService.clearSessionRegistries).toHaveBeenCalledTimes(1);
   });
 
@@ -621,9 +525,11 @@ describe('auth slice', () => {
       jest.clearAllMocks();
     });
 
-    it('saves state to sessionStorage on setAuthFromResponse', () => {
+    it('saves state to sessionStorage when a refresh restores the session', async () => {
+      (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
       const store = makeStore();
-      store.dispatch(setAuthFromResponse(mockAuthResponse));
+
+      await store.dispatch(refreshSessionThunk());
 
       const raw = window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY);
       expect(raw).toBeTruthy();
@@ -632,16 +538,17 @@ describe('auth slice', () => {
       expect(stored.accessToken).toBe(mockAuthResponse.accessToken);
     });
 
-    it('clears sessionStorage on clearAuth', () => {
+    it('clears sessionStorage on logout', async () => {
       const snapshot = {
         user: mockUser,
         accessToken: 'stored-token',
         expiresAt: Date.now() + 1000 * 60,
       };
       window.sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+      (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
 
-      const store = makeStore();
-      store.dispatch(clearAuth());
+      const store = makeStore({ user: mockUser, accessToken: 'stored-token' });
+      await store.dispatch(logoutThunk());
 
       expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
     });

@@ -9,7 +9,5 @@ export interface AuthState {
   lastSilentRefreshAt?: number | null;
   /** Bumped when the identity changes, so an in-flight refresh cannot revive a previous session. */
   sessionId: number;
-  isLoading: boolean;
   isInitializing: boolean;
-  error: string | null;
 }

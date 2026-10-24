@@ -1,9 +1,4 @@
-import {
-  createSlice,
-  createAsyncThunk,
-  createListenerMiddleware,
-  type PayloadAction,
-} from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, createListenerMiddleware } from '@reduxjs/toolkit';
 import type { AuthState } from './auth.types';
 import type { AuthApiResponse } from '@/types/auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
@@ -101,9 +96,7 @@ const initialState: AuthState = {
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastSilentRefreshAt: null,
   sessionId: 0,
-  isLoading: false,
   isInitializing: true,
-  error: null,
 };
 
 // Two rotations of the same refresh cookie make the API treat the second as
@@ -212,35 +205,9 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
 const authSlice = createSlice({
   name: 'auth',
   initialState,
-  reducers: {
-    setAuthFromResponse(state, action: PayloadAction<AuthApiResponse>) {
-      const { user, accessToken, expiresIn } = action.payload;
-      state.user = user;
-      state.accessToken = accessToken;
-      state.expiresAt = Date.now() + expiresIn * 1000;
-      state.sessionId += 1;
-      state.error = null;
-    },
-    clearAuth(state) {
-      state.user = null;
-      state.accessToken = null;
-      state.expiresAt = null;
-      state.lastSilentRefreshAt = null;
-      state.sessionId += 1;
-      state.error = null;
-    },
-    clearError(state) {
-      state.error = null;
-    },
-    setInitializing(state, action: PayloadAction<boolean>) {
-      state.isInitializing = action.payload;
-    },
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
-      .addCase(refreshSessionThunk.pending, (state) => {
-        state.error = null;
-      })
       .addCase(refreshSessionThunk.fulfilled, (state, action) => {
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
@@ -281,34 +248,15 @@ const authSlice = createSlice({
       state.expiresAt = null;
       state.lastSilentRefreshAt = null;
       state.sessionId += 1;
-      state.error = null;
     });
   },
 });
 
-export const { setAuthFromResponse, clearAuth, clearError, setInitializing } = authSlice.actions;
 export default authSlice.reducer;
 
 // Session side effects live here, not in reducers: guest link mirrors must
 // not leak into the signed-in session, and snapshots belong in storage.
 export const authListenerMiddleware = createListenerMiddleware();
-authListenerMiddleware.startListening({
-  actionCreator: setAuthFromResponse,
-  effect: async (_action, listenerApi) => {
-    // A guest link signing in is an identity switch too, not just the thunks below.
-    attachmentService.resetAttachmentUrlCache();
-    documentService.clearSessionRegistries();
-    persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
-  },
-});
-authListenerMiddleware.startListening({
-  actionCreator: clearAuth,
-  effect: async () => {
-    attachmentService.resetAttachmentUrlCache();
-    clearPersistedAuthSnapshot();
-    documentService.clearSessionRegistries();
-  },
-});
 authListenerMiddleware.startListening({
   actionCreator: refreshSessionThunk.fulfilled,
   effect: async (_action, listenerApi) => {

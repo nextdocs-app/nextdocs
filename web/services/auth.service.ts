@@ -49,11 +49,4 @@ export const authApiService = {
       { allowEmptyData: true }
     );
   },
-
-  getMe(accessToken: string): Promise<AuthApiResponse['user']> {
-    return apiRequest<AuthApiResponse['user']>('/api/v1/auth/me', {
-      method: 'GET',
-      headers: withBearer(accessToken),
-    });
-  },
 };

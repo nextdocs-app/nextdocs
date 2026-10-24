@@ -14,9 +14,7 @@ import { logoutThunk, refreshSessionThunk } from '@/stores/auth/auth.slice';
  */
 export function useAuth() {
   const dispatch = useAppDispatch();
-  const { user, accessToken, expiresAt, isLoading, isInitializing, error } = useAppSelector(
-    (state) => state.auth
-  );
+  const { user, accessToken, expiresAt, isInitializing } = useAppSelector((state) => state.auth);
 
   /** Ticks every 10 s so time-dependent derived values stay reactive. */
   const [tick, setTick] = useState(() => Date.now());
@@ -39,10 +37,8 @@ export function useAuth() {
     user,
     accessToken,
     isAuthenticated,
-    isLoading,
     isInitializing,
     isTokenExpiringSoon,
-    error,
     logout,
     refresh,
   };
