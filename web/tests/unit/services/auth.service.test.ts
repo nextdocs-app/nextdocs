@@ -111,6 +111,25 @@ it('previewInvite POSTs the token in the body, never the URL', async () => {
   expect(result.workspaceName).toBe('Acme');
 });
 
+it('getInstanceStatus reads the public instance probe', async () => {
+  mockFetch.mockReturnValue(
+    makeResponse({
+      success: true,
+      data: { initialized: false },
+      error: null,
+      message: null,
+    })
+  );
+
+  const status = await authApiService.getInstanceStatus();
+
+  expect(mockFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/api/v1/instance/status'),
+    expect.objectContaining({ method: 'GET' })
+  );
+  expect(status.initialized).toBe(false);
+});
+
 it('refresh sends credentials:include so the HTTP-only cookie is forwarded', async () => {
   mockFetch.mockReturnValue(makeResponse(successBody));
   await authApiService.refresh();

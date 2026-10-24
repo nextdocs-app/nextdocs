@@ -8,6 +8,7 @@ jest.mock('../../../../services/auth.service', () => ({
   authApiService: {
     refresh: jest.fn(),
     login: jest.fn(),
+    getInstanceStatus: jest.fn(),
   },
 }));
 
@@ -18,6 +19,7 @@ jest.mock('../../../../lib/navigation.util', () => ({
 
 const mockRefresh = authApiService.refresh as jest.Mock;
 const mockLogin = authApiService.login as jest.Mock;
+const mockGetInstanceStatus = authApiService.getInstanceStatus as jest.Mock;
 
 async function renderLogin(next?: string) {
   render(<LoginScreen next={next} />);
@@ -27,6 +29,7 @@ async function renderLogin(next?: string) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRefresh.mockRejectedValue(new Error('No session'));
+  mockGetInstanceStatus.mockResolvedValue({ initialized: true });
 });
 
 it('shows the form once the session pre-check fails', async () => {
@@ -45,6 +48,25 @@ it('redirects an existing session to the requested page', async () => {
 
   await waitFor(() => expect(hardReplace).toHaveBeenCalledWith('/doc/shared-doc'));
   expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+  expect(mockGetInstanceStatus).not.toHaveBeenCalled();
+});
+
+it('sends an uninitialized instance to the bootstrap page', async () => {
+  mockGetInstanceStatus.mockResolvedValue({ initialized: false });
+
+  render(<LoginScreen />);
+
+  await waitFor(() => expect(hardReplace).toHaveBeenCalledWith('/join'));
+  expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+});
+
+it('still shows the form when the instance status probe fails', async () => {
+  mockGetInstanceStatus.mockRejectedValue(new Error('Network down'));
+
+  await renderLogin();
+
+  expect(hardReplace).not.toHaveBeenCalled();
+  expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
 });
 
 it('signs in and performs a full navigation to the requested page', async () => {

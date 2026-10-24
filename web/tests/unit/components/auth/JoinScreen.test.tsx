@@ -10,6 +10,7 @@ jest.mock('../../../../services/auth.service', () => ({
   authApiService: {
     previewInvite: jest.fn(),
     register: jest.fn(),
+    getInstanceStatus: jest.fn(),
   },
 }));
 
@@ -19,6 +20,7 @@ jest.mock('../../../../lib/navigation.util', () => ({
 
 const mockPreviewInvite = authApiService.previewInvite as jest.Mock;
 const mockRegister = authApiService.register as jest.Mock;
+const mockGetInstanceStatus = authApiService.getInstanceStatus as jest.Mock;
 
 const preview: InvitePreview = {
   email: 'invitee@example.com',
@@ -44,6 +46,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   window.history.replaceState(null, '', '/');
   window.sessionStorage.clear();
+  mockGetInstanceStatus.mockResolvedValue({ initialized: true });
   mockPreviewInvite.mockResolvedValue(preview);
 });
 
@@ -81,6 +84,7 @@ it('keeps the invite working when the tab reloads after the fragment is gone', a
 
   expect(await screen.findByRole('heading', { name: 'Join Acme' })).toBeInTheDocument();
   expect(mockPreviewInvite).toHaveBeenLastCalledWith('invite-token');
+  expect(mockGetInstanceStatus).not.toHaveBeenCalled();
 });
 
 it('prefers a freshly opened invite link over the stashed token', async () => {
@@ -194,8 +198,50 @@ it('asks for an invitation when the link carries no token', async () => {
   expect(
     await screen.findByRole('heading', { name: 'An invitation is required' })
   ).toBeInTheDocument();
+  expect(mockGetInstanceStatus).toHaveBeenCalledTimes(1);
   expect(mockPreviewInvite).not.toHaveBeenCalled();
   for (const link of screen.getAllByRole('link', { name: 'Sign in' })) {
     expect(link).toHaveAttribute('href', '/login');
   }
+});
+
+it('falls back to the invite-only card when the status probe fails', async () => {
+  mockGetInstanceStatus.mockRejectedValue(new Error('Network down'));
+
+  render(<JoinScreen />);
+
+  expect(
+    await screen.findByRole('heading', { name: 'An invitation is required' })
+  ).toBeInTheDocument();
+});
+
+it('bootstraps the first account on an uninitialized instance', async () => {
+  mockGetInstanceStatus.mockResolvedValue({ initialized: false });
+  mockRegister.mockResolvedValue({});
+  const user = userEvent.setup();
+
+  render(<JoinScreen />);
+
+  expect(await screen.findByRole('heading', { name: 'Set up this instance' })).toBeInTheDocument();
+  expect(screen.queryByText('Already have an account?')).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Sign in' })).not.toBeInTheDocument();
+
+  const email = screen.getByLabelText('Email');
+  expect(email).not.toHaveAttribute('readonly');
+  expect(screen.queryByText('Role')).not.toBeInTheDocument();
+
+  await user.type(email, 'owner@example.com');
+  await user.type(screen.getByLabelText('Full name'), 'Workspace Owner');
+  await user.type(screen.getByLabelText('Password'), 'password123');
+  await user.type(screen.getByLabelText('Confirm password'), 'password123');
+  await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+  await waitFor(() =>
+    expect(mockRegister).toHaveBeenCalledWith({
+      email: 'owner@example.com',
+      displayName: 'Workspace Owner',
+      password: 'password123',
+    })
+  );
+  expect(hardNavigate).toHaveBeenCalledWith('/');
 });

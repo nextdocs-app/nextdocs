@@ -25,7 +25,8 @@ export function LoginScreen({ next }: LoginScreenProps) {
   const [error, setError] = useState<string | null>(null);
 
   // A refresh cookie can already belong to a signed-in user. Restore it before
-  // showing the form so a bookmarked /login does not ask again.
+  // showing the form so a bookmarked /login does not ask again. On a fresh
+  // instance there is nobody to sign in as, so send the visitor to bootstrap.
   useEffect(() => {
     let cancelled = false;
 
@@ -37,9 +38,29 @@ export function LoginScreen({ next }: LoginScreenProps) {
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setIsCheckingSession(false);
+        if (cancelled) {
+          return;
         }
+
+        authApiService
+          .getInstanceStatus()
+          .then(({ initialized }) => {
+            if (cancelled) {
+              return;
+            }
+            if (initialized) {
+              setIsCheckingSession(false);
+            } else {
+              hardReplace('/join');
+            }
+          })
+          // A failed probe must not block sign-in: the form still works when
+          // the instance is initialized and the call was merely transient.
+          .catch(() => {
+            if (!cancelled) {
+              setIsCheckingSession(false);
+            }
+          });
       });
 
     return () => {

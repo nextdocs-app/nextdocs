@@ -1,5 +1,6 @@
 import type {
   AuthApiResponse,
+  InstanceStatus,
   InvitePreview,
   LoginCredentials,
   RegisterCredentials,
@@ -22,6 +23,11 @@ export const authApiService = {
       },
       { includeRawBodyOnParseError: true }
     );
+  },
+
+  /** Public onboarding probe: whether the first account still needs creating. */
+  getInstanceStatus(): Promise<InstanceStatus> {
+    return apiRequest<InstanceStatus>('/api/v1/instance/status', { method: 'GET' });
   },
 
   /** Resolves an invitation link; the token travels only in the request body. */

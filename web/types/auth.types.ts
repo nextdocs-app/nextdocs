@@ -30,6 +30,11 @@ export interface InvitePreview {
   expiresAt: string;
 }
 
+export interface InstanceStatus {
+  /** False until a workspace member exists; the first account bootstraps it. */
+  initialized: boolean;
+}
+
 export interface AuthApiResponse {
   accessToken: string;
   tokenType: string;
