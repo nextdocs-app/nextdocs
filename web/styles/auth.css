@@ -38,12 +38,9 @@
 }
 
 .nd-auth-wordmark-text {
-  margin-top: 2px;
-  font-family: var(--font-serif);
   font-size: 24px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.025em;
   color: var(--nd-auth-ink);
 }
 

@@ -15,14 +15,7 @@ export function SidebarBrand({ name, icon }: SidebarBrandProps) {
   return (
     <div className="flex min-w-0 items-center gap-2 overflow-hidden rounded-sm px-1.5 py-1">
       <span className="flex-shrink-0">{icon ?? <NextDocs className="h-[26px] w-[26px]" />}</span>
-      <span
-        className="mt-[2px] truncate whitespace-nowrap text-[22px] font-[600] leading-none"
-        style={{
-          fontFamily: 'var(--font-serif)',
-          letterSpacing: '0.025em',
-        }}
-        title={name}
-      >
+      <span className="truncate whitespace-nowrap text-[22px] font-[600] leading-none" title={name}>
         {name}
       </span>
     </div>
