@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useSyncExternalStore } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
 import { ToastContainer } from '@/components/ToastContainer';
@@ -16,6 +16,21 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 
 const emptySubscribe = () => () => {};
 
+/** Publish the scrollport's per-edge gutter for full-bleed surfaces. */
+function syncScrollbarGutter(node: HTMLDivElement | null) {
+  if (
+    !node ||
+    typeof CSS === 'undefined' ||
+    typeof CSS.supports !== 'function' ||
+    !CSS.supports('scrollbar-gutter', 'stable both-edges')
+  ) {
+    return;
+  }
+
+  const gutter = Math.max(0, (node.offsetWidth - node.clientWidth) / 2);
+  node.style.setProperty('--nd-scrollbar-gutter', `${gutter}px`);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const dispatch = useAppDispatch();
   const pathname = usePathname();
@@ -27,6 +42,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     () => true,
     () => false
   );
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const setScroller = useCallback((node: HTMLDivElement | null) => {
+    scrollerRef.current = node;
+    // Ref callbacks run before paint, so the cover never widens a frame late.
+    syncScrollbarGutter(node);
+  }, []);
 
   const { user, isTokenExpiringSoon, accessToken, isInitializing, isAuthenticated } = useAuth();
   usePendingCloudDocumentCreates(user?.id ?? null, accessToken);
@@ -38,6 +59,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     return () => document.body.classList.remove('nd-mobile-nav-open');
   }, [isMobileLayout, isMobileNavOpen]);
+
+  // `scrollbar-gutter: stable both-edges` keeps the centered page column on the
+  // scrollport's center line. It also narrows the content box on both sides, so
+  // publish the per-edge gutter for full-bleed surfaces (the page cover) to
+  // paint into. `offsetWidth - clientWidth` is both edges' worth of gutter;
+  // overlay scrollbars and unsupporting browsers report zero.
+  useEffect(() => {
+    const syncGutter = () => syncScrollbarGutter(scrollerRef.current);
+    window.addEventListener('resize', syncGutter);
+    return () => window.removeEventListener('resize', syncGutter);
+  }, []);
 
   // A discard the user did not ask for deletes a page they wrote. The row
   // disappearing is the symptom; saying why turns it from a bug into an answer.
@@ -105,7 +137,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling
         the browser that the scrollable region starts below the toolbar's height.*/}
         <div className="h-12 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />
-        <div className="flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full">
+        <div
+          ref={setScroller}
+          className="nd-app-scroll flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full"
+        >
           {/*
             No global max-w here: each route centers its own column
             (DocumentPageHeader + EditorContent both use max-w-4xl with the

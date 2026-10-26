@@ -257,7 +257,7 @@ export function PageCover({
     <div
       ref={frameRef}
       className={`
-        nd-page-cover group/cover relative w-full select-none overflow-hidden bg-muted
+        nd-page-cover group/cover relative select-none overflow-hidden bg-muted
         h-[24vh] min-h-[140px] max-h-[260px]
         md:h-[30vh] md:min-h-[190px] md:max-h-[340px]
         ${isRepositioning ? 'cursor-grab ring-2 ring-inset ring-[var(--nd-brand-ring)] active:cursor-grabbing' : ''}
@@ -303,14 +303,18 @@ export function PageCover({
 
           They stay put rather than moving on hover, so the strip is where the
           pointer already is by the time it starts showing.
+
+          The cover bleeds into the scrollbar gutter, so the strip offsets by
+          that same gutter to keep the last button clear of the scrollbar.
         */
         <div
           role="group"
           aria-label="Cover actions"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
+          style={{ right: 'calc(0.625rem + var(--nd-scrollbar-gutter, 0px))' }}
           className={`
-            absolute right-2.5 bottom-2.5 z-10 inline-flex items-stretch overflow-hidden
+            absolute bottom-2.5 z-10 inline-flex items-stretch overflow-hidden
             divide-x divide-border rounded-md bg-background/85 shadow-sm backdrop-blur-sm
             transition-opacity duration-150
             ${actionsVisibilityClass(areActionsVisible, isTouchInput)}

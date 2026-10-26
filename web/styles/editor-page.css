@@ -30,6 +30,14 @@
     flex-direction: column;
   }
 
+  /* The app shell reserves a symmetric scrollbar gutter so `mx-auto` columns
+     stay on the scrollport's center line. The cover paints into both reserved
+     strips so it still reaches the edges of the document pane. */
+  .nd-page-cover {
+    width: calc(100% + (var(--nd-scrollbar-gutter, 0px) * 2));
+    margin-inline: calc(-1 * var(--nd-scrollbar-gutter, 0px));
+  }
+
   .document-title-input::placeholder {
     color: rgba(63, 63, 63, 0.3);
   }
