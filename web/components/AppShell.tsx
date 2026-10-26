@@ -5,9 +5,10 @@ import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
 import { ToastContainer } from '@/components/ToastContainer';
 import { WorkspaceEntry } from '@/components/WorkspaceEntry';
+import { Hamburger } from '@/icons';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { refreshSessionThunk } from '@/stores/auth/auth.slice';
-import { setMobileNavOpen } from '@/stores/sidebar/sidebar.slice';
+import { setCollapsed, setMobileNavOpen, toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
@@ -36,6 +37,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
+  const isSidebarCollapsed = useAppSelector((state) => state.sidebar.isCollapsed);
   const isMobileLayout = useIsMobileLayout();
   const isHydrated = useSyncExternalStore(
     emptySubscribe,
@@ -134,6 +136,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         />
       )}
       <main className="nd-app-shell-main flex-1 flex flex-col min-w-0 bg-background text-foreground relative overflow-hidden">
+        {/* Shell-level so a collapsed rail is still reachable on routes that
+            render no document toolbar (loading and error screens). */}
+        {(isMobileLayout || isSidebarCollapsed) && (
+          <button
+            type="button"
+            onClick={() => {
+              if (isMobileLayout) {
+                dispatch(toggleMobileNav());
+                return;
+              }
+              dispatch(setCollapsed(false));
+            }}
+            aria-label={isMobileLayout ? 'Open navigation' : 'Open sidebar'}
+            aria-haspopup={isMobileLayout ? 'dialog' : undefined}
+            aria-expanded={isMobileLayout ? isMobileNavOpen : false}
+            title={isMobileLayout ? 'Open navigation' : 'Open sidebar'}
+            className="
+              fixed top-2 z-40 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm
+              md:h-7 md:w-7
+              text-muted-foreground hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
+              transition-colors duration-150 cursor-pointer
+              focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
+            "
+            style={{ left: 'calc(0.5rem + env(safe-area-inset-left, 0px))' }}
+          >
+            <Hamburger size={19} />
+          </button>
+        )}
         {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling
         the browser that the scrollable region starts below the toolbar's height.*/}
         <div className="h-12 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />

@@ -20,8 +20,6 @@ function renderTrashPanel(
   render(
     <DocumentsPanel
       mode="trash"
-      isSidebarCollapsed={false}
-      sidebarWidth={300}
       searchQuery={overrides.searchQuery ?? ''}
       setSearchQuery={jest.fn()}
       onClose={jest.fn()}

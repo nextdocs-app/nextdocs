@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { DocumentsPanelMode, DocActionsAnchor } from '@/components/sidebar/types';
 
 export interface SidebarState {
+  /** Desktop only: the rail is fully closed and the shell shows its opener. */
   isCollapsed: boolean;
   sidebarWidth: number;
   panelMode: DocumentsPanelMode;
@@ -11,8 +12,8 @@ export interface SidebarState {
   docActionsAnchor: DocActionsAnchor | null;
   /**
    * Mobile only: whether the off-canvas navigation drawer is showing. Kept
-   * separate from `isCollapsed` so collapsing the rail on desktop does not
-   * decide whether the drawer is open on a phone, and vice versa.
+   * separate from `isCollapsed` so closing the rail on desktop does not decide
+   * whether the drawer is open on a phone, and vice versa.
    */
   isMobileNavOpen: boolean;
 }
@@ -32,9 +33,6 @@ const sidebarSlice = createSlice({
   name: 'sidebar',
   initialState,
   reducers: {
-    toggleCollapsed(state) {
-      state.isCollapsed = !state.isCollapsed;
-    },
     setCollapsed(state, action: PayloadAction<boolean>) {
       state.isCollapsed = action.payload;
     },
@@ -72,7 +70,6 @@ const sidebarSlice = createSlice({
 });
 
 export const {
-  toggleCollapsed,
   setCollapsed,
   setMobileNavOpen,
   toggleMobileNav,

@@ -1,16 +1,23 @@
 import { act, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { AppShell } from '../../../components/AppShell';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '../../../hooks/usePendingCloudDocumentCreates.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '../../../lib/pending-cloud-create.util';
+import { setCollapsed, toggleMobileNav } from '../../../stores/sidebar/sidebar.slice';
 import { addToast } from '../../../stores/toasts/toasts.slice';
+
+let mockIsMobileLayout = false;
+const mockSidebarState = { isMobileNavOpen: false, isCollapsed: false };
 
 jest.mock('../../../components/sidebar', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../../components/ToastContainer', () => ({ ToastContainer: () => null }));
 jest.mock('../../../components/WorkspaceEntry', () => ({
   WorkspaceEntry: () => <div>workspace-entry</div>,
 }));
-jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: () => false }));
+jest.mock('../../../hooks/useMediaQuery.hook', () => ({
+  useIsMobileLayout: () => mockIsMobileLayout,
+}));
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
 jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
   usePendingCloudDocumentCreates: jest.fn(),
@@ -18,7 +25,8 @@ jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
 const mockDispatch = jest.fn();
 jest.mock('../../../stores/hooks', () => ({
   useAppDispatch: () => mockDispatch,
-  useAppSelector: () => false,
+  useAppSelector: (selector: (state: { sidebar: typeof mockSidebarState }) => unknown) =>
+    selector({ sidebar: mockSidebarState }),
 }));
 
 const mockReplace = jest.fn();
@@ -40,6 +48,9 @@ describe('AppShell', () => {
   beforeEach(() => {
     mockPathname = '/doc/doc-1';
     mockReplace.mockClear();
+    mockIsMobileLayout = false;
+    mockSidebarState.isMobileNavOpen = false;
+    mockSidebarState.isCollapsed = false;
   });
 
   it('wires the offline create replay to the signed-in session', () => {
@@ -162,5 +173,63 @@ describe('AppShell', () => {
 
     expect(screen.getByText('content')).toBeInTheDocument();
     expect(screen.queryByText('workspace-entry')).not.toBeInTheDocument();
+  });
+
+  it('keeps a way back into a collapsed rail on screens without a document toolbar', async () => {
+    const user = userEvent.setup();
+    mockSidebarState.isCollapsed = true;
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
+
+    render(
+      <AppShell>
+        <div>error screen</div>
+      </AppShell>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Open sidebar' }));
+
+    expect(mockDispatch).toHaveBeenCalledWith(setCollapsed(false));
+  });
+
+  it('opens the mobile drawer from the shell', async () => {
+    const user = userEvent.setup();
+    mockIsMobileLayout = true;
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    expect(mockDispatch).toHaveBeenCalledWith(toggleMobileNav());
+  });
+
+  it('does not render a desktop sidebar opener while the rail is open', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    expect(screen.queryByRole('button', { name: 'Open sidebar' })).not.toBeInTheDocument();
   });
 });

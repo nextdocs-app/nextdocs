@@ -15,6 +15,8 @@ import { DocumentServiceApiError, documentService } from '../../../services/docu
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
+import { useIsMobileLayout } from '../../../hooks/useMediaQuery.hook';
+import { useWorkspace } from '../../../hooks/useWorkspace.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import { listPendingCloudCreates } from '../../../lib/pending-cloud-create.util';
 import { resolveRootDocumentId } from '../../../lib/root-document.util';
@@ -113,6 +115,8 @@ jest.mock('next/navigation');
 jest.mock('../../../services/document.service');
 jest.mock('../../../hooks/useAuth.hook');
 jest.mock('../../../hooks/useTheme.hook');
+jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: jest.fn() }));
+jest.mock('../../../hooks/useWorkspace.hook');
 jest.mock('../../../lib/root-document.util', () => ({
   resolveRootDocumentId: jest.fn(),
 }));
@@ -180,6 +184,14 @@ function setupDefault() {
     loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
   });
   (useTheme as jest.Mock).mockReturnValue({ resolvedTheme: 'light' });
+  (useIsMobileLayout as jest.Mock).mockReturnValue(false);
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'NextDocs',
+    icon: null,
+    role: 'OWNER',
+    memberCount: 2,
+  });
   (useAuth as jest.Mock).mockReturnValue({
     user: {
       displayName: 'Alice',
@@ -232,6 +244,77 @@ it('renders the document list', () => {
   render(<Sidebar />);
   expect(getTreeNodeRow(/Doc 1/i)).toBeInTheDocument();
   expect(getTreeNodeRow(/Untitled/i)).toBeInTheDocument();
+});
+
+it('labels the rail with the workspace identity', () => {
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'Acme Docs',
+    icon: { type: 'emoji', value: '📚' },
+    role: 'OWNER',
+    memberCount: 3,
+  });
+
+  render(<Sidebar />);
+
+  expect(screen.getByTitle('Acme Docs')).toBeInTheDocument();
+  expect(screen.getByText('📚')).toBeInTheDocument();
+});
+
+it('uses a neutral placeholder when the workspace has no icon', () => {
+  render(<Sidebar />);
+
+  expect(screen.getByTestId('workspace-placeholder')).toBeInTheDocument();
+});
+
+it('removes the rail from the page when collapsed', async () => {
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  expect(screen.getByTitle('NextDocs')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+
+  expect(screen.queryByTitle('NextDocs')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Search Documents' })).not.toBeInTheDocument();
+});
+
+it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
+  (useIsMobileLayout as jest.Mock).mockReturnValue(true);
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebar: {
+        isCollapsed: true,
+        sidebarWidth: 256,
+        panelMode: null,
+        searchQuery: '',
+        isPrivateOpen: true,
+        isSharedOpen: true,
+        docActionsAnchor: null,
+        isMobileNavOpen: false,
+      },
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+
+  render(<Sidebar />, store);
+
+  expect(screen.getByRole('button', { name: 'Search Documents' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Close navigation' })).toBeInTheDocument();
 });
 
 it('navigates to the selected document', async () => {
