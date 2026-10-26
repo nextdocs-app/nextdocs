@@ -103,7 +103,7 @@
   border: 1px solid var(--nd-auth-line);
   border-radius: 8px;
   background: var(--nd-auth-surface);
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 14px;
   color: var(--nd-auth-ink);
   outline: none;
@@ -122,6 +122,42 @@
   opacity: 0.6;
 }
 
+.nd-auth-password {
+  position: relative;
+}
+
+.nd-auth-password .nd-auth-input {
+  padding-right: 40px;
+}
+
+.nd-auth-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--nd-auth-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.nd-auth-password-toggle:hover {
+  background: rgba(28, 25, 23, 0.06);
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-password-toggle:focus-visible {
+  outline: 2px solid var(--nd-auth-link);
+  outline-offset: 1px;
+}
+
 .nd-auth-button {
   display: inline-flex;
   align-items: center;
@@ -129,12 +165,13 @@
   width: 100%;
   border-radius: 8px;
   background: var(--nd-brand);
-  padding: 10px 16px;
+  padding: 9px 16px;
   font-size: 14px;
   font-weight: 600;
   color: var(--nd-brand-foreground);
   text-align: center;
   text-decoration: none;
+  cursor: pointer;
   transition:
     background-color 0.15s ease,
     opacity 0.15s ease;
@@ -220,6 +257,7 @@
   font-weight: 500;
   text-decoration: underline;
   text-underline-offset: 4px;
+  cursor: pointer;
 }
 
 .nd-auth-link:hover {

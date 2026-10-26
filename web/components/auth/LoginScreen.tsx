@@ -5,6 +5,7 @@ import { NextDocs } from '@/icons';
 import { authApiService } from '@/services/auth.service';
 import { hardNavigate, hardReplace } from '@/lib/navigation.util';
 import { safeRedirectPath } from '@/lib/safe-redirect.util';
+import { PasswordField } from './PasswordField';
 
 interface LoginScreenProps {
   /** Raw `?next=` value; sanitized before any navigation. */
@@ -129,21 +130,15 @@ export function LoginScreen({ next }: LoginScreenProps) {
                 />
               </div>
 
-              <div className="nd-auth-field">
-                <label className="nd-auth-label" htmlFor={passwordId}>
-                  Password
-                </label>
-                <input
-                  id={passwordId}
-                  className="nd-auth-input"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  required
-                />
-              </div>
+              <PasswordField
+                id={passwordId}
+                label="Password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                required
+              />
 
               <button className="nd-auth-button" type="submit" disabled={isSubmitting}>
                 {isSubmitting ? 'Signing in…' : 'Sign in'}

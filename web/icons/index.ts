@@ -21,6 +21,8 @@ export { ChevronDown } from './ChevronDown';
 export { Close } from './Close';
 export { EditOff } from './EditOff';
 export { Lock } from './Lock';
+export { Eye } from './Eye';
+export { EyeOff } from './EyeOff';
 export { UserCircle } from './UserCircle';
 export { Plus } from './Plus';
 export { TriangleAlert } from './TriangleAlert';

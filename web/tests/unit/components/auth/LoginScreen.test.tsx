@@ -41,6 +41,21 @@ it('shows the form once the session pre-check fails', async () => {
   expect(hardReplace).not.toHaveBeenCalled();
 });
 
+it('lets the user reveal and hide the password', async () => {
+  const user = userEvent.setup();
+  await renderLogin();
+
+  const password = screen.getByLabelText('Password');
+  expect(password).toHaveAttribute('type', 'password');
+  expect(password).toHaveAttribute('placeholder', 'Enter your password');
+
+  await user.click(screen.getByRole('button', { name: 'Show password' }));
+  expect(password).toHaveAttribute('type', 'text');
+
+  await user.click(screen.getByRole('button', { name: 'Hide password' }));
+  expect(password).toHaveAttribute('type', 'password');
+});
+
 it('redirects an existing session to the requested page', async () => {
   mockRefresh.mockResolvedValue({});
 

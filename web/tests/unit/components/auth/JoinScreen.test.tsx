@@ -126,6 +126,28 @@ it('drops the stashed token once the account is registered', async () => {
   await waitFor(() => expect(window.sessionStorage.getItem(INVITE_TOKEN_STORAGE_KEY)).toBeNull());
 });
 
+it('shows password guidance and lets the invitee reveal both password fields', async () => {
+  setHash('#token=invite-token');
+  const user = userEvent.setup();
+  await renderJoin();
+
+  const password = screen.getByLabelText('Password');
+  expect(screen.getByLabelText('Full name')).toHaveAttribute('placeholder', 'Your name');
+  expect(password).toHaveAttribute('placeholder', 'Create a strong password');
+  expect(screen.getByLabelText('Confirm password')).toHaveAttribute(
+    'placeholder',
+    'Repeat your password'
+  );
+
+  await user.click(screen.getByRole('button', { name: 'Show password' }));
+  expect(password).toHaveAttribute('type', 'text');
+  await user.click(screen.getByRole('button', { name: 'Show confirm password' }));
+  expect(screen.getByLabelText('Confirm password')).toHaveAttribute('type', 'text');
+
+  await user.click(screen.getByRole('button', { name: 'Hide password' }));
+  expect(password).toHaveAttribute('type', 'password');
+});
+
 it('registers with the invite token and full-navigates into the workspace', async () => {
   mockRegister.mockResolvedValue({});
   setHash('#token=invite-token');

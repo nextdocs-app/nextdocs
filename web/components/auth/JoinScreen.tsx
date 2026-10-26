@@ -12,6 +12,7 @@ import {
   stripUrlFragment,
 } from '@/lib/invite-token.util';
 import type { InvitePreview } from '@/types/auth.types';
+import { PasswordField } from './PasswordField';
 
 type JoinPhase =
   | { kind: 'reading' }
@@ -218,6 +219,7 @@ export function JoinScreen() {
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
             autoComplete="name"
+            placeholder="Your name"
             minLength={2}
             maxLength={100}
             required
@@ -225,39 +227,29 @@ export function JoinScreen() {
           />
         </div>
 
-        <div className="nd-auth-field">
-          <label className="nd-auth-label" htmlFor={passwordId}>
-            Password
-          </label>
-          <input
-            id={passwordId}
-            className="nd-auth-input"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete="new-password"
-            minLength={8}
-            maxLength={128}
-            required
-          />
-        </div>
+        <PasswordField
+          id={passwordId}
+          label="Password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete="new-password"
+          placeholder="Create a strong password"
+          minLength={8}
+          maxLength={128}
+          required
+        />
 
-        <div className="nd-auth-field">
-          <label className="nd-auth-label" htmlFor={confirmPasswordId}>
-            Confirm password
-          </label>
-          <input
-            id={confirmPasswordId}
-            className="nd-auth-input"
-            type="password"
-            value={confirmPassword}
-            onChange={(event) => setConfirmPassword(event.target.value)}
-            autoComplete="new-password"
-            minLength={8}
-            maxLength={128}
-            required
-          />
-        </div>
+        <PasswordField
+          id={confirmPasswordId}
+          label="Confirm password"
+          value={confirmPassword}
+          onChange={(event) => setConfirmPassword(event.target.value)}
+          autoComplete="new-password"
+          placeholder="Repeat your password"
+          minLength={8}
+          maxLength={128}
+          required
+        />
 
         <button className="nd-auth-button" type="submit" disabled={isSubmitting}>
           {isSubmitting ? 'Creating account…' : 'Create account'}
