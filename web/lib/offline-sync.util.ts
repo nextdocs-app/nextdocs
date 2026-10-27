@@ -50,7 +50,15 @@ export function readPendingSyncEdits(documentId: string): number {
   return parsed;
 }
 
-export function writePendingSyncEdits(documentId: string, pendingEdits: number): number {
+/**
+ * Writes the pending marker without notifying listeners.
+ *
+ * A save records the marker before its network call so a frozen tab or an
+ * aborted upload still leaves a copy the next load will prefer. Publishing it
+ * only once the write fails keeps the "pending sync" badge from flashing on
+ * every successful keystroke.
+ */
+export function markPendingSyncEdits(documentId: string, pendingEdits: number): number {
   const normalized = Math.max(0, Math.floor(pendingEdits));
 
   if (typeof window !== 'undefined') {
@@ -62,6 +70,11 @@ export function writePendingSyncEdits(documentId: string, pendingEdits: number):
     }
   }
 
+  return normalized;
+}
+
+export function writePendingSyncEdits(documentId: string, pendingEdits: number): number {
+  const normalized = markPendingSyncEdits(documentId, pendingEdits);
   notifyPendingSyncChanged(documentId, normalized);
   return normalized;
 }

@@ -1,6 +1,7 @@
 import {
   readPendingSyncEdits,
   writePendingSyncEdits,
+  markPendingSyncEdits,
   incrementPendingSyncEdits,
   clearPendingSyncEdits,
   readPendingIconCoverPatch,
@@ -64,6 +65,27 @@ describe('offline-sync.util', () => {
         documentId,
         pendingEdits: 3,
       });
+    });
+  });
+
+  describe('markPendingSyncEdits', () => {
+    it('writes the value without notifying listeners', () => {
+      const dispatchSpy = jest.spyOn(window, 'dispatchEvent');
+
+      expect(markPendingSyncEdits(documentId, 4)).toBe(4);
+
+      expect(window.localStorage.getItem(storageKey)).toBe('4');
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('removes the key without notifying listeners when cleared', () => {
+      const dispatchSpy = jest.spyOn(window, 'dispatchEvent');
+      window.localStorage.setItem(storageKey, '2');
+
+      markPendingSyncEdits(documentId, 0);
+
+      expect(window.localStorage.getItem(storageKey)).toBeNull();
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
   });
 
