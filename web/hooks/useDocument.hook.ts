@@ -47,6 +47,12 @@ import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 const MESSAGE_ACCESS_LEVEL = 2;
 
+// A 1008 close is answered with an HTTP access re-check and then a reconnect;
+// repeating that as fast as the round trips allow would hammer a server that
+// keeps refusing. Bounded exponential backoff caps it.
+const CLOSE_RECONNECT_BASE_MS = 500;
+const CLOSE_RECONNECT_MAX_MS = 8000;
+
 class OfflineDocumentUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -794,10 +800,43 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       awareness: awareness ?? undefined,
     });
 
+    let closeHandlerCancelled = false;
+    // The first reconnect after a 1008 stays immediate; only repeats wait, so a
+    // single stale token still resumes instantly.
+    let closeReconnectAttempts = 0;
+    let closeReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleCloseReconnect = () => {
+      if (closeHandlerCancelled) {
+        return;
+      }
+
+      clearTimeout(closeReconnectTimer);
+      const delayMs =
+        closeReconnectAttempts === 0
+          ? 0
+          : Math.min(
+              CLOSE_RECONNECT_BASE_MS * 2 ** (closeReconnectAttempts - 1),
+              CLOSE_RECONNECT_MAX_MS
+            );
+      closeReconnectAttempts += 1;
+      closeReconnectTimer = setTimeout(() => {
+        closeReconnectTimer = undefined;
+        if (!closeHandlerCancelled) {
+          provider.connect();
+        }
+      }, delayMs);
+    };
+
     const statusHandler = (event: { status: 'connected' | 'disconnected' | 'connecting' }) => {
+      if (event.status === 'connected') {
+        // A live socket proves the last close is behind us: drop the backoff
+        // and the reconnect it had scheduled.
+        closeReconnectAttempts = 0;
+        clearTimeout(closeReconnectTimer);
+        closeReconnectTimer = undefined;
+      }
       setIsRealtimeConnected(event.status === 'connected');
     };
-    let closeHandlerCancelled = false;
 
     const connectionCloseHandler = (event: CloseEvent | null) => {
       if (!event || event.code !== 1008) {
@@ -807,7 +846,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // We perform a one-off /my-access fetch to distinguish between a stale token/expired session (401)
       // and a true access revocation (403/404). This prevents locking the user out unnecessarily
       // when their session simply needs to be refreshed.
-      // Prevent reconnection race: stop reconnection before the async verification
+      // Halt the automatic retry while that check is in flight, so it cannot
+      // race the decision below. y-websocket checks this flag exactly once,
+      // on its own backoff tick, so resuming has to go through connect().
       provider.shouldConnect = false;
 
       const verifyAccessAndHandleClose = async () => {
@@ -839,7 +880,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 // keep the document active and allow reconnection.
                 writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
                 setResolvedAccessLevel(myAccess.accessLevel, true);
-                provider.shouldConnect = true;
+                scheduleCloseReconnect();
                 return;
               } catch (cloudErr) {
                 if (closeHandlerCancelled) return;
@@ -852,6 +893,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                   return;
                 }
                 console.warn('Failed to fetch trashed document status on close:', cloudErr);
+                // Transient failure: the close proves nothing about access, so
+                // schedule a retry instead of stranding the document.
+                scheduleCloseReconnect();
                 return;
               }
             }
@@ -861,7 +905,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               return;
             }
             // Access is still valid - allow reconnection
-            provider.shouldConnect = true;
+            scheduleCloseReconnect();
+            return;
           } else if (!isAuthenticated) {
             // Anonymous guest: re-check the share link. A revoked link (or a
             // link downgraded below the needed level) surfaces as restricted;
@@ -875,7 +920,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               }
               writeCachedDocumentAccessLevel(resolvedDocumentId, publicAccess.accessLevel);
               setResolvedAccessLevel(publicAccess.accessLevel, true);
-              provider.shouldConnect = true;
+              scheduleCloseReconnect();
+              return;
             } catch (publicErr) {
               if (closeHandlerCancelled) return;
               if (
@@ -886,7 +932,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 return;
               }
               // Transient failure (e.g. 429 rate limit or offline): keep reconnecting
-              provider.shouldConnect = true;
+              scheduleCloseReconnect();
               return;
             }
           } else {
@@ -912,7 +958,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           }
         }
 
-        // For transient errors or if access is still valid, we let the provider continue reconnecting
+        // A transient failure (network error, 429, 5xx) says nothing about
+        // access, so resume the provider halted above. `shouldConnect = true`
+        // is not enough: y-websocket only reads it on the retry it already
+        // scheduled, which is long gone by the time a slow round trip answers.
+        // The scheduled reconnect opens a socket when none is pending.
+        scheduleCloseReconnect();
       };
 
       const handleAccessRevoked = (statusCode: number = 404) => {
@@ -936,6 +987,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
     return () => {
       closeHandlerCancelled = true;
+      clearTimeout(closeReconnectTimer);
+      closeReconnectTimer = undefined;
       provider.off('status', statusHandler);
       provider.off('connection-close', connectionCloseHandler);
       provider.shouldConnect = false;
