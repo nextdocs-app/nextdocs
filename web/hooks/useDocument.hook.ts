@@ -896,8 +896,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         } catch (err) {
           if (err instanceof DocumentServiceApiError && err.status === 401) {
             if (closeHandlerCancelled) return;
-            // Token is stale, trigger silent session refresh.
-            // Reconnection will automatically use the new token on the next retry.
+            // Token is stale, trigger silent session refresh. The refreshed
+            // accessToken re-runs the provider effect, which reconnects with it.
             void refresh();
             return;
           }
@@ -951,6 +951,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isLoading,
     errorState,
     isAuthenticated,
+    // A refresh rotates the token the server captured at connect time. Rebuild
+    // the provider so the new socket authenticates with the new token instead
+    // of staying closed after a 1008.
+    accessToken,
     isGuestRealtimeLevelKnown,
     meta?.deletedAt,
     hasPendingCloudCreate,
@@ -1297,6 +1301,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         queuePendingSync,
         triggerBackoff: triggerCloudMetadataBackoff,
         clearBackoff: clearCloudMetadataBackoff,
+        refreshSession: refresh,
         rollback: guardedRollback,
         logScope: 'metadata update',
       });
@@ -1312,6 +1317,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       clearCloudMetadataBackoff,
       triggerCloudMetadataBackoff,
       isSharedDocument,
+      refresh,
     ]
   );
 
@@ -1423,6 +1429,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isCloudMetadataInBackoff,
     clearCloudMetadataBackoff,
     triggerCloudMetadataBackoff,
+    refreshSession: refresh,
     metaRef,
     ydocRef,
     accessLevelRef,

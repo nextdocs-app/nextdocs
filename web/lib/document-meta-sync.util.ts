@@ -1,5 +1,5 @@
 import type * as Y from 'yjs';
-import { isConnectivityError } from '@/lib/cloud-connectivity.util';
+import { isConnectivityError, isUnauthorizedError } from '@/lib/cloud-connectivity.util';
 import type { DocumentAccessLevel } from '@/services/document.service';
 
 // Yjs-shared document meta: `ydoc.getMap('meta')` carries the live title
@@ -70,6 +70,7 @@ export function persistMetaWrite({
   triggerBackoff,
   clearBackoff,
   rollback,
+  refreshSession,
   logScope,
 }: {
   /** Remote PATCH promise, or null for a local-only write. */
@@ -90,6 +91,8 @@ export function persistMetaWrite({
   clearBackoff: () => void;
   /** Guarded rollback — the caller captures the write seq. */
   rollback: () => void;
+  /** Silent re-auth for a 401; the queued write replays with the new token. */
+  refreshSession?: () => void;
   /** Scope for error logs (`metadata update` vs `page icon/cover update`). */
   logScope: string;
 }): void {
@@ -113,8 +116,14 @@ export function persistMetaWrite({
       }
     })
     .catch(async (err) => {
-      if (remoteWrite && isConnectivityError(err)) {
-        triggerBackoff();
+      if (remoteWrite && (isConnectivityError(err) || isUnauthorizedError(err))) {
+        if (isUnauthorizedError(err)) {
+          // The token expired mid-write. Keep the local edit and queue it for
+          // replay instead of rolling a title/icon back under the user.
+          refreshSession?.();
+        } else {
+          triggerBackoff();
+        }
 
         try {
           await persistLocal();

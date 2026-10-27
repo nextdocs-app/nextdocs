@@ -19,10 +19,13 @@ import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cl
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
+const mockRefreshSession = jest.fn();
+
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
     isAuthenticated: false,
     accessToken: null,
+    refresh: mockRefreshSession,
   })),
 }));
 
@@ -60,6 +63,7 @@ describe('useYjsPersistence', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
+      refresh: mockRefreshSession,
     });
     (useNetworkStatus as jest.Mock).mockReturnValue({
       isOnline: true,
@@ -544,6 +548,48 @@ describe('useYjsPersistence', () => {
       }
     );
     expect(emitLocalDocumentsChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the edit queued and refreshes when the cloud save is unauthorized', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Expired Token Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'expired-token',
+      user: { id: 'user-1' },
+      refresh: mockRefreshSession,
+    });
+    saveCloudDocumentSpy.mockRejectedValue(
+      new DocumentServiceApiError('Authentication required.', 401)
+    );
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        ydoc,
+        expect.objectContaining({ title: 'Expired Token Test' }),
+        undefined
+      );
+      expect(result.current.pendingEdits).toBe(1);
+    });
+
+    expect(mockRefreshSession).toHaveBeenCalled();
+    expect(result.current.isSaving).toBe(false);
   });
 
   it('should fall back to local save when cloud write fails due to connectivity', async () => {

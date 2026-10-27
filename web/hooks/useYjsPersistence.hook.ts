@@ -24,7 +24,11 @@ import {
   readPendingIconCoverPatch,
   readPendingSyncEdits,
 } from '@/lib/offline-sync.util';
-import { backoffMsFor, isConnectivityError } from '@/lib/cloud-connectivity.util';
+import {
+  backoffMsFor,
+  isConnectivityError,
+  isUnauthorizedError,
+} from '@/lib/cloud-connectivity.util';
 import {
   discardPendingDocument,
   flushPendingCloudCreate,
@@ -43,7 +47,7 @@ export function useYjsPersistence(
 ) {
   const dispatch = useAppDispatch();
   const { isSaving, lastSaved } = useAppSelector((state) => state.document);
-  const { isAuthenticated, accessToken, user } = useAuth();
+  const { isAuthenticated, accessToken, user, refresh } = useAuth();
   const { isOnline } = useNetworkStatus();
   const { trigger: triggerBackoff, clear: clearBackoff, isInBackoff } = useCloudBackoff();
 
@@ -171,14 +175,17 @@ export function useYjsPersistence(
           if (
             patchErr instanceof DocumentServiceApiError &&
             patchErr.status >= 400 &&
-            patchErr.status < 500
+            patchErr.status < 500 &&
+            // 401 means the token expired, not that the server refused the
+            // patch. Keep it queued so the refreshed session can replay it.
+            patchErr.status !== 401
           ) {
             // The server will refuse this again, and a queued patch keeps the
             // document pinned to its local copy (a pending sync forces local
             // reads), so drop it rather than retry it forever.
             console.warn('Dropping a rejected page icon/cover patch:', patchErr.message);
           } else {
-            // Connectivity: leave the patch queued for the next flush attempt.
+            // Connectivity or auth: leave the patch queued for the next flush.
             throw patchErr;
           }
         }
@@ -193,6 +200,13 @@ export function useYjsPersistence(
     } catch (err) {
       if (isConnectivityError(err)) {
         triggerBackoff(backoffMsFor(err));
+        return;
+      }
+
+      if (err instanceof DocumentServiceApiError && err.status === 401) {
+        // The access token expired while the edits were queued. Keep them
+        // pending and re-auth; the new token re-runs this flush.
+        void refresh();
         return;
       }
 
@@ -218,6 +232,7 @@ export function useYjsPersistence(
     isInBackoff,
     triggerBackoff,
     reconcileSavedMeta,
+    refresh,
   ]);
 
   useEffect(() => {
@@ -363,8 +378,15 @@ export function useYjsPersistence(
 
         dispatch(setLastSaved(new Date().toISOString()));
       } catch (err) {
-        if (isAuthenticated && accessToken && canPersistCloud && isConnectivityError(err)) {
-          triggerBackoff(backoffMsFor(err));
+        if (
+          isAuthenticated &&
+          accessToken &&
+          canPersistCloud &&
+          (isConnectivityError(err) || isUnauthorizedError(err))
+        ) {
+          if (isConnectivityError(err)) {
+            triggerBackoff(backoffMsFor(err));
+          }
 
           try {
             await persistLocalCopy();
@@ -372,7 +394,6 @@ export function useYjsPersistence(
             pendingEditsRef.current = nextPendingEdits;
             setPendingEdits(nextPendingEdits);
             dispatch(setLastSaved(new Date().toISOString()));
-            return;
           } catch (fallbackErr) {
             console.error('Failed to save document:', fallbackErr);
             dispatch(
@@ -380,8 +401,15 @@ export function useYjsPersistence(
                 fallbackErr instanceof Error ? fallbackErr.message : 'Failed to save document'
               )
             );
-            return;
           }
+
+          if (isUnauthorizedError(err)) {
+            // The token expired between the debounce and the request. Keep the
+            // bytes queued so the refresh can replay them instead of dropping
+            // the edit.
+            void refresh();
+          }
+          return;
         }
 
         console.error('Failed to save document:', err);
@@ -431,6 +459,7 @@ export function useYjsPersistence(
     isInBackoff,
     triggerBackoff,
     reconcileSavedMeta,
+    refresh,
   ]);
 
   return {

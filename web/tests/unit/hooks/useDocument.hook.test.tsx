@@ -2707,6 +2707,43 @@ describe('useDocument', () => {
       mockSetLocalStateField.mockClear();
     });
 
+    it('reconnects with the rotated token after a refresh', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const authState = {
+        isAuthenticated: true,
+        accessToken: 'token-old',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      };
+
+      (useAuth as jest.Mock).mockImplementation(() => authState);
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      const { result, rerender } = renderHook(() => useDocument(validUuid), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      await waitFor(() => {
+        expect(WebsocketProvider).toHaveBeenCalledTimes(1);
+      });
+
+      authState.accessToken = 'token-new';
+      rerender();
+
+      await waitFor(() => {
+        expect(WebsocketProvider).toHaveBeenCalledTimes(2);
+      });
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+    });
+
     it('should skip access polling when isRealtimeConnected is true', async () => {
       jest.useFakeTimers();
 

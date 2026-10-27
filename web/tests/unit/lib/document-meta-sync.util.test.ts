@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { waitFor } from '@testing-library/react';
+import { DocumentServiceApiError } from '../../../services/document.service';
 import {
   determineMetaWriteRoute,
   mirrorIconCoverToYjs,
@@ -142,6 +143,36 @@ describe('persistMetaWrite', () => {
     await waitFor(() => {
       expect(queuePendingPatch).toHaveBeenCalledTimes(1);
     });
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local edit and re-auths on a 401 instead of rolling back', async () => {
+    const remote = deferred<unknown>();
+    const persistLocal = jest.fn().mockResolvedValue(undefined);
+    const queuePendingSync = jest.fn();
+    const refreshSession = jest.fn();
+    const rollback = jest.fn();
+
+    persistMetaWrite({
+      remoteWrite: remote.promise,
+      mirrorRemote: jest.fn().mockResolvedValue(undefined),
+      persistLocal,
+      queuePendingSync,
+      triggerBackoff: jest.fn(),
+      clearBackoff: jest.fn(),
+      refreshSession,
+      rollback,
+      logScope: 'metadata update',
+    });
+    remote.reject(new DocumentServiceApiError('Authentication required.', 401));
+
+    await waitFor(() => {
+      expect(persistLocal).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(queuePendingSync).toHaveBeenCalledTimes(1);
+    });
+    expect(refreshSession).toHaveBeenCalledTimes(1);
     expect(rollback).not.toHaveBeenCalled();
   });
 
