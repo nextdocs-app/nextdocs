@@ -110,18 +110,49 @@ let inFlightRefresh: {
   promise: Promise<AuthApiResponse>;
 } | null = null;
 
-function requestSessionRefresh(userId: string | null, sessionId: number): Promise<AuthApiResponse> {
+function requestSessionRefresh(
+  userId: string | null,
+  sessionId: number,
+  isCurrent: () => boolean
+): Promise<AuthApiResponse> {
   if (inFlightRefresh?.userId === userId && inFlightRefresh.sessionId === sessionId) {
     return inFlightRefresh.promise;
   }
 
-  const promise = authApiService.refresh().finally(() => {
+  const promise = refreshWithRotationRetry(isCurrent, userId !== null).finally(() => {
     if (inFlightRefresh?.promise === promise) {
       inFlightRefresh = null;
     }
   });
   inFlightRefresh = { userId, sessionId, promise };
   return promise;
+}
+
+/**
+ * Retries the one 401 this tab can actually explain: a rotation that raced
+ * another tab. That tab replaced the shared refresh cookie while this request
+ * was in flight, and the browser jar already holds the replacement, so a second
+ * attempt can recover without signing the user out.
+ *
+ * Only a tab that already had a session can have lost that race. A tab with no
+ * known identity is asking whether a session exists at all, and retrying that
+ * "no" would double every signed-out page load's refresh traffic for nothing.
+ * (The server's own rotation grace answers the raced case with 200, so the retry
+ * is the fallback for a refresh that raced a `Set-Cookie` write.)
+ */
+async function refreshWithRotationRetry(
+  isCurrent: () => boolean,
+  hadPriorSession: boolean
+): Promise<AuthApiResponse> {
+  try {
+    return await authApiService.refresh();
+  } catch (err) {
+    if (!hadPriorSession || !(err instanceof ApiError) || err.status !== 401 || !isCurrent()) {
+      throw err;
+    }
+
+    return authApiService.refresh();
+  }
 }
 
 function isStaleSession(state: AuthState, userId: string | null, sessionId: number): boolean {
@@ -138,7 +169,11 @@ export const refreshSessionThunk = createAsyncThunk<
     const { user, sessionId } = getState().auth;
     const sessionUserId = user?.id ?? null;
     try {
-      const response = await requestSessionRefresh(sessionUserId, sessionId);
+      const response = await requestSessionRefresh(
+        sessionUserId,
+        sessionId,
+        () => !isStaleSession(getState().auth, sessionUserId, sessionId)
+      );
       // A logout, account switch, or a fresh sign-in may have completed while
       // the request was in flight. Applying the response now would restore the
       // previous identity (and re-point IndexedDB at it) after its local data

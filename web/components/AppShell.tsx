@@ -7,7 +7,7 @@ import { ToastContainer } from '@/components/ToastContainer';
 import { WorkspaceEntry } from '@/components/WorkspaceEntry';
 import { Hamburger } from '@/icons';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
-import { refreshSessionThunk } from '@/stores/auth/auth.slice';
+import { refreshSessionThunk, SILENT_REFRESH_MIN_INTERVAL_MS } from '@/stores/auth/auth.slice';
 import { setCollapsed, setMobileNavOpen, toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
@@ -106,11 +106,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     dispatch(refreshSessionThunk());
   }, [dispatch]);
 
-  // Auto-refresh token just before it expires to prevent UX drops
+  // Auto-refresh token just before it expires to prevent UX drops. A failed
+  // attempt clears the thunk's throttle stamp, so keep retrying while the
+  // token is still expiring instead of waiting for the next API 401.
   useEffect(() => {
-    if (isTokenExpiringSoon) {
-      dispatch(refreshSessionThunk());
+    if (!isTokenExpiringSoon) {
+      return;
     }
+
+    dispatch(refreshSessionThunk());
+    const retry = setInterval(
+      () => dispatch(refreshSessionThunk()),
+      SILENT_REFRESH_MIN_INTERVAL_MS
+    );
+    return () => clearInterval(retry);
   }, [isTokenExpiringSoon, dispatch]);
 
   // `/` is the workspace entry: until the refresh settles, and for guests, it

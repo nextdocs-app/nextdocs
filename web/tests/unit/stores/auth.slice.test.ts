@@ -119,6 +119,46 @@ describe('auth slice', () => {
     expect(store.getState().auth.lastSilentRefreshAt).not.toBeNull();
   });
 
+  it('refreshSessionThunk retries once when a parallel tab rotated the cookie', async () => {
+    // Two tabs can present the same refresh cookie; the loser sees 401 while
+    // the shared jar already holds the replacement.
+    (authApiService.refresh as jest.Mock)
+      .mockRejectedValueOnce(new ApiError('Refresh token is invalid', 401))
+      .mockResolvedValueOnce(mockAuthResponse);
+    const store = makeStore({ user: mockUser, accessToken: 'stale', isInitializing: false });
+
+    const result = await store.dispatch(refreshSessionThunk());
+
+    expect(refreshSessionThunk.fulfilled.match(result)).toBe(true);
+    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
+    expect(store.getState().auth.user).toEqual(mockUser);
+    expect(store.getState().auth.accessToken).toBe('access-token-123');
+  });
+
+  it('refreshSessionThunk does not retry a 401 when this tab never had a session', async () => {
+    // A signed-out load is asking whether a session exists; a second identical
+    // request cannot change that answer and doubles the unauthorized traffic.
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('No session', 401));
+    const store = makeStore({ user: null, accessToken: null, isInitializing: true });
+
+    const result = await store.dispatch(refreshSessionThunk());
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+    expect(store.getState().auth.user).toBeNull();
+  });
+
+  it('refreshSessionThunk still signs out when both refresh attempts are unauthorized', async () => {
+    (authApiService.refresh as jest.Mock).mockRejectedValue(new ApiError('No session', 401));
+    const store = makeStore({ user: mockUser, accessToken: 'stale', isInitializing: false });
+
+    const result = await store.dispatch(refreshSessionThunk());
+
+    expect(refreshSessionThunk.rejected.match(result)).toBe(true);
+    expect(authApiService.refresh).toHaveBeenCalledTimes(2);
+    expect(store.getState().auth.user).toBeNull();
+  });
+
   it('refreshSessionThunk/fulfilled marks initializing complete and restores session', async () => {
     (authApiService.refresh as jest.Mock).mockResolvedValue(mockAuthResponse);
     const store = makeStore({ isInitializing: true });
