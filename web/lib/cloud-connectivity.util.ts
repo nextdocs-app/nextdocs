@@ -53,3 +53,8 @@ export function isConnectivityError(error: unknown): boolean {
 
   return false;
 }
+
+/** The access token is stale; retrying after a silent refresh can succeed. */
+export function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof DocumentServiceApiError && error.status === 401;
+}

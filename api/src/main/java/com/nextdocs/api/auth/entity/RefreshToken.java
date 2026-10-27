@@ -43,6 +43,14 @@ public class RefreshToken {
     @Builder.Default
     private boolean revoked = false;
 
+    /**
+     * When this token was rotated. Null for tokens revoked by logout or by a
+     * bulk revocation, so reuse detection only grants grace to a concurrent
+     * refresh, never to a deliberate sign-out.
+     */
+    @Column(name = "rotated_at")
+    private OffsetDateTime rotatedAt;
+
     // Best-effort IP of the client that created this token. May be null.
     @Column(name = "ip_address")
     private InetAddress ipAddress;

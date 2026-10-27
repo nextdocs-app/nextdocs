@@ -2,13 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
-import {
-  loginThunk,
-  registerThunk,
-  logoutThunk,
-  refreshSessionThunk,
-} from '@/stores/auth/auth.slice';
-import type { LoginCredentials, RegisterCredentials } from '@/stores/auth/auth.types';
+import { logoutThunk, refreshSessionThunk } from '@/stores/auth/auth.slice';
 
 /**
  * Primary auth hook. Exposes auth state and typed action helpers.
@@ -20,9 +14,7 @@ import type { LoginCredentials, RegisterCredentials } from '@/stores/auth/auth.t
  */
 export function useAuth() {
   const dispatch = useAppDispatch();
-  const { user, accessToken, expiresAt, isLoading, isInitializing, error } = useAppSelector(
-    (state) => state.auth
-  );
+  const { user, accessToken, expiresAt, isInitializing } = useAppSelector((state) => state.auth);
 
   /** Ticks every 10 s so time-dependent derived values stay reactive. */
   const [tick, setTick] = useState(() => Date.now());
@@ -30,16 +22,6 @@ export function useAuth() {
     const id = setInterval(() => setTick(Date.now()), 10_000);
     return () => clearInterval(id);
   }, []);
-
-  const login = useCallback(
-    (credentials: LoginCredentials) => dispatch(loginThunk(credentials)),
-    [dispatch]
-  );
-
-  const register = useCallback(
-    (credentials: RegisterCredentials) => dispatch(registerThunk(credentials)),
-    [dispatch]
-  );
 
   const logout = useCallback(() => dispatch(logoutThunk()), [dispatch]);
 
@@ -55,12 +37,8 @@ export function useAuth() {
     user,
     accessToken,
     isAuthenticated,
-    isLoading,
     isInitializing,
     isTokenExpiringSoon,
-    error,
-    login,
-    register,
     logout,
     refresh,
   };

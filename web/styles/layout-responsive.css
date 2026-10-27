@@ -6,6 +6,14 @@
     padding-right 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* The editor's `mx-auto` column measures against this scroll container's
+   content box. Reserving the scrollbar gutter on both edges keeps that box
+   symmetric, so a classic scrollbar does not pull the column a few pixels left
+   of the viewport center line or make it jump when the document starts to scroll. */
+.nd-app-scroll {
+  scrollbar-gutter: stable both-edges;
+}
+
 .nd-doc-toolbar {
   transition: right 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }

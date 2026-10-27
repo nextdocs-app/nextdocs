@@ -1,10 +1,4 @@
-export interface AuthUser {
-  id: string;
-  email: string;
-  displayName: string;
-  avatarUrl: string | null;
-  emailVerified: boolean;
-}
+import type { AuthUser } from '@/types/auth.types';
 
 export interface AuthState {
   user: AuthUser | null;
@@ -15,25 +9,5 @@ export interface AuthState {
   lastSilentRefreshAt?: number | null;
   /** Bumped when the identity changes, so an in-flight refresh cannot revive a previous session. */
   sessionId: number;
-  isLoading: boolean;
   isInitializing: boolean;
-  error: string | null;
-}
-
-export interface LoginCredentials {
-  email: string;
-  password: string;
-}
-
-export interface RegisterCredentials {
-  email: string;
-  displayName: string;
-  password: string;
-}
-
-export interface AuthApiResponse {
-  accessToken: string;
-  tokenType: string;
-  expiresIn: number;
-  user: AuthUser;
 }

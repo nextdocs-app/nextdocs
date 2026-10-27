@@ -16,13 +16,17 @@ import {
   writePendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { CLOUD_BACKOFF_MS } from '@/lib/cloud-connectivity.util';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
+
+const mockRefreshSession = jest.fn();
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
   useAuth: jest.fn(() => ({
     isAuthenticated: false,
     accessToken: null,
+    refresh: mockRefreshSession,
   })),
 }));
 
@@ -60,6 +64,7 @@ describe('useYjsPersistence', () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: false,
       accessToken: null,
+      refresh: mockRefreshSession,
     });
     (useNetworkStatus as jest.Mock).mockReturnValue({
       isOnline: true,
@@ -546,6 +551,132 @@ describe('useYjsPersistence', () => {
     expect(emitLocalDocumentsChangedSpy).not.toHaveBeenCalled();
   });
 
+  it('writes the local snapshot before attempting the cloud save', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Local First',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    saveCloudDocumentSpy.mockResolvedValue(undefined);
+
+    renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveCloudDocumentSpy).toHaveBeenCalled();
+    });
+
+    // An aborted PATCH must not be able to cost the edit: the IndexedDB write
+    // has already completed before the request leaves the browser.
+    expect(saveDocumentSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      saveCloudDocumentSpy.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('persists the pending debounce locally when the page is hidden', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Backgrounded',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    expect(saveDocumentSpy).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    });
+
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+
+      await waitFor(() => {
+        expect(saveDocumentSpy).toHaveBeenCalledWith(
+          'cloud-id',
+          ydoc,
+          expect.objectContaining({ title: 'Backgrounded' }),
+          undefined
+        );
+      });
+
+      // The marker is what makes the next load prefer these bytes; the cloud
+      // PATCH is deliberately left to the visible/flush path.
+      expect(readPendingSyncEdits('cloud-id')).toBe(1);
+      expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
+    } finally {
+      delete (document as unknown as { visibilityState?: string }).visibilityState;
+    }
+  });
+
+  it('keeps the edit queued and refreshes when the cloud save is unauthorized', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Expired Token Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'expired-token',
+      user: { id: 'user-1' },
+      refresh: mockRefreshSession,
+    });
+    saveCloudDocumentSpy.mockRejectedValue(
+      new DocumentServiceApiError('Authentication required.', 401)
+    );
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        ydoc,
+        expect.objectContaining({ title: 'Expired Token Test' }),
+        undefined
+      );
+      expect(result.current.pendingEdits).toBe(1);
+    });
+
+    expect(mockRefreshSession).toHaveBeenCalled();
+    expect(result.current.isSaving).toBe(false);
+  });
+
   it('should fall back to local save when cloud write fails due to connectivity', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {
@@ -689,6 +820,54 @@ describe('useYjsPersistence', () => {
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(0);
       expect(result.current.hasPendingSync).toBe(false);
+    });
+  });
+
+  it('retries queued edits when the connectivity backoff expires', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Backoff Retry Test',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    loadDocumentSpy.mockResolvedValue({ ydoc, meta });
+    saveCloudDocumentSpy
+      .mockRejectedValueOnce(new DocumentServiceApiError('Service unavailable', 503))
+      .mockResolvedValueOnce(undefined);
+
+    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(1);
+    });
+    expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
+
+    // The 500 is retried after the backoff instead of waiting for the next
+    // keystroke to trigger a flush.
+    await act(async () => {
+      jest.advanceTimersByTime(CLOUD_BACKOFF_MS);
+    });
+
+    await waitFor(() => {
+      expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(0);
     });
   });
 

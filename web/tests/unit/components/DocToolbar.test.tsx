@@ -543,6 +543,28 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
   });
 });
 
+describe('DocToolbar sidebar toggle', () => {
+  const closedSidebarState = {
+    isCollapsed: true,
+    sidebarWidth: 256,
+    panelMode: null,
+    searchQuery: '',
+    isPrivateOpen: true,
+    isSharedOpen: true,
+    docActionsAnchor: null,
+    isMobileNavOpen: false,
+  };
+
+  it('leaves the navigation toggle to the app shell', () => {
+    renderWithStore(<DocToolbar documentId="doc-1" isShareEnabled={false} isOffline={false} />, {
+      sidebar: closedSidebarState,
+    });
+
+    expect(screen.queryByRole('button', { name: 'Open sidebar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open navigation' })).not.toBeInTheDocument();
+  });
+});
+
 describe('DocToolbar share panel integration', () => {
   it('passes canManageSharing to SharePanel when isShareEnabled is true', async () => {
     const user = userEvent.setup();

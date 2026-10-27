@@ -44,6 +44,10 @@
   --nd-brand-ring: #d7897f;
   --nd-brand-foreground: #1c1917;
 
+  /* Neutral placeholder marks (workspace and account) */
+  --nd-placeholder-bg: #e7e3dd;
+  --nd-placeholder-fg: #67625b;
+
   /* Comments Panel & Toolbar Tokens */
   --nd-comments-panel-bg: #f4f4f6;
   --nd-comments-panel-border: rgba(0, 0, 0, 0.08);
@@ -144,6 +148,10 @@
   --nd-brand-active: #d57768;
   --nd-brand-ring: #d7897f;
   --nd-brand-foreground: #1c1917;
+
+  /* Neutral placeholder marks (workspace and account) */
+  --nd-placeholder-bg: #3a3833;
+  --nd-placeholder-fg: #c2bdb5;
 
   /* Comments Panel & Toolbar Dark Tokens */
   --nd-comments-panel-bg: #181816;

@@ -21,30 +21,23 @@ import {
   setDocActionsAnchor,
 } from '@/stores/sidebar/sidebar.slice';
 import {
-  setAuthModalOpen,
   setSettingsModalOpen,
   setAccountMenuOpen,
   setPermanentDeleteTarget,
 } from '@/stores/ui/ui.slice';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
-import {
-  NewDocument,
-  Search,
-  ChevronRight,
-  NextDocs,
-  Close,
-  CloseSidebar,
-  OpenSidebar,
-  UserCircle,
-} from '@/icons';
+import { NewDocument, Search, ChevronRight, Close, CloseSidebar, UserCircle } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { SettingsModal } from '@/components/SettingsModal';
+import { PageIcon } from '@/components/page/PageIcon';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { useWorkspace } from '@/hooks/useWorkspace.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { generateDocumentId } from '@/lib/document-id.util';
+import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { clearLocalDocumentParent, setLocalDocumentParent } from '@/lib/local-tree.util';
 import {
@@ -83,6 +76,7 @@ import {
 // Import sub-components
 import { SharedTree } from './SharedTree';
 import { SidebarTree } from './SidebarTree';
+import { WorkspaceLockup } from './WorkspaceLockup';
 import { ProfileMenuPopup } from './ProfileMenuPopup';
 import { DocumentActionsMenu } from './DocumentActionsMenu';
 import { DocumentsPanel } from './DocumentsPanel';
@@ -97,7 +91,6 @@ import type { SharedDocumentEntry } from '@/stores/documentList/documentList.typ
 import type { DocActionType, SidebarSectionDocument } from './types';
 
 const emptySubscribe = () => () => {};
-const SIDEBAR_COLLAPSE_HOVER_GUARD_MS = 260;
 
 // Stable empty list for the guest Shared section (guests have no document
 // list); a fresh literal per render would re-run the roots sync effect.
@@ -134,6 +127,12 @@ function Sidebar() {
   } = useDocumentList();
   const { resolvedTheme } = useTheme();
   const { user, isAuthenticated, accessToken, logout, isInitializing } = useAuth();
+  const workspace = useWorkspace();
+  const workspaceName = workspace?.name ?? 'NextDocs';
+  const workspaceIcon = sanitizeDocumentIcon(workspace?.icon);
+  const workspaceLockupIcon = workspaceIcon ? (
+    <PageIcon icon={workspaceIcon} size={23} />
+  ) : undefined;
   const userInitial =
     user?.displayName?.trim()?.charAt(0)?.toUpperCase() ||
     user?.email?.charAt(0)?.toUpperCase() ||
@@ -167,7 +166,6 @@ function Sidebar() {
   // Mobile renders the same rail as an off-canvas drawer, which has no collapsed
   // state: it is either covering the page or hidden off-screen.
   const isMobileLayout = useIsMobileLayout();
-  const isRailCollapsed = isMobileLayout ? false : isSidebarCollapsed;
   const closeMobileNav = useCallback(() => dispatch(setMobileNavOpen(false)), [dispatch]);
 
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
@@ -176,7 +174,6 @@ function Sidebar() {
   const permanentDeleteTarget = useAppSelector((state) => state.ui.permanentDeleteTarget);
   const [trashActionLoadingDocId, setTrashActionLoadingDocId] = useState<string | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
-  const [isSidebarCollapseHoverGuard, setIsSidebarCollapseHoverGuard] = useState(false);
 
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
   const { isGuestSharedLoading } = useGuestSharedTree(isAuthenticated ? '' : activeDocId);
@@ -490,6 +487,13 @@ function Sidebar() {
     () => false
   );
 
+  // Guests sign in from here; carrying this route back (path and share params)
+  // returns them to the document they were reading instead of the root.
+  const goToSignIn = useCallback(() => {
+    const next = `${window.location.pathname}${window.location.search}`;
+    router.push(`/login?next=${encodeURIComponent(next)}`);
+  }, [router]);
+
   const handleCreateFile = useCallback(
     async (parentId?: string) => {
       closeMobileNav();
@@ -497,7 +501,7 @@ function Sidebar() {
       // Guests only ever see documents shared with them; private documents
       // need an account, so creation becomes a sign-in prompt.
       if (!isAuthenticated || !accessToken) {
-        dispatch(setAuthModalOpen(true));
+        goToSignIn();
         return;
       }
 
@@ -599,6 +603,7 @@ function Sidebar() {
     },
     [
       router,
+      goToSignIn,
       refresh,
       isAuthenticated,
       accessToken,
@@ -740,20 +745,6 @@ function Sidebar() {
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isMobileNavOpen, closeMobileNav]);
-
-  useEffect(() => {
-    if (!isSidebarCollapseHoverGuard) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setIsSidebarCollapseHoverGuard(false);
-    }, SIDEBAR_COLLAPSE_HOVER_GUARD_MS);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [isSidebarCollapseHoverGuard]);
 
   const handleLoadMore = useCallback(async () => {
     if (isTrashPanel) {
@@ -1073,6 +1064,12 @@ function Sidebar() {
     );
   }
 
+  // Desktop collapse removes the rail outright; the app shell's navigation
+  // toggle is the only way back in. Mobile keeps it mounted as a drawer.
+  if (isSidebarCollapsed && !isMobileLayout) {
+    return null;
+  }
+
   return (
     <aside
       ref={sidebarRef}
@@ -1080,190 +1077,141 @@ function Sidebar() {
       // Off-screen drawers are still keyboard-reachable, so hide the whole rail
       // from assistive tech and tab order while it is closed on mobile.
       inert={isMobileLayout && !isMobileNavOpen ? true : undefined}
-      className={`nd-left-sidebar ${isRailCollapsed ? 'w-13 border-r-0' : 'border-r'} border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
+      className={`nd-left-sidebar border-r border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: isRailCollapsed ? undefined : `var(--nd-sidebar-width, ${sidebarWidth}px)`,
+        width: `var(--nd-sidebar-width, ${sidebarWidth}px)`,
       }}
     >
-      {/* Header */}
-      {isRailCollapsed ? (
-        <div className="flex flex-col p-2">
-          <button
-            type="button"
-            onClick={() => {
-              dispatch(setCollapsed(false));
-              setIsSidebarCollapseHoverGuard(false);
-            }}
-            aria-label="Expand sidebar"
-            aria-expanded={false}
-            title="Expand sidebar"
-            className={`flex items-center gap-3 px-2 py-2 rounded-sm text-sidebar-foreground/80 transition-colors duration-100 cursor-pointer overflow-hidden ${
-              isSidebarCollapseHoverGuard
-                ? ''
-                : 'hover:bg-sidebar-accent hover:text-sidebar-foreground'
-            }`}
-          >
-            <OpenSidebar size={21} className="flex-shrink-0 opacity-80" />
-          </button>
+      {/* Header — one toolbar row: workspace identity, then the rail control. */}
+      <div className="flex items-center justify-between gap-2 px-1.5 pt-2">
+        <div className="flex min-w-0 items-center overflow-hidden">
+          <WorkspaceLockup name={workspaceName} icon={workspaceLockupIcon} />
         </div>
-      ) : (
-        <div className="flex items-center justify-between gap-2 p-2 pr-3">
-          <div className="flex items-center gap-2 py-1 px-1.5 rounded-sm cursor-pointer overflow-hidden">
-            <NextDocs className="w-[26px] h-[26px] flex-shrink-0" />
-            <span
-              className="text-[22px] mt-[2px] font-[600] leading-none whitespace-nowrap"
-              style={{
-                fontFamily: 'var(--font-serif)',
-                letterSpacing: '0.025em',
-              }}
-            >
-              NextDocs
-            </span>
-          </div>
 
-          {/*
-            One control, two meanings: on desktop it docks the rail, on mobile it
-            dismisses the drawer (which has nowhere to dock to).
-          */}
-          <button
-            type="button"
-            onClick={() => {
-              if (isMobileLayout) {
-                closeMobileNav();
-                return;
-              }
-              dispatch(setAccountMenuOpen(false));
-              dispatch(setCollapsed(true));
-              setIsSidebarCollapseHoverGuard(true);
-            }}
-            aria-label={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
-            aria-expanded={true}
-            title={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors duration-100 cursor-pointer flex-shrink-0"
-          >
-            {isMobileLayout ? (
-              <Close size={20} className="flex-shrink-0 opacity-80" />
-            ) : (
-              <CloseSidebar size={21} className="flex-shrink-0 opacity-80" />
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* Action buttons */}
-      <div className="flex flex-col py-2 px-2">
+        {/*
+          One control, two meanings: on desktop it closes the rail, on mobile it
+          dismisses the drawer (which has nowhere to close to).
+        */}
         <button
-          onClick={() => void handleCreateFile()}
-          className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+          type="button"
+          onClick={() => {
+            if (isMobileLayout) {
+              closeMobileNav();
+              return;
+            }
+            dispatch(setAccountMenuOpen(false));
+            dispatch(setCollapsed(true));
+          }}
+          aria-label={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
+          title={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
+          className="inline-flex h-9 w-12 flex-shrink-0 items-center justify-center rounded-sm text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer md:h-7 md:w-9"
         >
-          <NewDocument size={21} className="flex-shrink-0 opacity-80" />
-          <span
-            className="text-[14.5px] whitespace-nowrap"
-            style={{
-              opacity: isRailCollapsed ? 0 : 1,
-              width: isRailCollapsed ? 0 : 'auto',
-            }}
-          >
-            New Document
-          </span>
+          {isMobileLayout ? (
+            <Close size={18} className="flex-shrink-0 opacity-80" />
+          ) : (
+            <CloseSidebar size={18} className="flex-shrink-0 opacity-80" />
+          )}
         </button>
+      </div>
 
+      {/* Quick actions: a search surface with the create control beside it. */}
+      <div className="flex items-center gap-2 px-2 pt-5 pb-4">
         <button
+          type="button"
           onClick={openAllDocumentsPanel}
-          className="flex items-center gap-3 px-2 py-[7px] rounded-sm text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer overflow-hidden"
+          aria-label="Search Documents"
+          title="Search Documents"
+          className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-sm border border-sidebar-border bg-sidebar-accent/40 px-2.5 text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring md:h-8"
         >
-          <Search size={21} className="flex-shrink-0 opacity-80" />
-          <span
-            className="text-[14.5px] whitespace-nowrap"
-            style={{
-              opacity: isRailCollapsed ? 0 : 1,
-              width: isRailCollapsed ? 0 : 'auto',
-            }}
-          >
-            Search Documents
-          </span>
+          <Search size={16} className="flex-shrink-0 opacity-80" />
+          <span className="truncate text-[13.5px] text-sidebar-foreground/70">Search</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleCreateFile()}
+          aria-label="New document"
+          title="New document"
+          className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm border border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring md:h-8 md:w-8"
+        >
+          <NewDocument size={17} className="flex-shrink-0 opacity-80" />
         </button>
       </div>
 
       {/* Document sections and account menu */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
-        {!isRailCollapsed && (
-          <div className="ml-1">
-            <SidebarTreeDndContext treeApi={sidebarTreeApi}>
-              {/* Guests have no private workspace: their only documents are
+        <div className="ml-1">
+          <SidebarTreeDndContext treeApi={sidebarTreeApi}>
+            {/* Guests have no private workspace: their only documents are
                   share links, which the Shared section below lists. */}
-              {isAuthenticated && (
-                <SidebarTree
-                  excludedNodeIds={excludedNodeIds}
-                  isOpen={isPrivateOpen}
-                  onToggle={() => dispatch(togglePrivateOpen())}
-                  activeDocId={activeDocId}
-                  onSelectDocument={(docId) => {
-                    dispatch(setDocActionsAnchor(null));
-                    handleSelectDocument(docId);
-                  }}
-                  onCreateChild={(parentId) => {
-                    void handleCreateFile(parentId);
-                  }}
-                  isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-                  docActionsAnchor={docActionsAnchor}
-                  onToggleDocumentActions={handleToggleDocumentActions}
-                  onShowAll={openAllDocumentsPanel}
-                />
-              )}
+            {isAuthenticated && (
+              <SidebarTree
+                excludedNodeIds={excludedNodeIds}
+                isOpen={isPrivateOpen}
+                onToggle={() => dispatch(togglePrivateOpen())}
+                activeDocId={activeDocId}
+                onSelectDocument={(docId) => {
+                  dispatch(setDocActionsAnchor(null));
+                  handleSelectDocument(docId);
+                }}
+                onCreateChild={(parentId) => {
+                  void handleCreateFile(parentId);
+                }}
+                isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+                docActionsAnchor={docActionsAnchor}
+                onToggleDocumentActions={handleToggleDocumentActions}
+                onShowAll={openAllDocumentsPanel}
+              />
+            )}
 
-              {isAuthenticated && (
-                <SharedTree
-                  className="mt-1"
-                  isOpen={isSharedOpen}
-                  onToggle={() => dispatch(toggleSharedOpen())}
-                  documents={sharedDocuments}
-                  isLoading={isSharedLoading}
-                  activeDocId={activeDocId}
-                  onSelectDocument={(docId) => {
-                    dispatch(setDocActionsAnchor(null));
-                    handleSelectDocument(docId);
-                  }}
-                  onCreateChild={(parentId) => {
-                    void handleCreateFile(parentId);
-                  }}
-                  isActionsEnabled={Boolean(isAuthenticated && accessToken)}
-                  docActionsAnchor={docActionsAnchor}
-                  onToggleDocumentActions={handleToggleDocumentActions}
-                  resolveActionType={resolveSharedTreeActionType}
-                  onShowAll={openSharedDocumentsPanel}
-                />
-              )}
+            {isAuthenticated && (
+              <SharedTree
+                className="mt-1"
+                isOpen={isSharedOpen}
+                onToggle={() => dispatch(toggleSharedOpen())}
+                documents={sharedDocuments}
+                isLoading={isSharedLoading}
+                activeDocId={activeDocId}
+                onSelectDocument={(docId) => {
+                  dispatch(setDocActionsAnchor(null));
+                  handleSelectDocument(docId);
+                }}
+                onCreateChild={(parentId) => {
+                  void handleCreateFile(parentId);
+                }}
+                isActionsEnabled={Boolean(isAuthenticated && accessToken)}
+                docActionsAnchor={docActionsAnchor}
+                onToggleDocumentActions={handleToggleDocumentActions}
+                resolveActionType={resolveSharedTreeActionType}
+                onShowAll={openSharedDocumentsPanel}
+              />
+            )}
 
-              {/* Guests keep the section mounted while the roots load: the
+            {/* Guests keep the section mounted while the roots load: the
                   section renders its skeleton rows from isLoading, which a
                   roots-empty gate would hide for the whole first request. */}
-              {!isAuthenticated && (sharedTreeRootIds.length > 0 || isGuestSharedLoading) && (
-                <SharedTree
-                  className="mt-1"
-                  isOpen={isSharedOpen}
-                  onToggle={() => dispatch(toggleSharedOpen())}
-                  documents={EMPTY_SHARED_DOCUMENTS}
-                  isLoading={isGuestSharedLoading}
-                  activeDocId={activeDocId}
-                  onSelectDocument={(docId) => {
-                    dispatch(setDocActionsAnchor(null));
-                    handleSelectDocument(docId);
-                  }}
-                  onCreateChild={guestNoop}
-                  isActionsEnabled={false}
-                  docActionsAnchor={null}
-                  onToggleDocumentActions={guestNoop}
-                  resolveActionType={guestResolveActionType}
-                />
-              )}
-            </SidebarTreeDndContext>
-          </div>
-        )}
+            {!isAuthenticated && (sharedTreeRootIds.length > 0 || isGuestSharedLoading) && (
+              <SharedTree
+                className="mt-1"
+                isOpen={isSharedOpen}
+                onToggle={() => dispatch(toggleSharedOpen())}
+                documents={EMPTY_SHARED_DOCUMENTS}
+                isLoading={isGuestSharedLoading}
+                activeDocId={activeDocId}
+                onSelectDocument={(docId) => {
+                  dispatch(setDocActionsAnchor(null));
+                  handleSelectDocument(docId);
+                }}
+                onCreateChild={guestNoop}
+                isActionsEnabled={false}
+                docActionsAnchor={null}
+                onToggleDocumentActions={guestNoop}
+                resolveActionType={guestResolveActionType}
+              />
+            )}
+          </SidebarTreeDndContext>
+        </div>
 
-        <div
-          className={`relative mt-auto sticky bottom-0 ${isRailCollapsed ? '' : 'border-t border-border'} bg-sidebar p-2`}
-        >
+        <div className="relative mt-auto sticky bottom-0 border-t border-border bg-sidebar p-2">
           <button
             ref={accountMenuTriggerRef}
             onClick={() => dispatch(setAccountMenuOpen(!isAccountMenuOpen))}
@@ -1273,24 +1221,17 @@ function Sidebar() {
           >
             <span
               aria-hidden="true"
-              className="inline-flex h-[23px] w-[23px] flex-shrink-0 items-center justify-center rounded-full bg-[#7d7a75]"
+              className="inline-flex h-[23px] w-[23px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
             >
               {isAuthenticated && user ? (
-                <span className="text-[12px] text-white font-semibold leading-none select-none">
+                <span className="text-[12px] font-semibold leading-none select-none">
                   {userInitial}
                 </span>
               ) : (
                 <UserCircle className="h-[16px] w-[16px]" />
               )}
             </span>
-            <span
-              className="flex items-center min-w-0 overflow-hidden transition-all duration-300"
-              style={{
-                opacity: isRailCollapsed ? 0 : 1,
-                width: isRailCollapsed ? 0 : 'calc(100% - 23px)',
-                paddingLeft: isRailCollapsed ? 0 : '12px',
-              }}
-            >
+            <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-3">
               <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
               <ChevronRight
                 className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
@@ -1324,9 +1265,9 @@ function Sidebar() {
               accessToken: null,
             });
           }}
-          onOpenAuth={() => {
+          onSignIn={() => {
             dispatch(setAccountMenuOpen(false));
-            dispatch(setAuthModalOpen(true));
+            goToSignIn();
           }}
           style={profileMenuStyle}
           popupRef={accountMenuPopupRef}
@@ -1347,8 +1288,6 @@ function Sidebar() {
       {isDocumentsPanelOpen && (
         <DocumentsPanel
           mode={documentsPanelMode}
-          sidebarWidth={sidebarWidth}
-          isSidebarCollapsed={isRailCollapsed}
           searchQuery={searchQuery}
           setSearchQuery={handleSetSearchQuery}
           onClose={closeDocumentsPanel}
@@ -1413,16 +1352,14 @@ function Sidebar() {
         }}
       />
 
-      {!isRailCollapsed && (
-        <div
-          onPointerDown={startResizing}
-          onMouseDown={(e) => {
-            if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
-            startResizing(e);
-          }}
-          className="nd-sidebar-resize-handle absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
-        />
-      )}
+      <div
+        onPointerDown={startResizing}
+        onMouseDown={(e) => {
+          if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
+          startResizing(e);
+        }}
+        className="nd-sidebar-resize-handle absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-sidebar-border/80 active:bg-sidebar-ring z-50 transition-colors touch-none"
+      />
     </aside>
   );
 }

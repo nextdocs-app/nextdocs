@@ -267,7 +267,7 @@ import { useDocument } from '../../../hooks/useDocument.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { createCodeBlockSpec } from '@blocknote/core';
@@ -349,6 +349,7 @@ function clearTouchInputStub() {
 
 describe('Editor Component', () => {
   const mockUpdateMeta = jest.fn();
+  const mockPush = jest.fn();
   const mockReplace = jest.fn();
   const mockYdoc = new Y.Doc();
   const mockMeta = {
@@ -359,7 +360,8 @@ describe('Editor Component', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (useRouter as jest.Mock).mockReturnValue({ replace: mockReplace });
+    (useRouter as jest.Mock).mockReturnValue({ push: mockPush, replace: mockReplace });
+    (usePathname as jest.Mock).mockReturnValue('/doc/test-doc-id');
     (useParams as jest.Mock).mockReturnValue({
       id: 'test-doc-id',
     });
@@ -475,6 +477,66 @@ describe('Editor Component', () => {
     expect(screen.getByText(/Access to this document has been restricted/i)).toBeInTheDocument();
     expect(screen.getByText(/Response code: 404/i)).toBeInTheDocument();
     expect(screen.queryByTestId('blocknote-view')).not.toBeInTheDocument();
+  });
+
+  it('offers sign-in from the restricted panel to a visitor with no session', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: null,
+      meta: null,
+      accessLevel: null,
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: {
+        kind: 'restricted',
+        title: 'Access to this document has been restricted',
+        description: 'This document may have been moved to trash.',
+        statusCode: 404,
+        responseMessage: 'The requested resource was not found.',
+      },
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    // The panel returns the visitor to this document after signing in.
+    expect(mockPush).toHaveBeenCalledWith('/login?next=%2Fdoc%2Ftest-doc-id');
+  });
+
+  it('does not offer sign-in on the restricted panel to a signed-in visitor', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'access-token',
+      user: { id: 'user-1' },
+    });
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: null,
+      meta: null,
+      accessLevel: null,
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: {
+        kind: 'restricted',
+        title: 'Access to this document has been restricted',
+        description: 'This document may have been moved to trash.',
+        statusCode: 404,
+        responseMessage: 'The requested resource was not found.',
+      },
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    expect(screen.getByText(/Access to this document has been restricted/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
   });
 
   it('should render title input and auto-focus for new documents', () => {
@@ -651,7 +713,7 @@ describe('Editor Component', () => {
     expect(commentsButton).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('should render shared guest toolbar notice and open auth modal from CTA', () => {
+  it('should render shared guest toolbar notice and send the CTA to sign-in', () => {
     (useSearchParams as jest.Mock).mockReturnValue({
       get: (key: string) => {
         if (key === 'share') return '1';
@@ -679,21 +741,14 @@ describe('Editor Component', () => {
       updateMeta: mockUpdateMeta,
     });
 
-    const store = configureStore({
-      reducer: {
-        ui: uiReducer,
-      },
-    });
-    const dispatchSpy = jest.spyOn(store, 'dispatch');
-
-    render(<Editor />, store);
+    render(<Editor />);
 
     expect(screen.getByText(/You are viewing a shared document as a guest\./i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
+    expect(mockPush).toHaveBeenCalledWith(
+      `/login?next=${encodeURIComponent('/doc/test-doc-id?share=1&authRequired=1')}`
     );
   });
 

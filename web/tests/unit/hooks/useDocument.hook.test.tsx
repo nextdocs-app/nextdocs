@@ -36,6 +36,7 @@ jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
 const mockOn = jest.fn();
 const mockOff = jest.fn();
 const mockDestroy = jest.fn();
+const mockConnect = jest.fn();
 const mockSetLocalStateField = jest.fn();
 
 type ProviderEventHandler = (event: { status: string } | { code: number }) => void;
@@ -55,6 +56,7 @@ const mockProviderInstance = {
   on: mockOn,
   off: mockOff,
   destroy: mockDestroy,
+  connect: mockConnect,
   shouldConnect: true,
   awareness: {
     setLocalStateField: mockSetLocalStateField,
@@ -2707,6 +2709,43 @@ describe('useDocument', () => {
       mockSetLocalStateField.mockClear();
     });
 
+    it('reconnects with the rotated token after a refresh', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const authState = {
+        isAuthenticated: true,
+        accessToken: 'token-old',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      };
+
+      (useAuth as jest.Mock).mockImplementation(() => authState);
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      const { result, rerender } = renderHook(() => useDocument(validUuid), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      await waitFor(() => {
+        expect(WebsocketProvider).toHaveBeenCalledTimes(1);
+      });
+
+      authState.accessToken = 'token-new';
+      rerender();
+
+      await waitFor(() => {
+        expect(WebsocketProvider).toHaveBeenCalledTimes(2);
+      });
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+    });
+
     it('should skip access polling when isRealtimeConnected is true', async () => {
       jest.useFakeTimers();
 
@@ -2888,6 +2927,217 @@ describe('useDocument', () => {
         });
       });
       expect(result.current.ydoc).toBeNull();
+    });
+
+    it('should keep reconnecting when the access re-check after a 1008 close fails transiently', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-transient',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      mockProviderInstance.shouldConnect = true;
+
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // The client lost the network while the socket was closing: neither an
+      // expired token nor a revocation, just a failed re-check.
+      getMyAccessSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      // The handler stops reconnection while it decides, then has to hand control
+      // back; otherwise the socket stays closed for the rest of the session.
+      expect(mockProviderInstance.shouldConnect).toBe(false);
+
+      // y-websocket already spent its one retry by the time this slow round trip
+      // answers, so the flag alone would not reopen anything.
+      await waitFor(() => {
+        expect(mockConnect).toHaveBeenCalledTimes(1);
+      });
+      expect(result.current.errorState).toBeNull();
+    });
+
+    it('should keep reconnecting when the trashed-copy fetch after a 1008 close fails transiently', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-trash-transient',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      mockProviderInstance.shouldConnect = true;
+
+      // The document left the trash scope it loaded with, so the close handler
+      // asks for the trashed copy to tell a trash move from a revocation.
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        trashed: true,
+      });
+
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // The trash follow-up fails on a flaky link; nothing proves revocation.
+      getCloudDocumentSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+
+      expect(mockProviderInstance.shouldConnect).toBe(false);
+
+      await waitFor(() => {
+        expect(mockConnect).toHaveBeenCalledTimes(1);
+      });
+      expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2);
+      expect(result.current.errorState).toBeNull();
+    });
+
+    it('should back off repeated 1008 closes and reset once the socket reconnects', async () => {
+      jest.useFakeTimers();
+
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Realtime Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-close-backoff',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await act(async () => {
+        // Flush initial mount loadDoc promise chain
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      await waitFor(() => {
+        expect(registeredCloseHandler).not.toBeNull();
+      });
+      mockProviderInstance.shouldConnect = true;
+
+      const flushMicrotasks = async () => {
+        await act(async () => {
+          for (let i = 0; i < 5; i += 1) {
+            await Promise.resolve();
+          }
+        });
+      };
+
+      // First close: the access re-check passes, so the resume needs no wait.
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+      await flushMicrotasks();
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+
+      // Second close: the retry waits (500ms base), so a server that keeps
+      // refusing is not hit as fast as the close arrives.
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+      await flushMicrotasks();
+      await act(async () => {
+        jest.advanceTimersByTime(499);
+      });
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(mockConnect).toHaveBeenCalledTimes(2);
+
+      // A live socket means the closes are behind us: the backoff and the
+      // reconnect it had scheduled are dropped, so the next close is immediate.
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+      act(() => {
+        registeredCloseHandler!({ code: 1008 });
+      });
+      await flushMicrotasks();
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(mockConnect).toHaveBeenCalledTimes(3);
+
+      jest.useRealTimers();
     });
 
     it('should not establish realtime connection for a trashed document owned by the user', async () => {

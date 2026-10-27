@@ -7,7 +7,7 @@ export type ProfileMenuPopupProps = {
   onOpenSettings: () => void;
   onOpenTrash: () => void;
   onLogout: () => void;
-  onOpenAuth: () => void;
+  onSignIn: () => void;
   style: React.CSSProperties;
   popupRef: React.RefObject<HTMLDivElement | null>;
 };
@@ -18,7 +18,7 @@ export function ProfileMenuPopup({
   onOpenSettings,
   onOpenTrash,
   onLogout,
-  onOpenAuth,
+  onSignIn,
   style,
   popupRef,
 }: ProfileMenuPopupProps) {
@@ -57,7 +57,7 @@ export function ProfileMenuPopup({
           Log out
         </PopupMenuItem>
       ) : (
-        <PopupMenuItem theme={theme} icon={<Login className="opacity-90" />} onClick={onOpenAuth}>
+        <PopupMenuItem theme={theme} icon={<Login className="opacity-90" />} onClick={onSignIn}>
           Log in
         </PopupMenuItem>
       )}

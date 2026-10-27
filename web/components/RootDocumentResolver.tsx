@@ -5,15 +5,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
-import { useAppDispatch } from '@/stores/hooks';
-import { setAuthModalOpen } from '@/stores/ui/ui.slice';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 
 const OfflineEditor = dynamic(() => import('@/components/editor'), { ssr: false });
 
 export default function RootDocumentResolver() {
   const router = useRouter();
-  const dispatch = useAppDispatch();
   const { user, isAuthenticated, accessToken, isInitializing } = useAuth();
   const { isOnline } = useNetworkStatus();
   const hasResolvedRef = useRef(false);
@@ -75,23 +72,13 @@ export default function RootDocumentResolver() {
     };
   }, [isInitializing, isAuthenticated, accessToken, user?.id, router, isOnline, retryTrigger]);
 
-  if (!isInitializing && !isAuthenticated) {
+  // The workspace entry only mounts this resolver once a session exists, so a
+  // guest never reaches it. Keep the loading shell while the token refresh
+  // settles, matching what the server rendered.
+  if (isInitializing) {
     return (
-      <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-sm text-center">
-          <h1 className="text-xl font-semibold text-foreground">Welcome to NextDocs</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to create and edit your own documents. Opening a shared link works without an
-            account.
-          </p>
-          <button
-            type="button"
-            onClick={() => dispatch(setAuthModalOpen(true))}
-            className="mt-5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90"
-          >
-            Sign in
-          </button>
-        </div>
+      <div className="flex h-full items-center justify-center">
+        <div className="text-sm text-muted-foreground">Loading document...</div>
       </div>
     );
   }

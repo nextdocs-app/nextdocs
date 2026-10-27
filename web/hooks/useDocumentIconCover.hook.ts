@@ -35,6 +35,8 @@ export interface DocumentIconCoverDeps {
   isCloudMetadataInBackoff: () => boolean;
   clearCloudMetadataBackoff: () => void;
   triggerCloudMetadataBackoff: () => void;
+  /** Silent re-auth when a write hits an expired access token. */
+  refreshSession: () => void;
   metaRef: React.MutableRefObject<DocumentMeta | null>;
   ydocRef: React.MutableRefObject<Y.Doc | null>;
   accessLevelRef: React.MutableRefObject<DocumentAccessLevel | null>;
@@ -62,6 +64,7 @@ export function useDocumentIconCover(deps: DocumentIconCoverDeps) {
     isCloudMetadataInBackoff,
     clearCloudMetadataBackoff,
     triggerCloudMetadataBackoff,
+    refreshSession,
     metaRef,
     ydocRef,
     accessLevelRef,
@@ -217,6 +220,7 @@ export function useDocumentIconCover(deps: DocumentIconCoverDeps) {
         queuePendingPatch,
         triggerBackoff: triggerCloudMetadataBackoff,
         clearBackoff: clearCloudMetadataBackoff,
+        refreshSession,
         rollback: () => {
           if (updateMetaSeqRef.current === seq) {
             // Spread alone omits absent keys, which would leave an optimistic
@@ -257,6 +261,7 @@ export function useDocumentIconCover(deps: DocumentIconCoverDeps) {
       isCloudMetadataInBackoff,
       clearCloudMetadataBackoff,
       triggerCloudMetadataBackoff,
+      refreshSession,
       isSharedDocument,
       metaRef,
       ydocRef,

@@ -15,8 +15,6 @@ import type {
 
 export type DocumentsPanelProps = {
   mode: NonNullable<DocumentsPanelMode>;
-  isSidebarCollapsed: boolean;
-  sidebarWidth: number;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   onClose: () => void;
@@ -61,8 +59,6 @@ export type DocumentsPanelProps = {
 
 export function DocumentsPanel({
   mode,
-  isSidebarCollapsed,
-  sidebarWidth,
   searchQuery,
   setSearchQuery,
   onClose,
@@ -293,12 +289,7 @@ export function DocumentsPanel({
       aria-label={
         isTrashPanel ? 'Trash documents' : isSharedPanel ? 'Shared documents' : 'Private documents'
       }
-      className={`absolute inset-y-0 left-0 ${
-        isSidebarCollapsed ? 'border-r border-sidebar-border' : ''
-      } z-40 bg-sidebar flex flex-col animate-in slide-in-from-left-8 duration-300`}
-      style={{
-        width: isSidebarCollapsed ? `${sidebarWidth}px` : '100%',
-      }}
+      className="absolute inset-y-0 left-0 w-full z-40 bg-sidebar flex flex-col animate-in slide-in-from-left-8 duration-300"
     >
       <div className="px-2 pt-4 pb-3 border-b border-sidebar-border bg-gradient-to-b from-sidebar to-sidebar/95">
         <div className="flex items-center gap-2">

@@ -74,7 +74,7 @@ import { useDocumentToolbarInset } from '@/hooks/useDocumentToolbarInset.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
-import type { AuthUser } from '@/stores/auth/auth.types';
+import type { AuthUser } from '@/types/auth.types';
 import type { CommentsFilter, CommentsSort } from '@/components/comments/CommentProvider';
 import type { DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';

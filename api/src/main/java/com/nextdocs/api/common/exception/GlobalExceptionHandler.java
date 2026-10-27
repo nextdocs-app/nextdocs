@@ -1,11 +1,13 @@
 package com.nextdocs.api.common.exception;
 
 import com.nextdocs.api.common.response.ApiResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -116,6 +118,25 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException ex) {
         log.warn("Access denied: {}", ex.getMessage(), ex);
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiResponse.error("Access denied."));
+    }
+
+    /**
+     * A body that cannot be read is a caller-side problem: malformed JSON, or a
+     * connection that ended mid-upload (a backgrounded tab, a dev reload, a
+     * flaky LAN link). Answering 500 would make the client treat its
+     * own truncated request as a server outage and back off from saving.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(
+            HttpMessageNotReadableException ex, HttpServletRequest request) {
+        log.debug(
+                "Unreadable request body for {} {}: {}",
+                request.getMethod(),
+                request.getRequestURI(),
+                ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(
+                        ErrorCode.VALIDATION_FAILED.defaultMessage(), "The request body could not be read."));
     }
 
     @ExceptionHandler(Exception.class)

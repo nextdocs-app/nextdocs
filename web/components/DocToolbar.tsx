@@ -3,9 +3,8 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SharePanel } from '@/components/SharePanel';
-import { Comments, Hamburger, MoreHorizontal, Share } from '@/icons/index';
-import { useAppDispatch, useAppSelector } from '@/stores/hooks';
-import { toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
+import { Comments, MoreHorizontal, Share } from '@/icons/index';
+import { useAppSelector } from '@/stores/hooks';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
@@ -97,7 +96,6 @@ export function DocToolbar({
   onRestore,
 }: DocToolbarProps) {
   const router = useRouter();
-  const dispatch = useAppDispatch();
   const isMobileLayout = useIsMobileLayout();
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [showOfflineTooltip, setShowOfflineTooltip] = useState(false);
@@ -189,12 +187,13 @@ export function DocToolbar({
       : { id: documentId, title: documentTitle || 'Untitled', icon: documentIcon ?? null };
 
   // Left offset tracking: aligns pixel-perfectly with the left sidebar edge.
-  // On mobile the rail is off-canvas, so only the drawer toggle sits up here.
+  // When the rail is closed (or off-canvas on mobile), the shell's navigation
+  // toggle leads the row, so the toolbar clears it.
   const leftPositionStyle = {
     left: isMobileLayout
-      ? 'calc(0.5rem + env(safe-area-inset-left, 0px))'
+      ? 'calc(0.5rem + env(safe-area-inset-left, 0px) + 2.375rem)'
       : isSidebarCollapsed
-        ? 'calc(3.25rem + 12px)'
+        ? 'calc(0.5rem + 1.875rem)'
         : 'calc(var(--nd-sidebar-width, 256px) + 12px)',
   };
 
@@ -202,35 +201,22 @@ export function DocToolbar({
     <>
       {/* ── Left most toolbar: Document Hierarchy Breadcrumbs (Notion-style) ── */}
       <div
-        className="
+        className={`
           nd-doc-toolbar-left fixed top-2 z-40
           flex items-center gap-0.5 min-w-0
           max-w-[calc(100vw-6.5rem)]
-          md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]
+          ${
+            isSidebarCollapsed
+              ? 'md:max-w-[calc(100vw-17rem)]'
+              : 'md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]'
+          }
           h-9 md:h-7 select-none pointer-events-auto
           transition-[left] duration-300
-        "
+        `}
         style={leftPositionStyle}
         role="navigation"
         aria-label="Document hierarchy"
       >
-        {/* Mobile only: the rail is off-canvas, so this is the only way in. */}
-        <button
-          type="button"
-          onClick={() => dispatch(toggleMobileNav())}
-          aria-label="Open navigation"
-          aria-haspopup="dialog"
-          title="Open navigation"
-          className="
-            md:hidden inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm
-            text-muted-foreground hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
-            transition-colors duration-150 cursor-pointer
-            focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
-          "
-        >
-          <Hamburger size={19} />
-        </button>
-
         {shouldCollapseBreadcrumbs ? (
           <>
             {/* Root Document */}

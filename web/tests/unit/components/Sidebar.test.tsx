@@ -15,6 +15,8 @@ import { DocumentServiceApiError, documentService } from '../../../services/docu
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useTheme } from '../../../hooks/useTheme.hook';
+import { useIsMobileLayout } from '../../../hooks/useMediaQuery.hook';
+import { useWorkspace } from '../../../hooks/useWorkspace.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import { listPendingCloudCreates } from '../../../lib/pending-cloud-create.util';
 import { resolveRootDocumentId } from '../../../lib/root-document.util';
@@ -113,6 +115,8 @@ jest.mock('next/navigation');
 jest.mock('../../../services/document.service');
 jest.mock('../../../hooks/useAuth.hook');
 jest.mock('../../../hooks/useTheme.hook');
+jest.mock('../../../hooks/useMediaQuery.hook', () => ({ useIsMobileLayout: jest.fn() }));
+jest.mock('../../../hooks/useWorkspace.hook');
 jest.mock('../../../lib/root-document.util', () => ({
   resolveRootDocumentId: jest.fn(),
 }));
@@ -180,6 +184,14 @@ function setupDefault() {
     loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
   });
   (useTheme as jest.Mock).mockReturnValue({ resolvedTheme: 'light' });
+  (useIsMobileLayout as jest.Mock).mockReturnValue(false);
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'NextDocs',
+    icon: null,
+    role: 'OWNER',
+    memberCount: 2,
+  });
   (useAuth as jest.Mock).mockReturnValue({
     user: {
       displayName: 'Alice',
@@ -232,6 +244,77 @@ it('renders the document list', () => {
   render(<Sidebar />);
   expect(getTreeNodeRow(/Doc 1/i)).toBeInTheDocument();
   expect(getTreeNodeRow(/Untitled/i)).toBeInTheDocument();
+});
+
+it('labels the rail with the workspace identity', () => {
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'Acme Docs',
+    icon: { type: 'emoji', value: '📚' },
+    role: 'OWNER',
+    memberCount: 3,
+  });
+
+  render(<Sidebar />);
+
+  expect(screen.getByTitle('Acme Docs')).toBeInTheDocument();
+  expect(screen.getByText('📚')).toBeInTheDocument();
+});
+
+it('uses a neutral placeholder when the workspace has no icon', () => {
+  render(<Sidebar />);
+
+  expect(screen.getByTestId('workspace-placeholder')).toBeInTheDocument();
+});
+
+it('removes the rail from the page when collapsed', async () => {
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  expect(screen.getByTitle('NextDocs')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+
+  expect(screen.queryByTitle('NextDocs')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Search Documents' })).not.toBeInTheDocument();
+});
+
+it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
+  (useIsMobileLayout as jest.Mock).mockReturnValue(true);
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebar: {
+        isCollapsed: true,
+        sidebarWidth: 256,
+        panelMode: null,
+        searchQuery: '',
+        isPrivateOpen: true,
+        isSharedOpen: true,
+        docActionsAnchor: null,
+        isMobileNavOpen: false,
+      },
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+
+  render(<Sidebar />, store);
+
+  expect(screen.getByRole('button', { name: 'Search Documents' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Close navigation' })).toBeInTheDocument();
 });
 
 it('navigates to the selected document', async () => {
@@ -531,25 +614,34 @@ function useGuestAuth() {
   });
 }
 
-it('dispatches auth modal open action when "Log in" is selected from the account menu', async () => {
+it('sends a guest to the sign-in page from the account menu', async () => {
   useGuestAuth();
-  const store = configureStore({
-    reducer: {
-      sidebar: sidebarReducer,
-      sidebarTree: sidebarTreeReducer,
-      sharedTree: sharedTreeReducer,
-      ui: uiReducer,
-    },
-  });
-  const dispatchSpy = jest.spyOn(store, 'dispatch');
+  // Reading a shared document as a guest: signing in returns them here.
+  window.history.replaceState(null, '', '/doc/shared-doc?share=1');
   const user = userEvent.setup();
-  render(<Sidebar />, store);
+  render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log in/i }));
-  expect(dispatchSpy).toHaveBeenCalledWith(
-    expect.objectContaining({ type: 'ui/setAuthModalOpen', payload: true })
+  expect(mockPush).toHaveBeenCalledWith(
+    `/login?next=${encodeURIComponent('/doc/shared-doc?share=1')}`
   );
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  window.history.replaceState(null, '', '/');
+});
+
+it('sends a guest to the sign-in page instead of creating a document', async () => {
+  useGuestAuth();
+  window.history.replaceState(null, '', '/doc/shared-doc?share=1');
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getAllByRole('button', { name: /New document/i })[0]);
+
+  expect(mockPush).toHaveBeenCalledWith(
+    `/login?next=${encodeURIComponent('/doc/shared-doc?share=1')}`
+  );
+  expect(documentService.createDocument).not.toHaveBeenCalled();
+  window.history.replaceState(null, '', '/');
 });
 
 it('calls logout when "Log out" is selected from the account menu', async () => {

@@ -1,0 +1,20 @@
+/*
+ * Document-application styles: editor, comments, and the responsive shell.
+ * Imported by `app/(app)/layout.tsx` so public auth pages never download them.
+ * The order mirrors the original `globals.css` cascade — reordering changes
+ * which rule wins.
+ */
+
+@import './editor-page.css';
+@import './editor-code.css';
+@import './editor-blocks.css';
+@import './editor-handles.css';
+@import './editor-text.css';
+@import './comments-sidebar.css';
+@import './comments-threads.css';
+@import './comments-activity.css';
+@import './layout-responsive.css';
+@import './editor-toolbar.css';
+@import './editor-menus.css';
+@import './editor-popovers.css';
+@import './editor-media.css';

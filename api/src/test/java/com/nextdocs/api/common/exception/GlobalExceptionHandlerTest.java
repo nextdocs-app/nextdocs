@@ -109,6 +109,16 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void unreadableBody_returns400InsteadOf500() throws Exception {
+        mockMvc.perform(post("/test/validate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{not-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.VALIDATION_FAILED.defaultMessage()));
+    }
+
+    @Test
     void typeMismatchException_returns400WithValidationError() throws Exception {
         mockMvc.perform(get("/test/type-mismatch/default-doc"))
                 .andExpect(status().isBadRequest())

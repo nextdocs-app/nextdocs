@@ -1,15 +1,6 @@
-import {
-  createSlice,
-  createAsyncThunk,
-  createListenerMiddleware,
-  type PayloadAction,
-} from '@reduxjs/toolkit';
-import type {
-  AuthState,
-  LoginCredentials,
-  RegisterCredentials,
-  AuthApiResponse,
-} from './auth.types';
+import { createSlice, createAsyncThunk, createListenerMiddleware } from '@reduxjs/toolkit';
+import type { AuthState } from './auth.types';
+import type { AuthApiResponse } from '@/types/auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
 import { attachmentService } from '@/services/attachment.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
@@ -105,42 +96,8 @@ const initialState: AuthState = {
   expiresAt: persistedAuth?.expiresAt ?? null,
   lastSilentRefreshAt: null,
   sessionId: 0,
-  isLoading: false,
   isInitializing: true,
-  error: null,
 };
-
-export const loginThunk = createAsyncThunk<AuthApiResponse, LoginCredentials>(
-  'auth/login',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const response = await authApiService.login(credentials);
-      // A signed URL cached for a previous session must never leak into this one.
-      attachmentService.resetAttachmentUrlCache();
-      indexedDBService.setUserId(response.user.id);
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Login failed.';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-export const registerThunk = createAsyncThunk<AuthApiResponse, RegisterCredentials>(
-  'auth/register',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const response = await authApiService.register(credentials);
-      // A signed URL cached for a previous session must never leak into this one.
-      attachmentService.resetAttachmentUrlCache();
-      indexedDBService.setUserId(response.user.id);
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Registration failed.';
-      return rejectWithValue(message);
-    }
-  }
-);
 
 // Two rotations of the same refresh cookie make the API treat the second as
 // reuse and revoke the whole session, so every dispatch shares this request
@@ -153,18 +110,49 @@ let inFlightRefresh: {
   promise: Promise<AuthApiResponse>;
 } | null = null;
 
-function requestSessionRefresh(userId: string | null, sessionId: number): Promise<AuthApiResponse> {
+function requestSessionRefresh(
+  userId: string | null,
+  sessionId: number,
+  isCurrent: () => boolean
+): Promise<AuthApiResponse> {
   if (inFlightRefresh?.userId === userId && inFlightRefresh.sessionId === sessionId) {
     return inFlightRefresh.promise;
   }
 
-  const promise = authApiService.refresh().finally(() => {
+  const promise = refreshWithRotationRetry(isCurrent, userId !== null).finally(() => {
     if (inFlightRefresh?.promise === promise) {
       inFlightRefresh = null;
     }
   });
   inFlightRefresh = { userId, sessionId, promise };
   return promise;
+}
+
+/**
+ * Retries the one 401 this tab can actually explain: a rotation that raced
+ * another tab. That tab replaced the shared refresh cookie while this request
+ * was in flight, and the browser jar already holds the replacement, so a second
+ * attempt can recover without signing the user out.
+ *
+ * Only a tab that already had a session can have lost that race. A tab with no
+ * known identity is asking whether a session exists at all, and retrying that
+ * "no" would double every signed-out page load's refresh traffic for nothing.
+ * (The server's own rotation grace answers the raced case with 200, so the retry
+ * is the fallback for a refresh that raced a `Set-Cookie` write.)
+ */
+async function refreshWithRotationRetry(
+  isCurrent: () => boolean,
+  hadPriorSession: boolean
+): Promise<AuthApiResponse> {
+  try {
+    return await authApiService.refresh();
+  } catch (err) {
+    if (!hadPriorSession || !(err instanceof ApiError) || err.status !== 401 || !isCurrent()) {
+      throw err;
+    }
+
+    return authApiService.refresh();
+  }
 }
 
 function isStaleSession(state: AuthState, userId: string | null, sessionId: number): boolean {
@@ -181,7 +169,11 @@ export const refreshSessionThunk = createAsyncThunk<
     const { user, sessionId } = getState().auth;
     const sessionUserId = user?.id ?? null;
     try {
-      const response = await requestSessionRefresh(sessionUserId, sessionId);
+      const response = await requestSessionRefresh(
+        sessionUserId,
+        sessionId,
+        () => !isStaleSession(getState().auth, sessionUserId, sessionId)
+      );
       // A logout, account switch, or a fresh sign-in may have completed while
       // the request was in flight. Applying the response now would restore the
       // previous identity (and re-point IndexedDB at it) after its local data
@@ -248,71 +240,9 @@ export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthSta
 const authSlice = createSlice({
   name: 'auth',
   initialState,
-  reducers: {
-    setAuthFromResponse(state, action: PayloadAction<AuthApiResponse>) {
-      const { user, accessToken, expiresIn } = action.payload;
-      state.user = user;
-      state.accessToken = accessToken;
-      state.expiresAt = Date.now() + expiresIn * 1000;
-      state.sessionId += 1;
-      state.error = null;
-    },
-    clearAuth(state) {
-      state.user = null;
-      state.accessToken = null;
-      state.expiresAt = null;
-      state.lastSilentRefreshAt = null;
-      state.sessionId += 1;
-      state.error = null;
-    },
-    clearError(state) {
-      state.error = null;
-    },
-    setInitializing(state, action: PayloadAction<boolean>) {
-      state.isInitializing = action.payload;
-    },
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
-      .addCase(loginThunk.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(loginThunk.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.user = action.payload.user;
-        state.accessToken = action.payload.accessToken;
-        state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.sessionId += 1;
-        state.error = null;
-      })
-      .addCase(loginThunk.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = (action.payload as string) ?? 'Login failed.';
-      });
-
-    builder
-      .addCase(registerThunk.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(registerThunk.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.user = action.payload.user;
-        state.accessToken = action.payload.accessToken;
-        state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-        state.sessionId += 1;
-        state.error = null;
-      })
-      .addCase(registerThunk.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = (action.payload as string) ?? 'Registration failed.';
-      });
-
-    builder
-      .addCase(refreshSessionThunk.pending, (state) => {
-        state.error = null;
-      })
       .addCase(refreshSessionThunk.fulfilled, (state, action) => {
         state.user = action.payload.user;
         state.accessToken = action.payload.accessToken;
@@ -353,40 +283,25 @@ const authSlice = createSlice({
       state.expiresAt = null;
       state.lastSilentRefreshAt = null;
       state.sessionId += 1;
-      state.error = null;
     });
   },
 });
 
-export const { setAuthFromResponse, clearAuth, clearError, setInitializing } = authSlice.actions;
 export default authSlice.reducer;
 
 // Session side effects live here, not in reducers: guest link mirrors must
 // not leak into the signed-in session, and snapshots belong in storage.
 export const authListenerMiddleware = createListenerMiddleware();
 authListenerMiddleware.startListening({
-  actionCreator: setAuthFromResponse,
+  actionCreator: refreshSessionThunk.fulfilled,
   effect: async (_action, listenerApi) => {
-    // A guest link signing in is an identity switch too, not just the thunks below.
-    attachmentService.resetAttachmentUrlCache();
-    documentService.clearSessionRegistries();
-    persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
-  },
-});
-authListenerMiddleware.startListening({
-  actionCreator: clearAuth,
-  effect: async () => {
-    attachmentService.resetAttachmentUrlCache();
-    clearPersistedAuthSnapshot();
-    documentService.clearSessionRegistries();
-  },
-});
-authListenerMiddleware.startListening({
-  predicate: (action) =>
-    loginThunk.fulfilled.match(action) ||
-    registerThunk.fulfilled.match(action) ||
-    refreshSessionThunk.fulfilled.match(action),
-  effect: async (_action, listenerApi) => {
+    const previousUser = (listenerApi.getOriginalState() as { auth: AuthState }).auth.user;
+    const nextUser = (listenerApi.getState() as { auth: AuthState }).auth.user;
+    // A rotated token keeps the same identity and its per-identity cache keys;
+    // only a refresh that boots (or switches) the account invalidates URLs.
+    if ((previousUser?.id ?? null) !== (nextUser?.id ?? null)) {
+      attachmentService.resetAttachmentUrlCache();
+    }
     documentService.clearSessionRegistries();
     persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
   },

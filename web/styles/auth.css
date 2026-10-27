@@ -1,0 +1,279 @@
+/*
+ * Public auth surface. Warm neutral derived from the brand accent and
+ * deliberately light-only: the theme saved in the app must not restyle the
+ * signed-out entry point.
+ */
+
+.nd-auth-root {
+  --nd-auth-bg: #faf5f3;
+  --nd-auth-surface: #ffffff;
+  --nd-auth-ink: #1c1917;
+  --nd-auth-muted: #6f6862;
+  --nd-auth-line: rgba(28, 25, 23, 0.08);
+  --nd-auth-link: #a94f3c;
+
+  color-scheme: light;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  background:
+    radial-gradient(1100px 600px at 50% -12%, rgba(231, 143, 128, 0.16), transparent 58%),
+    linear-gradient(180deg, #fdfaf8 0%, var(--nd-auth-bg) 100%);
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-shell {
+  width: 100%;
+  max-width: 420px;
+}
+
+.nd-auth-wordmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.nd-auth-wordmark-text {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-card {
+  border: 1px solid var(--nd-auth-line);
+  border-radius: 16px;
+  background: var(--nd-auth-surface);
+  padding: 32px;
+  box-shadow:
+    0 1px 2px rgba(28, 25, 23, 0.04),
+    0 16px 48px -24px rgba(28, 25, 23, 0.18);
+}
+
+@media (max-width: 480px) {
+  .nd-auth-root {
+    padding: 32px 16px;
+  }
+
+  .nd-auth-card {
+    padding: 24px;
+  }
+}
+
+.nd-auth-title {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-subtitle {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--nd-auth-muted);
+}
+
+.nd-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 26px;
+}
+
+.nd-auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nd-auth-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-input {
+  width: 100%;
+  border: 1px solid var(--nd-auth-line);
+  border-radius: 8px;
+  background: var(--nd-auth-surface);
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--nd-auth-ink);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.nd-auth-input::placeholder {
+  color: #a8a29e;
+}
+
+.nd-auth-input:focus {
+  border-color: var(--nd-auth-link);
+}
+
+.nd-auth-input:disabled {
+  opacity: 0.6;
+}
+
+.nd-auth-password {
+  position: relative;
+}
+
+.nd-auth-password .nd-auth-input {
+  padding-right: 40px;
+}
+
+.nd-auth-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--nd-auth-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.nd-auth-password-toggle:hover {
+  background: rgba(28, 25, 23, 0.06);
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-password-toggle:focus-visible {
+  outline: 2px solid var(--nd-auth-link);
+  outline-offset: 1px;
+}
+
+.nd-auth-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border-radius: 8px;
+  background: var(--nd-brand);
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--nd-brand-foreground);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.nd-auth-button:hover:not(:disabled) {
+  background: var(--nd-brand-hover);
+}
+
+.nd-auth-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.nd-auth-error {
+  margin-bottom: 18px;
+  border: 1px solid rgba(168, 51, 42, 0.18);
+  border-radius: 8px;
+  background: #fdf0ee;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #a8332a;
+}
+
+.nd-auth-hint {
+  margin-top: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--nd-auth-muted);
+}
+
+.nd-auth-card-actions {
+  margin-top: 24px;
+}
+
+.nd-auth-field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--nd-auth-muted);
+}
+
+/* Invitation summary shown above the join form. A definition list keeps the
+ * label/value pairing available to screen readers without extra ARIA. */
+.nd-auth-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+  border: 1px solid var(--nd-auth-line);
+  border-radius: 10px;
+  background: #fdfaf8;
+  padding: 14px 16px;
+}
+
+.nd-auth-invite-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+}
+
+.nd-auth-invite-label {
+  font-size: 13px;
+  color: var(--nd-auth-muted);
+}
+
+.nd-auth-invite-value {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--nd-auth-ink);
+}
+
+.nd-auth-invite + .nd-auth-error {
+  margin-top: 18px;
+  margin-bottom: 0;
+}
+
+.nd-auth-link {
+  color: var(--nd-auth-link);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+.nd-auth-link:hover {
+  opacity: 0.8;
+}
+
+.nd-auth-footnote {
+  margin-top: 22px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--nd-auth-muted);
+}
+
+.nd-auth-loading {
+  margin-top: 26px;
+  font-size: 14px;
+  color: var(--nd-auth-muted);
+}
