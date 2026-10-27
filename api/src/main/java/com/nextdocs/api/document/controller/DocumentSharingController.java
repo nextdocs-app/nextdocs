@@ -1,6 +1,8 @@
 package com.nextdocs.api.document.controller;
 
 import com.nextdocs.api.auth.security.UserPrincipal;
+import com.nextdocs.api.common.exception.ApiException;
+import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
@@ -16,6 +18,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,6 +28,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -34,6 +38,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class DocumentSharingController {
+
+    private static final String BEARER_PREFIX = "Bearer ";
 
     private final DocumentSharingService sharingService;
 
@@ -216,8 +222,11 @@ public class DocumentSharingController {
             })
     @GetMapping("/{id}/my-access")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> myAccess(
-            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @PathVariable UUID id) {
         if (principal == null) {
+            rejectInvalidBearer(authorization);
             return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
         }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.getMyAccess(principal.getId(), id)));
@@ -235,10 +244,28 @@ public class DocumentSharingController {
             })
     @GetMapping("/{id}/access-check")
     public ResponseEntity<ApiResponse<DocumentAccessResponse>> accessCheck(
-            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @PathVariable UUID id) {
         if (principal == null) {
+            rejectInvalidBearer(authorization);
             return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
         }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheck(principal.getId(), id)));
+    }
+
+    /**
+     * A caller that presented a Bearer token but was not authenticated has a
+     * stale or revoked session. Falling back to the anonymous share-link level
+     * would silently downgrade a signed-in editor (the realtime server
+     * revalidates with this endpoint), so fail closed and let the client
+     * refresh instead.
+     */
+    private static void rejectInvalidBearer(String authorization) {
+        // RFC 7235 makes the scheme case-insensitive, and a client that spells it
+        // "bearer" must not slip past this guard into the anonymous access level.
+        if (authorization != null && authorization.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
+            throw new ApiException(ErrorCode.TOKEN_INVALID);
+        }
     }
 }

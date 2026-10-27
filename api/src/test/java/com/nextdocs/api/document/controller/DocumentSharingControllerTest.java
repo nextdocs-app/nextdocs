@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -351,6 +352,48 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.accessLevel").value("EDIT"));
+    }
+
+    @Test
+    void accessCheck_withStaleBearerToken_returns401InsteadOfPublicAccess() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}/access-check", documentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer expired-token"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verifyNoInteractions(sharingService);
+    }
+
+    @Test
+    void myAccess_withStaleBearerToken_returns401InsteadOfPublicAccess() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}/my-access", documentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer expired-token"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verifyNoInteractions(sharingService);
+    }
+
+    @Test
+    void accessCheck_withLowercaseBearerScheme_returns401InsteadOfPublicAccess() throws Exception {
+        // RFC 7235: the scheme name is case-insensitive, so "bearer" is the same
+        // stale credential and must not fall through to the share-link level.
+        mockMvc.perform(get("/api/v1/documents/{id}/access-check", documentId)
+                        .header(HttpHeaders.AUTHORIZATION, "bearer expired-token"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verifyNoInteractions(sharingService);
+    }
+
+    @Test
+    void myAccess_withLowercaseBearerScheme_returns401InsteadOfPublicAccess() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}/my-access", documentId)
+                        .header(HttpHeaders.AUTHORIZATION, "bEaReR expired-token"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verifyNoInteractions(sharingService);
     }
 
     @Test
