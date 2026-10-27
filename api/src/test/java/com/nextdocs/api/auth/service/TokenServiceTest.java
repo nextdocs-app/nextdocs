@@ -13,6 +13,8 @@ import com.nextdocs.api.auth.security.ClientIpResolver;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import jakarta.servlet.http.Cookie;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,6 +33,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class TokenServiceTest {
 
     private static final long REFRESH_EXPIRY_MS = 604_800_000L; // 7 days
+    private static final String TWO_TABS_USER_AGENT = "Mozilla/5.0 (two tabs, one jar)";
 
     @Mock
     private RefreshTokenRepository refreshTokenRepository;
@@ -177,6 +180,113 @@ class TokenServiceTest {
     }
 
     @Test
+    void rotateRefreshToken_acceptsReuse_withoutMintingASecondToken() {
+        // Two tabs sent the same cookie; the loser must not look like theft.
+        // Both tabs share the browser jar, so the client details match.
+        mockRequest.setCookies(new Cookie("rt", "rotatedrawtoken"));
+        mockRequest.addHeader("User-Agent", TWO_TABS_USER_AGENT);
+
+        RefreshToken rotatedToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(5))
+                .ipAddress(ip("203.0.113.5"))
+                .userAgent(TWO_TABS_USER_AGENT)
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotatedToken));
+
+        User returned = tokenService.rotateRefreshToken(mockRequest, mockResponse);
+
+        assertThat(returned).isEqualTo(testUser);
+        verify(refreshTokenRevoker, never()).revokeAllForUser(any());
+        // The rotation's replacement is already in the shared jar. A second one
+        // would be a live token a logout cannot reach, so a delayed Set-Cookie
+        // for it could restore the session.
+        assertThat(mockResponse.getHeader("Set-Cookie")).isNull();
+        verify(refreshTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void rotateRefreshToken_revokesAll_whenGraceIsReplayedFromAnotherUserAgent() {
+        // Same window, different browser: the shape of a cookie replayed off the
+        // victim's machine, which must not mint a session.
+        mockRequest.setCookies(new Cookie("rt", "stolenrawtoken"));
+        mockRequest.addHeader("User-Agent", "curl/8.0");
+
+        RefreshToken rotatedToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(5))
+                .ipAddress(ip("203.0.113.5"))
+                .userAgent(TWO_TABS_USER_AGENT)
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotatedToken));
+
+        assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex ->
+                        assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.REFRESH_TOKEN_INVALID));
+
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+        verify(refreshTokenRepository, never()).save(any());
+        assertThat(mockResponse.getHeader("Set-Cookie")).isNull();
+    }
+
+    @Test
+    void rotateRefreshToken_revokesAll_whenGraceIsReplayedFromAnotherAddress() {
+        mockRequest.setCookies(new Cookie("rt", "stolenrawtoken"));
+        mockRequest.addHeader("User-Agent", TWO_TABS_USER_AGENT);
+
+        RefreshToken rotatedToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(5))
+                .ipAddress(ip("198.51.100.7")) // not the resolver's 203.0.113.5
+                .userAgent(TWO_TABS_USER_AGENT)
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotatedToken));
+
+        assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex ->
+                        assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.REFRESH_TOKEN_INVALID));
+
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+        verify(refreshTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void rotateRefreshToken_revokesAll_whenRotatedTokenIsOutsideGrace() {
+        mockRequest.setCookies(new Cookie("rt", "stalereusedtoken"));
+
+        RefreshToken rotatedToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(31))
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotatedToken));
+
+        assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex ->
+                        assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.REFRESH_TOKEN_INVALID));
+
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+    }
+
+    @Test
     void rotateRefreshToken_revokesAndThrows_whenUserIsDeactivated() {
         mockRequest.setCookies(new Cookie("rt", "validrawtoken"));
         testUser.setActive(false);
@@ -191,6 +301,32 @@ class TokenServiceTest {
 
         // Removal deactivates the account and revokes its tokens; this backstop refuses
         // any token that slips through instead of minting a fresh access token.
+        assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_DISABLED));
+
+        verify(refreshTokenRevoker).revokeAllForUser(testUser.getId());
+        verify(refreshTokenRepository, never()).save(any());
+        assertThat(mockResponse.getHeader("Set-Cookie")).isNull();
+    }
+
+    @Test
+    void rotateRefreshToken_doesNotUseRotationGrace_whenUserIsDeactivated() {
+        // The grace window keeps a two-tab race signed in, but it must never
+        // resurrect a session that removal just ended.
+        mockRequest.setCookies(new Cookie("rt", "rotatedrawtoken"));
+        testUser.setActive(false);
+
+        RefreshToken rotatedToken = RefreshToken.builder()
+                .user(testUser)
+                .tokenHash("somehash")
+                .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(5))
+                .build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotatedToken));
+
         assertThatThrownBy(() -> tokenService.rotateRefreshToken(mockRequest, mockResponse))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_DISABLED));
@@ -217,6 +353,7 @@ class TokenServiceTest {
 
         assertThat(returned).isEqualTo(testUser);
         assertThat(validToken.isRevoked()).isTrue();
+        assertThat(validToken.getRotatedAt()).isNotNull();
         // A new Set-Cookie header should have been written
         assertThat(mockResponse.getHeader("Set-Cookie")).contains("rt=");
     }
@@ -229,6 +366,8 @@ class TokenServiceTest {
                 .user(testUser)
                 .tokenHash("somehash")
                 .expiresAt(OffsetDateTime.now().plusHours(1))
+                .revoked(true)
+                .rotatedAt(OffsetDateTime.now().minusSeconds(5))
                 .build();
 
         when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(token));
@@ -237,6 +376,10 @@ class TokenServiceTest {
         tokenService.revokeRefreshToken(mockRequest, mockResponse);
 
         assertThat(token.isRevoked()).isTrue();
+        // Logout must close the rotation-grace window too: the cookie replaced
+        // moments ago is still inside it and would otherwise refresh fine.
+        assertThat(token.getRotatedAt()).isNull();
+        verify(refreshTokenRepository).clearRotationGraceForUser(testUser.getId());
         // Cookie should be cleared (Max-Age=0)
         String setCookie = mockResponse.getHeader("Set-Cookie");
         assertThat(setCookie).contains("Max-Age=0");
@@ -249,5 +392,13 @@ class TokenServiceTest {
 
         String setCookie = mockResponse.getHeader("Set-Cookie");
         assertThat(setCookie).contains("Max-Age=0");
+    }
+
+    private static InetAddress ip(String literal) {
+        try {
+            return InetAddress.getByName(literal);
+        } catch (UnknownHostException e) {
+            throw new AssertionError(literal + " is an IP literal", e);
+        }
     }
 }

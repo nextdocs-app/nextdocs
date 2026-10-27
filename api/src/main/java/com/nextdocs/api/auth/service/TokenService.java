@@ -35,6 +35,21 @@ public class TokenService {
 
     private static final String REFRESH_TOKEN_COOKIE = "rt";
 
+    /**
+     * A refresh request that raced another tab's rotation can arrive moments
+     * after the cookie it carries was replaced. Accepting it inside this window
+     * keeps both tabs signed in; outside it, reuse is treated as theft.
+     *
+     * The cost is real and deliberate: for this window a replay is not read as
+     * theft — it answers with an access token and leaves the replacement cookie
+     * alive — so a cookie stolen and used within seconds of the victim's rotation
+     * becomes a session instead of a revocation. Grace is therefore granted only to
+     * the client that held the cookie ({@link #isSameClient}), because the race it
+     * exists for is two tabs of one browser: they share an address and a user
+     * agent, while a replay from elsewhere usually shares neither.
+     */
+    private static final long ROTATION_REUSE_GRACE_SECONDS = 30;
+
     private final RefreshTokenRepository refreshTokenRepository;
     private final RefreshTokenRevoker refreshTokenRevoker;
     private final ClientIpResolver clientIpResolver;
@@ -76,33 +91,72 @@ public class TokenService {
                 .findByTokenHash(hash)
                 .orElseThrow(() -> new ApiException(ErrorCode.REFRESH_TOKEN_INVALID));
 
-        if (!stored.isValid()) {
+        User user = stored.getUser();
+        boolean withinRotationGrace = !stored.isValid() && wasRotatedWithinGrace(stored) && isSameClient(stored, req);
+
+        if (!stored.isValid() && !withinRotationGrace) {
             // Possible token reuse — revoke all tokens for this user as a precaution.
             // The revoker commits independently: this method throws, so a revocation in
             // this transaction would be rolled back and the reused token would survive.
-            log.warn(
-                    "Invalid/expired refresh token used for user {}. Revoking all tokens.",
-                    stored.getUser().getId());
-            refreshTokenRevoker.revokeAllForUser(stored.getUser().getId());
+            log.warn("Invalid/expired refresh token used for user {}. Revoking all tokens.", user.getId());
+            refreshTokenRevoker.revokeAllForUser(user.getId());
             throw new ApiException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
 
-        User user = stored.getUser();
         if (!user.isActive()) {
             // A removed member's session must not outlive the removal by rotating here.
             // Removal revokes eagerly; this is the backstop for a token that slipped
             // through, so it revokes again (committing on its own) before refusing.
+            // This also covers a rotated token still inside the grace window: the
+            // window must never mint a session for a removed member.
             log.warn("Refresh token used for deactivated user {}. Revoking all tokens.", user.getId());
             refreshTokenRevoker.revokeAllForUser(user.getId());
             throw new ApiException(ErrorCode.ACCOUNT_DISABLED);
         }
 
+        if (withinRotationGrace) {
+            // Two tabs (or a retried request) presented the same cookie. The
+            // rotation that revoked it already wrote its replacement into the
+            // shared cookie jar, so answering from that successor is enough.
+            // Minting a second one would leave a live token that a logout —
+            // which revokes the cookie the browser presents — never sees, and a
+            // delayed Set-Cookie for it would bring the session back.
+            log.debug("Refresh token reused within rotation grace for user {}", user.getId());
+            return user;
+        }
+
         // Revoke the used token (rotation)
         stored.setRevoked(true);
+        stored.setRotatedAt(OffsetDateTime.now());
         refreshTokenRepository.save(stored);
 
         issueRefreshToken(user, req, res);
         return user;
+    }
+
+    private boolean wasRotatedWithinGrace(RefreshToken token) {
+        if (!token.isRevoked() || token.getRotatedAt() == null) {
+            return false;
+        }
+        return token.getRotatedAt().isAfter(OffsetDateTime.now().minusSeconds(ROTATION_REUSE_GRACE_SECONDS));
+    }
+
+    /**
+     * Whether the caller can be the client that minted this token, as far as the
+     * recorded values can tell. A recorded address or user agent that contradicts
+     * the caller drops reuse detection back to its strict form; a value we never
+     * captured is not a mismatch, since a proxy may legitimately hide either one.
+     */
+    private boolean isSameClient(RefreshToken token, HttpServletRequest req) {
+        String recordedAgent = token.getUserAgent();
+        String currentAgent = req.getHeader("User-Agent");
+        if (recordedAgent != null && currentAgent != null && !recordedAgent.equals(currentAgent)) {
+            return false;
+        }
+
+        InetAddress recordedIp = token.getIpAddress();
+        InetAddress currentIp = resolveIp(req);
+        return recordedIp == null || currentIp == null || recordedIp.equals(currentIp);
     }
 
     @Transactional
@@ -111,7 +165,13 @@ public class TokenService {
             String hash = SecureTokens.sha256Hex(rawToken);
             refreshTokenRepository.findByTokenHash(hash).ifPresent(token -> {
                 token.setRevoked(true);
+                token.setRotatedAt(null);
                 refreshTokenRepository.save(token);
+                // Logout is deliberate: a sibling tab may have rotated this
+                // cookie seconds ago, and that replaced token is still inside
+                // the grace window. Drop the window for the user so neither
+                // value can refresh after signing out.
+                refreshTokenRepository.clearRotationGraceForUser(token.getUser().getId());
             });
         });
         clearRefreshTokenCookie(res);
