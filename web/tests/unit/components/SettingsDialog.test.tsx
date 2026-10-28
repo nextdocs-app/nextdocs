@@ -10,6 +10,9 @@ jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
 jest.mock('../../../components/settings/panels/WorkspaceGeneralPanel', () => ({
   WorkspaceGeneralPanel: () => <div>Workspace general panel</div>,
 }));
+jest.mock('../../../components/settings/panels/WorkspacePeoplePanel', () => ({
+  WorkspacePeoplePanel: () => <div>Workspace people panel</div>,
+}));
 
 const mockSetTheme = jest.fn();
 const mockOnClose = jest.fn();
@@ -47,6 +50,7 @@ it('lists the Workspace group for a signed-in member', () => {
 
   expect(screen.getByText('Workspace')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'General' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'People' })).toBeInTheDocument();
 });
 
 it('opens the General page from the Workspace group', async () => {
@@ -60,6 +64,17 @@ it('opens the General page from the Workspace group', async () => {
   expect(screen.getByText('Workspace general panel')).toBeInTheDocument();
 });
 
+it('opens the People page from the Workspace group', async () => {
+  const user = userEvent.setup();
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  await user.click(screen.getByRole('button', { name: 'People' }));
+
+  expect(screen.getByRole('heading', { name: 'People' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'People' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByText('Workspace people panel')).toBeInTheDocument();
+});
+
 it('hides workspace pages from guests', () => {
   (useAuth as jest.Mock).mockReturnValue({
     user: null,
@@ -70,6 +85,7 @@ it('hides workspace pages from guests', () => {
   render(<SettingsDialog onClose={mockOnClose} />);
 
   expect(screen.queryByRole('button', { name: 'General' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'People' })).not.toBeInTheDocument();
   expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Preferences' })).toBeInTheDocument();
 });

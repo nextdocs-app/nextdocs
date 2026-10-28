@@ -23,9 +23,13 @@ export function canManageMembers(role: WorkspaceRole): boolean {
   return role !== 'MEMBER';
 }
 
-/** Owners grant any role; admins can only invite/remove plain members. */
+/** Owners grant any role; admins can only hand out the plain member role. */
 export function canGrantRole(actor: WorkspaceRole, target: WorkspaceRole): boolean {
-  return actor === 'OWNER' || target === 'MEMBER';
+  if (actor === 'OWNER') {
+    return true;
+  }
+
+  return actor === 'ADMIN' && target === 'MEMBER';
 }
 
 /** Nobody removes themselves, and admins never touch privileged members. */
@@ -54,7 +58,11 @@ export function canChangeRole(
 
 /** Roles the actor may hand out through the invite form or role dropdown. */
 export function grantableRoles(actor: WorkspaceRole): WorkspaceRole[] {
-  return actor === 'OWNER' ? ['OWNER', 'ADMIN', 'MEMBER'] : ['MEMBER'];
+  if (actor === 'OWNER') {
+    return ['OWNER', 'ADMIN', 'MEMBER'];
+  }
+
+  return actor === 'ADMIN' ? ['MEMBER'] : [];
 }
 
 export function roleOptions(actor: WorkspaceRole): DropdownOption<WorkspaceRole>[] {

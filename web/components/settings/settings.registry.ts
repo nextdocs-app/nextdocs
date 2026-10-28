@@ -1,8 +1,9 @@
-import { Sliders, UserCircle, Workspace } from '@/icons';
+import { Sliders, UserCircle, Users, Workspace } from '@/icons';
 import type { SettingsEntry, SettingsGroup } from './types';
 import { PreferencesPanel } from './panels/PreferencesPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
 import { WorkspaceGeneralPanel } from './panels/WorkspaceGeneralPanel';
+import { WorkspacePeoplePanel } from './panels/WorkspacePeoplePanel';
 
 /**
  * The settings catalog. Everything the dialog shows — nav order, group
@@ -24,6 +25,14 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: Workspace,
         requiresAuth: true,
         Panel: WorkspaceGeneralPanel,
+      },
+      {
+        id: 'workspace-people',
+        label: 'People',
+        description: 'See who has access to this workspace and manage invitations.',
+        icon: Users,
+        requiresAuth: true,
+        Panel: WorkspacePeoplePanel,
       },
     ],
   },
