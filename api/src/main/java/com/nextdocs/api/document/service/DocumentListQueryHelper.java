@@ -247,18 +247,14 @@ public class DocumentListQueryHelper {
         Map<UUID, String> orderKeys = fetchUserOrderKeys(userId, docIds);
         Map<UUID, Long> childCounts = fetchChildCounts(docIds);
         Set<UUID> collaboratorDocIds = new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
-        List<UUID> nonOwnedIds = docs.stream()
-                .filter(d -> !d.getUser().getId().equals(userId))
-                .map(Document::getId)
-                .toList();
-        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, nonOwnedIds);
+        // Resolve owned pages too: an archived space caps every level, ownership included,
+        // at VIEW, and the DTO must not advertise a write grant.
+        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
 
         return page.map(doc -> {
             boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
             boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
-            DocumentAccessLevel access = doc.getUser().getId().equals(userId)
-                    ? DocumentAccessLevel.OWNER
-                    : accessLevels.getOrDefault(doc.getId(), null);
+            DocumentAccessLevel access = accessLevels.getOrDefault(doc.getId(), null);
 
             return DocumentResponses.of(
                     doc, null, orderKeys.get(doc.getId()), hasChildren, hasCollaborators, access, null, null);
@@ -309,19 +305,13 @@ public class DocumentListQueryHelper {
         List<UUID> docIds = docs.stream().map(Document::getId).toList();
         Map<UUID, Long> childCounts = fetchChildCounts(docIds);
         Set<UUID> collaboratorDocIds = new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
-
-        List<UUID> nonOwnedIds = docs.stream()
-                .filter(d -> !d.getUser().getId().equals(userId))
-                .map(Document::getId)
-                .toList();
-        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, nonOwnedIds);
+        // Children inherit their root's space; an archived one caps them at VIEW too.
+        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
 
         return page.map(doc -> {
             boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
             boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
-            DocumentAccessLevel access = doc.getUser().getId().equals(userId)
-                    ? DocumentAccessLevel.OWNER
-                    : accessLevels.getOrDefault(doc.getId(), null);
+            DocumentAccessLevel access = accessLevels.getOrDefault(doc.getId(), null);
 
             return DocumentResponses.of(
                     doc, parentId, doc.getSiblingOrderKey(), hasChildren, hasCollaborators, access, null, null);
@@ -391,6 +381,9 @@ public class DocumentListQueryHelper {
         Map<UUID, Long> childCounts = fetchChildCounts(docIds);
         Set<UUID> collaboratorDocIds = new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
         Map<UUID, String> rootOrderKeys = fetchRootOrderKeys(userId, docs);
+        // The "mine" scope is every page the caller owns, space pages included; an
+        // archived space caps those at VIEW like every other projection.
+        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
 
         return page.map(doc -> {
             boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
@@ -399,7 +392,14 @@ public class DocumentListQueryHelper {
             UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
             return DocumentResponses.of(
-                    doc, parentDocId, orderKey, hasChildren, hasCollaborators, DocumentAccessLevel.OWNER, null, null);
+                    doc,
+                    parentDocId,
+                    orderKey,
+                    hasChildren,
+                    hasCollaborators,
+                    accessLevels.getOrDefault(doc.getId(), null),
+                    null,
+                    null);
         });
     }
 

@@ -1,17 +1,25 @@
 package com.nextdocs.api.common.exception;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.nextdocs.api.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import java.sql.SQLException;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -60,6 +68,35 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error").value("Method not allowed for this endpoint."));
+    }
+
+    @Test
+    void dataIntegrityViolation_returns409InsteadOf500() throws Exception {
+        mockMvc.perform(get("/test/data-integrity"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value(ErrorCode.CONFLICT.defaultMessage()));
+    }
+
+    @Test
+    void dataIntegrityViolation_logsSQLStateWithoutTheCauseMessage() {
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new GlobalExceptionHandler()
+                    .handleDataIntegrityViolation(new DataIntegrityViolationException(
+                            "could not execute statement",
+                            new SQLException("duplicate key value: (email)=(secret@example.com)", "23505")));
+
+            assertTrue(appender.list.stream()
+                    .anyMatch(event -> event.getFormattedMessage().contains("23505")));
+            assertFalse(appender.list.stream()
+                    .anyMatch(event -> event.getFormattedMessage().contains("secret@example.com")));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test
@@ -149,6 +186,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/unexpected")
         ResponseEntity<ApiResponse<Void>> unexpected() {
             throw new RuntimeException("unexpected failure");
+        }
+
+        @GetMapping("/data-integrity")
+        ResponseEntity<ApiResponse<Void>> dataIntegrity() {
+            throw new DataIntegrityViolationException("fk_documents_space");
         }
 
         @PostMapping("/validate")

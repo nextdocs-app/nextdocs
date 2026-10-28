@@ -52,9 +52,6 @@ import org.springframework.web.multipart.MultipartFile;
 @RequiredArgsConstructor
 public class WorkspaceService {
 
-    /** Name of the bootstrap/backfill workspace; the owner renames it in General. */
-    public static final String DEFAULT_NAME = "NextDocs";
-
     private static final String LAST_OWNER_MESSAGE = "The workspace must keep at least one owner.";
 
     private static final String LAST_OWNER_SELF_DEMOTE_MESSAGE =
@@ -106,7 +103,7 @@ public class WorkspaceService {
         Workspace workspace = workspaceRepository
                 .findFirstByOrderByCreatedAtAsc()
                 .orElseGet(() -> workspaceRepository.save(
-                        Workspace.builder().name(DEFAULT_NAME).build()));
+                        Workspace.builder().name(defaultWorkspaceName(user)).build()));
         memberRepository.save(WorkspaceMember.builder()
                 .workspace(workspace)
                 .user(user)
@@ -114,6 +111,19 @@ public class WorkspaceService {
                 .build());
         log.info("Bootstrapped workspace {} with owner {}", workspace.getId(), user.getId());
         return true;
+    }
+
+    /**
+     * Names the fresh workspace after the account that created it. The name is visible in
+     * the sidebar and on invitations, so a product name there reads like branding the
+     * owner may never replace; their own name is clearly theirs to edit in General.
+     *
+     * <p>Registration requires a display name, so the fallback only guards other callers.
+     */
+    private static String defaultWorkspaceName(User user) {
+        String displayName =
+                user.getDisplayName() == null ? "" : user.getDisplayName().strip();
+        return displayName.isEmpty() ? "My workspace" : displayName + "'s workspace";
     }
 
     /** Adds a user admitted by an invite, carrying the invite's role. */

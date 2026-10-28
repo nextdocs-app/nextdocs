@@ -17,6 +17,7 @@ import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -170,6 +171,48 @@ class SpaceAccessServiceTest {
         assertThatThrownBy(() -> accessService.requireEdit(userId, space.getId()))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
+    void requireEdit_rejectsAnArchivedSpaceEvenForAnEditor() {
+        authorize(WorkspaceRole.MEMBER);
+        memberWithLevel(DocumentAccessLevel.EDIT);
+        space.setArchivedAt(OffsetDateTime.now());
+
+        assertThatThrownBy(() -> accessService.requireEdit(userId, space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+    }
+
+    @Test
+    void requireActiveAdministration_rejectsAnArchivedSpace() {
+        authorize(WorkspaceRole.MEMBER);
+        memberWithLevel(DocumentAccessLevel.OWNER);
+        space.setArchivedAt(OffsetDateTime.now());
+
+        assertThatThrownBy(() -> accessService.requireActiveAdministration(userId, space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+    }
+
+    @Test
+    void requireAdministration_stillAdmitsAnArchivedSpaceForRestoreAndDelete() {
+        authorize(WorkspaceRole.MEMBER);
+        memberWithLevel(DocumentAccessLevel.OWNER);
+        space.setArchivedAt(OffsetDateTime.now());
+
+        assertThat(accessService.requireAdministration(userId, space.getId()).canAdminister())
+                .isTrue();
+    }
+
+    @Test
+    void requireRead_stillAdmitsAnArchivedSpace() {
+        authorize(WorkspaceRole.MEMBER);
+        memberWithLevel(DocumentAccessLevel.VIEW);
+        space.setArchivedAt(OffsetDateTime.now());
+
+        assertThat(accessService.requireRead(userId, space.getId()).accessLevel())
+                .isEqualTo(DocumentAccessLevel.VIEW);
     }
 
     @Test

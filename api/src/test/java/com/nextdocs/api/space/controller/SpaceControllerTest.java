@@ -88,13 +88,14 @@ class SpaceControllerTest {
                 true,
                 3,
                 5,
+                null,
                 OffsetDateTime.now(),
                 OffsetDateTime.now());
     }
 
     @Test
     void list_returnsSpaces() throws Exception {
-        when(spaceService.listSpaces(userId)).thenReturn(List.of(response()));
+        when(spaceService.listSpaces(userId, false)).thenReturn(List.of(response()));
 
         mockMvc.perform(get(SpaceController.BASE_PATH).with(user(principal)))
                 .andExpect(status().isOk())
@@ -102,6 +103,17 @@ class SpaceControllerTest {
                 .andExpect(jsonPath("$.data[0].accessMode").value("PUBLIC"))
                 .andExpect(jsonPath("$.data[0].myAccessLevel").value("OWNER"))
                 .andExpect(jsonPath("$.data[0].pageCount").value(5));
+    }
+
+    @Test
+    void list_archived_returnsTheRestoreView() throws Exception {
+        when(spaceService.listSpaces(userId, true)).thenReturn(List.of(response()));
+
+        mockMvc.perform(get(SpaceController.BASE_PATH).param("archived", "true").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].name").value("Engineering"));
+
+        verify(spaceService).listSpaces(userId, true);
     }
 
     @Test
@@ -163,21 +175,35 @@ class SpaceControllerTest {
     }
 
     @Test
-    void delete_defaultsToKeepingThePages() throws Exception {
-        mockMvc.perform(delete(SpaceController.BASE_PATH + "/{id}", spaceId).with(user(principal)))
-                .andExpect(status().isNoContent());
+    void archive_returnsTheArchivedSpace() throws Exception {
+        when(spaceService.archiveSpace(userId, spaceId)).thenReturn(response());
 
-        verify(spaceService).deleteSpace(userId, spaceId, false);
+        mockMvc.perform(post(SpaceController.BASE_PATH + "/{id}/archive", spaceId)
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name").value("Engineering"));
+
+        verify(spaceService).archiveSpace(userId, spaceId);
     }
 
     @Test
-    void delete_withDeleteDocuments_asksForThePagesToo() throws Exception {
-        mockMvc.perform(delete(SpaceController.BASE_PATH + "/{id}", spaceId)
-                        .param("deleteDocuments", "true")
+    void restore_returnsTheRestoredSpace() throws Exception {
+        when(spaceService.restoreSpace(userId, spaceId)).thenReturn(response());
+
+        mockMvc.perform(post(SpaceController.BASE_PATH + "/{id}/restore", spaceId)
                         .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name").value("Engineering"));
+
+        verify(spaceService).restoreSpace(userId, spaceId);
+    }
+
+    @Test
+    void delete_deletesOnlyTheEmptySpace() throws Exception {
+        mockMvc.perform(delete(SpaceController.BASE_PATH + "/{id}", spaceId).with(user(principal)))
                 .andExpect(status().isNoContent());
 
-        verify(spaceService).deleteSpace(userId, spaceId, true);
+        verify(spaceService).deleteSpace(userId, spaceId);
     }
 
     @Test

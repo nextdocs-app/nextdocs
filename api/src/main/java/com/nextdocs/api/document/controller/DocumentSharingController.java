@@ -32,6 +32,11 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Sharing surfaces. Every endpoint here answers 409 for a page anchored in an archived
+ * space, read-only views included: the archive freezes sharing, so a settings read would
+ * advertise edits the space refuses. Restore the space first.
+ */
 @Tag(name = "Document Sharing", description = "Document collaboration and sharing endpoints")
 @RestController
 @RequestMapping("/api/v1/documents")

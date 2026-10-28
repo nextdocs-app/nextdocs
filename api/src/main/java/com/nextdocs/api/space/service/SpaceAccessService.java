@@ -10,6 +10,8 @@ import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,7 @@ public class SpaceAccessService {
     private final SpaceRepository spaceRepository;
     private final SpaceMemberRepository memberRepository;
     private final WorkspaceAccessService workspaceAccessService;
+    private final EntityManager entityManager;
 
     /** A resolved space plus the caller's content level (null when none) and workspace role. */
     public record SpaceContext(Space space, WorkspaceRole workspaceRole, DocumentAccessLevel accessLevel) {
@@ -54,6 +57,21 @@ public class SpaceAccessService {
         /** May rename, re-share, delete, and manage members. */
         public boolean canAdminister() {
             return workspaceAdmin() || accessLevel == DocumentAccessLevel.OWNER;
+        }
+    }
+
+    /**
+     * Re-reads a managed space after the caller has locked its row. The gate may have
+     * loaded the entity before waiting on the lock, and a lock query does not overwrite
+     * an already-managed entity, so a committed archive would otherwise stay invisible
+     * to the post-lock re-check.
+     */
+    @Transactional
+    public void refreshForLock(Space space) {
+        try {
+            entityManager.refresh(space);
+        } catch (EntityNotFoundException ex) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
         }
     }
 
@@ -123,6 +141,9 @@ public class SpaceAccessService {
         if (!context.accessLevel().allowsEdit()) {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
+        if (context.space().getArchivedAt() != null) {
+            throw new ApiException(ErrorCode.CONFLICT, "This space is archived. Restore it before editing.");
+        }
         return context;
     }
 
@@ -138,6 +159,20 @@ public class SpaceAccessService {
             return context;
         }
         throw new ApiException(context.accessLevel() == null ? ErrorCode.NOT_FOUND : ErrorCode.FORBIDDEN);
+    }
+
+    /**
+     * Administration of an active space. Archive/restore/delete deliberately use
+     * {@link #requireAdministration} instead: an archived space still has to be
+     * restorable and, when empty, deletable.
+     */
+    @Transactional(readOnly = true)
+    public SpaceContext requireActiveAdministration(UUID userId, UUID spaceId) {
+        SpaceContext context = requireAdministration(userId, spaceId);
+        if (context.space().getArchivedAt() != null) {
+            throw new ApiException(ErrorCode.CONFLICT, "This space is archived. Restore it before making changes.");
+        }
+        return context;
     }
 
     /** The caller's content level for a loaded space, or null when none. */

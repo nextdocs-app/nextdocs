@@ -13,7 +13,6 @@ import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
-import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
@@ -35,7 +34,6 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -125,6 +123,9 @@ class SpaceServiceTest {
     private void callerAdministers(DocumentAccessLevel level) {
         lenient()
                 .when(spaceAccessService.requireAdministration(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, level));
+        lenient()
+                .when(spaceAccessService.requireActiveAdministration(actorId, space.getId()))
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, level));
     }
 
@@ -252,6 +253,7 @@ class SpaceServiceTest {
         callerAdministers(DocumentAccessLevel.OWNER);
         User bob = User.builder().email("bob@example.com").displayName("Bob").build();
         bob.setId(UUID.randomUUID());
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
         when(workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), bob.getId()))
                 .thenReturn(Optional.of(WorkspaceMember.builder()
@@ -301,6 +303,7 @@ class SpaceServiceTest {
         callerAdministers(DocumentAccessLevel.OWNER);
         User bob = User.builder().email("bob@example.com").displayName("Bob").build();
         bob.setId(UUID.randomUUID());
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
         when(workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), bob.getId()))
                 .thenReturn(Optional.of(WorkspaceMember.builder()
@@ -317,6 +320,31 @@ class SpaceServiceTest {
                         new SpaceMemberCreateRequest("bob@example.com", DocumentAccessLevel.VIEW)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+    }
+
+    @Test
+    void addMember_refusesAnArchiveCommittedWhileWaitingForTheRowLock() {
+        when(spaceAccessService.requireActiveAdministration(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER))
+                .thenThrow(new ApiException(ErrorCode.CONFLICT));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        User bob = User.builder().email("bob@example.com").displayName("Bob").build();
+        bob.setId(UUID.randomUUID());
+        when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
+        when(workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), bob.getId()))
+                .thenReturn(Optional.of(WorkspaceMember.builder()
+                        .workspace(workspace)
+                        .user(bob)
+                        .role(WorkspaceRole.MEMBER)
+                        .build()));
+
+        assertThatThrownBy(() -> spaceService.addMember(
+                        actorId,
+                        space.getId(),
+                        new SpaceMemberCreateRequest("bob@example.com", DocumentAccessLevel.EDIT)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+        verify(memberRepository, never()).save(any(SpaceMember.class));
     }
 
     @Test
@@ -399,54 +427,95 @@ class SpaceServiceTest {
     }
 
     @Test
-    void deleteSpace_refusesAPopulatedSpaceUnlessPagesAreDeletedToo() {
+    void attachPage_locksTheSpaceAndLeavesTheGateToDocumentService() {
+        UUID documentId = UUID.randomUUID();
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+
+        spaceService.attachPage(actorId, space.getId(), documentId);
+
+        verify(spaceRepository).findByIdForUpdate(space.getId());
+        verify(documentService).assignSpace(actorId, documentId, space.getId());
+        verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+    }
+
+    @Test
+    void detachPage_locksTheSpaceAndLeavesTheGateToDocumentService() {
+        UUID documentId = UUID.randomUUID();
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+
+        spaceService.detachPage(actorId, space.getId(), documentId);
+
+        verify(spaceRepository).findByIdForUpdate(space.getId());
+        verify(documentService).clearSpace(actorId, documentId, space.getId());
+        verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+    }
+
+    @Test
+    void deleteSpace_refusesASpaceThatStillHasPagesIncludingTrash() {
         callerAdministers(DocumentAccessLevel.OWNER);
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
-        when(documentRepository.findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(space.getId()))
-                .thenReturn(List.of(Document.builder()
-                        .id(UUID.randomUUID())
-                        .user(actor)
-                        .title("Page")
-                        .yjsState("seed".getBytes(StandardCharsets.UTF_8))
-                        .build()));
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(2L);
 
-        assertThatThrownBy(() -> spaceService.deleteSpace(actorId, space.getId(), false))
+        assertThatThrownBy(() -> spaceService.deleteSpace(actorId, space.getId()))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
         verify(spaceRepository, never()).delete(any(Space.class));
-        verify(documentService, never()).trashSubtree(any(Document.class));
     }
 
     @Test
-    void deleteSpace_trashesThePagesWhenExplicitlyAsked() {
+    void deleteSpace_deletesAnEmptySpace() {
         callerAdministers(DocumentAccessLevel.OWNER);
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
-        Document page = Document.builder()
-                .id(UUID.randomUUID())
-                .user(actor)
-                .title("Page")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
-                .build();
-        when(documentRepository.findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(space.getId()))
-                .thenReturn(List.of(page));
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
-        spaceService.deleteSpace(actorId, space.getId(), true);
+        spaceService.deleteSpace(actorId, space.getId());
 
-        verify(documentService).trashSubtree(page);
         verify(spaceRepository).delete(space);
     }
 
     @Test
-    void deleteSpace_deletesAnEmptySpaceWithoutTrashingAnything() {
+    void archiveSpace_marksTheSpaceArchivedAndIsIdempotent() {
         callerAdministers(DocumentAccessLevel.OWNER);
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
-        when(documentRepository.findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(space.getId()))
-                .thenReturn(List.of());
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userRepository.findById(actorId)).thenReturn(Optional.of(actor));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(4L);
 
-        spaceService.deleteSpace(actorId, space.getId(), false);
+        SpaceResponse response = spaceService.archiveSpace(actorId, space.getId());
 
-        verify(documentService, never()).trashSubtree(any(Document.class));
-        verify(spaceRepository).delete(space);
+        assertThat(space.getArchivedAt()).isNotNull();
+        assertThat(space.getArchivedBy()).isSameAs(actor);
+        assertThat(response.archivedAt()).isEqualTo(space.getArchivedAt());
+
+        spaceService.archiveSpace(actorId, space.getId());
+
+        verify(spaceRepository).save(space);
+    }
+
+    @Test
+    void restoreSpace_clearsTheArchiveAndIsIdempotent() {
+        callerAdministers(DocumentAccessLevel.OWNER);
+        space.setArchivedAt(OffsetDateTime.now());
+        space.setArchivedBy(actor);
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(4L);
+
+        SpaceResponse response = spaceService.restoreSpace(actorId, space.getId());
+
+        assertThat(space.getArchivedAt()).isNull();
+        assertThat(space.getArchivedBy()).isNull();
+        assertThat(response.archivedAt()).isNull();
+
+        spaceService.restoreSpace(actorId, space.getId());
+
+        verify(spaceRepository).save(space);
     }
 
     @Test
@@ -464,7 +533,7 @@ class SpaceServiceTest {
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
         when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
 
-        List<SpaceResponse> spaces = spaceService.listSpaces(actorId);
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
 
         assertThat(spaces).extracting(SpaceResponse::name).containsExactly("Engineering", "Handbook");
         assertThat(spaces.get(0).myAccessLevel()).isEqualTo(DocumentAccessLevel.OWNER);
@@ -474,20 +543,52 @@ class SpaceServiceTest {
     }
 
     @Test
-    void listSpaces_givesAWorkspaceAdminEverySpace() {
+    void listSpaces_givesAWorkspaceAdminEveryActiveSpace() {
         callerIsWorkspaceMember(WorkspaceRole.ADMIN);
-        when(spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspace.getId()))
+        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspace.getId()))
                 .thenReturn(List.of(space));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of());
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
         when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
 
-        List<SpaceResponse> spaces = spaceService.listSpaces(actorId);
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
 
         assertThat(spaces).hasSize(1);
         assertThat(spaces.get(0).myAccessLevel()).isNull();
         assertThat(spaces.get(0).canAdminister()).isTrue();
         verify(spaceRepository, never()).findAllVisibleToUser(any(), any());
-        verify(spaceRepository).findAllByWorkspace_IdOrderByCreatedAtAsc(eq(workspace.getId()));
+        verify(spaceRepository).findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(eq(workspace.getId()));
+    }
+
+    @Test
+    void listSpaces_archivedReturnsOnlySpacesTheCallerCanRestore() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space ownArchived = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Own archived")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .archivedAt(OffsetDateTime.now())
+                .build();
+        when(spaceRepository.findArchivedOwnedByUser(workspace.getId(), actorId))
+                .thenReturn(List.of(ownArchived));
+        when(memberRepository.findAllByUser_Id(actorId))
+                .thenReturn(List.of(SpaceMember.builder()
+                        .space(ownArchived)
+                        .user(actor)
+                        .accessLevel(DocumentAccessLevel.OWNER)
+                        .build()));
+        when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, true);
+
+        assertThat(spaces).extracting(SpaceResponse::name).containsExactly("Own archived");
+        assertThat(spaces.get(0).archivedAt()).isNotNull();
+        // Restore is administered, not written: the effective level is the archived VIEW.
+        assertThat(spaces.get(0).myAccessLevel()).isEqualTo(DocumentAccessLevel.VIEW);
+        assertThat(spaces.get(0).canAdminister()).isTrue();
+        verify(spaceRepository, never()).findAllByWorkspace_IdAndArchivedAtIsNotNullOrderByArchivedAtDescIdDesc(any());
     }
 }

@@ -14,16 +14,34 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface SpaceRepository extends JpaRepository<Space, UUID> {
 
-    /** Every space of a workspace, oldest first: the sidebar's stable base order. */
-    List<Space> findAllByWorkspace_IdOrderByCreatedAtAsc(UUID workspaceId);
+    /** Active spaces of a workspace, oldest first: the sidebar's stable base order. */
+    List<Space> findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(UUID workspaceId);
+
+    /** Archived spaces of a workspace, newest archive first: the restore view. */
+    List<Space> findAllByWorkspace_IdAndArchivedAtIsNotNullOrderByArchivedAtDescIdDesc(UUID workspaceId);
+
+    /**
+     * Archived spaces of a workspace the caller owns, newest archive first. A plain member
+     * may only restore the spaces they own, so the ownership filter belongs in SQL.
+     */
+    @Query("SELECT s FROM Space s "
+            + "WHERE s.workspace.id = :workspaceId "
+            + "AND s.archivedAt IS NOT NULL "
+            + "AND EXISTS (SELECT 1 FROM SpaceMember m WHERE m.space.id = s.id "
+            + "     AND m.user.id = :userId "
+            + "     AND m.accessLevel = com.nextdocs.api.document.entity.DocumentAccessLevel.OWNER) "
+            + "ORDER BY s.archivedAt DESC, s.id DESC")
+    List<Space> findArchivedOwnedByUser(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     /**
      * Spaces a plain member can see: the ones they are listed on plus every PUBLIC space.
      * Public is resolved from the mode alone — a PUBLIC space is readable by the whole
-     * workspace whatever its everyone-else level is.
+     * workspace whatever its everyone-else level is. Archived spaces are hidden from
+     * normal navigation and listed separately.
      */
     @Query("SELECT s FROM Space s "
             + "WHERE s.workspace.id = :workspaceId "
+            + "AND s.archivedAt IS NULL "
             + "AND (s.accessMode = com.nextdocs.api.space.entity.SpaceAccessMode.PUBLIC "
             + "     OR EXISTS (SELECT 1 FROM SpaceMember m WHERE m.space.id = s.id AND m.user.id = :userId)) "
             + "ORDER BY s.createdAt ASC, s.id ASC")

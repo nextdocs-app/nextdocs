@@ -101,10 +101,11 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     long countBySpace_IdAndDeletedAtIsNull(UUID spaceId);
 
     /**
-     * Active root pages of one space, entities rather than a projection: deleting a space
-     * trashes each of them through the ordinary cascade, which needs the row itself.
+     * Every root page that still references the space, active or trashed. A space anchors
+     * root pages and purging a root deletes its descendants first, so zero here means the
+     * space is truly empty; a trashed page still blocks a hard delete.
      */
-    List<Document> findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(UUID spaceId);
+    long countBySpace_Id(UUID spaceId);
 
     @Query("SELECT d.space.id, COUNT(d) FROM Document d "
             + "WHERE d.space.id IN :spaceIds AND d.deletedAt IS NULL GROUP BY d.space.id")

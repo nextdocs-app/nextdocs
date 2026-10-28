@@ -189,13 +189,19 @@ public class PermissionService {
     /**
      * Enforces that the user has administrative sharing access (OWNER level) to the document.
      * Applicable across active and trashed documents so owners and full-access collaborators
-     * can manage sharing regardless of trash state.
+     * can manage sharing regardless of trash state. A page in an archived space is rejected
+     * with 409 for callers who can read it: the archive freezes sharing until the space is
+     * restored. Callers without read access keep the 404 existence mask.
      *
      * @return the Document if the user has OWNER access in trash scope
      */
     @Transactional(readOnly = true)
     public Document requireSharingAdminAccess(UUID userId, UUID documentId) {
-        Document doc = documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        // Resolve read access before the archive state: a caller who cannot read the page
+        // must not learn that it still exists, while a reader can be told to restore the
+        // space. Trash scope returns null in an archived space by design.
+        Document doc = requireReadAccessIncludingTrash(userId, documentId);
+        requireActiveSpace(doc);
 
         DocumentAccessLevel access = resolveTrashAccess(userId, documentId);
         if (access == null) {
@@ -232,6 +238,26 @@ public class PermissionService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         return trashed;
+    }
+
+    /**
+     * Rejects a page anchored in an archived space with 409. The archive caps every
+     * level, ownership included, at VIEW, so gates that resolve only the trash scope
+     * see null and would otherwise mask an existing page as deleted.
+     */
+    public void requireActiveSpace(Document doc) {
+        Document current = doc;
+        while (current != null) {
+            if (current.getSpace() != null) {
+                if (current.getSpace().getArchivedAt() != null) {
+                    throw new ApiException(
+                            ErrorCode.CONFLICT,
+                            "This page is in an archived space. Restore the space to manage sharing.");
+                }
+                return;
+            }
+            current = current.getParent();
+        }
     }
 
     /**

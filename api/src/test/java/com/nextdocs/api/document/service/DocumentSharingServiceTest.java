@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -29,6 +30,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -153,6 +155,54 @@ class DocumentSharingServiceTest {
         assertFalse(response.allowed());
         assertTrue(response.trashed());
         assertNull(response.accessLevel());
+    }
+
+    @Test
+    void accessCheck_ownerOfAnArchivedSpacePage_getsViewNotOwner() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .space(Space.builder()
+                        .id(UUID.randomUUID())
+                        .name("Archived")
+                        .archivedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                        .build())
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(ownerId, documentId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        DocumentAccessResponse response = sharingService.accessCheck(ownerId, documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
+        assertTrue(response.owner());
+    }
+
+    @Test
+    void leaveSharedDocument_inAnArchivedSpace_isBlocked() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(UUID.randomUUID()).build())
+                .space(Space.builder()
+                        .id(UUID.randomUUID())
+                        .name("Archived")
+                        .archivedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                        .build())
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
+                .thenReturn(document);
+        doThrow(new ApiException(ErrorCode.CONFLICT)).when(permissionService).requireActiveSpace(document);
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> sharingService.leaveSharedDocument(userId, documentId));
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        verify(collaboratorRepository, never()).deleteByDocument_IdAndUser_Id(any(), any());
     }
 
     @Test

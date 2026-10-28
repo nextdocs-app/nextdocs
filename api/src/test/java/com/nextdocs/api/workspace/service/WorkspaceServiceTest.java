@@ -161,13 +161,28 @@ class WorkspaceServiceTest {
 
         ArgumentCaptor<Workspace> workspaceCaptor = ArgumentCaptor.forClass(Workspace.class);
         verify(workspaceRepository).save(workspaceCaptor.capture());
-        assertThat(workspaceCaptor.getValue().getName()).isEqualTo(WorkspaceService.DEFAULT_NAME);
+        assertThat(workspaceCaptor.getValue().getName()).isEqualTo("Owner's workspace");
 
         ArgumentCaptor<WorkspaceMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceMember.class);
         verify(memberRepository).save(memberCaptor.capture());
         assertThat(memberCaptor.getValue().getRole()).isEqualTo(WorkspaceRole.OWNER);
         assertThat(memberCaptor.getValue().getUser()).isSameAs(owner);
         assertThat(memberCaptor.getValue().getWorkspace()).isSameAs(workspaceCaptor.getValue());
+    }
+
+    @Test
+    void bootstrapFirstUser_fallsBackToANeutralNameWhenTheOwnerHasNoDisplayName() {
+        givenInstanceLock();
+        when(accessService.isInitialized()).thenReturn(false);
+        when(workspaceRepository.findFirstByOrderByCreatedAtAsc()).thenReturn(Optional.empty());
+        when(workspaceRepository.save(any(Workspace.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(workspaceService.bootstrapFirstUser(user("unnamed@example.com", null)))
+                .isTrue();
+
+        ArgumentCaptor<Workspace> workspaceCaptor = ArgumentCaptor.forClass(Workspace.class);
+        verify(workspaceRepository).save(workspaceCaptor.capture());
+        assertThat(workspaceCaptor.getValue().getName()).isEqualTo("My workspace");
     }
 
     @Test

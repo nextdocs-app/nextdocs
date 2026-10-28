@@ -209,6 +209,28 @@ class SpacePermissionMigrationPostgresTest {
         }
     }
 
+    private void archiveSpace(UUID spaceId) throws SQLException {
+        try (PreparedStatement stmt =
+                connection.prepareStatement("UPDATE spaces SET archived_at = now() WHERE id = ?")) {
+            stmt.setObject(1, spaceId);
+            stmt.executeUpdate();
+        }
+    }
+
+    private void deleteSpaceRow(UUID spaceId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM spaces WHERE id = ?")) {
+            stmt.setObject(1, spaceId);
+            stmt.executeUpdate();
+        }
+    }
+
+    private void deleteDocumentRow(UUID documentId) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement("DELETE FROM documents WHERE id = ?")) {
+            stmt.setObject(1, documentId);
+            stmt.executeUpdate();
+        }
+    }
+
     private String resolveAccess(UUID userId, UUID docId) throws SQLException {
         return scalar("SELECT resolve_effective_access(?, ?)", userId, docId);
     }
@@ -442,6 +464,133 @@ class SpacePermissionMigrationPostgresTest {
                 .containsExactly(visible);
         assertThat(jdbc.queryForObject(DocumentRepository.SPACE_PAGES_COUNT_SQL, params, Long.class))
                 .isEqualTo(1L);
+    }
+
+    @Test
+    void archivedSpace_capsEveryMemberLevelAtView() throws SQLException {
+        UUID owner = insertUser();
+        UUID member = insertUser();
+        UUID stranger = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, member);
+        insertWorkspaceMember(workspaceId, stranger);
+
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, member, "EDIT");
+
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        UUID revoked = UUID.randomUUID();
+        insertDoc(root, owner, null, spaceId, null, null);
+        insertDoc(child, owner, root, null, null, null);
+        insertDoc(revoked, owner, null, spaceId, null, null);
+        insertCollaborator(revoked, member, "NO_ACCESS");
+
+        archiveSpace(spaceId);
+
+        // Ownership survives as read access, never as a write grant.
+        assertThat(resolveAccess(owner, root)).isEqualTo("VIEW");
+        assertThat(resolveAccess(owner, child)).isEqualTo("VIEW");
+        assertThat(resolveAccess(member, root)).isEqualTo("VIEW");
+        assertThat(resolveAccess(member, child)).isEqualTo("VIEW");
+        // Archive caps a grant; it does not widen one.
+        assertThat(resolveAccess(stranger, root)).isNull();
+        // NO_ACCESS still wins over the space grant.
+        assertThat(resolveAccess(member, revoked)).isNull();
+    }
+
+    @Test
+    void archivedSpace_publicLinkStaysReadableButReadOnly() throws SQLException {
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, "ANYONE_WITH_LINK", "EDIT");
+
+        assertThat(scalarOne("SELECT resolve_public_access(?)", page)).isEqualTo("EDIT");
+
+        archiveSpace(spaceId);
+
+        assertThat(scalarOne("SELECT resolve_public_access(?)", page)).isEqualTo("VIEW");
+    }
+
+    @Test
+    void archivedSpace_hasNoTrashScope() throws SQLException {
+        UUID owner = insertUser();
+        UUID member = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, member);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, owner, "OWNER");
+        insertSpaceMember(spaceId, member, "EDIT");
+
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null, true);
+
+        assertThat(resolveTrashAccess(owner, page)).isEqualTo("OWNER");
+        assertThat(resolveTrashAccess(member, page)).isEqualTo("EDIT");
+
+        archiveSpace(spaceId);
+
+        // Restore the space first; its trash is not reachable while archived.
+        assertThat(resolveTrashAccess(owner, page)).isNull();
+        assertThat(resolveTrashAccess(member, page)).isNull();
+    }
+
+    @Test
+    void documentsSpaceForeignKey_restrictsDeletingAPopulatedSpace() throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                        "SELECT confdeltype FROM pg_constraint WHERE conname = 'fk_documents_space'");
+                ResultSet rs = stmt.executeQuery()) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("r");
+        }
+
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID active = UUID.randomUUID();
+        UUID trashed = UUID.randomUUID();
+        insertDoc(active, owner, null, spaceId, null, null);
+        insertDoc(trashed, owner, null, spaceId, null, null, true);
+
+        // Both an active and a trashed page still reference the space.
+        assertThatThrownBy(() -> deleteSpaceRow(spaceId)).isInstanceOf(SQLException.class);
+
+        deleteDocumentRow(active);
+        assertThatThrownBy(() -> deleteSpaceRow(spaceId)).isInstanceOf(SQLException.class);
+
+        deleteDocumentRow(trashed);
+        deleteSpaceRow(spaceId);
+    }
+
+    @Test
+    void migrationsApplyOnTopOfV26_andKeepExistingSpacePages() throws Exception {
+        migrateTo("26");
+
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null);
+
+        migrateFurther();
+
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT archived_at FROM spaces WHERE id = ?")) {
+            stmt.setObject(1, spaceId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getTimestamp(1)).isNull();
+            }
+        }
+        try (PreparedStatement stmt = connection.prepareStatement("SELECT space_id FROM documents WHERE id = ?")) {
+            stmt.setObject(1, page);
+            try (ResultSet rs = stmt.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getObject(1)).isEqualTo(spaceId);
+            }
+        }
     }
 
     @Test

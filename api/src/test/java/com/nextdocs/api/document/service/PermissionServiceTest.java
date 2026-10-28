@@ -403,6 +403,55 @@ class PermissionServiceTest {
     }
 
     @Test
+    void requireSharingAdminAccess_archivedSpaceReadable_throwsConflictInsteadOfNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        // A child does not repeat the space: the gate has to walk to the root anchor.
+        Document archivedRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .space(com.nextdocs.api.space.entity.Space.builder()
+                        .id(UUID.randomUUID())
+                        .name("Archived")
+                        .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
+                        .build())
+                .build();
+        Document doc = Document.builder().id(documentId).parent(archivedRoot).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
+        // The archive check must answer before the null trash scope masks it as deleted.
+        verify(documentRepository, never()).resolveTrashAccess(any(), any());
+    }
+
+    @Test
+    void requireSharingAdminAccess_archivedSpaceWithoutReadAccess_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document archivedRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .space(com.nextdocs.api.space.entity.Space.builder()
+                        .id(UUID.randomUUID())
+                        .name("Archived")
+                        .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
+                        .build())
+                .build();
+        Document doc = Document.builder().id(documentId).parent(archivedRoot).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+        // No read access means the caller never learns whether the page still exists.
+        verify(documentRepository, never()).resolveTrashAccess(any(), any());
+    }
+
+    @Test
     void requireReadAccessIncludingTrash_activeWithAccess_returnsDocument() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
