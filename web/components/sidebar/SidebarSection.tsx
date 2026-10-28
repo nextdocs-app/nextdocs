@@ -1,4 +1,5 @@
 import { ChevronRight, MoreHorizontal } from '@/icons';
+import { SectionHeading } from '@/components/SectionHeading';
 import { SIDEBAR_VISIBLE_COUNT } from './types';
 
 export interface SidebarSectionProps {
@@ -71,9 +72,12 @@ export function SidebarSection({
         className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] pointer-coarse:py-2 text-[13.5px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
       >
         <span className="flex items-center gap-1 min-w-0">
-          <span className="font-medium text-muted-foreground/80 group-hover/header:text-muted-foreground transition-colors duration-100">
+          <SectionHeading
+            as="span"
+            className="transition-colors duration-100 group-hover/header:text-muted-foreground"
+          >
             {title}
-          </span>
+          </SectionHeading>
           <ChevronRight
             size={14}
             className={`flex-shrink-0 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-all duration-150 ${
