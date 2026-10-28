@@ -36,11 +36,15 @@ export async function apiRequest<T>(
   init: RequestInit = {},
   options: ApiRequestOptions = {}
 ): Promise<T> {
+  // FormData carries its own multipart boundary. Declaring JSON would both
+  // break the parse server-side and hide the boundary the browser must add.
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
+
   const res = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
-      ...(init.body == null ? {} : { 'Content-Type': 'application/json' }),
+      ...(init.body == null || isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...init.headers,
     },
   });

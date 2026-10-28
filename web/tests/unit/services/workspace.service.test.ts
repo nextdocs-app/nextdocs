@@ -63,3 +63,51 @@ it('surfaces the API error instead of an empty workspace', async () => {
     'No workspace membership'
   );
 });
+
+it('PATCHes only the fields the owner changed', async () => {
+  mockFetch.mockReturnValue(
+    makeResponse({
+      success: true,
+      data: { ...successBody.data, name: 'Renamed' },
+      error: null,
+    })
+  );
+
+  await workspaceApiService.updateCurrent('token-1', {
+    name: 'Renamed',
+    icon: { type: null, value: null },
+  });
+
+  expect(mockFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/api/v1/workspaces/current'),
+    expect.objectContaining({
+      method: 'PATCH',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer token-1',
+        'Content-Type': 'application/json',
+      }),
+      body: JSON.stringify({ name: 'Renamed', icon: { type: null, value: null } }),
+    })
+  );
+});
+
+it('uploads a workspace icon as multipart form data', async () => {
+  mockFetch.mockReturnValue(
+    makeResponse({
+      success: true,
+      data: { id: 'attachment-1' },
+      error: null,
+    })
+  );
+  const file = new File(['x'], 'icon.png', { type: 'image/png' });
+
+  const uploaded = await workspaceApiService.uploadIcon('token-1', file);
+
+  expect(uploaded).toEqual({ id: 'attachment-1' });
+  const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+  expect(init.method).toBe('POST');
+  expect((init.headers as Record<string, string>).Authorization).toBe('Bearer token-1');
+  expect(init.headers).not.toHaveProperty('Content-Type');
+  expect(init.body).toBeInstanceOf(FormData);
+  expect((init.body as FormData).get('file')).toBe(file);
+});

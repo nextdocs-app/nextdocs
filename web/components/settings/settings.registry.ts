@@ -1,7 +1,8 @@
-import { Sliders, UserCircle } from '@/icons';
+import { Sliders, UserCircle, Workspace } from '@/icons';
 import type { SettingsEntry, SettingsGroup } from './types';
 import { PreferencesPanel } from './panels/PreferencesPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
+import { WorkspaceGeneralPanel } from './panels/WorkspaceGeneralPanel';
 
 /**
  * The settings catalog. Everything the dialog shows — nav order, group
@@ -12,6 +13,20 @@ import { ProfilePanel } from './panels/ProfilePanel';
  * Settings inside a panel are composed from `SettingsSection` / `SettingsRow`.
  */
 export const SETTINGS_GROUPS: SettingsGroup[] = [
+  {
+    id: 'workspace',
+    label: 'Workspace',
+    entries: [
+      {
+        id: 'workspace-general',
+        label: 'General',
+        description: 'Manage the workspace name and icon.',
+        icon: Workspace,
+        requiresAuth: true,
+        Panel: WorkspaceGeneralPanel,
+      },
+    ],
+  },
   {
     id: 'account',
     label: 'Account',
@@ -36,6 +51,17 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
 
 /** Flat lookup for panels; the nav keeps the grouped view. */
 export const SETTINGS_ENTRIES: SettingsEntry[] = SETTINGS_GROUPS.flatMap((group) => group.entries);
+
+/**
+ * The groups a visitor can actually use. Entries that need a session are
+ * dropped for guests, and a group with nothing left disappears with them.
+ */
+export function getSettingsGroups(isAuthenticated: boolean): SettingsGroup[] {
+  return SETTINGS_GROUPS.map((group) => ({
+    ...group,
+    entries: group.entries.filter((entry) => !entry.requiresAuth || isAuthenticated),
+  })).filter((group) => group.entries.length > 0);
+}
 
 /** Page shown when settings opens. */
 export const DEFAULT_SETTINGS_ENTRY_ID = 'preferences';

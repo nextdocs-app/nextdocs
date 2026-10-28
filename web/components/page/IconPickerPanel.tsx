@@ -38,16 +38,25 @@ export function IconPickerPanel({
   canUpload,
   panelRef,
   panelStyle,
+  inline = false,
+  label,
+  uploadFile,
   onSelect,
   onRemove,
   onClose,
 }: {
   icon?: DocumentIcon;
-  documentId: string;
+  /** Required unless `uploadFile` supplies its own endpoint. */
+  documentId?: string;
   accessToken: string | null;
   canUpload: boolean;
-  panelRef: React.RefObject<HTMLDivElement | null>;
-  panelStyle: React.CSSProperties;
+  panelRef?: React.RefObject<HTMLDivElement | null>;
+  panelStyle?: React.CSSProperties;
+  /** Render inside its parent (settings) instead of portalling to the body. */
+  inline?: boolean;
+  /** Accessible name; defaults to the page-icon wording. */
+  label?: string;
+  uploadFile?: (file: File) => Promise<{ id: string }>;
   onSelect: (icon: DocumentIcon) => void;
   onRemove: () => void;
   onClose: () => void;
@@ -96,6 +105,7 @@ export function IconPickerPanel({
   const { upload, error, setError, isUploading } = usePageImageUpload({
     documentId,
     accessToken,
+    uploadFile,
   });
   // A chosen category narrows the grid to that section; 'all' keeps every
   // section. Memoized so the pagination hook sees a stable reference and
@@ -208,7 +218,12 @@ export function IconPickerPanel({
   };
 
   return (
-    <PickerShell panelRef={panelRef} style={panelStyle} label="Choose a page icon">
+    <PickerShell
+      panelRef={panelRef}
+      style={panelStyle}
+      inline={inline}
+      label={label ?? 'Choose a page icon'}
+    >
       <div
         className="flex items-center justify-between gap-1 border-b border-border/70 dark:border-white/10 px-2 pt-2.5 pb-0 sm:px-3"
         onMouseEnter={preloadEmojiMart}

@@ -1,6 +1,7 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { useWorkspace } from '../../../hooks/useWorkspace.hook';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { dispatchWorkspaceUpdated } from '../../../lib/workspace-event.util';
 import { workspaceApiService } from '../../../services/workspace.service';
 
 jest.mock('../../../hooks/useAuth.hook', () => ({
@@ -91,4 +92,22 @@ it('does not show the previous account workspace after a switch', async () => {
   rerender();
 
   expect(result.current).toBeNull();
+});
+
+it('applies a settings update and refreshes the cached identity', async () => {
+  mockAuth('user-1', 'token-1');
+  mockGetCurrent.mockResolvedValue(workspace);
+  const { result } = renderHook(() => useWorkspace());
+  await waitFor(() => expect(result.current).toEqual(workspace));
+
+  const updated = { ...workspace, name: 'Renamed', memberCount: 4 };
+  act(() => dispatchWorkspaceUpdated(updated));
+
+  expect(result.current).toEqual(updated);
+  expect(JSON.parse(window.sessionStorage.getItem('nextdocs.workspace.current') ?? 'null')).toEqual(
+    {
+      userId: 'user-1',
+      workspace: updated,
+    }
+  );
 });

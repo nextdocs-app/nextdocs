@@ -7,6 +7,9 @@ import { getFocusableElements } from '../../../lib/focus-trap.util';
 
 jest.mock('../../../hooks/useTheme.hook', () => ({ useTheme: jest.fn() }));
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
+jest.mock('../../../components/settings/panels/WorkspaceGeneralPanel', () => ({
+  WorkspaceGeneralPanel: () => <div>Workspace general panel</div>,
+}));
 
 const mockSetTheme = jest.fn();
 const mockOnClose = jest.fn();
@@ -37,6 +40,38 @@ it('opens on Preferences with an Account navigation', () => {
     'aria-current',
     'page'
   );
+});
+
+it('lists the Workspace group for a signed-in member', () => {
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  expect(screen.getByText('Workspace')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'General' })).toBeInTheDocument();
+});
+
+it('opens the General page from the Workspace group', async () => {
+  const user = userEvent.setup();
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  await user.click(screen.getByRole('button', { name: 'General' }));
+
+  expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByText('Workspace general panel')).toBeInTheDocument();
+});
+
+it('hides workspace pages from guests', () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: null,
+    isAuthenticated: false,
+    isInitializing: false,
+    accessToken: null,
+  });
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  expect(screen.queryByRole('button', { name: 'General' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Preferences' })).toBeInTheDocument();
 });
 
 it('renders the three theme choices and applies the selected one', async () => {

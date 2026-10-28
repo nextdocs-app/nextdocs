@@ -23,6 +23,7 @@ export { Lock } from './Lock';
 export { Eye } from './Eye';
 export { EyeOff } from './EyeOff';
 export { UserCircle } from './UserCircle';
+export { Users } from './Users';
 export { Workspace } from './Workspace';
 export { Plus } from './Plus';
 export { TriangleAlert } from './TriangleAlert';

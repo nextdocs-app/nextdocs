@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { WORKSPACE_UPDATED_EVENT } from '@/lib/workspace-event.util';
 import { workspaceApiService } from '@/services/workspace.service';
 import type { Workspace } from '@/types/workspace.types';
 
@@ -83,6 +84,28 @@ export function useWorkspace(): Workspace | null {
       controller.abort();
     };
   }, [isAuthenticated, accessToken, userId]);
+
+  // Settings edits the identity in place (name, icon, roster count, own role).
+  // Listening here keeps the rail lockup current without a second store or a
+  // refetch of everything that renders the workspace.
+  useEffect(() => {
+    if (!isAuthenticated || !userId || typeof window === 'undefined') {
+      return;
+    }
+
+    const handleWorkspaceUpdated = (event: Event) => {
+      const next = (event as CustomEvent<Workspace>).detail;
+      if (!next || typeof next.id !== 'string') {
+        return;
+      }
+
+      setLoaded({ userId, workspace: next });
+      cacheWorkspace(userId, next);
+    };
+
+    window.addEventListener(WORKSPACE_UPDATED_EVENT, handleWorkspaceUpdated);
+    return () => window.removeEventListener(WORKSPACE_UPDATED_EVENT, handleWorkspaceUpdated);
+  }, [isAuthenticated, userId]);
 
   // Tagging the value by user hides the previous account's identity during an
   // account switch, and a signed-out session shows no identity at all.

@@ -2,10 +2,11 @@
 
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { Portal } from '@/components/Portal';
+import { useAuth } from '@/hooks/useAuth.hook';
 import { Close } from '@/icons';
 import { trapTabKey } from '@/lib/focus-trap.util';
 import { SettingsNav } from './SettingsNav';
-import { DEFAULT_SETTINGS_ENTRY_ID, SETTINGS_ENTRIES, SETTINGS_GROUPS } from './settings.registry';
+import { DEFAULT_SETTINGS_ENTRY_ID, getSettingsGroups } from './settings.registry';
 
 function SettingsDialogSurface({
   onClose,
@@ -15,6 +16,9 @@ function SettingsDialogSurface({
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const [activeId, setActiveId] = useState(DEFAULT_SETTINGS_ENTRY_ID);
+  const { isAuthenticated } = useAuth();
+  const groups = getSettingsGroups(isAuthenticated);
+  const entries = groups.flatMap((group) => group.entries);
   const dialogRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -24,8 +28,7 @@ function SettingsDialogSurface({
   const titleId = `${baseId}-title`;
   const descriptionId = `${baseId}-description`;
 
-  const activeEntry =
-    SETTINGS_ENTRIES.find((entry) => entry.id === activeId) ?? SETTINGS_ENTRIES[0];
+  const activeEntry = entries.find((entry) => entry.id === activeId) ?? entries[0];
   const ActivePanel = activeEntry.Panel;
 
   useEffect(() => {
@@ -101,7 +104,7 @@ function SettingsDialogSurface({
           <Close size={16} />
         </button>
 
-        <SettingsNav groups={SETTINGS_GROUPS} activeId={activeEntry.id} onSelect={setActiveId} />
+        <SettingsNav groups={groups} activeId={activeEntry.id} onSelect={setActiveId} />
 
         <div className="flex min-h-0 flex-1 flex-col">
           <div

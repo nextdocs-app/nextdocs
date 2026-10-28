@@ -56,6 +56,20 @@ it('omits the JSON content type on a request with no body', async () => {
   expect(init.headers).not.toHaveProperty('Content-Type');
 });
 
+it('leaves the multipart content type to the browser for FormData', async () => {
+  // The boundary lives in the header the browser generates; declaring JSON
+  // would make the request unparseable server-side.
+  mockFetch.mockReturnValue(Promise.resolve(makeResponse(successBody)));
+  const body = new FormData();
+  body.append('file', new File(['x'], 'icon.png', { type: 'image/png' }));
+
+  await apiRequest('/api/v1/example', { method: 'POST', body });
+
+  const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+  expect(init.headers).not.toHaveProperty('Content-Type');
+  expect(init.body).toBe(body);
+});
+
 it('unwraps the envelope data', async () => {
   mockFetch.mockReturnValue(Promise.resolve(makeResponse(successBody)));
 

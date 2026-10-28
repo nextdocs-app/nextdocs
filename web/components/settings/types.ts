@@ -10,6 +10,11 @@ export interface SettingsEntry {
   description: string;
   icon: ComponentType<IconProps>;
   Panel: ComponentType;
+  /**
+   * Hidden from guests. Panels can still render a signed-out state as a
+   * fallback, but an entry nobody can use should not appear in the nav.
+   */
+  requiresAuth?: boolean;
 }
 
 /** A labeled cluster of entries in the settings navigation. */
