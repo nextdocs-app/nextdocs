@@ -296,6 +296,8 @@ class DocumentListQueryHelperTest {
                 .thenReturn(childPage);
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(child1.getId(), DocumentAccessLevel.OWNER));
 
         Page<DocumentResponse> result = queryHelper.list(userId, parentId.toString(), "all", null, null, pageable);
 
@@ -307,6 +309,56 @@ class DocumentListQueryHelperTest {
         assertFalse(item.hasChildren());
         assertFalse(item.hasCollaborators());
         assertEquals(DocumentAccessLevel.OWNER, item.accessLevel());
+    }
+
+    @Test
+    void list_children_ownerChildInAnArchivedSpace_reportsView() {
+        UUID parentId = UUID.randomUUID();
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .title("Frozen Child")
+                .siblingOrderKey("a0")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 50);
+        when(permissionService.requireReadAccess(userId, parentId)).thenReturn(child);
+        when(documentRepository.findAllByParent_IdAndDeletedAtIsNull(eq(parentId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(child)));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(child.getId(), DocumentAccessLevel.VIEW));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, parentId.toString(), "all", null, null, pageable);
+
+        assertEquals(DocumentAccessLevel.VIEW, result.getContent().get(0).accessLevel());
+    }
+
+    @Test
+    void list_flatAll_ownerPageInAnArchivedSpace_reportsView() {
+        Document page = Document.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .title("Frozen Root")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(documentRepository.findAllByUser_IdAndDeletedAtIsNull(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(page)));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(page.getId(), DocumentAccessLevel.VIEW));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "all", null, null, pageable);
+
+        assertEquals(1, result.getContent().size());
+        assertEquals(DocumentAccessLevel.VIEW, result.getContent().get(0).accessLevel());
     }
 
     @Test
@@ -386,6 +438,8 @@ class DocumentListQueryHelperTest {
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
         when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {page.getId(), "a1"}));
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(page.getId(), DocumentAccessLevel.OWNER));
 
         Page<DocumentResponse> result = queryHelper.list(userId, "root", "space", null, spaceId.toString(), pageable);
 
@@ -394,6 +448,37 @@ class DocumentListQueryHelperTest {
         assertEquals("Space Page", item.title());
         assertEquals("a1", item.orderKey());
         assertEquals(spaceId, item.spaceId());
+        assertEquals(DocumentAccessLevel.OWNER, item.accessLevel());
+    }
+
+    @Test
+    void list_spaceScope_ownerPageInAnArchivedSpace_reportsView() {
+        UUID spaceId = UUID.randomUUID();
+        Document page = Document.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .title("Frozen Page")
+                .space(spaceWith(spaceId))
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 50);
+        when(spaceAccessService.requireContentRead(userId, spaceId))
+                .thenReturn(new com.nextdocs.api.space.service.SpaceAccessService.SpaceContext(
+                        spaceWith(spaceId),
+                        com.nextdocs.api.workspace.entity.WorkspaceRole.MEMBER,
+                        DocumentAccessLevel.VIEW));
+        when(documentRepository.findSpaceRootDocuments(userId, spaceId, pageable))
+                .thenReturn(new PageImpl<>(List.of(page), pageable, 1));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
+        when(permissionService.resolveAccessBatch(eq(userId), any()))
+                .thenReturn(java.util.Map.of(page.getId(), DocumentAccessLevel.VIEW));
+
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "space", null, spaceId.toString(), pageable);
+
+        assertEquals(DocumentAccessLevel.VIEW, result.getContent().get(0).accessLevel());
     }
 
     @Test

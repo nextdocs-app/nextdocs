@@ -50,9 +50,11 @@ public class SpaceController {
 
     @Operation(
             summary = "List spaces",
-            description = "Returns the spaces the caller can see: their memberships, every PUBLIC space, "
+            description = "Returns the active spaces the caller can see: their memberships, every PUBLIC space, "
                     + "and — for a workspace owner or admin — all spaces of the workspace. "
-                    + "Each entry carries the caller's effective level, member count, and page count.",
+                    + "With archived=true, returns the archived spaces the caller can administer instead, "
+                    + "newest archive first. Each entry carries the caller's effective level, member count, "
+                    + "page count, and archivedAt.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
@@ -62,8 +64,10 @@ public class SpaceController {
                         description = "Authentication required")
             })
     @GetMapping
-    public ResponseEntity<ApiResponse<List<SpaceResponse>>> list(@AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(ApiResponse.ok(spaceService.listSpaces(callerId(principal))));
+    public ResponseEntity<ApiResponse<List<SpaceResponse>>> list(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false, defaultValue = "false") boolean archived) {
+        return ResponseEntity.ok(ApiResponse.ok(spaceService.listSpaces(callerId(principal), archived)));
     }
 
     @Operation(
@@ -134,10 +138,53 @@ public class SpaceController {
     }
 
     @Operation(
+            summary = "Archive a space",
+            description = "Space owner or workspace admin. Hides the space from normal navigation and makes "
+                    + "it read-only: pages, hierarchy, attachments, memberships, and access rules stay intact. "
+                    + "Idempotent. Restore clears the archive.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Space archived"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller cannot administer this space"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Space not found")
+            })
+    @PostMapping("/{id}/archive")
+    public ResponseEntity<ApiResponse<SpaceResponse>> archive(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(spaceService.archiveSpace(callerId(principal), id)));
+    }
+
+    @Operation(
+            summary = "Restore an archived space",
+            description = "Space owner or workspace admin. Clears the archive so navigation and writes work "
+                    + "again; every page, membership, and access rule is exactly as it was. Idempotent.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Space restored"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller cannot administer this space"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Space not found")
+            })
+    @PostMapping("/{id}/restore")
+    public ResponseEntity<ApiResponse<SpaceResponse>> restore(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(spaceService.restoreSpace(callerId(principal), id)));
+    }
+
+    @Operation(
             summary = "Delete a space",
-            description = "Space owner or workspace admin. Refuses while the space still holds pages (409) "
-                    + "unless deleteDocuments=true, which trashes those pages with the space; the existing "
-                    + "trash and restore rules then apply, and a restored page returns to Private.",
+            description = "Space owner or workspace admin. Only an empty space can be deleted: every page, "
+                    + "including pages in trash, must be permanently deleted first. Archive the space instead "
+                    + "when it still holds pages.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "204",
@@ -150,14 +197,11 @@ public class SpaceController {
                         description = "Space not found"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "409",
-                        description = "Space still holds pages and deleteDocuments was not set")
+                        description = "Space still contains pages, including pages in trash")
             })
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(
-            @AuthenticationPrincipal UserPrincipal principal,
-            @PathVariable UUID id,
-            @RequestParam(required = false, defaultValue = "false") boolean deleteDocuments) {
-        spaceService.deleteSpace(callerId(principal), id, deleteDocuments);
+    public ResponseEntity<Void> delete(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        spaceService.deleteSpace(callerId(principal), id);
         return ResponseEntity.noContent().build();
     }
 

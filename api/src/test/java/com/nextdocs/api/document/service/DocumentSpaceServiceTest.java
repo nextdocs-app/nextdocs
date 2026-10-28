@@ -172,7 +172,7 @@ class DocumentSpaceServiceTest {
     void assignSpace_filesAnActiveRootPage() {
         Document page = rootPage();
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
-        when(spaceAccessService.requireAdministration(userId, space.getId()))
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
                 .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
         when(documentRepository.save(page)).thenReturn(page);
 
@@ -187,12 +187,27 @@ class DocumentSpaceServiceTest {
     void assignSpace_rejectsANestedPage() {
         Document page = rootPage();
         page.setParent(rootPage());
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
 
         assertThatThrownBy(() -> documentService.assignSpace(userId, page.getId(), space.getId()))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
-        verify(spaceAccessService, never()).requireAdministration(any(), any());
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    void assignSpace_archivedSpaceAnswersConflictBeforeThePageGrantIsChecked() {
+        Document page = rootPage();
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenThrow(new ApiException(ErrorCode.CONFLICT));
+
+        assertThatThrownBy(() -> documentService.assignSpace(userId, page.getId(), space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+        // The page's archived VIEW cap must not turn the space's answer into a 403.
+        verify(permissionService, never()).requireEditAccess(any(), any());
     }
 
     @Test
@@ -200,7 +215,7 @@ class DocumentSpaceServiceTest {
         Document page = rootPage();
         page.setSpace(Space.builder().id(UUID.randomUUID()).name("Other").build());
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
-        when(spaceAccessService.requireAdministration(userId, space.getId()))
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
                 .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
 
         assertThatThrownBy(() -> documentService.assignSpace(userId, page.getId(), space.getId()))
@@ -213,7 +228,7 @@ class DocumentSpaceServiceTest {
         Document page = rootPage();
         page.setSpace(space);
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
-        when(spaceAccessService.requireAdministration(userId, space.getId()))
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
                 .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
 
         DocumentResponse response = documentService.assignSpace(userId, page.getId(), space.getId());
@@ -227,7 +242,7 @@ class DocumentSpaceServiceTest {
         Document page = rootPage();
         page.setSpace(space);
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
-        when(spaceAccessService.requireAdministration(userId, space.getId()))
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
                 .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
 
         documentService.clearSpace(userId, page.getId(), space.getId());
@@ -240,6 +255,8 @@ class DocumentSpaceServiceTest {
     void clearSpace_rejectsAPageThatIsNotInTheNamedSpace() {
         Document page = rootPage();
         page.setSpace(Space.builder().id(UUID.randomUUID()).name("Other").build());
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
 
         assertThatThrownBy(() -> documentService.clearSpace(userId, page.getId(), space.getId()))
@@ -250,6 +267,8 @@ class DocumentSpaceServiceTest {
     @Test
     void clearSpace_rejectsAPageOutsideAnySpace() {
         Document page = rootPage();
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
         when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
 
         assertThatThrownBy(() -> documentService.clearSpace(userId, page.getId(), space.getId()))

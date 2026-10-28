@@ -614,12 +614,10 @@ public class DocumentService {
     }
 
     /**
-     * Soft-deletes a page and its active descendants. The caller owns the permission
-     * check: {@link #delete} runs it for the ordinary route, and space deletion trashes
-     * the pages it was told to delete on the strength of the space-ownership check.
+     * Soft-deletes a page and its active descendants. {@link #delete} runs the permission
+     * check and owns the transaction, so this must stay inside that call.
      */
-    @Transactional
-    public void trashSubtree(Document document) {
+    private void trashSubtree(Document document) {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         document.setDeletedAt(now);
         userDocumentOrderRepository.deleteByDocument_Id(document.getId());
@@ -639,17 +637,22 @@ public class DocumentService {
     /**
      * Files a root page into a space. Requires EDIT on the page and space administration:
      * moving a page into a space changes who can read it, which is a sharing decision.
-     * The owner keeps the page; access to it now flows from the space.
+     * The owner keeps the page; access to it now flows from the space. The caller must
+     * hold the space row lock ({@code SpaceService.attachPage} does), so an archive or
+     * delete cannot commit between this gate and the write.
      */
     @Transactional
     public DocumentResponse assignSpace(UUID userId, UUID documentId, UUID spaceId) {
+        // Gate the space before the page: an archived space must answer 409, not the
+        // page's capped VIEW grant answering 403 for a change the space itself forbids.
+        Space space =
+                spaceAccessService.requireActiveAdministration(userId, spaceId).space();
         Document document = permissionService.requireEditAccess(userId, documentId);
         if (document.getParent() != null) {
             throw new ApiException(
                     ErrorCode.VALIDATION_FAILED,
                     "Only root pages can live in a space. Move the page to the root first.");
         }
-        Space space = spaceAccessService.requireAdministration(userId, spaceId).space();
         if (document.getSpace() != null) {
             if (document.getSpace().getId().equals(spaceId)) {
                 return toResponse(document, true, userId);
@@ -662,16 +665,18 @@ public class DocumentService {
 
     /**
      * Detaches a page from the space it names, returning it to the owner's Private
-     * section. Requires EDIT on the page and administration of that space.
+     * section. Requires EDIT on the page and administration of that space; the caller
+     * must hold the space row lock ({@code SpaceService.detachPage} does).
      */
     @Transactional
     public void clearSpace(UUID userId, UUID documentId, UUID spaceId) {
+        // Same ordering as assignSpace: the space-state answer (409) wins over the
+        // page-level grant check for a change the archived space forbids.
+        spaceAccessService.requireActiveAdministration(userId, spaceId);
         Document document = permissionService.requireEditAccess(userId, documentId);
-        Space space = document.getSpace();
-        if (space == null || !space.getId().equals(spaceId)) {
+        if (document.getSpace() == null || !document.getSpace().getId().equals(spaceId)) {
             throw new ApiException(ErrorCode.NOT_FOUND, "The page is not in this space.");
         }
-        spaceAccessService.requireAdministration(userId, spaceId);
         document.setSpace(null);
         documentRepository.save(document);
     }
@@ -1012,11 +1017,12 @@ public class DocumentService {
             accessLevel = publicAccessHint != null
                     ? publicAccessHint
                     : permissionService.resolvePublicAccess(document.getId());
-        } else if (document.getUser().getId().equals(callerUserId)) {
-            accessLevel = DocumentAccessLevel.OWNER;
         } else if (document.getDeletedAt() != null) {
             accessLevel = permissionService.resolveTrashAccess(callerUserId, document.getId());
         } else {
+            // Resolve through SQL even for the owner: an archived space caps every level,
+            // ownership included, at VIEW. A short-circuit here would advertise a write
+            // grant that /my-access and realtime have already revoked.
             accessLevel = permissionService.resolveAccess(callerUserId, document.getId());
         }
 

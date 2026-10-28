@@ -372,6 +372,7 @@ public class DocumentSharingService {
     @Transactional
     public void leaveSharedDocument(UUID userId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(userId, documentId);
+        permissionService.requireActiveSpace(doc);
 
         if (doc.getUser().getId().equals(userId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owners cannot leave their own documents.");
@@ -574,15 +575,14 @@ public class DocumentSharingService {
 
     private DocumentAccessResponse computeActiveAccess(UUID userId, UUID documentId, Document doc) {
         boolean isOwner = doc.getUser().getId().equals(userId);
-        if (isOwner) {
-            return new DocumentAccessResponse(documentId, true, DocumentAccessLevel.OWNER, true, false);
-        }
-
+        // Resolve through SQL even for the owner: an archived space caps every level,
+        // ownership included, at VIEW. Realtime treats OWNER as a write grant, so a
+        // short-circuit here would keep an archived space editable for page owners.
         DocumentAccessLevel level = permissionService.resolveAccess(userId, documentId);
         if (level == null) {
             return new DocumentAccessResponse(documentId, false, null, false, false);
         }
-        return new DocumentAccessResponse(documentId, true, level, false, false);
+        return new DocumentAccessResponse(documentId, true, level, isOwner, false);
     }
 
     private static DocumentAccessLevel normalizeCollaboratorAccess(DocumentAccessLevel accessLevel) {

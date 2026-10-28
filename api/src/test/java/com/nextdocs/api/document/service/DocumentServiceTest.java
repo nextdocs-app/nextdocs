@@ -518,6 +518,29 @@ class DocumentServiceTest {
     }
 
     @Test
+    void get_ownerOfAnArchivedSpacePage_reportsViewNotOwner() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .title("Frozen page")
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccess(ownerId, documentId)).thenReturn(document);
+        when(permissionService.resolveAccess(ownerId, documentId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        DocumentResponse response = documentService.get(ownerId, documentId, false);
+
+        // The owner short-circuit used to answer OWNER here while /my-access and the
+        // realtime gate resolved VIEW through the archived-space cap.
+        assertEquals(DocumentAccessLevel.VIEW, response.accessLevel());
+        verify(permissionService).resolveAccess(ownerId, documentId);
+    }
+
+    @Test
     void get_floatedSharedDocument_returnsUserDocumentOrderKey() {
         UUID requesterId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();

@@ -23,8 +23,9 @@ public record SpaceResponse(
         DocumentAccessLevel everyoneAccessLevel,
 
         @Schema(
-                description =
-                        "The caller's effective level in the space; null for a workspace admin who is not a member")
+                description = "The caller's effective level in the space; VIEW while the space is archived "
+                        + "(canAdminister still reports whether the caller may restore it); null for a workspace "
+                        + "admin who is not a member")
         DocumentAccessLevel myAccessLevel,
 
         @Schema(description = "Whether the caller may rename, re-share, and administer this space")
@@ -34,6 +35,9 @@ public record SpaceResponse(
 
         @Schema(description = "Number of active root pages in the space")
         long pageCount,
+
+        @Schema(description = "When the space was archived; null when it is active")
+        OffsetDateTime archivedAt,
 
         @Schema(description = "Creation timestamp") OffsetDateTime createdAt,
 

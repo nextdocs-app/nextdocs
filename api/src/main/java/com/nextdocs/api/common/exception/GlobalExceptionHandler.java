@@ -2,9 +2,11 @@ package com.nextdocs.api.common.exception;
 
 import com.nextdocs.api.common.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import java.sql.SQLException;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -112,6 +114,24 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(
                         ErrorCode.VALIDATION_FAILED.defaultMessage(),
                         "Missing required parameter: " + ex.getParameterName() + "."));
+    }
+
+    /**
+     * A constraint violation is a state conflict, not a server fault: the common case is
+     * a concurrent archive, delete, or duplicate write making a check stale. A 500 would
+     * tell the client its request can never succeed as written.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        // The driver message can carry column values (duplicate key detail), so log only
+        // the SQL state and failure type at WARN.
+        Throwable cause = ex.getMostSpecificCause();
+        String sqlState = cause instanceof SQLException sqlException ? sqlException.getSQLState() : null;
+        log.warn(
+                "Data integrity violation: sqlState={}, cause={}",
+                sqlState,
+                cause.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.error(ErrorCode.CONFLICT.defaultMessage()));
     }
 
     @ExceptionHandler(AccessDeniedException.class)

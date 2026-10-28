@@ -1,5 +1,6 @@
 package com.nextdocs.api.space.entity;
 
+import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -62,6 +63,19 @@ public class Space {
     @Column(name = "everyone_access_level", nullable = false, length = 16)
     @Builder.Default
     private DocumentAccessLevel everyoneAccessLevel = DocumentAccessLevel.VIEW;
+
+    /**
+     * When set, the space is hidden from normal navigation and frozen read-only.
+     * Pages, memberships, and attachments stay in place; restoring clears this
+     * flag and makes every write path available again.
+     */
+    @Column(name = "archived_at")
+    private OffsetDateTime archivedAt;
+
+    /** Who archived the space, for audit. Null when the space is active. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "archived_by_user_id")
+    private User archivedBy;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

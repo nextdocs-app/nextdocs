@@ -5,7 +5,6 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
-import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
@@ -26,6 +25,8 @@ import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -74,28 +75,38 @@ public class SpaceService {
     private final PageIconValidator pageIconValidator;
 
     /**
-     * Spaces the caller can see, oldest first: their memberships, every PUBLIC space of
-     * the workspace, and — for a workspace owner or admin — all of them, with
+     * Active spaces the caller can see, oldest first: their memberships, every PUBLIC
+     * space of the workspace, and — for a workspace owner or admin — all of them, with
      * {@code myAccessLevel} null for the ones they are not part of.
+     *
+     * <p>With {@code archived=true} the result is the restore view instead: archived
+     * spaces only, limited to the ones the caller can administer.
      */
     @Transactional(readOnly = true)
-    public List<SpaceResponse> listSpaces(UUID userId) {
+    public List<SpaceResponse> listSpaces(UUID userId, boolean archived) {
         WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(userId);
         Workspace workspace = membership.workspace();
         boolean workspaceAdmin = membership.member().getRole().canManageMembers();
 
-        List<Space> spaces = workspaceAdmin
-                ? spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspace.getId())
-                : spaceRepository.findAllVisibleToUser(workspace.getId(), userId);
+        Map<UUID, DocumentAccessLevel> levels = memberLevels(userId);
+        List<Space> spaces;
+        if (archived) {
+            // Filter in SQL: a plain member only restores the spaces they own, and loading
+            // every archived space of the workspace just to discard it grows with history.
+            spaces = workspaceAdmin
+                    ? spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNotNullOrderByArchivedAtDescIdDesc(
+                            workspace.getId())
+                    : spaceRepository.findArchivedOwnedByUser(workspace.getId(), userId);
+        } else {
+            spaces = workspaceAdmin
+                    ? spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspace.getId())
+                    : spaceRepository.findAllVisibleToUser(workspace.getId(), userId);
+        }
         if (spaces.isEmpty()) {
             return List.of();
         }
 
         List<UUID> spaceIds = spaces.stream().map(Space::getId).toList();
-        Map<UUID, DocumentAccessLevel> levels = new HashMap<>();
-        for (SpaceMember member : memberRepository.findAllByUser_Id(userId)) {
-            levels.put(member.getSpace().getId(), member.getAccessLevel());
-        }
         Map<UUID, Long> memberCounts = fetchMemberCounts(spaceIds);
         Map<UUID, Long> pageCounts = fetchPageCounts(spaceIds);
 
@@ -120,6 +131,55 @@ public class SpaceService {
     public SpaceResponse getSpace(UUID userId, UUID spaceId) {
         SpaceContext context = spaceAccessService.requireRead(userId, spaceId);
         return toResponse(context);
+    }
+
+    /**
+     * Archives a space: hidden from normal navigation, readable but frozen. Pages,
+     * memberships, attachments, and access rules stay in place. Idempotent.
+     */
+    @Transactional
+    public SpaceResponse archiveSpace(UUID userId, UUID spaceId) {
+        spaceAccessService.requireAdministration(userId, spaceId);
+        Space space = lockSpace(spaceId);
+        // Re-check after the row lock: a demotion committed while this transaction
+        // waited must not ride along with the archive.
+        SpaceContext lockedContext = spaceAccessService.requireAdministration(userId, spaceId);
+
+        if (space.getArchivedAt() == null) {
+            space.setArchivedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            space.setArchivedBy(userRepository
+                    .findById(userId)
+                    .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found.")));
+            spaceRepository.save(space);
+            log.info("Archived space {} by {}", spaceId, userId);
+        }
+        return toResponse(
+                space,
+                spaceAccessService.resolveLevel(userId, space),
+                lockedContext.canAdminister(),
+                memberRepository.countBySpace_Id(spaceId),
+                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
+    }
+
+    /** Restores an archived space to normal navigation and writes. Idempotent. */
+    @Transactional
+    public SpaceResponse restoreSpace(UUID userId, UUID spaceId) {
+        spaceAccessService.requireAdministration(userId, spaceId);
+        Space space = lockSpace(spaceId);
+        SpaceContext lockedContext = spaceAccessService.requireAdministration(userId, spaceId);
+
+        if (space.getArchivedAt() != null) {
+            space.setArchivedAt(null);
+            space.setArchivedBy(null);
+            spaceRepository.save(space);
+            log.info("Restored space {} by {}", spaceId, userId);
+        }
+        return toResponse(
+                space,
+                spaceAccessService.resolveLevel(userId, space),
+                lockedContext.canAdminister(),
+                memberRepository.countBySpace_Id(spaceId),
+                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
     }
 
     /**
@@ -162,7 +222,7 @@ public class SpaceService {
     /** Renames, re-shares, or re-icons a space. Space owner or workspace admin. */
     @Transactional
     public SpaceResponse updateSpace(UUID userId, UUID spaceId, SpaceUpdateRequest request) {
-        SpaceContext context = spaceAccessService.requireAdministration(userId, spaceId);
+        SpaceContext context = spaceAccessService.requireActiveAdministration(userId, spaceId);
         UUID workspaceId = context.space().getWorkspace().getId();
 
         // Validate icon bytes and level values before taking the row lock: storage I/O
@@ -173,14 +233,13 @@ public class SpaceService {
                 request.everyoneAccessLevel() == null ? null : normalizeEveryoneLevel(request.everyoneAccessLevel());
         String name = request.name() == null ? null : normalizeName(request.name());
 
-        Space space =
-                spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        Space space = lockSpace(spaceId);
         if (!space.getWorkspace().getId().equals(workspaceId)) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         // The pre-lock check ran before this transaction waited on the row: re-check after
         // taking the lock so a demotion committed in between cannot ride along.
-        SpaceContext lockedContext = spaceAccessService.requireAdministration(userId, spaceId);
+        SpaceContext lockedContext = spaceAccessService.requireActiveAdministration(userId, spaceId);
 
         if (name != null) {
             space.setName(name);
@@ -205,35 +264,27 @@ public class SpaceService {
     }
 
     /**
-     * Deletes a space. Refuses while it still holds pages unless the caller explicitly
-     * asks to delete them, in which case every root page is trashed (the existing cascade
-     * takes its descendants) and the space is removed. The trashed pages become Private
-     * roots on restore: the space no longer exists to inherit from.
+     * Deletes a space only when it is truly empty: no document row may still reference
+     * it. Trashed pages keep their space_id, so they block deletion until they are
+     * permanently deleted. A populated space must be archived instead.
      */
     @Transactional
-    public void deleteSpace(UUID userId, UUID spaceId, boolean deleteDocuments) {
-        Space space =
-                spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+    public void deleteSpace(UUID userId, UUID spaceId) {
+        Space space = lockSpace(spaceId);
         // Checked under the lock: a space member promoted while this transaction waited
         // must be able to administer the deletion it is holding the row for.
         spaceAccessService.requireAdministration(userId, spaceId);
 
-        List<Document> rootPages = documentRepository.findAllBySpace_IdAndParentIsNullAndDeletedAtIsNull(space.getId());
-        if (!rootPages.isEmpty() && !deleteDocuments) {
+        long remainingPages = documentRepository.countBySpace_Id(spaceId);
+        if (remainingPages > 0) {
             throw new ApiException(
                     ErrorCode.CONFLICT,
-                    "This space still holds pages. Move them out, or delete the space and its pages together.");
-        }
-        for (Document page : rootPages) {
-            documentService.trashSubtree(page);
+                    "This space still contains pages, including pages in trash. "
+                            + "Permanently delete them first, or archive the space.");
         }
 
         spaceRepository.delete(space);
-        log.info(
-                "Deleted space {} with {} root page(s), deleteDocuments={}",
-                spaceId,
-                rootPages.size(),
-                deleteDocuments);
+        log.info("Deleted empty space {}", spaceId);
     }
 
     /**
@@ -254,7 +305,7 @@ public class SpaceService {
      */
     @Transactional
     public List<SpaceMemberResponse> addMember(UUID userId, UUID spaceId, SpaceMemberCreateRequest request) {
-        SpaceContext context = spaceAccessService.requireAdministration(userId, spaceId);
+        SpaceContext context = spaceAccessService.requireActiveAdministration(userId, spaceId);
         DocumentAccessLevel level = normalizeMemberLevel(request.accessLevel());
 
         User target = userRepository
@@ -265,6 +316,12 @@ public class SpaceService {
                 .isEmpty()) {
             throw new ApiException(ErrorCode.NOT_FOUND, "That person is not a member of this workspace.");
         }
+
+        // Take the row lock before writing the membership: an archive that commits
+        // while this transaction waited must not leave a member on a frozen space.
+        Space space = lockSpace(spaceId);
+        spaceAccessService.requireActiveAdministration(userId, spaceId);
+
         if (memberRepository.existsBySpace_IdAndUser_Id(spaceId, target.getId())) {
             throw new ApiException(ErrorCode.CONFLICT, "That person is already a member of this space.");
         }
@@ -273,7 +330,7 @@ public class SpaceService {
                 .findById(userId)
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found."));
         memberRepository.save(SpaceMember.builder()
-                .space(context.space())
+                .space(space)
                 .user(target)
                 .accessLevel(level)
                 .grantedBy(actor)
@@ -289,10 +346,9 @@ public class SpaceService {
     @Transactional
     public List<SpaceMemberResponse> updateMemberAccess(
             UUID userId, UUID spaceId, UUID targetUserId, SpaceMemberAccessUpdateRequest request) {
-        spaceAccessService.requireAdministration(userId, spaceId);
-        Space space =
-                spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-        spaceAccessService.requireAdministration(userId, spaceId);
+        spaceAccessService.requireActiveAdministration(userId, spaceId);
+        Space space = lockSpace(spaceId);
+        spaceAccessService.requireActiveAdministration(userId, spaceId);
 
         DocumentAccessLevel newLevel = normalizeMemberLevel(request.accessLevel());
         SpaceMember target = requireMember(space, targetUserId);
@@ -315,16 +371,16 @@ public class SpaceService {
         boolean self = userId.equals(targetUserId);
         if (self) {
             // Leaving is a read-adjacent act: any member may do it, and a workspace
-            // admin who is not a member has nothing to leave.
+            // admin who is not a member has nothing to leave. It stays available in an
+            // archived space so a member is never trapped there.
             spaceAccessService.requireRead(userId, spaceId);
         } else {
-            spaceAccessService.requireAdministration(userId, spaceId);
+            spaceAccessService.requireActiveAdministration(userId, spaceId);
         }
 
-        Space space =
-                spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        Space space = lockSpace(spaceId);
         if (!self) {
-            spaceAccessService.requireAdministration(userId, spaceId);
+            spaceAccessService.requireActiveAdministration(userId, spaceId);
         }
 
         SpaceMember target = requireMember(space, targetUserId);
@@ -336,18 +392,37 @@ public class SpaceService {
     }
 
     /**
-     * Files an existing root page into the space. The page rules and both permission
-     * checks (space administration, page EDIT) live in {@link DocumentService#assignSpace}.
+     * Files an existing root page into the space. The row lock serializes an archive or
+     * delete of this space; the page rules and the single permission gate live in
+     * {@link DocumentService#assignSpace}.
      */
     @Transactional
     public DocumentResponse attachPage(UUID userId, UUID spaceId, UUID documentId) {
+        lockSpace(spaceId);
         return documentService.assignSpace(userId, documentId, spaceId);
     }
 
-    /** Detaches a page from its space; it returns to the owner's Private section. */
+    /**
+     * Detaches a page from its space; it returns to the owner's Private section. Like
+     * attach, the lock keeps an archive from committing between the gate and the write.
+     */
     @Transactional
     public void detachPage(UUID userId, UUID spaceId, UUID documentId) {
+        lockSpace(spaceId);
         documentService.clearSpace(userId, documentId, spaceId);
+    }
+
+    /**
+     * Row-locks the space and re-reads it. Archive and delete take the same lock, so
+     * the active-space gates cannot go stale between their read and the write; the
+     * refresh is required because a pre-lock check has already put the space in the
+     * persistence context, where the lock query does not overwrite its old state.
+     */
+    private Space lockSpace(UUID spaceId) {
+        Space space =
+                spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        spaceAccessService.refreshForLock(space);
+        return space;
     }
 
     private List<SpaceMemberResponse> roster(UUID spaceId) {
@@ -376,6 +451,14 @@ public class SpaceService {
                 documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()));
     }
 
+    private Map<UUID, DocumentAccessLevel> memberLevels(UUID userId) {
+        Map<UUID, DocumentAccessLevel> levels = new HashMap<>();
+        for (SpaceMember member : memberRepository.findAllByUser_Id(userId)) {
+            levels.put(member.getSpace().getId(), member.getAccessLevel());
+        }
+        return levels;
+    }
+
     private Map<UUID, Long> fetchMemberCounts(List<UUID> spaceIds) {
         Map<UUID, Long> counts = new HashMap<>();
         for (Object[] row : memberRepository.countMembersBySpaceIds(spaceIds)) {
@@ -394,16 +477,22 @@ public class SpaceService {
 
     private static SpaceResponse toResponse(
             Space space, DocumentAccessLevel myAccessLevel, boolean canAdminister, long memberCount, long pageCount) {
+        // An archived space caps content at VIEW; reporting the pre-archive membership
+        // level as "effective" would advertise a write grant the page endpoints deny.
+        // canAdminister stays the restore flag.
+        DocumentAccessLevel effectiveLevel =
+                myAccessLevel != null && space.getArchivedAt() != null ? DocumentAccessLevel.VIEW : myAccessLevel;
         return new SpaceResponse(
                 space.getId(),
                 space.getName(),
                 toIconResponse(space),
                 space.getAccessMode(),
                 space.getEveryoneAccessLevel(),
-                myAccessLevel,
+                effectiveLevel,
                 canAdminister,
                 memberCount,
                 pageCount,
+                space.getArchivedAt(),
                 space.getCreatedAt(),
                 space.getUpdatedAt());
     }
