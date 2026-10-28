@@ -9,7 +9,7 @@
 </h3>
 
 <p align="center">
-  <a href="https://github.com/santhoshh-kumar/nextdocs/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-3B82F6?style=flat-square" alt="License"></a> 
+  <a href="https://github.com/santhoshh-kumar/nextdocs/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-AGPLv3-3B82F6?style=flat-square" alt="License"></a> 
   <a href="https://www.blocknotejs.org/"><img src="https://img.shields.io/badge/Powered--by-BlockNote-7C3AED?style=flat-square" alt="BlockNote"></a> 
   <a href="https://yjs.dev/"><img src="https://img.shields.io/badge/Collaboration-Yjs-F59E0B?style=flat-square" alt="Yjs"></a>
   <a href="https://github.com/santhoshh-kumar/nextdocs/releases"><img src="https://img.shields.io/badge/Release-Pre--alpha-orange?style=flat-square" alt="Release Status"></a>
@@ -121,7 +121,8 @@ npm run dev -- --filter=realtime  # Realtime server only
 - [x] Polish blocknote editor experience.
 - [x] Icons + covers for documents.
 
-### Q4 20226
+### Q4 2026
+
 - [ ] Document version history and snapshots.
 - [ ] Full-text search support.
 - [ ] AI integration and MCP support.
@@ -130,4 +131,4 @@ npm run dev -- --filter=realtime  # Realtime server only
 
 ## License
 
-Distributed under the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
+Distributed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for details.

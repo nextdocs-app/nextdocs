@@ -1,6 +1,7 @@
 {
   "name": "nextdocs-root",
   "private": true,
+  "license": "AGPL-3.0-only",
   "packageManager": "npm@11.6.2",
   "engines": {
     "node": ">=24.14.1",

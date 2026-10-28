@@ -30,7 +30,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-only",
   "dependencies": {
     "dotenv": "^18.0.9",
     "lib0": "^0.2.119",
