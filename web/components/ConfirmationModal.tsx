@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef } from 'react';
 import { Portal } from '@/components/Portal';
-
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+import { getFocusableElements, trapTabKey } from '@/lib/focus-trap.util';
 
 type ConfirmationModalProps = {
   id?: string;
@@ -108,50 +106,21 @@ export function ConfirmationModal({
       return;
     }
 
-    const getFocusableElements = () => {
-      return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        (element) =>
-          !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true'
-      );
-    };
-
-    const focusTarget = cancelButtonRef.current ?? getFocusableElements()[0] ?? dialog;
+    const focusTarget = cancelButtonRef.current ?? getFocusableElements(dialog)[0] ?? dialog;
     focusTarget.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (event.isComposing) {
+          return;
+        }
+
         event.preventDefault();
         handleCancel();
         return;
       }
 
-      if (event.key !== 'Tab') {
-        return;
-      }
-
-      const focusableElements = getFocusableElements();
-      if (focusableElements.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-      const activeElement = document.activeElement as HTMLElement | null;
-
-      if (event.shiftKey) {
-        if (!activeElement || activeElement === firstElement || !dialog.contains(activeElement)) {
-          event.preventDefault();
-          lastElement.focus();
-        }
-        return;
-      }
-
-      if (!activeElement || activeElement === lastElement || !dialog.contains(activeElement)) {
-        event.preventDefault();
-        firstElement.focus();
-      }
+      trapTabKey(event, dialog);
     };
 
     dialog.addEventListener('keydown', handleKeyDown);

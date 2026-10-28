@@ -21,7 +21,7 @@ import {
   setDocActionsAnchor,
 } from '@/stores/sidebar/sidebar.slice';
 import {
-  setSettingsModalOpen,
+  setSettingsDialogOpen,
   setAccountMenuOpen,
   setPermanentDeleteTarget,
 } from '@/stores/ui/ui.slice';
@@ -29,7 +29,7 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 
 import { NewDocument, Search, ChevronRight, Close, CloseSidebar, UserCircle } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
-import { SettingsModal } from '@/components/SettingsModal';
+import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { PageIcon } from '@/components/page/PageIcon';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
@@ -170,7 +170,7 @@ function Sidebar() {
 
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const isAccountMenuOpen = useAppSelector((state) => state.ui.isAccountMenuOpen);
-  const isSettingsOpen = useAppSelector((state) => state.ui.isSettingsModalOpen);
+  const isSettingsOpen = useAppSelector((state) => state.ui.isSettingsDialogOpen);
   const permanentDeleteTarget = useAppSelector((state) => state.ui.permanentDeleteTarget);
   const [trashActionLoadingDocId, setTrashActionLoadingDocId] = useState<string | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
@@ -1249,7 +1249,7 @@ function Sidebar() {
           isAuthenticated={isAuthenticated}
           onOpenSettings={() => {
             dispatch(setAccountMenuOpen(false));
-            dispatch(setSettingsModalOpen(true));
+            dispatch(setSettingsDialogOpen(true));
           }}
           onOpenTrash={() => {
             dispatch(setAccountMenuOpen(false));
@@ -1274,7 +1274,12 @@ function Sidebar() {
         />
       )}
 
-      {isSettingsOpen && <SettingsModal onClose={() => dispatch(setSettingsModalOpen(false))} />}
+      {isSettingsOpen && (
+        <SettingsDialog
+          returnFocusRef={accountMenuTriggerRef}
+          onClose={() => dispatch(setSettingsDialogOpen(false))}
+        />
+      )}
 
       {docActionsAnchor && (
         <DocumentActionsMenu

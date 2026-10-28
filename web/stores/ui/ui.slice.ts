@@ -1,7 +1,7 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
 export interface UiState {
-  isSettingsModalOpen: boolean;
+  isSettingsDialogOpen: boolean;
   isAccountMenuOpen: boolean;
 
   // Permanent delete target
@@ -12,7 +12,7 @@ export interface UiState {
 }
 
 const initialState: UiState = {
-  isSettingsModalOpen: false,
+  isSettingsDialogOpen: false,
   isAccountMenuOpen: false,
   permanentDeleteTarget: null,
 };
@@ -21,8 +21,8 @@ const uiSlice = createSlice({
   name: 'ui',
   initialState,
   reducers: {
-    setSettingsModalOpen(state, action: PayloadAction<boolean>) {
-      state.isSettingsModalOpen = action.payload;
+    setSettingsDialogOpen(state, action: PayloadAction<boolean>) {
+      state.isSettingsDialogOpen = action.payload;
     },
     setAccountMenuOpen(state, action: PayloadAction<boolean>) {
       state.isAccountMenuOpen = action.payload;
@@ -33,7 +33,7 @@ const uiSlice = createSlice({
   },
 });
 
-export const { setSettingsModalOpen, setAccountMenuOpen, setPermanentDeleteTarget } =
+export const { setSettingsDialogOpen, setAccountMenuOpen, setPermanentDeleteTarget } =
   uiSlice.actions;
 
 export default uiSlice.reducer;

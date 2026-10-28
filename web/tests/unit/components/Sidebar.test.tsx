@@ -120,9 +120,9 @@ jest.mock('../../../hooks/useWorkspace.hook');
 jest.mock('../../../lib/root-document.util', () => ({
   resolveRootDocumentId: jest.fn(),
 }));
-jest.mock('../../../components/SettingsModal', () => ({
-  SettingsModal: ({ onClose }: { onClose: () => void }) => (
-    <div data-testid="settings-modal">
+jest.mock('../../../components/settings/SettingsDialog', () => ({
+  SettingsDialog: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="settings-dialog">
       <button onClick={onClose}>Close Settings</button>
     </div>
   ),
@@ -669,13 +669,13 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
-it('opens the settings modal when "Settings" is selected from the account menu', async () => {
+it('opens the settings dialog when "Settings" is selected from the account menu', async () => {
   useGuestAuth();
   const user = userEvent.setup();
   render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
   await user.click(screen.getByRole('menuitem', { name: /Settings/i }));
-  expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+  expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
