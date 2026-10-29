@@ -39,6 +39,11 @@ const POSTGRES_USER = 'nextdocs';
 const POSTGRES_PASSWORD = 'nextdocs';
 const POSTGRES_DB = 'nextdocs';
 
+const MAILPIT_CONTAINER = 'nextdocs-mailpit';
+const MAILPIT_IMAGE = 'axllent/mailpit:v1.24';
+const MAILPIT_SMTP_PORT = '1025';
+const MAILPIT_WEB_PORT = '8025';
+
 // TODO: If the number of keys that need to be generated this way are more,
 // we may need to find a more generalizable pattern.
 let generatedDevOAuthTokenKey = null;
@@ -92,6 +97,13 @@ function buildApiDevEnv(overrides = {}) {
       'http://10.*.*.*:3000',
       ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
     ].join(',');
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.SPRING_MAIL_HOST)) {
+    env.SPRING_MAIL_HOST = 'localhost';
+    env.SPRING_MAIL_PORT = MAILPIT_SMTP_PORT;
+    env.SPRING_MAIL_SMTP_STARTTLS = 'false';
+    env.SPRING_MAIL_SMTP_SSL_CHECK_SERVER_IDENTITY = 'false';
   }
 
   return env;
@@ -204,6 +216,32 @@ function ensurePostgres() {
   ].join(' '));
 }
 
+function ensureMailpit() {
+  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${MAILPIT_CONTAINER}`);
+  if (check.status === 0 && check.stdout.toString().trim() === 'true') {
+    console.log(`\x1b[32m✓ Mailpit already running (Web UI: http://localhost:${MAILPIT_WEB_PORT})\x1b[0m`);
+    return;
+  }
+
+  const exists = runSilent(`docker inspect ${MAILPIT_CONTAINER}`);
+  if (exists.status === 0) {
+    console.log(`\x1b[34m> Starting existing mailpit container...\x1b[0m`);
+    run(`docker start ${MAILPIT_CONTAINER}`);
+    console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
+    return;
+  }
+
+  console.log(`\x1b[34m> Starting mailpit container...\x1b[0m`);
+  run([
+    'docker run -d',
+    `--name ${MAILPIT_CONTAINER}`,
+    `-p ${MAILPIT_SMTP_PORT}:1025`,
+    `-p ${MAILPIT_WEB_PORT}:8025`,
+    MAILPIT_IMAGE,
+  ].join(' '));
+  console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
+}
+
 const API_COMMANDS = {
   lint: isFix
     ? `${mvnw} spotless:apply --no-transfer-progress`
@@ -218,7 +256,7 @@ function usage() {
   console.log('Usage: ./nd <command> [service] [--fix]');
   console.log();
   console.log('Commands:');
-  console.log('  dev [service]       Start dev servers (auto-starts postgres)');
+  console.log('  dev [service]       Start dev servers (auto-starts postgres and mailpit)');
   console.log('  lint [service]      Run linters (--fix to auto-fix)');
   console.log('  format [service]    Run formatters (--fix to auto-fix)');
   console.log('  test [service]      Run tests');
@@ -277,7 +315,12 @@ switch (command) {
   case 'dev':
     // TODO: We will not require postgres to be running for web and realtime.
     ensurePostgres();
+    ensureMailpit();
     if (service) {
+      process.on('exit', () => {
+        console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
+        runSilent(`docker stop ${MAILPIT_CONTAINER}`);
+      });
       runForService('dev', service);
     } else {
       ensureJsWorkspaceReady('all');
@@ -354,10 +397,12 @@ switch (command) {
         }
       });
 
-      // Stop postgres when exiting dev mode
+      // Stop postgres and mailpit when exiting dev mode
       process.on('exit', () => {
         console.log(`\x1b[34m> Stopping postgres container...\x1b[0m`);
         runSilent(`docker stop ${POSTGRES_CONTAINER}`);
+        console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
+        runSilent(`docker stop ${MAILPIT_CONTAINER}`);
       });
     }
     break;
