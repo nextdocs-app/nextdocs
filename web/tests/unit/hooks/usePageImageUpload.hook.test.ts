@@ -67,6 +67,20 @@ describe('usePageImageUpload', () => {
     expect(uploadMock).toHaveBeenCalledWith('doc-1', png, 'token');
   });
 
+  it('uses a supplied uploader when the picker is not attached to a document', async () => {
+    const uploadFile = jest.fn().mockResolvedValue({ id: 'workspace-icon' });
+    const { result } = renderHook(() => usePageImageUpload({ accessToken: 'token', uploadFile }));
+
+    let uploaded: unknown;
+    await act(async () => {
+      uploaded = await result.current.upload(png);
+    });
+
+    expect(uploaded).toEqual({ id: 'workspace-icon' });
+    expect(uploadFile).toHaveBeenCalledWith(png);
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
   it('surfaces an upload failure as an error', async () => {
     uploadMock.mockRejectedValue(new Error('Quota exceeded.'));
     const { result } = renderHook(() =>

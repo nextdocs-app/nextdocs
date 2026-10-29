@@ -20,6 +20,10 @@ public interface SpaceMemberRepository extends JpaRepository<SpaceMember, UUID> 
     @EntityGraph(attributePaths = "user")
     List<SpaceMember> findAllBySpace_IdOrderByCreatedAtAsc(UUID spaceId);
 
+    /** Every space membership across a workspace, with space and user attached. */
+    @EntityGraph(attributePaths = {"space", "user"})
+    List<SpaceMember> findAllBySpace_Workspace_Id(UUID workspaceId);
+
     /**
      * Every membership of one user, with the space attached: the visible-space listing
      * and the workspace off-boarding cleanup both need the space, never a lazy load per row.

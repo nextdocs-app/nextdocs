@@ -120,9 +120,15 @@ jest.mock('../../../hooks/useWorkspace.hook');
 jest.mock('../../../lib/root-document.util', () => ({
   resolveRootDocumentId: jest.fn(),
 }));
-jest.mock('../../../components/SettingsModal', () => ({
-  SettingsModal: ({ onClose }: { onClose: () => void }) => (
-    <div data-testid="settings-modal">
+jest.mock('../../../components/settings/SettingsDialog', () => ({
+  SettingsDialog: ({
+    onClose,
+    initialEntryId,
+  }: {
+    onClose: () => void;
+    initialEntryId?: string | null;
+  }) => (
+    <div data-testid="settings-dialog" data-initial-entry-id={initialEntryId ?? undefined}>
       <button onClick={onClose}>Close Settings</button>
     </div>
   ),
@@ -669,13 +675,125 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
-it('opens the settings modal when "Settings" is selected from the account menu', async () => {
+it('opens the settings dialog when "Settings" is selected from the account menu', async () => {
   useGuestAuth();
   const user = userEvent.setup();
   render(<Sidebar />);
   await user.click(screen.getByRole('button', { name: /Guest User/i }));
   await user.click(screen.getByRole('menuitem', { name: /Settings/i }));
-  expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+  expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
+it('opens the settings dialog on profile when "Profile" is selected from the account menu', async () => {
+  useGuestAuth();
+  const user = userEvent.setup();
+  render(<Sidebar />);
+  await user.click(screen.getByRole('button', { name: /Guest User/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Profile/i }));
+  const dialog = screen.getByTestId('settings-dialog');
+  expect(dialog).toBeInTheDocument();
+  expect(dialog).toHaveAttribute('data-initial-entry-id', 'profile');
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
+it('opens the settings dialog on preferences when "Preferences" is selected from the account menu', async () => {
+  useGuestAuth();
+  const user = userEvent.setup();
+  render(<Sidebar />);
+  await user.click(screen.getByRole('button', { name: /Guest User/i }));
+  await user.click(screen.getByRole('menuitem', { name: /Preferences/i }));
+  const dialog = screen.getByTestId('settings-dialog');
+  expect(dialog).toBeInTheDocument();
+  expect(dialog).toHaveAttribute('data-initial-entry-id', 'preferences');
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
+it('opens the workspace menu when workspace button is clicked and shows "Manage people" for an owner', async () => {
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'Acme Docs',
+    icon: { type: 'emoji', value: '📚' },
+    role: 'OWNER',
+    memberCount: 3,
+  });
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /Acme Docs workspace options/i }));
+  expect(screen.getByRole('menu', { name: 'Workspace options' })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: 'Workspace settings' })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: 'Manage people' })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: 'Trash' })).toBeInTheDocument();
+
+  await user.click(screen.getByRole('menuitem', { name: 'Manage people' }));
+  const dialog = screen.getByTestId('settings-dialog');
+  expect(dialog).toBeInTheDocument();
+  expect(dialog).toHaveAttribute('data-initial-entry-id', 'workspace-people');
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
+it('closes the workspace menu when Escape is pressed', async () => {
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /NextDocs workspace options/i }));
+  expect(screen.getByRole('menu', { name: 'Workspace options' })).toBeInTheDocument();
+
+  await user.keyboard('{Escape}');
+
+  expect(screen.queryByRole('menu', { name: 'Workspace options' })).not.toBeInTheDocument();
+});
+
+it('swaps the workspace menu for the account menu when the account trigger is pressed', async () => {
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /NextDocs workspace options/i }));
+  await user.click(screen.getByRole('button', { name: /Alice/i }));
+
+  expect(screen.getByRole('menu', { name: 'Account options' })).toBeInTheDocument();
+  expect(screen.queryByRole('menu', { name: 'Workspace options' })).not.toBeInTheDocument();
+});
+
+it('leaves the workspace lockup as a plain label for guests', () => {
+  useGuestAuth();
+  render(<Sidebar />);
+
+  expect(screen.queryByRole('button', { name: /workspace options/i })).not.toBeInTheDocument();
+  expect(screen.getByTitle('NextDocs')).toBeInTheDocument();
+});
+
+it('renders account menu with profile, preferences, settings, and without trash', async () => {
+  useGuestAuth();
+  const user = userEvent.setup();
+  render(<Sidebar />);
+  await user.click(screen.getByRole('button', { name: /Guest User/i }));
+  expect(screen.getByRole('menuitem', { name: 'Profile' })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: 'Preferences' })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeInTheDocument();
+  expect(screen.queryByRole('menuitem', { name: /Trash/i })).not.toBeInTheDocument();
+});
+
+it('shows "People" without manage prefix when user is a plain member', async () => {
+  (useWorkspace as jest.Mock).mockReturnValue({
+    id: 'workspace-1',
+    name: 'Acme Docs',
+    icon: { type: 'emoji', value: '📚' },
+    role: 'MEMBER',
+    memberCount: 3,
+  });
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /Acme Docs workspace options/i }));
+  expect(screen.getByRole('menuitem', { name: 'People' })).toBeInTheDocument();
+  expect(screen.queryByRole('menuitem', { name: 'Manage people' })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
+  const dialog = screen.getByTestId('settings-dialog');
+  expect(dialog).toBeInTheDocument();
+  expect(dialog).toHaveAttribute('data-initial-entry-id', 'workspace-general');
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
@@ -994,8 +1112,8 @@ it('shows trash option for authenticated user and opens trash panel', async () =
   const user = userEvent.setup();
   render(<Sidebar />);
 
-  await user.click(screen.getByRole('button', { name: /Alice/i }));
-  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /workspace options/i }));
+  await user.click(screen.getByRole('menuitem', { name: /^Trash$/i }));
 
   expect(mockShowTrashDocuments).toHaveBeenCalledTimes(1);
   expect(screen.getByRole('dialog', { name: /Trash documents/i })).toBeInTheDocument();
@@ -1446,8 +1564,8 @@ it('restores a document from trash panel row actions', async () => {
   const user = userEvent.setup();
   render(<Sidebar />);
 
-  await user.click(screen.getByRole('button', { name: /Alice/i }));
-  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /workspace options/i }));
+  await user.click(screen.getByRole('menuitem', { name: /^Trash$/i }));
   await user.click(screen.getByRole('button', { name: /Restore Doc 1/i }));
 
   await waitFor(() => {
@@ -1495,8 +1613,8 @@ it('permanently deletes a document from trash panel after confirmation', async (
   const user = userEvent.setup();
   render(<Sidebar />);
 
-  await user.click(screen.getByRole('button', { name: /Alice/i }));
-  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /workspace options/i }));
+  await user.click(screen.getByRole('menuitem', { name: /^Trash$/i }));
   await user.click(screen.getByRole('button', { name: /Delete permanently Doc 1/i }));
 
   const confirmationDialog = screen.getByRole('dialog', { name: /Delete permanently\?/i });
@@ -1568,8 +1686,8 @@ it('shows restore button for child document in trash when trashHasMore is true a
   const user = userEvent.setup();
   render(<Sidebar />);
 
-  await user.click(screen.getByRole('button', { name: /Alice/i }));
-  await user.click(screen.getByRole('menuitem', { name: /Trash Documents/i }));
+  await user.click(screen.getByRole('button', { name: /workspace options/i }));
+  await user.click(screen.getByRole('menuitem', { name: /^Trash$/i }));
 
   const restoreBtn = screen.getByRole('button', { name: /Restore Trashed Child Doc/i });
   expect(restoreBtn).toBeInTheDocument();

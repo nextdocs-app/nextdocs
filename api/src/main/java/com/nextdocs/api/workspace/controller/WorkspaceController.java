@@ -101,7 +101,9 @@ public class WorkspaceController {
 
     @Operation(
             summary = "List workspace members",
-            description = "Returns the member roster with roles. Any member.",
+            description = "Returns the member roster with roles. Any member. Space memberships are "
+                    + "attached only for owners and admins, because who belongs to a space is roster "
+                    + "data rather than content.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

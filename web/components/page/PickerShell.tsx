@@ -19,39 +19,50 @@ export function PickerShell({
   panelRef,
   style,
   label,
+  inline = false,
   children,
 }: {
-  panelRef: React.RefObject<HTMLDivElement | null>;
-  style: React.CSSProperties;
+  panelRef?: React.RefObject<HTMLDivElement | null>;
+  style?: React.CSSProperties;
   label: string;
+  /** Render in place instead of portalling; used inside the settings dialog. */
+  inline?: boolean;
   children: React.ReactNode;
 }) {
-  return (
-    <Portal>
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-label={label}
-        style={{
-          ...style,
-          // Fixed 360px overflows viewports under ~376px (360 + 2×8 margin):
-          // clamp to the viewport so the panel fits small phones instead of
-          // bleeding past the right edge. Height clamps to the visual viewport
-          // for short landscape screens the same way.
-          width: `min(${PICKER_PANEL_WIDTH}px, calc(100vw - 16px))`,
-          maxHeight: `min(${PICKER_PANEL_MAX_HEIGHT}px, calc(100dvh - 16px))`,
-        }}
-        className="
+  const panel = (
+    <div
+      ref={panelRef}
+      role={inline ? 'group' : 'dialog'}
+      aria-label={label}
+      style={
+        inline
+          ? undefined
+          : {
+              ...style,
+              // Fixed 360px overflows viewports under ~376px (360 + 2×8 margin):
+              // clamp to the viewport so the panel fits small phones instead of
+              // bleeding past the right edge. Height clamps to the visual viewport
+              // for short landscape screens the same way.
+              width: `min(${PICKER_PANEL_WIDTH}px, calc(100vw - 16px))`,
+              maxHeight: `min(${PICKER_PANEL_MAX_HEIGHT}px, calc(100dvh - 16px))`,
+            }
+      }
+      className={
+        inline
+          ? 'nd-picker flex w-full flex-col overflow-hidden rounded-md border border-border bg-card text-card-foreground'
+          : `
           nd-picker
           z-[9999] flex max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-md
           bg-card text-card-foreground ring-1 ring-foreground/10 shadow-md
           animate-in fade-in slide-in-from-top-1 duration-100
-        "
-      >
-        {children}
-      </div>
-    </Portal>
+        `
+      }
+    >
+      {children}
+    </div>
   );
+
+  return inline ? panel : <Portal>{panel}</Portal>;
 }
 
 /**

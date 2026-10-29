@@ -1,11 +1,13 @@
-import { Settings, Trash, Logout, Login } from '@/icons';
+import { Settings, Logout, Login, UserCircle, Sliders } from '@/icons';
 import { PopupMenuItem } from '@/components/PopupMenuItem';
+import { SidebarMenuSeparator, SidebarPopup } from './SidebarPopup';
 
 export type ProfileMenuPopupProps = {
   theme: 'dark' | 'light';
   isAuthenticated: boolean;
+  onOpenProfile: () => void;
+  onOpenPreferences: () => void;
   onOpenSettings: () => void;
-  onOpenTrash: () => void;
   onLogout: () => void;
   onSignIn: () => void;
   style: React.CSSProperties;
@@ -15,23 +17,31 @@ export type ProfileMenuPopupProps = {
 export function ProfileMenuPopup({
   theme,
   isAuthenticated,
+  onOpenProfile,
+  onOpenPreferences,
   onOpenSettings,
-  onOpenTrash,
   onLogout,
   onSignIn,
   style,
   popupRef,
 }: ProfileMenuPopupProps) {
   return (
-    <div
-      ref={popupRef}
-      style={style}
-      className={`fixed w-[14.9rem] text-[15px] z-30 rounded-lg border border-sidebar-border p-1.5 ${
-        theme === 'dark' ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
-      }`}
-      role="menu"
-      aria-label="Account options"
-    >
+    <SidebarPopup theme={theme} label="Account options" style={style} popupRef={popupRef}>
+      <PopupMenuItem
+        theme={theme}
+        icon={<UserCircle size={16} className="opacity-90" />}
+        onClick={onOpenProfile}
+      >
+        Profile
+      </PopupMenuItem>
+      <PopupMenuItem
+        theme={theme}
+        icon={<Sliders size={16} className="opacity-90" />}
+        onClick={onOpenPreferences}
+      >
+        Preferences
+      </PopupMenuItem>
+      <SidebarMenuSeparator />
       <PopupMenuItem
         theme={theme}
         icon={<Settings size={16} className="opacity-90" />}
@@ -39,15 +49,7 @@ export function ProfileMenuPopup({
       >
         Settings
       </PopupMenuItem>
-      {isAuthenticated && (
-        <PopupMenuItem
-          theme={theme}
-          icon={<Trash size={16} className="opacity-90" />}
-          onClick={onOpenTrash}
-        >
-          Trash Documents
-        </PopupMenuItem>
-      )}
+      <SidebarMenuSeparator />
       {isAuthenticated ? (
         <PopupMenuItem
           theme={theme}
@@ -61,6 +63,6 @@ export function ProfileMenuPopup({
           Log in
         </PopupMenuItem>
       )}
-    </div>
+    </SidebarPopup>
   );
 }

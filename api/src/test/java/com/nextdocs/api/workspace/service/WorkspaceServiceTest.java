@@ -21,11 +21,16 @@ import com.nextdocs.api.auth.repository.RefreshTokenRepository;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
+import com.nextdocs.api.space.repository.SpaceRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -88,6 +93,9 @@ class WorkspaceServiceTest {
     @Mock
     private SpaceMemberRepository spaceMemberRepository;
 
+    @Mock
+    private SpaceRepository spaceRepository;
+
     private WorkspaceService workspaceService;
     private Workspace workspace;
     private UUID workspaceId;
@@ -106,7 +114,8 @@ class WorkspaceServiceTest {
                 new PageIconValidator(iconCatalog, attachmentRepository, attachmentStorage),
                 attachmentService,
                 instanceLockRepository,
-                spaceMemberRepository);
+                spaceMemberRepository,
+                spaceRepository);
         workspaceId = UUID.randomUUID();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
         owner = user("owner@example.com", "Owner");
@@ -571,6 +580,105 @@ class WorkspaceServiceTest {
         assertThat(roster.get(0).role()).isEqualTo(WorkspaceRole.OWNER);
         assertThat(roster.get(1).userId()).isEqualTo(target.getId());
         assertThat(roster.get(1).role()).isEqualTo(WorkspaceRole.MEMBER);
+    }
+
+    @Test
+    void listMembers_attachesSpaceMemberships() {
+        when(accessService.requireMember(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.OWNER)));
+        WorkspaceMember targetMember = member(target, WorkspaceRole.MEMBER);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER), targetMember));
+
+        Space customSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Core Team")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .iconType(PageIconType.EMOJI)
+                .iconValue("\uD83D\uDCDA")
+                .build();
+        Space publicSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("General")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(customSpace, publicSpace));
+
+        SpaceMember customOwnerMember = SpaceMember.builder()
+                .id(UUID.randomUUID())
+                .space(customSpace)
+                .user(owner)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build();
+        when(spaceMemberRepository.findAllBySpace_Workspace_Id(workspaceId)).thenReturn(List.of(customOwnerMember));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.listMembers(actorId);
+
+        assertThat(roster).hasSize(2);
+        // Owner is explicit in customSpace and gets publicSpace
+        assertThat(roster.get(0).spaces()).hasSize(2);
+        assertThat(roster.get(0).spaces().get(0).name()).isEqualTo("Core Team");
+        assertThat(roster.get(0).spaces().get(0).accessLevel()).isEqualTo(DocumentAccessLevel.OWNER);
+        assertThat(roster.get(0).spaces().get(0).icon().type()).isEqualTo("emoji");
+        assertThat(roster.get(0).spaces().get(0).icon().value()).isEqualTo("\uD83D\uDCDA");
+        assertThat(roster.get(0).spaces().get(1).name()).isEqualTo("General");
+        assertThat(roster.get(0).spaces().get(1).accessLevel()).isEqualTo(DocumentAccessLevel.VIEW);
+
+        // Target is not in customSpace, but gets publicSpace automatically
+        assertThat(roster.get(1).spaces()).hasSize(1);
+        assertThat(roster.get(1).spaces().get(0).name()).isEqualTo("General");
+        assertThat(roster.get(1).spaces().get(0).accessLevel()).isEqualTo(DocumentAccessLevel.VIEW);
+    }
+
+    @Test
+    void listMembers_prefersAnExplicitSpaceMembershipOverThePublicGrant() {
+        when(accessService.requireMember(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.OWNER)));
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(target, WorkspaceRole.MEMBER)));
+
+        Space publicSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("General")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(publicSpace));
+        when(spaceMemberRepository.findAllBySpace_Workspace_Id(workspaceId))
+                .thenReturn(List.of(SpaceMember.builder()
+                        .id(UUID.randomUUID())
+                        .space(publicSpace)
+                        .user(target)
+                        .accessLevel(DocumentAccessLevel.EDIT)
+                        .build()));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.listMembers(actorId);
+
+        assertThat(roster.get(0).spaces()).singleElement().satisfies(space -> {
+            assertThat(space.name()).isEqualTo("General");
+            assertThat(space.accessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+        });
+    }
+
+    @Test
+    void listMembers_omitsSpaceMembershipsForPlainMembers() {
+        when(accessService.requireMember(actorId))
+                .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.MEMBER)));
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.MEMBER)));
+
+        List<WorkspaceMemberResponse> roster = workspaceService.listMembers(actorId);
+
+        // Who belongs to a space is roster data, not content: a plain member must not
+        // learn the space roster, matching SpaceAccessService#requireRoster.
+        assertThat(roster.get(0).spaces()).isNull();
+        verifyNoInteractions(spaceRepository, spaceMemberRepository);
     }
 
     // --- updateMemberRole ---

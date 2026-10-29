@@ -153,14 +153,16 @@ class WorkspaceControllerTest {
     @Test
     void listMembers_success_returnsRoster() throws Exception {
         WorkspaceMemberResponse member = new WorkspaceMemberResponse(
-                targetId, "member@example.com", "Member", null, WorkspaceRole.ADMIN, OffsetDateTime.now());
+                targetId, "member@example.com", "Member", null, WorkspaceRole.ADMIN, OffsetDateTime.now(), null);
         when(workspaceService.listMembers(userId)).thenReturn(List.of(member));
 
         mockMvc.perform(get(WorkspaceController.MEMBERS_PATH).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].userId").value(targetId.toString()))
                 .andExpect(jsonPath("$.data[0].role").value("ADMIN"))
-                .andExpect(jsonPath("$.data[0].joinedAt").exists());
+                .andExpect(jsonPath("$.data[0].joinedAt").exists())
+                // Undisclosed space memberships are null, and nulls are omitted.
+                .andExpect(jsonPath("$.data[0].spaces").doesNotExist());
     }
 
     @Test

@@ -22,7 +22,7 @@ Ports: web `3000`, API `8080`, realtime `1234`.
 All from the repo root:
 
 ```bash
-./nd dev              # api + web + realtime; requires Docker (auto-starts/stops the postgres container)
+./nd dev              # api + web + realtime; requires Docker (auto-starts/stops postgres and Mailpit)
 ./nd dev web          # one service (postgres is still started even for web/realtime only)
 ./nd test [service]   # api | web | realtime
 ./nd lint web --fix   # eslint --fix for web/realtime (spotless:check for api)
