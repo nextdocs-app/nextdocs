@@ -485,7 +485,7 @@ public class SpaceService {
         return new SpaceResponse(
                 space.getId(),
                 space.getName(),
-                toIconResponse(space),
+                PageIconResponse.from(space.getIconType(), space.getIconValue(), space.getIconColor()),
                 space.getAccessMode(),
                 space.getEveryoneAccessLevel(),
                 effectiveLevel,
@@ -526,14 +526,6 @@ public class SpaceService {
         space.setIconType(icon.type());
         space.setIconValue(icon.value());
         space.setIconColor(icon.color());
-    }
-
-    private static PageIconResponse toIconResponse(Space space) {
-        if (space.getIconType() == null) {
-            return null;
-        }
-        return new PageIconResponse(
-                space.getIconType().name().toLowerCase(Locale.ROOT), space.getIconValue(), space.getIconColor());
     }
 
     private static String normalizeName(String raw) {

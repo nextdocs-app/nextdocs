@@ -9,14 +9,20 @@ import com.nextdocs.api.auth.repository.RefreshTokenRepository;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
+import com.nextdocs.api.space.repository.SpaceRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceMemberResponse;
+import com.nextdocs.api.workspace.dto.response.WorkspaceMemberSpaceSummaryResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceResponse;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
@@ -26,9 +32,9 @@ import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -66,6 +72,7 @@ public class WorkspaceService {
     private final AttachmentService attachmentService;
     private final InstanceLockRepository instanceLockRepository;
     private final SpaceMemberRepository spaceMemberRepository;
+    private final SpaceRepository spaceRepository;
 
     /**
      * How long an uploaded icon may sit unapplied before the nightly sweep deletes it.
@@ -152,7 +159,10 @@ public class WorkspaceService {
     public Optional<WorkspaceBrandingResponse> findPublicBranding() {
         return workspaceRepository
                 .findFirstByOrderByCreatedAtAsc()
-                .map(workspace -> new WorkspaceBrandingResponse(workspace.getName(), toIconResponse(workspace)));
+                .map(workspace -> new WorkspaceBrandingResponse(
+                        workspace.getName(),
+                        PageIconResponse.from(
+                                workspace.getIconType(), workspace.getIconValue(), workspace.getIconColor())));
     }
 
     @Transactional
@@ -241,7 +251,7 @@ public class WorkspaceService {
     @Transactional(readOnly = true)
     public List<WorkspaceMemberResponse> listMembers(UUID userId) {
         Membership membership = accessService.requireMember(userId);
-        return roster(workspaceId(membership));
+        return roster(workspaceId(membership), membership.member().getRole().canManageMembers());
     }
 
     /**
@@ -273,7 +283,7 @@ public class WorkspaceService {
         }
         target.setRole(newRole);
         memberRepository.save(target);
-        return roster(workspaceId);
+        return roster(workspaceId, true);
     }
 
     /**
@@ -317,7 +327,7 @@ public class WorkspaceService {
         userRepository.save(targetUser);
         refreshTokenRepository.revokeAllForUser(targetUserId);
         log.info("Removed user {} from workspace {}", targetUserId, workspaceId);
-        return roster(workspaceId);
+        return roster(workspaceId, true);
     }
 
     /**
@@ -391,10 +401,66 @@ public class WorkspaceService {
         }
     }
 
-    private List<WorkspaceMemberResponse> roster(UUID workspaceId) {
-        return memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId).stream()
-                .map(WorkspaceService::toMemberResponse)
+    /**
+     * Builds the roster, optionally with each member's spaces.
+     *
+     * <p>Space memberships are disclosed to owners and admins only: who belongs to a
+     * space is roster data, not content, so a plain member — who may read a public
+     * space's pages — must not learn its member list. This mirrors
+     * {@code SpaceAccessService#requireRoster}, which answers 403 to exactly that
+     * caller. For everyone else {@code spaces} stays null and Jackson omits it.
+     */
+    private List<WorkspaceMemberResponse> roster(UUID workspaceId, boolean includeSpaces) {
+        List<WorkspaceMember> members = memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId);
+        if (members.isEmpty()) {
+            return List.of();
+        }
+        if (!includeSpaces) {
+            return members.stream()
+                    .map(member -> toMemberResponse(member, null))
+                    .toList();
+        }
+
+        List<Space> spaces = spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspaceId);
+        List<SpaceMember> spaceMembers = spaceMemberRepository.findAllBySpace_Workspace_Id(workspaceId);
+
+        Map<UUID, Map<UUID, DocumentAccessLevel>> userSpaceAccess = new HashMap<>();
+        for (SpaceMember spaceMember : spaceMembers) {
+            userSpaceAccess
+                    .computeIfAbsent(spaceMember.getUser().getId(), k -> new HashMap<>())
+                    .put(spaceMember.getSpace().getId(), spaceMember.getAccessLevel());
+        }
+
+        return members.stream()
+                .map(member -> toMemberResponse(member, spacesFor(member, spaces, userSpaceAccess)))
                 .toList();
+    }
+
+    /**
+     * The spaces a member belongs to, oldest first. An explicit membership wins over a
+     * public space's everyone-else grant: promotion above the default is the whole point
+     * of listing somebody on a public space.
+     */
+    private static List<WorkspaceMemberSpaceSummaryResponse> spacesFor(
+            WorkspaceMember member, List<Space> spaces, Map<UUID, Map<UUID, DocumentAccessLevel>> userSpaceAccess) {
+        Map<UUID, DocumentAccessLevel> explicitLevels =
+                userSpaceAccess.getOrDefault(member.getUser().getId(), Map.of());
+        List<WorkspaceMemberSpaceSummaryResponse> memberSpaces = new ArrayList<>();
+
+        for (Space space : spaces) {
+            DocumentAccessLevel explicitLevel = explicitLevels.get(space.getId());
+            DocumentAccessLevel level = explicitLevel != null
+                    ? explicitLevel
+                    : space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null;
+            if (level != null) {
+                memberSpaces.add(new WorkspaceMemberSpaceSummaryResponse(
+                        space.getId(),
+                        space.getName(),
+                        PageIconResponse.from(space.getIconType(), space.getIconValue(), space.getIconColor()),
+                        level));
+            }
+        }
+        return memberSpaces;
     }
 
     private WorkspaceResponse toResponse(Membership membership) {
@@ -402,7 +468,7 @@ public class WorkspaceService {
         return new WorkspaceResponse(
                 workspace.getId(),
                 workspace.getName(),
-                toIconResponse(workspace),
+                PageIconResponse.from(workspace.getIconType(), workspace.getIconValue(), workspace.getIconColor()),
                 membership.member().getRole(),
                 memberRepository.countByWorkspaceId(workspace.getId()));
     }
@@ -412,17 +478,8 @@ public class WorkspaceService {
         return workspace.getIconType() == PageIconType.UPLOAD ? workspace.getIconValue() : null;
     }
 
-    private static PageIconResponse toIconResponse(Workspace workspace) {
-        if (workspace.getIconType() == null) {
-            return null;
-        }
-        return new PageIconResponse(
-                workspace.getIconType().name().toLowerCase(Locale.ROOT),
-                workspace.getIconValue(),
-                workspace.getIconColor());
-    }
-
-    private static WorkspaceMemberResponse toMemberResponse(WorkspaceMember member) {
+    private static WorkspaceMemberResponse toMemberResponse(
+            WorkspaceMember member, List<WorkspaceMemberSpaceSummaryResponse> spaces) {
         User user = member.getUser();
         return new WorkspaceMemberResponse(
                 user.getId(),
@@ -430,6 +487,7 @@ public class WorkspaceService {
                 user.getDisplayName(),
                 user.getAvatarUrl(),
                 member.getRole(),
-                member.getCreatedAt());
+                member.getCreatedAt(),
+                spaces);
     }
 }
