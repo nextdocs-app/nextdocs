@@ -22,6 +22,8 @@ const owner: WorkspaceMember = {
   avatarUrl: null,
   role: 'OWNER',
   joinedAt: '2026-01-05T10:00:00Z',
+  // Admins get the disclosed field; an empty list is "in no spaces".
+  spaces: [],
 };
 
 const admin: WorkspaceMember = {
@@ -85,6 +87,32 @@ describe('WorkspaceMemberList', () => {
     expect(screen.getByText('(you)')).toBeInTheDocument();
   });
 
+  it('shows spaces column and badges for members', () => {
+    const memberWithSpaces: WorkspaceMember = {
+      ...member,
+      spaces: [
+        { id: 'space-1', name: 'Engineering', accessLevel: 'EDIT' },
+        { id: 'space-2', name: 'General', accessLevel: 'VIEW' },
+      ],
+    };
+    renderList({ members: [owner, memberWithSpaces] });
+
+    expect(screen.getByText('User')).toBeInTheDocument();
+    expect(screen.getByText('Spaces')).toBeInTheDocument();
+    expect(screen.getByText('Role')).toBeInTheDocument();
+    // Owner has no spaces -> None
+    expect(screen.getByText('None')).toBeInTheDocument();
+    // Member has 2 spaces -> 2 spaces
+    expect(screen.getByText('2 spaces')).toBeInTheDocument();
+  });
+
+  it('hides the spaces column from members, who may not read space rosters', () => {
+    renderList({ actorRole: 'MEMBER', selfId: 'member-1' });
+
+    expect(screen.queryByText('Spaces')).not.toBeInTheDocument();
+    expect(screen.queryByText('None')).not.toBeInTheDocument();
+  });
+
   it('gives owners a role dropdown for everyone but themselves', () => {
     renderList();
 
@@ -127,7 +155,8 @@ describe('WorkspaceMemberList', () => {
     removeMember.mockResolvedValue([owner, admin]);
     const { onRosterChange, onNotice } = renderList();
 
-    await user.click(screen.getByRole('button', { name: 'Remove Bob Member' }));
+    await user.click(screen.getByRole('button', { name: 'Role for Bob Member' }));
+    await user.click(screen.getByRole('option', { name: 'Remove member' }));
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Remove Bob Member?')).toBeInTheDocument();
@@ -146,11 +175,55 @@ describe('WorkspaceMemberList', () => {
   it('lets admins remove plain members but not owners or other admins', () => {
     renderList({ actorRole: 'ADMIN', selfId: 'admin-1' });
 
-    expect(screen.queryByRole('button', { name: 'Remove Ada Owner' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Remove Grace Admin' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove Bob Member' })).toBeInTheDocument();
-    // Admins cannot change roles at all, so every role is a plain label.
-    expect(screen.queryByRole('button', { name: /^Role for/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Role for Ada Owner' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Role for Grace Admin' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Role for Bob Member' })).toBeInTheDocument();
+  });
+
+  it('confirms before an owner demotes themselves', async () => {
+    const user = userEvent.setup();
+    const otherOwner = { ...admin, role: 'OWNER' as const };
+    const roster = [{ ...owner, role: 'ADMIN' as const }, otherOwner, member];
+    updateMemberRole.mockResolvedValue(roster);
+    const { onRosterChange, onNotice } = renderList({
+      members: [owner, otherOwner, member],
+      selfId: 'owner-1',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Role for Ada Owner' }));
+    await user.click(screen.getByRole('option', { name: 'Admin' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Demote yourself to Admin?')).toBeInTheDocument();
+    expect(updateMemberRole).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Demote' }));
+
+    expect(updateMemberRole).toHaveBeenCalledWith('token-1', 'owner-1', 'ADMIN');
+    expect(onRosterChange).toHaveBeenCalledWith(roster);
+    expect(onNotice).toHaveBeenCalledWith({
+      kind: 'status',
+      message: 'Ada Owner is now Admin.',
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels self demotion when clicking cancel', async () => {
+    const user = userEvent.setup();
+    const otherOwner = { ...admin, role: 'OWNER' as const };
+    renderList({
+      members: [owner, otherOwner, member],
+      selfId: 'owner-1',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Role for Ada Owner' }));
+    await user.click(screen.getByRole('option', { name: 'Admin' }));
+
+    expect(screen.getByText('Demote yourself to Admin?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(updateMemberRole).not.toHaveBeenCalled();
+    expect(screen.queryByText('Demote yourself to Admin?')).not.toBeInTheDocument();
   });
 
   it('keeps members read-only', () => {

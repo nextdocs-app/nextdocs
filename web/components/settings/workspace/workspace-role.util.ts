@@ -76,3 +76,53 @@ export function roleOptions(actor: WorkspaceRole): DropdownOption<WorkspaceRole>
       description: WORKSPACE_ROLE_DESCRIPTIONS[role],
     }));
 }
+
+export type WorkspaceMemberAction = WorkspaceRole | 'REMOVE';
+
+/** Options shown in the member role dropdown, including the destructive remove action when allowed. */
+export function memberRoleOptions(
+  actor: WorkspaceRole,
+  memberRole: WorkspaceRole,
+  { isSelf, ownerCount }: { isSelf: boolean; ownerCount: number }
+): DropdownOption<WorkspaceMemberAction>[] {
+  const canChange = canChangeRole(actor, { isSelf, ownerCount });
+  const canRemove = canRemoveMember(actor, memberRole, isSelf);
+
+  if (!canChange && !canRemove) {
+    return [];
+  }
+
+  const options: DropdownOption<WorkspaceMemberAction>[] = [];
+
+  if (canChange) {
+    const roles = grantableRoles(actor);
+    for (const role of ['OWNER', 'ADMIN', 'MEMBER'] as const) {
+      if (roles.includes(role)) {
+        options.push({
+          value: role,
+          label: WORKSPACE_ROLE_LABELS[role],
+          description: WORKSPACE_ROLE_DESCRIPTIONS[role],
+        });
+      }
+    }
+  } else {
+    // If the actor cannot change role but can remove (e.g. Admin on Member),
+    // show the current role as the selected non-destructive option.
+    options.push({
+      value: memberRole,
+      label: WORKSPACE_ROLE_LABELS[memberRole],
+      description: WORKSPACE_ROLE_DESCRIPTIONS[memberRole],
+    });
+  }
+
+  if (canRemove) {
+    options.push({
+      value: 'REMOVE',
+      label: 'Remove member',
+      dividerBefore: true,
+      isDestructive: true,
+    });
+  }
+
+  return options;
+}

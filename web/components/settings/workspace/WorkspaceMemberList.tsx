@@ -4,16 +4,16 @@ import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { AccessDropdown } from '@/components/share/AccessDropdown';
 import { ShareAvatar } from '@/components/share/CollaboratorRow';
-import { Trash } from '@/icons';
 import { ApiError } from '@/services/api-client';
 import { workspaceApiService } from '@/services/workspace.service';
 import type { WorkspaceRole } from '@/types/auth.types';
 import type { WorkspaceMember } from '@/types/workspace.types';
+import { MemberSpacesBadge } from './MemberSpacesBadge';
 import {
-  canChangeRole,
-  canRemoveMember,
-  roleOptions,
+  canManageMembers,
+  memberRoleOptions,
   workspaceRoleLabel,
+  type WorkspaceMemberAction,
 } from './workspace-role.util';
 
 export interface PeopleNotice {
@@ -82,13 +82,17 @@ export function WorkspaceMemberList({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<WorkspaceMember | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [pendingSelfDemotion, setPendingSelfDemotion] = useState<{
+    member: WorkspaceMember;
+    newRole: WorkspaceRole;
+  } | null>(null);
+  const [isDemoting, setIsDemoting] = useState(false);
   const ownerCount = members.filter((member) => member.role === 'OWNER').length;
+  // The API omits space memberships unless the caller can manage members, so the
+  // column is management-only: who belongs to a space is roster data, not content.
+  const showSpaces = canManageMembers(actorRole);
 
-  const handleRoleChange = async (member: WorkspaceMember, role: WorkspaceRole) => {
-    if (role === member.role) {
-      return;
-    }
-
+  const applyRoleChange = async (member: WorkspaceMember, role: WorkspaceRole) => {
     setBusyKey(`role:${member.userId}`);
     onNotice(null);
     try {
@@ -107,6 +111,40 @@ export function WorkspaceMemberList({
       }
     } finally {
       setBusyKey(null);
+    }
+  };
+
+  const handleActionSelect = (member: WorkspaceMember, action: WorkspaceMemberAction) => {
+    if (action === 'REMOVE') {
+      setPendingRemoval(member);
+      return;
+    }
+
+    if (action === member.role) {
+      return;
+    }
+
+    const isSelf = member.userId === selfId;
+    if (isSelf) {
+      setPendingSelfDemotion({ member, newRole: action });
+      return;
+    }
+
+    void applyRoleChange(member, action);
+  };
+
+  const handleConfirmSelfDemotion = async () => {
+    if (!pendingSelfDemotion) {
+      return;
+    }
+
+    const { member, newRole } = pendingSelfDemotion;
+    setIsDemoting(true);
+    try {
+      await applyRoleChange(member, newRole);
+      setPendingSelfDemotion(null);
+    } finally {
+      setIsDemoting(false);
     }
   };
 
@@ -145,69 +183,100 @@ export function WorkspaceMemberList({
       {members.length === 0 ? (
         <p className="py-3.5 text-[13px] text-muted-foreground">No members yet.</p>
       ) : (
-        <ul className="divide-y divide-border/60">
-          {members.map((member) => {
-            const isSelf = member.userId === selfId;
-            const canChange = canChangeRole(actorRole, { isSelf, ownerCount });
-            const canRemove = canRemoveMember(actorRole, member.role, isSelf);
-            const isRoleBusy = busyKey === `role:${member.userId}`;
-            const joinedAt = formatJoinedAt(member.joinedAt);
-            const name = displayName(member);
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="Workspace members"
+          className="table-wrapper overflow-x-auto w-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr className="border-b border-border text-[12px] font-medium text-muted-foreground/80">
+                <th scope="col" className="py-2.5 pl-1 pr-4 font-medium text-left">
+                  User
+                </th>
+                {showSpaces ? (
+                  <th scope="col" className="py-2.5 px-4 font-medium text-left whitespace-nowrap">
+                    Spaces
+                  </th>
+                ) : null}
+                <th scope="col" className="py-2.5 px-4 font-medium text-left whitespace-nowrap">
+                  Role
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {members.map((member) => {
+                const isSelf = member.userId === selfId;
+                const isRoleBusy = busyKey === `role:${member.userId}`;
+                const joinedAt = formatJoinedAt(member.joinedAt);
+                const name = displayName(member);
+                const options = memberRoleOptions(actorRole, member.role, {
+                  isSelf,
+                  ownerCount,
+                });
+                const canInteract = options.length > 0;
 
-            return (
-              <li key={member.userId} className="flex items-center gap-3 py-3">
-                <MemberAvatar member={member} />
+                return (
+                  <tr key={member.userId} className="group transition-colors hover:bg-muted/30">
+                    {/* User */}
+                    <td className="py-3 pl-1 pr-4 align-middle">
+                      <div className="flex items-center gap-3">
+                        <MemberAvatar member={member} />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-[13.5px] font-medium leading-snug">
+                              {name}
+                            </span>
+                            {isSelf && (
+                              <span className="flex-shrink-0 text-[11.5px] font-normal text-muted-foreground">
+                                (you)
+                              </span>
+                            )}
+                          </div>
+                          <p className="truncate text-[12px] leading-snug text-muted-foreground/70">
+                            {member.email}
+                            {joinedAt ? ` · Joined ${joinedAt}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="min-w-0 truncate text-[13.5px] font-medium leading-snug">
-                      {name}
-                    </span>
-                    {isSelf ? (
-                      <span className="flex-shrink-0 text-[12px] font-normal text-muted-foreground">
-                        (you)
-                      </span>
+                    {/* Spaces */}
+                    {showSpaces ? (
+                      <td className="py-3 px-4 align-middle whitespace-nowrap">
+                        <MemberSpacesBadge spaces={member.spaces} memberName={name} />
+                      </td>
                     ) : null}
-                  </div>
-                  <p className="mt-0.5 truncate text-[12px] leading-snug text-muted-foreground/70">
-                    {member.email}
-                    {joinedAt ? ` · Joined ${joinedAt}` : ''}
-                  </p>
-                </div>
 
-                <div className="flex flex-shrink-0 items-center gap-1">
-                  {canChange ? (
-                    <AccessDropdown<WorkspaceRole>
-                      value={member.role}
-                      options={roleOptions(actorRole)}
-                      onChange={(role) => void handleRoleChange(member, role)}
-                      disabled={isRoleBusy}
-                      align="right"
-                      ariaLabel={`Role for ${name}`}
-                      muted
-                    />
-                  ) : (
-                    <span className="inline-flex select-none items-center px-2 py-1 text-[13px] font-medium text-muted-foreground/80">
-                      {workspaceRoleLabel(member.role)}
-                    </span>
-                  )}
-
-                  {canRemove ? (
-                    <button
-                      type="button"
-                      onClick={() => setPendingRemoval(member)}
-                      aria-label={`Remove ${name}`}
-                      title={`Remove ${name}`}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
-                    >
-                      <Trash size={14} />
-                    </button>
-                  ) : null}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    {/* Role */}
+                    <td className="py-3 px-4 align-middle whitespace-nowrap">
+                      {canInteract ? (
+                        <div className="-ml-2 flex items-center">
+                          <AccessDropdown<WorkspaceMemberAction>
+                            value={member.role}
+                            options={options}
+                            onChange={(action) => handleActionSelect(member, action)}
+                            disabled={isRoleBusy}
+                            align="left"
+                            ariaLabel={`Role for ${name}`}
+                            muted
+                          />
+                        </div>
+                      ) : (
+                        <div className="-ml-2 flex items-center">
+                          <span className="inline-flex select-none items-center rounded-md px-2 py-1 text-[13px] font-medium text-muted-foreground/80">
+                            {workspaceRoleLabel(member.role)}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <ConfirmationModal
@@ -221,6 +290,23 @@ export function WorkspaceMemberList({
         onCancel={() => {
           if (!isRemoving) {
             setPendingRemoval(null);
+          }
+        }}
+      />
+
+      <ConfirmationModal
+        isOpen={pendingSelfDemotion !== null}
+        title={`Demote yourself to ${
+          pendingSelfDemotion ? workspaceRoleLabel(pendingSelfDemotion.newRole) : ''
+        }?`}
+        description="You will lose owner permissions and will not be able to restore them yourself unless another owner promotes you."
+        confirmLabel="Demote"
+        tone="danger"
+        isConfirming={isDemoting}
+        onConfirm={() => void handleConfirmSelfDemotion()}
+        onCancel={() => {
+          if (!isDemoting) {
+            setPendingSelfDemotion(null);
           }
         }}
       />

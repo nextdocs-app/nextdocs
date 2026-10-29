@@ -20,6 +20,14 @@ export interface WorkspaceUpdateInput {
   icon?: IconRequestPayload;
 }
 
+/** Wire shape of a space summary attached to a workspace member. */
+export interface WorkspaceMemberSpaceSummary {
+  id: string;
+  name: string;
+  icon?: DocumentIcon | null;
+  accessLevel: 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
+}
+
 /** Wire shape of `GET /api/v1/workspaces/current/members`. */
 export interface WorkspaceMember {
   userId: string;
@@ -28,6 +36,7 @@ export interface WorkspaceMember {
   avatarUrl?: string | null;
   role: WorkspaceRole;
   joinedAt: string;
+  spaces?: WorkspaceMemberSpaceSummary[];
 }
 
 /** Wire shape of a pending invite. Accepted and revoked invites are never listed. */

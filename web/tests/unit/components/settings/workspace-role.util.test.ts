@@ -4,6 +4,7 @@ import {
   canManageMembers,
   canRemoveMember,
   grantableRoles,
+  memberRoleOptions,
   roleOptions,
   workspaceRoleLabel,
 } from '../../../../components/settings/workspace/workspace-role.util';
@@ -56,5 +57,34 @@ describe('workspace role capabilities', () => {
     ]);
     expect(roleOptions('ADMIN').map((option) => option.value)).toEqual(['MEMBER']);
     expect(roleOptions('MEMBER')).toEqual([]);
+  });
+
+  it('builds member dropdown options with destructive remove when allowed', () => {
+    // Owner on another member: can change role and can remove
+    const ownerOnMember = memberRoleOptions('OWNER', 'MEMBER', { isSelf: false, ownerCount: 1 });
+    expect(ownerOnMember.map((o) => o.value)).toEqual(['OWNER', 'ADMIN', 'MEMBER', 'REMOVE']);
+    const removeOpt = ownerOnMember.find((o) => o.value === 'REMOVE');
+    expect(removeOpt?.isDestructive).toBe(true);
+    expect(removeOpt?.dividerBefore).toBe(true);
+
+    // Owner on themselves with multiple owners: can demote, but cannot remove self
+    const ownerOnSelfMulti = memberRoleOptions('OWNER', 'OWNER', { isSelf: true, ownerCount: 2 });
+    expect(ownerOnSelfMulti.map((o) => o.value)).toEqual(['OWNER', 'ADMIN', 'MEMBER']);
+
+    // Owner on themselves with single owner: cannot demote, cannot remove
+    const ownerOnSelfSingle = memberRoleOptions('OWNER', 'OWNER', { isSelf: true, ownerCount: 1 });
+    expect(ownerOnSelfSingle).toEqual([]);
+
+    // Admin on member: cannot change role, but can remove
+    const adminOnMember = memberRoleOptions('ADMIN', 'MEMBER', { isSelf: false, ownerCount: 1 });
+    expect(adminOnMember.map((o) => o.value)).toEqual(['MEMBER', 'REMOVE']);
+
+    // Admin on owner: cannot change role, cannot remove
+    const adminOnOwner = memberRoleOptions('ADMIN', 'OWNER', { isSelf: false, ownerCount: 1 });
+    expect(adminOnOwner).toEqual([]);
+
+    // Member on anyone: no actions
+    const memberOnMember = memberRoleOptions('MEMBER', 'MEMBER', { isSelf: false, ownerCount: 1 });
+    expect(memberOnMember).toEqual([]);
   });
 });
