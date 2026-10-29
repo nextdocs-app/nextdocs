@@ -38,7 +38,9 @@ services:
       - ATTACHMENT_PUBLIC_BASE_URL=${ATTACHMENT_PUBLIC_BASE_URL:-}
       # Invitations & Email
       - APP_WEB_BASE_URL=${APP_WEB_BASE_URL:-http://localhost:3000}
-      - SPRING_MAIL_HOST=${SPRING_MAIL_HOST:-}
+      # Bare name on purpose: Compose omits the variable when it is unset, while
+      # `${SPRING_MAIL_HOST:-}` would hand the API an empty host it must ignore.
+      - SPRING_MAIL_HOST
       - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
       - SPRING_MAIL_USERNAME=${SPRING_MAIL_USERNAME:-}
       - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}

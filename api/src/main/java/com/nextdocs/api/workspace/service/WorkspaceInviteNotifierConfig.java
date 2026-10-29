@@ -4,9 +4,12 @@ import java.util.concurrent.Executor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Condition;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -15,7 +18,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
  * notifier that refuses delivery otherwise.
  *
  * <p>Invitations exist only as emails — the API never returns the signup link — so
- * without a relay the service has nowhere to send them and answers 503. The fallback is
+ * without a relay the service has nowhere to send them and answers 503. A relay counts
+ * as configured only when the host has content, because container runs pass an empty
+ * `SPRING_MAIL_HOST` through when nothing is set. The fallback is
  * a bean method below the SMTP one on purpose: a missing-bean condition only sees
  * definitions registered so far, and bean methods of one configuration class are
  * registered in declaration order. A scanned {@code @Component} fallback would make the
@@ -31,7 +36,7 @@ public class WorkspaceInviteNotifierConfig {
      * workers are still timing out on the previous one.
      */
     @Bean
-    @ConditionalOnProperty(name = "spring.mail.host")
+    @Conditional(MailRelayConfigured.class)
     public ThreadPoolTaskExecutor inviteMailExecutor(@Value("${app.mail.invite-send-workers:2}") int workers) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(workers);
@@ -44,7 +49,7 @@ public class WorkspaceInviteNotifierConfig {
     }
 
     @Bean
-    @ConditionalOnProperty(name = "spring.mail.host")
+    @Conditional(MailRelayConfigured.class)
     public SmtpWorkspaceInviteNotifier smtpWorkspaceInviteNotifier(
             JavaMailSender mailSender,
             @Value("${app.mail.from}") String from,
@@ -56,5 +61,18 @@ public class WorkspaceInviteNotifierConfig {
     @ConditionalOnMissingBean(WorkspaceInviteNotifier.class)
     public MailDisabledWorkspaceInviteNotifier mailDisabledWorkspaceInviteNotifier() {
         return new MailDisabledWorkspaceInviteNotifier();
+    }
+
+    /**
+     * Matches only a relay host with content. `@ConditionalOnProperty` reads an empty
+     * value as present, which would wire an SMTP sender pointed at nowhere.
+     */
+    static final class MailRelayConfigured implements Condition {
+
+        @Override
+        public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            String host = context.getEnvironment().getProperty("spring.mail.host", "");
+            return !host.isBlank();
+        }
     }
 }

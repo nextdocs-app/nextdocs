@@ -65,6 +65,8 @@ function getOrCreateDevJwtSecret() {
 
 const PLACEHOLDER = 'CHANGE_ME_IN_PRODUCTION';
 
+const isKeyEmptyOrPlaceholder = (val) => !val || !val.trim() || val === PLACEHOLDER;
+
 function buildApiDevEnv(overrides = {}) {
   const env = {
     ...process.env,
@@ -72,8 +74,6 @@ function buildApiDevEnv(overrides = {}) {
   };
 
   // Keep required API dev env defaults in one place so ./nd dev is zero-setup.
-  const isKeyEmptyOrPlaceholder = (val) => !val || !val.trim() || val === PLACEHOLDER;
-
   if (isKeyEmptyOrPlaceholder(env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64)) {
     env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 = getOrCreateDevOAuthTokenEncryptionKey();
     console.warn(
@@ -216,15 +216,38 @@ function ensurePostgres() {
   ].join(' '));
 }
 
-function ensureMailpit() {
-  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${MAILPIT_CONTAINER}`);
-  if (check.status === 0 && check.stdout.toString().trim() === 'true') {
-    console.log(`\x1b[32m✓ Mailpit already running (Web UI: http://localhost:${MAILPIT_WEB_PORT})\x1b[0m`);
-    return;
+/**
+ * Mailpit has no auth and keeps every message it captures, so it is published on the
+ * loopback interface only. An existing container may predate that, and `docker start`
+ * reuses its original port bindings.
+ */
+function mailpitIsLoopbackOnly() {
+  const ports = runSilent(`docker port ${MAILPIT_CONTAINER}`);
+  if (ports.status !== 0) {
+    return false;
   }
 
-  const exists = runSilent(`docker inspect ${MAILPIT_CONTAINER}`);
-  if (exists.status === 0) {
+  const bindings = ports.stdout
+    .toString()
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return bindings.length === 2 && bindings.every((binding) => binding.includes(' -> 127.0.0.1:'));
+}
+
+function ensureMailpit() {
+  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${MAILPIT_CONTAINER}`);
+  const exists = check.status === 0;
+  const isRunning = exists && check.stdout.toString().trim() === 'true';
+
+  if (exists && !mailpitIsLoopbackOnly()) {
+    console.log(`\x1b[34m> Recreating mailpit with loopback-only ports...\x1b[0m`);
+    run(`docker rm -f ${MAILPIT_CONTAINER}`);
+  } else if (isRunning) {
+    console.log(`\x1b[32m✓ Mailpit already running (Web UI: http://localhost:${MAILPIT_WEB_PORT})\x1b[0m`);
+    return;
+  } else if (exists) {
     console.log(`\x1b[34m> Starting existing mailpit container...\x1b[0m`);
     run(`docker start ${MAILPIT_CONTAINER}`);
     console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
@@ -235,11 +258,45 @@ function ensureMailpit() {
   run([
     'docker run -d',
     `--name ${MAILPIT_CONTAINER}`,
-    `-p ${MAILPIT_SMTP_PORT}:1025`,
-    `-p ${MAILPIT_WEB_PORT}:8025`,
+    `-p 127.0.0.1:${MAILPIT_SMTP_PORT}:1025`,
+    `-p 127.0.0.1:${MAILPIT_WEB_PORT}:8025`,
     MAILPIT_IMAGE,
   ].join(' '));
   console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
+}
+
+/**
+ * Mailpit is a development-only sink, and only the API sends through it: a web or
+ * realtime run must not start it, nor stop a container another session's API is
+ * using. An external `SPRING_MAIL_HOST` means the API does not want it either.
+ */
+function devUsesLocalMailpit(service) {
+  return (!service || service === 'api') && isKeyEmptyOrPlaceholder(process.env.SPRING_MAIL_HOST);
+}
+
+/**
+ * A single-service run blocks in a synchronous spawn, so stopping Mailpit from an
+ * `exit` hook alone is not enough: interrupt the run and the wrapper may die without
+ * one. Cleaning up on the signal keeps the container from outliving the session.
+ */
+function registerDevMailpitCleanup() {
+  let stopped = false;
+  const stopMailpit = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
+    runSilent(`docker stop ${MAILPIT_CONTAINER}`);
+  };
+
+  process.on('exit', stopMailpit);
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      stopMailpit();
+      process.exit(0);
+    });
+  }
 }
 
 const API_COMMANDS = {
@@ -315,12 +372,14 @@ switch (command) {
   case 'dev':
     // TODO: We will not require postgres to be running for web and realtime.
     ensurePostgres();
-    ensureMailpit();
+    if (devUsesLocalMailpit(service)) {
+      ensureMailpit();
+      // The all-services branch stops Mailpit from its own exit hook.
+      if (service) {
+        registerDevMailpitCleanup();
+      }
+    }
     if (service) {
-      process.on('exit', () => {
-        console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
-        runSilent(`docker stop ${MAILPIT_CONTAINER}`);
-      });
       runForService('dev', service);
     } else {
       ensureJsWorkspaceReady('all');
@@ -401,8 +460,10 @@ switch (command) {
       process.on('exit', () => {
         console.log(`\x1b[34m> Stopping postgres container...\x1b[0m`);
         runSilent(`docker stop ${POSTGRES_CONTAINER}`);
-        console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
-        runSilent(`docker stop ${MAILPIT_CONTAINER}`);
+        if (devUsesLocalMailpit()) {
+          console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
+          runSilent(`docker stop ${MAILPIT_CONTAINER}`);
+        }
       });
     }
     break;

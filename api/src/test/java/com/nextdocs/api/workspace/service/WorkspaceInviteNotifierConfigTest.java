@@ -28,6 +28,18 @@ class WorkspaceInviteNotifierConfigTest {
     }
 
     @Test
+    void withABlankMailHost_deliveryIsUnavailable() {
+        // Container runs pass SPRING_MAIL_HOST through as an empty value when no
+        // relay is configured; that must not count as a relay.
+        runner.withPropertyValues("spring.mail.host=").run(context -> {
+            assertThat(context).hasSingleBean(WorkspaceInviteNotifier.class);
+            assertThat(context.getBean(WorkspaceInviteNotifier.class))
+                    .isInstanceOf(MailDisabledWorkspaceInviteNotifier.class);
+            assertThat(context).doesNotHaveBean("inviteMailExecutor");
+        });
+    }
+
+    @Test
     void withAMailHost_deliveryIsConfiguredOverSmtp() {
         runner.withPropertyValues("spring.mail.host=smtp.example.com", "app.mail.from=NextDocs <no-reply@example.com>")
                 .run(context -> {
