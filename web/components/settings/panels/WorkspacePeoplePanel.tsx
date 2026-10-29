@@ -1,18 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useAuth } from '@/hooks/useAuth.hook';
+import { Plus } from '@/icons';
 import { dispatchWorkspaceUpdated } from '@/lib/workspace-event.util';
 import { workspaceApiService } from '@/services/workspace.service';
 import type { Workspace, WorkspaceMember } from '@/types/workspace.types';
-import { SettingsSection } from '../SettingsPrimitives';
-import { WorkspaceInviteSection } from '../workspace/WorkspaceInviteSection';
+import { InviteMembersModal } from '../workspace/InviteMembersModal';
 import { WorkspaceMemberList, type PeopleNotice } from '../workspace/WorkspaceMemberList';
 import {
   WorkspacePanelError,
   WorkspacePanelLoading,
   WorkspacePanelSignedOut,
 } from '../workspace/WorkspacePanelStates';
+import { WorkspacePendingInvites } from '../workspace/WorkspacePendingInvites';
 import { canManageMembers } from '../workspace/workspace-role.util';
 
 function messageFor(error: unknown, fallback: string): string {
@@ -31,7 +32,12 @@ export function WorkspacePeoplePanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<PeopleNotice | null>(null);
+  const [activeTab, setActiveTab] = useState<'members' | 'pending'>('members');
+  const [pendingReloadKey, setPendingReloadKey] = useState(0);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const membersTabRef = useRef<HTMLButtonElement>(null);
+  const pendingTabRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !accessToken) {
@@ -112,6 +118,20 @@ export function WorkspacePeoplePanel() {
   };
 
   const canManage = canManageMembers(workspace.role);
+  const currentTab = canManage ? activeTab : 'members';
+
+  const selectTab = (tab: 'members' | 'pending') => {
+    setActiveTab(tab);
+    (tab === 'members' ? membersTabRef : pendingTabRef).current?.focus();
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!canManage || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) {
+      return;
+    }
+    event.preventDefault();
+    selectTab(currentTab === 'members' ? 'pending' : 'members');
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -132,28 +152,112 @@ export function WorkspacePeoplePanel() {
         </p>
       ) : null}
 
-      <SettingsSection
-        title="Members"
-        description={`${members.length} ${members.length === 1 ? 'person has' : 'people have'} access to this workspace.`}
-      >
-        <WorkspaceMemberList
-          members={members}
-          actorRole={workspace.role}
-          selfId={user?.id ?? null}
-          accessToken={accessToken ?? ''}
-          onRosterChange={handleRosterChange}
-          onRefresh={retry}
-          onNotice={setNotice}
-        />
-      </SettingsSection>
+      <section>
+        <div className="flex items-center justify-between border-b border-border pb-0">
+          <div
+            role="tablist"
+            aria-label="People"
+            onKeyDown={handleTabKeyDown}
+            className="flex items-center gap-1 select-none"
+          >
+            <button
+              ref={membersTabRef}
+              type="button"
+              role="tab"
+              id="tab-members"
+              aria-controls="panel-members"
+              aria-selected={currentTab === 'members'}
+              tabIndex={currentTab === 'members' ? 0 : -1}
+              onClick={() => setActiveTab('members')}
+              className={`relative px-3 py-2 text-[14px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                currentTab === 'members'
+                  ? 'text-foreground font-semibold after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-[var(--nd-brand)]'
+                  : 'text-muted-foreground/70 font-medium hover:text-foreground'
+              }`}
+            >
+              Members
+            </button>
+            {canManage ? (
+              <button
+                ref={pendingTabRef}
+                type="button"
+                role="tab"
+                id="tab-pending"
+                aria-controls="panel-pending"
+                aria-selected={currentTab === 'pending'}
+                tabIndex={currentTab === 'pending' ? 0 : -1}
+                onClick={() => setActiveTab('pending')}
+                className={`relative px-3 py-2 text-[14px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                  currentTab === 'pending'
+                    ? 'text-foreground font-semibold after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-[var(--nd-brand)]'
+                    : 'text-muted-foreground/70 font-medium hover:text-foreground'
+                }`}
+              >
+                Pending
+              </button>
+            ) : null}
+          </div>
 
-      {canManage ? (
-        <WorkspaceInviteSection accessToken={accessToken ?? ''} actorRole={workspace.role} />
-      ) : (
+          {canManage ? (
+            <div className="pb-1.5">
+              <button
+                type="button"
+                onClick={() => setIsInviteModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md bg-[var(--nd-brand)] px-2.5 py-1 text-[12.5px] font-medium text-[var(--nd-brand-foreground)] shadow-xs transition-colors hover:bg-[var(--nd-brand-hover)] active:bg-[var(--nd-brand-active)] cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Plus size={13} strokeWidth={2.5} />
+                <span>Add member</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col pt-3">
+          {currentTab === 'members' ? (
+            <div id="panel-members" role="tabpanel" aria-labelledby="tab-members">
+              <WorkspaceMemberList
+                members={members}
+                actorRole={workspace.role}
+                selfId={user?.id ?? null}
+                accessToken={accessToken ?? ''}
+                onRosterChange={handleRosterChange}
+                onRefresh={retry}
+                onNotice={setNotice}
+              />
+            </div>
+          ) : (
+            <div id="panel-pending" role="tabpanel" aria-labelledby="tab-pending">
+              <WorkspacePendingInvites
+                accessToken={accessToken ?? ''}
+                actorRole={workspace.role}
+                reloadKey={pendingReloadKey}
+                onNotice={setNotice}
+              />
+            </div>
+          )}
+        </div>
+      </section>
+
+      {!canManage ? (
         <p className="text-[12.5px] leading-relaxed text-muted-foreground">
           Only workspace owners and admins can invite people or change roles.
         </p>
-      )}
+      ) : null}
+
+      {canManage ? (
+        <InviteMembersModal
+          isOpen={isInviteModalOpen}
+          accessToken={accessToken ?? ''}
+          actorRole={workspace.role}
+          onClose={() => setIsInviteModalOpen(false)}
+          onInvited={() => {
+            // Invitees are not members yet, so only the pending list changes.
+            setPendingReloadKey((key) => key + 1);
+            setActiveTab('pending');
+          }}
+          onNotice={setNotice}
+        />
+      ) : null}
     </div>
   );
 }

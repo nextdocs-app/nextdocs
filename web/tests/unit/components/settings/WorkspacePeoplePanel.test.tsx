@@ -17,10 +17,14 @@ jest.mock('../../../../services/workspace.service', () => ({
 jest.mock('../../../../lib/workspace-event.util', () => ({
   dispatchWorkspaceUpdated: jest.fn(),
 }));
-jest.mock('../../../../components/settings/workspace/WorkspaceInviteSection', () => ({
-  WorkspaceInviteSection: ({ actorRole }: { actorRole: string }) => (
-    <p>Invite section for {actorRole}</p>
+jest.mock('../../../../components/settings/workspace/WorkspacePendingInvites', () => ({
+  WorkspacePendingInvites: ({ actorRole }: { actorRole: string }) => (
+    <p>Pending invites for {actorRole}</p>
   ),
+}));
+jest.mock('../../../../components/settings/workspace/InviteMembersModal', () => ({
+  InviteMembersModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div>Invite members modal dialog</div> : null,
 }));
 jest.mock('../../../../components/settings/workspace/WorkspaceMemberList', () => ({
   WorkspaceMemberList: ({
@@ -121,7 +125,8 @@ describe('WorkspacePeoplePanel', () => {
     render(<WorkspacePeoplePanel />);
 
     expect(await screen.findByText('Roster for MEMBER: 2')).toBeInTheDocument();
-    expect(screen.queryByText('Invite section for MEMBER')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Pending' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add member' })).not.toBeInTheDocument();
     expect(
       screen.getByText('Only workspace owners and admins can invite people or change roles.')
     ).toBeInTheDocument();
@@ -129,20 +134,59 @@ describe('WorkspacePeoplePanel', () => {
     expect(listMembers).toHaveBeenCalledWith('token-1', expect.any(AbortSignal));
   });
 
-  it('mounts invite management for owners', async () => {
+  it('mounts pending tab and switches tabs for owners', async () => {
+    const user = userEvent.setup();
     render(<WorkspacePeoplePanel />);
 
-    expect(await screen.findByText('Roster for OWNER: 2')).toBeInTheDocument();
-    expect(screen.getByText('Invite section for OWNER')).toBeInTheDocument();
+    const membersTab = await screen.findByRole('tab', { name: 'Members' });
+    const pendingTab = screen.getByRole('tab', { name: 'Pending' });
+
+    expect(membersTab).toHaveAttribute('aria-selected', 'true');
+    expect(pendingTab).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByText('Roster for OWNER: 2')).toBeInTheDocument();
+    expect(screen.queryByText('Pending invites for OWNER')).not.toBeInTheDocument();
+
+    await user.click(pendingTab);
+
+    expect(membersTab).toHaveAttribute('aria-selected', 'false');
+    expect(pendingTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Pending invites for OWNER')).toBeInTheDocument();
   });
 
-  it('mounts invite management for admins', async () => {
+  it('moves between tabs with the arrow keys', async () => {
+    const user = userEvent.setup();
+    render(<WorkspacePeoplePanel />);
+
+    const membersTab = await screen.findByRole('tab', { name: 'Members' });
+    await user.click(membersTab);
+    await user.keyboard('{ArrowRight}');
+
+    expect(screen.getByRole('tab', { name: 'Pending' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Pending invites for OWNER')).toBeInTheDocument();
+
+    await user.keyboard('{ArrowLeft}');
+
+    expect(membersTab).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('mounts pending tab for admins', async () => {
     getCurrent.mockResolvedValue({ ...workspace, role: 'ADMIN' });
     mockAuth({ user: { id: 'admin-1' } });
     render(<WorkspacePeoplePanel />);
 
-    expect(await screen.findByText('Roster for ADMIN: 2')).toBeInTheDocument();
-    expect(screen.getByText('Invite section for ADMIN')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Pending' })).toBeInTheDocument();
+  });
+
+  it('opens the invite modal when clicking Add member', async () => {
+    const user = userEvent.setup();
+    render(<WorkspacePeoplePanel />);
+
+    const addButton = await screen.findByRole('button', { name: 'Add member' });
+    expect(screen.queryByText('Invite members modal dialog')).not.toBeInTheDocument();
+
+    await user.click(addButton);
+
+    expect(screen.getByText('Invite members modal dialog')).toBeInTheDocument();
   });
 
   it('retires management controls when a self-demotion lands', async () => {
@@ -153,7 +197,8 @@ describe('WorkspacePeoplePanel', () => {
     await user.click(screen.getByRole('button', { name: 'Demote self' }));
 
     expect(screen.getByText('Roster for MEMBER: 2')).toBeInTheDocument();
-    expect(screen.queryByText('Invite section for MEMBER')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Pending' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add member' })).not.toBeInTheDocument();
     expect(dispatchUpdated).toHaveBeenCalledWith({
       ...workspace,
       role: 'MEMBER',

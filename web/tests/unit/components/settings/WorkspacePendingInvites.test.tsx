@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { WorkspaceInviteSection } from '../../../../components/settings/workspace/WorkspaceInviteSection';
+import { WorkspacePendingInvites } from '../../../../components/settings/workspace/WorkspacePendingInvites';
 import { ApiError } from '../../../../services/api-client';
 import { workspaceApiService } from '../../../../services/workspace.service';
 import type { WorkspaceInvite, WorkspacePage } from '../../../../types/workspace.types';
@@ -8,14 +8,12 @@ import type { WorkspaceInvite, WorkspacePage } from '../../../../types/workspace
 jest.mock('../../../../services/workspace.service', () => ({
   workspaceApiService: {
     listInvites: jest.fn(),
-    createInvites: jest.fn(),
     resendInvite: jest.fn(),
     revokeInvite: jest.fn(),
   },
 }));
 
 const listInvites = workspaceApiService.listInvites as jest.Mock;
-const createInvites = workspaceApiService.createInvites as jest.Mock;
 const resendInvite = workspaceApiService.resendInvite as jest.Mock;
 const revokeInvite = workspaceApiService.revokeInvite as jest.Mock;
 
@@ -55,97 +53,30 @@ beforeEach(() => {
   listInvites.mockResolvedValue(page([]));
 });
 
-describe('WorkspaceInviteSection', () => {
-  it('invites the typed address and prepends the pending invite', async () => {
-    const user = userEvent.setup();
-    createInvites.mockResolvedValue([
-      {
-        email: 'new@example.com',
-        status: 'INVITED',
-        invite: {
-          id: 'invite-member',
-          email: 'new@example.com',
-          role: 'MEMBER',
-          expiresAt: '2026-11-30T00:00:00Z',
-        },
-      },
-    ]);
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
-
-    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
-
-    expect(createInvites).toHaveBeenCalledWith('token-1', ['new@example.com'], 'MEMBER');
-    expect(await screen.findByText('Invitation emailed to new@example.com.')).toBeInTheDocument();
-    expect(screen.getByText('new@example.com')).toBeInTheDocument();
-    expect(screen.getByLabelText('Email address')).toHaveValue('');
-  });
-
-  it('lets owners choose a privileged role for the invite', async () => {
-    const user = userEvent.setup();
-    createInvites.mockResolvedValue([
-      {
-        email: 'new@example.com',
-        status: 'INVITED',
-        invite: { ...memberInvite, email: 'new@example.com', role: 'ADMIN' },
-      },
-    ]);
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
-
-    await user.click(screen.getByRole('button', { name: 'Invite role' }));
-    expect(screen.getByRole('option', { name: 'Owner' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Admin' })).toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: 'Admin' }));
-
-    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
-
-    expect(createInvites).toHaveBeenCalledWith('token-1', ['new@example.com'], 'ADMIN');
-  });
-
-  it('fixes admins to plain-member invites', async () => {
-    const user = userEvent.setup();
-    createInvites.mockResolvedValue([
-      {
-        email: 'new@example.com',
-        status: 'INVITED',
-        invite: { ...memberInvite, email: 'new@example.com' },
-      },
-    ]);
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="ADMIN" />);
-
-    expect(screen.queryByRole('button', { name: 'Invite role' })).not.toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
-
-    expect(createInvites).toHaveBeenCalledWith('token-1', ['new@example.com'], 'MEMBER');
-  });
-
-  it('reports an address that is already a member', async () => {
-    const user = userEvent.setup();
-    createInvites.mockResolvedValue([{ email: 'existing@example.com', status: 'ALREADY_MEMBER' }]);
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
-
-    await user.type(screen.getByLabelText('Email address'), 'existing@example.com');
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
-
-    expect(
-      await screen.findByText('existing@example.com is already a member.')
-    ).toBeInTheDocument();
-  });
-
-  it('explains when the instance has no email delivery', async () => {
-    const user = userEvent.setup();
-    createInvites.mockRejectedValue(new ApiError('Email delivery is not configured', 503));
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
-
-    await user.type(screen.getByLabelText('Email address'), 'new@example.com');
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Invites need email delivery, which is not configured on this instance.'
+describe('WorkspacePendingInvites', () => {
+  it('renders nothing for regular members', () => {
+    const { container } = render(
+      <WorkspacePendingInvites accessToken="token-1" actorRole="MEMBER" />
     );
+
+    expect(container.firstChild).toBeNull();
+    expect(listInvites).not.toHaveBeenCalled();
+  });
+
+  it('renders empty state when there are no pending invites', async () => {
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
+
+    expect(await screen.findByText('No pending invites.')).toBeInTheDocument();
+  });
+
+  it('renders pending invites table with invitee details', async () => {
+    listInvites.mockResolvedValue(page([memberInvite]));
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
+
+    expect(await screen.findByText('new@example.com')).toBeInTheDocument();
+    expect(screen.getByText('Member')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resend' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
   });
 
   it('resends an invite and adopts the rotated expiry', async () => {
@@ -157,7 +88,7 @@ describe('WorkspaceInviteSection', () => {
       role: 'MEMBER',
       expiresAt: '2026-12-15T00:00:00Z',
     });
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
 
     await screen.findByText('new@example.com');
     await user.click(screen.getByRole('button', { name: 'Resend' }));
@@ -170,7 +101,7 @@ describe('WorkspaceInviteSection', () => {
     const user = userEvent.setup();
     listInvites.mockResolvedValue(page([memberInvite]));
     revokeInvite.mockResolvedValue(undefined);
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
 
     await screen.findByText('new@example.com');
     await user.click(screen.getByRole('button', { name: 'Revoke' }));
@@ -183,7 +114,7 @@ describe('WorkspaceInviteSection', () => {
 
   it('leaves privileged invites to owners when an admin is reading', async () => {
     listInvites.mockResolvedValue(page([ownerInvite]));
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="ADMIN" />);
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="ADMIN" />);
 
     expect(await screen.findByText('boss@example.com')).toBeInTheDocument();
     expect(screen.getByText('Owner-managed')).toBeInTheDocument();
@@ -200,7 +131,7 @@ describe('WorkspaceInviteSection', () => {
           : page([ownerInvite], { number: 1 })
       )
     );
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
 
     await screen.findByText('new@example.com');
     await user.click(screen.getByRole('button', { name: 'Load more' }));
@@ -215,7 +146,7 @@ describe('WorkspaceInviteSection', () => {
     listInvites
       .mockRejectedValueOnce(new ApiError('Invites unavailable', 500))
       .mockResolvedValueOnce(page([memberInvite]));
-    render(<WorkspaceInviteSection accessToken="token-1" actorRole="OWNER" />);
+    render(<WorkspacePendingInvites accessToken="token-1" actorRole="OWNER" />);
 
     expect(await screen.findByText('Invites unavailable')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
