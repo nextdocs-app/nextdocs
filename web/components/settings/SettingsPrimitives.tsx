@@ -6,22 +6,11 @@ import { SectionHeading } from '@/components/SectionHeading';
  * rows, so a new setting is one `<SettingsRow>` — no dialog changes needed.
  */
 
-export function SettingsSection({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
-}) {
+export function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
       <div className="border-b border-border pb-2.5">
         <SectionHeading as="h3">{title}</SectionHeading>
-        {description ? (
-          <p className="mt-1 text-[13px] leading-snug text-muted-foreground">{description}</p>
-        ) : null}
       </div>
       <div className="flex flex-col">{children}</div>
     </section>

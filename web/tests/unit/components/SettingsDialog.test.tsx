@@ -53,6 +53,16 @@ it('lists the Workspace group for a signed-in member', () => {
   expect(screen.getByRole('button', { name: 'People' })).toBeInTheDocument();
 });
 
+it('places the Account group before the Workspace group in the navigation', () => {
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  const account = screen.getByText('Account');
+  const workspace = screen.getByText('Workspace');
+  expect(
+    Boolean(account.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING)
+  ).toBe(true);
+});
+
 it('opens the General page from the Workspace group', async () => {
   const user = userEvent.setup();
   render(<SettingsDialog onClose={mockOnClose} />);

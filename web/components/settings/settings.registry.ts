@@ -15,6 +15,26 @@ import { WorkspacePeoplePanel } from './panels/WorkspacePeoplePanel';
  */
 export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
+    id: 'account',
+    label: 'Account',
+    entries: [
+      {
+        id: 'profile',
+        label: 'Profile',
+        description: 'Manage your personal profile and account details.',
+        icon: UserCircle,
+        Panel: ProfilePanel,
+      },
+      {
+        id: 'preferences',
+        label: 'Preferences',
+        description: 'Choose how NextDocs looks and behaves on this device.',
+        icon: Sliders,
+        Panel: PreferencesPanel,
+      },
+    ],
+  },
+  {
     id: 'workspace',
     label: 'Workspace',
     entries: [
@@ -33,26 +53,6 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: Users,
         requiresAuth: true,
         Panel: WorkspacePeoplePanel,
-      },
-    ],
-  },
-  {
-    id: 'account',
-    label: 'Account',
-    entries: [
-      {
-        id: 'profile',
-        label: 'Profile',
-        description: 'Manage your personal profile and account details.',
-        icon: UserCircle,
-        Panel: ProfilePanel,
-      },
-      {
-        id: 'preferences',
-        label: 'Preferences',
-        description: 'Choose how NextDocs looks and behaves on this device.',
-        icon: Sliders,
-        Panel: PreferencesPanel,
       },
     ],
   },

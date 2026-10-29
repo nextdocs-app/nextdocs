@@ -27,29 +27,35 @@ export function SettingsNav({ groups, activeId, onSelect }: SettingsNavProps) {
         {groups.map((group) => (
           <div key={group.id} className="contents sm:flex sm:flex-col">
             <SectionHeading className="hidden px-2 pb-1 sm:block">{group.label}</SectionHeading>
-            <div className="flex items-center gap-1 sm:flex-col sm:items-stretch sm:gap-0.5">
+            <ul className="flex items-center gap-1 sm:flex-col sm:items-stretch sm:gap-px list-none m-0 p-0">
               {group.entries.map((entry) => {
                 const Icon = entry.icon;
                 const isActive = entry.id === activeId;
 
                 return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => onSelect(entry.id)}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={`flex h-9 flex-shrink-0 items-center gap-2 rounded-sm px-3 text-left text-[13.5px] transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:px-2 ${
-                      isActive
-                        ? 'bg-sidebar-accent/70 font-medium text-sidebar-foreground'
-                        : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
-                    }`}
-                  >
-                    <Icon size={16} aria-hidden="true" className="flex-shrink-0 opacity-80" />
-                    <span className="truncate">{entry.label}</span>
-                  </button>
+                  <li key={entry.id} className="contents sm:block">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(entry.id)}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={`group relative flex items-center gap-2 rounded-sm text-left text-[14px] transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring h-9 flex-shrink-0 px-3 sm:h-auto sm:w-full sm:px-2 sm:py-1.5 pointer-coarse:sm:py-2.5 ${
+                        isActive
+                          ? 'bg-sidebar-accent/70 text-sidebar-foreground font-medium hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                          : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                      }`}
+                    >
+                      <span
+                        className="relative flex h-[17px] w-[17px] flex-shrink-0 items-center justify-center"
+                        aria-hidden="true"
+                      >
+                        <Icon size={16} className="flex-shrink-0 opacity-80" />
+                      </span>
+                      <span className="truncate flex-1 min-w-0">{entry.label}</span>
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           </div>
         ))}
       </div>
