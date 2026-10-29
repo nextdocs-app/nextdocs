@@ -130,9 +130,6 @@ function Sidebar() {
   const workspace = useWorkspace();
   const workspaceName = workspace?.name ?? 'NextDocs';
   const workspaceIcon = sanitizeDocumentIcon(workspace?.icon);
-  const workspaceLockupIcon = workspaceIcon ? (
-    <PageIcon icon={workspaceIcon} size={23} />
-  ) : undefined;
   const userInitial =
     user?.displayName?.trim()?.charAt(0)?.toUpperCase() ||
     user?.email?.charAt(0)?.toUpperCase() ||
@@ -1085,7 +1082,7 @@ function Sidebar() {
       {/* Header — one toolbar row: workspace identity, then the rail control. */}
       <div className="flex items-center justify-between gap-2 px-1.5 pt-2">
         <div className="flex min-w-0 items-center overflow-hidden">
-          <WorkspaceLockup name={workspaceName} icon={workspaceLockupIcon} />
+          <WorkspaceLockup name={workspaceName} workspaceIcon={workspaceIcon} />
         </div>
 
         {/*
