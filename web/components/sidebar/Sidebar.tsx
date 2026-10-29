@@ -21,13 +21,15 @@ import {
   setDocActionsAnchor,
 } from '@/stores/sidebar/sidebar.slice';
 import {
-  setSettingsDialogOpen,
+  closeSettingsDialog,
+  openSettingsDialog,
   setAccountMenuOpen,
+  setWorkspaceMenuOpen,
   setPermanentDeleteTarget,
 } from '@/stores/ui/ui.slice';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
-import { NewDocument, Search, ChevronRight, Close, CloseSidebar, UserCircle } from '@/icons';
+import { NewDocument, Search, ChevronDown, Close, CloseSidebar, UserCircle } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { PageIcon } from '@/components/page/PageIcon';
@@ -77,10 +79,14 @@ import {
 import { SharedTree } from './SharedTree';
 import { SidebarTree } from './SidebarTree';
 import { WorkspaceLockup } from './WorkspaceLockup';
+import { WorkspaceMenuPopup } from './WorkspaceMenuPopup';
 import { ProfileMenuPopup } from './ProfileMenuPopup';
 import { DocumentActionsMenu } from './DocumentActionsMenu';
 import { DocumentsPanel } from './DocumentsPanel';
 import { useSidebarResize } from './useSidebarResize';
+import { useDismissableMenu } from './useDismissableMenu';
+import { resolvePopupPosition } from './popup-position.util';
+import { canManageMembers } from '@/components/settings/workspace/workspace-role.util';
 import {
   SidebarTreeDndContext,
   type MoveDocumentArgs,
@@ -97,6 +103,10 @@ const emptySubscribe = () => () => {};
 const EMPTY_SHARED_DOCUMENTS: SharedDocumentEntry[] = [];
 const guestNoop = () => {};
 const guestResolveActionType = () => 'move-to-trash' as const;
+
+// Shared geometry for the header's rail control and the footer spacer beside
+// the account row, so the two rows stay aligned.
+const SIDEBAR_RAIL_CONTROL_CLASS = 'h-9 w-12 flex-shrink-0 md:h-7 md:w-9';
 
 function Sidebar() {
   const router = useRouter();
@@ -130,6 +140,7 @@ function Sidebar() {
   const workspace = useWorkspace();
   const workspaceName = workspace?.name ?? 'NextDocs';
   const workspaceIcon = sanitizeDocumentIcon(workspace?.icon);
+  const hasManagePeopleAccess = Boolean(workspace && canManageMembers(workspace.role));
   const userInitial =
     user?.displayName?.trim()?.charAt(0)?.toUpperCase() ||
     user?.email?.charAt(0)?.toUpperCase() ||
@@ -167,21 +178,31 @@ function Sidebar() {
 
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
   const isAccountMenuOpen = useAppSelector((state) => state.ui.isAccountMenuOpen);
+  const isWorkspaceMenuOpen = useAppSelector((state) => state.ui.isWorkspaceMenuOpen);
   const isSettingsOpen = useAppSelector((state) => state.ui.isSettingsDialogOpen);
+  const settingsEntryId = useAppSelector((state) => state.ui.settingsDialogEntryId);
+  const settingsSource = useAppSelector((state) => state.ui.settingsDialogSource);
   const permanentDeleteTarget = useAppSelector((state) => state.ui.permanentDeleteTarget);
   const [trashActionLoadingDocId, setTrashActionLoadingDocId] = useState<string | null>(null);
   const [isPermanentDeleteLoading, setIsPermanentDeleteLoading] = useState(false);
+  // Menus render at the rail root (the tree scrolls and would clip them), so
+  // each carries a position measured from its trigger when it opens.
+  const [accountMenuPosition, setAccountMenuPosition] = useState<React.CSSProperties | null>(null);
+  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<React.CSSProperties | null>(
+    null
+  );
 
   const activeDocId = offlineSelectedDocumentId ?? routeActiveDocId;
   const { isGuestSharedLoading } = useGuestSharedTree(isAuthenticated ? '' : activeDocId);
   const accountMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const accountMenuPopupRef = useRef<HTMLDivElement>(null);
+  const workspaceMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const workspaceMenuPopupRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
 
   const isDocumentsPanelOpen = documentsPanelMode !== null;
   const isTrashPanel = documentsPanelMode === 'trash';
   const isSharedPanel = documentsPanelMode === 'shared';
-  const profileMenuStyle = { left: '0.5rem', bottom: '4rem' } as React.CSSProperties;
 
   const panelDocuments = useMemo(
     () => (isTrashPanel ? trashedDocuments : isSharedPanel ? sharedDocuments : documents),
@@ -698,34 +719,44 @@ function Sidebar() {
     }
   }, [routeActiveDocId, offlineSelectedDocumentId]);
 
-  useEffect(() => {
-    if (!isAccountMenuOpen) {
+  const closeAccountMenu = useCallback(() => dispatch(setAccountMenuOpen(false)), [dispatch]);
+  const closeWorkspaceMenu = useCallback(() => dispatch(setWorkspaceMenuOpen(false)), [dispatch]);
+
+  // An open menu dismisses itself on an outside press, which is also what keeps
+  // the two menus exclusive: the press before the other trigger's click closes
+  // this one.
+  useDismissableMenu({
+    isOpen: isAccountMenuOpen,
+    triggerRef: accountMenuTriggerRef,
+    popupRef: accountMenuPopupRef,
+    onDismiss: closeAccountMenu,
+  });
+  useDismissableMenu({
+    isOpen: isWorkspaceMenuOpen,
+    triggerRef: workspaceMenuTriggerRef,
+    popupRef: workspaceMenuPopupRef,
+    onDismiss: closeWorkspaceMenu,
+  });
+
+  const toggleAccountMenu = useCallback(() => {
+    if (isAccountMenuOpen) {
+      dispatch(setAccountMenuOpen(false));
       return;
     }
 
-    const handleOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
-      const isWithinTrigger = accountMenuTriggerRef.current?.contains(target);
-      const isWithinPopup = accountMenuPopupRef.current?.contains(target);
-      if (!isWithinTrigger && !isWithinPopup) {
-        dispatch(setAccountMenuOpen(false));
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        dispatch(setAccountMenuOpen(false));
-      }
-    };
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleEscape);
-
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleEscape);
-    };
+    setAccountMenuPosition(resolvePopupPosition(accountMenuTriggerRef.current, 'above'));
+    dispatch(setAccountMenuOpen(true));
   }, [isAccountMenuOpen, dispatch]);
+
+  const toggleWorkspaceMenu = useCallback(() => {
+    if (isWorkspaceMenuOpen) {
+      dispatch(setWorkspaceMenuOpen(false));
+      return;
+    }
+
+    setWorkspaceMenuPosition(resolvePopupPosition(workspaceMenuTriggerRef.current, 'below'));
+    dispatch(setWorkspaceMenuOpen(true));
+  }, [isWorkspaceMenuOpen, dispatch]);
 
   // Escape dismisses the mobile drawer, matching every other overlay in the app.
   useEffect(() => {
@@ -1081,8 +1112,33 @@ function Sidebar() {
     >
       {/* Header — one toolbar row: workspace identity, then the rail control. */}
       <div className="flex items-center justify-between gap-2 px-1.5 pt-2">
-        <div className="flex min-w-0 items-center overflow-hidden">
-          <WorkspaceLockup name={workspaceName} workspaceIcon={workspaceIcon} />
+        <div className="flex min-w-0 flex-1 items-center overflow-hidden">
+          {/* Guests have no workspace pages to open, so the lockup stays a label. */}
+          {isAuthenticated ? (
+            <button
+              ref={workspaceMenuTriggerRef}
+              type="button"
+              onClick={toggleWorkspaceMenu}
+              aria-haspopup="menu"
+              aria-expanded={isWorkspaceMenuOpen}
+              aria-label={`${workspaceName} workspace options`}
+              className="group/workspace flex min-w-0 flex-1 items-center gap-1 rounded-sm p-0.5 text-left transition-colors hover:bg-sidebar-accent cursor-pointer overflow-hidden focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+            >
+              <WorkspaceLockup name={workspaceName} workspaceIcon={workspaceIcon} />
+              <ChevronDown
+                className={`flex-shrink-0 transition-all duration-150 ${
+                  isWorkspaceMenuOpen
+                    ? 'opacity-70 rotate-180 w-3.5 mr-1'
+                    : 'w-0 opacity-0 group-hover/workspace:w-3.5 group-hover/workspace:mr-1 group-hover/workspace:opacity-70 group-focus-visible/workspace:w-3.5 group-focus-visible/workspace:mr-1 group-focus-visible/workspace:opacity-70 overflow-hidden'
+                }`}
+                size={14}
+              />
+            </button>
+          ) : (
+            <span className="flex min-w-0 flex-1 items-center p-0.5">
+              <WorkspaceLockup name={workspaceName} workspaceIcon={workspaceIcon} />
+            </span>
+          )}
         </div>
 
         {/*
@@ -1097,11 +1153,12 @@ function Sidebar() {
               return;
             }
             dispatch(setAccountMenuOpen(false));
+            dispatch(setWorkspaceMenuOpen(false));
             dispatch(setCollapsed(true));
           }}
           aria-label={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
           title={isMobileLayout ? 'Close navigation' : 'Collapse sidebar'}
-          className="inline-flex h-9 w-12 flex-shrink-0 items-center justify-center rounded-sm text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer md:h-7 md:w-9"
+          className={`inline-flex ${SIDEBAR_RAIL_CONTROL_CLASS} items-center justify-center rounded-sm text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer`}
         >
           {isMobileLayout ? (
             <Close size={18} className="flex-shrink-0 opacity-80" />
@@ -1208,20 +1265,20 @@ function Sidebar() {
           </SidebarTreeDndContext>
         </div>
 
-        <div className="relative mt-auto sticky bottom-0 border-t border-border bg-sidebar p-2">
+        <div className="relative mt-auto sticky bottom-0 flex items-center justify-between gap-2 border-t border-border bg-sidebar px-1.5 py-2">
           <button
             ref={accountMenuTriggerRef}
-            onClick={() => dispatch(setAccountMenuOpen(!isAccountMenuOpen))}
+            onClick={toggleAccountMenu}
             aria-haspopup="menu"
             aria-expanded={isAccountMenuOpen}
-            className="group/account w-full rounded-sm px-1.5 py-2 text-left transition-colors hover:bg-sidebar-accent cursor-pointer flex items-center overflow-hidden"
+            className="group/account flex min-w-0 flex-1 items-center overflow-hidden rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-sidebar-accent cursor-pointer"
           >
             <span
               aria-hidden="true"
-              className="inline-flex h-[23px] w-[23px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
+              className="inline-flex h-[25px] w-[25px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
             >
               {isAuthenticated && user ? (
-                <span className="text-[12px] font-semibold leading-none select-none">
+                <span className="text-[13px] font-semibold leading-none select-none">
                   {userInitial}
                 </span>
               ) : (
@@ -1230,27 +1287,57 @@ function Sidebar() {
             </span>
             <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-3">
               <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
-              <ChevronRight
-                className={`flex-shrink-0 opacity-70 transition-transform duration-150 ${
-                  isAccountMenuOpen ? '-rotate-90' : 'rotate-90'
+              <ChevronDown
+                className={`flex-shrink-0 transition-all duration-150 ${
+                  isAccountMenuOpen
+                    ? 'opacity-70 -rotate-180 w-3.5'
+                    : 'w-0 opacity-0 group-hover/account:w-3.5 group-hover/account:opacity-70 group-focus-visible/account:w-3.5 group-focus-visible/account:opacity-70 overflow-hidden'
                 }`}
+                size={14}
               />
             </span>
           </button>
+          {/* Balances the header's rail control so both rows share an edge. */}
+          <div className={SIDEBAR_RAIL_CONTROL_CLASS} aria-hidden="true" />
         </div>
       </div>
 
-      {isAccountMenuOpen && (
+      {isAuthenticated && isWorkspaceMenuOpen && workspaceMenuPosition && (
+        <WorkspaceMenuPopup
+          theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+          canManageMembers={hasManagePeopleAccess}
+          onOpenWorkspaceSettings={() => {
+            dispatch(closeWorkspaceMenu());
+            dispatch(openSettingsDialog({ entryId: 'workspace-general', source: 'workspace' }));
+          }}
+          onOpenPeople={() => {
+            dispatch(closeWorkspaceMenu());
+            dispatch(openSettingsDialog({ entryId: 'workspace-people', source: 'workspace' }));
+          }}
+          onOpenTrash={() => {
+            dispatch(closeWorkspaceMenu());
+            openTrashDocumentsPanel();
+          }}
+          style={workspaceMenuPosition}
+          popupRef={workspaceMenuPopupRef}
+        />
+      )}
+
+      {isAccountMenuOpen && accountMenuPosition && (
         <ProfileMenuPopup
           theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
           isAuthenticated={isAuthenticated}
-          onOpenSettings={() => {
-            dispatch(setAccountMenuOpen(false));
-            dispatch(setSettingsDialogOpen(true));
+          onOpenProfile={() => {
+            dispatch(closeAccountMenu());
+            dispatch(openSettingsDialog({ entryId: 'profile', source: 'account' }));
           }}
-          onOpenTrash={() => {
-            dispatch(setAccountMenuOpen(false));
-            openTrashDocumentsPanel();
+          onOpenPreferences={() => {
+            dispatch(closeAccountMenu());
+            dispatch(openSettingsDialog({ entryId: 'preferences', source: 'account' }));
+          }}
+          onOpenSettings={() => {
+            dispatch(closeAccountMenu());
+            dispatch(openSettingsDialog({ source: 'account' }));
           }}
           onLogout={async () => {
             dispatch(setAccountMenuOpen(false));
@@ -1263,18 +1350,21 @@ function Sidebar() {
             });
           }}
           onSignIn={() => {
-            dispatch(setAccountMenuOpen(false));
+            dispatch(closeAccountMenu());
             goToSignIn();
           }}
-          style={profileMenuStyle}
+          style={accountMenuPosition}
           popupRef={accountMenuPopupRef}
         />
       )}
 
       {isSettingsOpen && (
         <SettingsDialog
-          returnFocusRef={accountMenuTriggerRef}
-          onClose={() => dispatch(setSettingsDialogOpen(false))}
+          initialEntryId={settingsEntryId}
+          returnFocusRef={
+            settingsSource === 'workspace' ? workspaceMenuTriggerRef : accountMenuTriggerRef
+          }
+          onClose={() => dispatch(closeSettingsDialog())}
         />
       )}
 
