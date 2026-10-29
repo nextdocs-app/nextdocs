@@ -409,6 +409,9 @@ public class WorkspaceService {
      * space's pages — must not learn its member list. This mirrors
      * {@code SpaceAccessService#requireRoster}, which answers 403 to exactly that
      * caller. For everyone else {@code spaces} stays null and Jackson omits it.
+     *
+     * <p>Archived spaces are left out: they are hidden from navigation, so a member
+     * summary would list a space the reader cannot open.
      */
     private List<WorkspaceMemberResponse> roster(UUID workspaceId, boolean includeSpaces) {
         List<WorkspaceMember> members = memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId);
@@ -421,7 +424,7 @@ public class WorkspaceService {
                     .toList();
         }
 
-        List<Space> spaces = spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspaceId);
+        List<Space> spaces = spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspaceId);
         List<SpaceMember> spaceMembers = spaceMemberRepository.findAllBySpace_Workspace_Id(workspaceId);
 
         Map<UUID, Map<UUID, DocumentAccessLevel>> userSpaceAccess = new HashMap<>();

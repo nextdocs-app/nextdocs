@@ -605,7 +605,7 @@ class WorkspaceServiceTest {
                 .accessMode(SpaceAccessMode.PUBLIC)
                 .everyoneAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
-        when(spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspaceId))
+        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspaceId))
                 .thenReturn(List.of(customSpace, publicSpace));
 
         SpaceMember customOwnerMember = SpaceMember.builder()
@@ -648,7 +648,7 @@ class WorkspaceServiceTest {
                 .accessMode(SpaceAccessMode.PUBLIC)
                 .everyoneAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
-        when(spaceRepository.findAllByWorkspace_IdOrderByCreatedAtAsc(workspaceId))
+        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspaceId))
                 .thenReturn(List.of(publicSpace));
         when(spaceMemberRepository.findAllBySpace_Workspace_Id(workspaceId))
                 .thenReturn(List.of(SpaceMember.builder()
