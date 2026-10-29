@@ -1,5 +1,5 @@
 import { Sliders, UserCircle, Users, Workspace } from '@/icons';
-import type { SettingsEntry, SettingsGroup } from './types';
+import type { SettingsEntry, SettingsEntryId, SettingsGroup } from './types';
 import { PreferencesPanel } from './panels/PreferencesPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
 import { WorkspaceGeneralPanel } from './panels/WorkspaceGeneralPanel';
@@ -72,5 +72,5 @@ export function getSettingsGroups(isAuthenticated: boolean): SettingsGroup[] {
   })).filter((group) => group.entries.length > 0);
 }
 
-/** Page shown when settings opens. */
-export const DEFAULT_SETTINGS_ENTRY_ID = 'preferences';
+/** Page shown when settings opens without a requested entry. */
+export const DEFAULT_SETTINGS_ENTRY_ID: SettingsEntryId = 'preferences';

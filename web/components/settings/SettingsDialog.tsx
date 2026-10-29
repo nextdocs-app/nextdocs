@@ -7,15 +7,20 @@ import { Close } from '@/icons';
 import { trapTabKey } from '@/lib/focus-trap.util';
 import { SettingsNav } from './SettingsNav';
 import { DEFAULT_SETTINGS_ENTRY_ID, getSettingsGroups } from './settings.registry';
+import type { SettingsEntryId } from './types';
 
 function SettingsDialogSurface({
+  initialEntryId,
   onClose,
   returnFocusRef,
 }: {
+  initialEntryId?: SettingsEntryId | null;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
-  const [activeId, setActiveId] = useState(DEFAULT_SETTINGS_ENTRY_ID);
+  const [activeId, setActiveId] = useState<SettingsEntryId>(
+    initialEntryId ?? DEFAULT_SETTINGS_ENTRY_ID
+  );
   const { isAuthenticated } = useAuth();
   const groups = getSettingsGroups(isAuthenticated);
   const entries = groups.flatMap((group) => group.entries);
@@ -137,15 +142,21 @@ function SettingsDialogSurface({
 }
 
 export function SettingsDialog({
+  initialEntryId,
   onClose,
   returnFocusRef,
 }: {
+  initialEntryId?: SettingsEntryId | null;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   return (
     <Portal>
-      <SettingsDialogSurface onClose={onClose} returnFocusRef={returnFocusRef} />
+      <SettingsDialogSurface
+        initialEntryId={initialEntryId}
+        onClose={onClose}
+        returnFocusRef={returnFocusRef}
+      />
     </Portal>
   );
 }

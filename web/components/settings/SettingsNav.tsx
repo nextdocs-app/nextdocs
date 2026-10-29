@@ -1,12 +1,12 @@
 'use client';
 
 import { SectionHeading } from '@/components/SectionHeading';
-import type { SettingsGroup } from './types';
+import type { SettingsEntryId, SettingsGroup } from './types';
 
 interface SettingsNavProps {
   groups: SettingsGroup[];
-  activeId: string;
-  onSelect: (id: string) => void;
+  activeId: SettingsEntryId;
+  onSelect: (id: SettingsEntryId) => void;
 }
 
 export function SettingsNav({ groups, activeId, onSelect }: SettingsNavProps) {

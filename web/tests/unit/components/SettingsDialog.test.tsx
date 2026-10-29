@@ -45,6 +45,18 @@ it('opens on Preferences with an Account navigation', () => {
   );
 });
 
+it('opens on Profile when initialEntryId is "profile"', () => {
+  render(<SettingsDialog initialEntryId="profile" onClose={mockOnClose} />);
+
+  expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Profile' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('button', { name: 'Preferences' })).not.toHaveAttribute(
+    'aria-current',
+    'page'
+  );
+});
+
 it('lists the Workspace group for a signed-in member', () => {
   render(<SettingsDialog onClose={mockOnClose} />);
 

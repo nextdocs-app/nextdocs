@@ -1,10 +1,16 @@
 import type { ComponentType } from 'react';
 import type { IconProps } from '@/icons';
 
+/**
+ * Every settings page. The store opens one by id; typing it here keeps a
+ * mistyped or renamed page from silently falling back to the first entry.
+ */
+export type SettingsEntryId = 'profile' | 'preferences' | 'workspace-general' | 'workspace-people';
+
 /** One settings page: a nav entry plus the panel it renders. */
 export interface SettingsEntry {
   /** Stable id used for the nav selection; unique across all groups. */
-  id: string;
+  id: SettingsEntryId;
   label: string;
   /** Shown under the page title in the content header. */
   description: string;
