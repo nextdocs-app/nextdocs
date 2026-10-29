@@ -33,7 +33,11 @@ function SettingsDialogSurface({
   const titleId = `${baseId}-title`;
   const descriptionId = `${baseId}-description`;
 
-  const activeEntry = entries.find((entry) => entry.id === activeId) ?? entries[0];
+  // A guest can request a page that needs a session; land on the default page
+  // rather than whichever entry the catalog happens to list first.
+  const defaultEntry =
+    entries.find((entry) => entry.id === DEFAULT_SETTINGS_ENTRY_ID) ?? entries[0];
+  const activeEntry = entries.find((entry) => entry.id === activeId) ?? defaultEntry;
   const ActivePanel = activeEntry.Panel;
 
   useEffect(() => {
@@ -56,6 +60,19 @@ function SettingsDialogSurface({
     const returnFocusTarget = returnFocusRef?.current ?? null;
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A nested modal (invite, confirmation) is portaled outside this dialog and
+      // owns its own keys. Without this, its Escape would close settings behind it
+      // and its Tab would be pulled back into this dialog's focus trap.
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      const target = event.target;
+      const owningDialog = target instanceof Element ? target.closest('[role="dialog"]') : null;
+      if (owningDialog && owningDialog !== dialog) {
+        return;
+      }
+
       if (event.key === 'Escape') {
         if (event.isComposing) {
           return;

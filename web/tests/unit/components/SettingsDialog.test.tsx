@@ -112,6 +112,22 @@ it('hides workspace pages from guests', () => {
   expect(screen.getByRole('button', { name: 'Preferences' })).toBeInTheDocument();
 });
 
+it('opens Preferences when the requested page needs a session', () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: null,
+    isAuthenticated: false,
+    isInitializing: false,
+    accessToken: null,
+  });
+  render(<SettingsDialog initialEntryId="workspace-people" onClose={mockOnClose} />);
+
+  expect(screen.getByRole('heading', { name: 'Preferences' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Preferences' })).toHaveAttribute(
+    'aria-current',
+    'page'
+  );
+});
+
 it('renders the three theme choices and applies the selected one', async () => {
   const user = userEvent.setup();
   render(<SettingsDialog onClose={mockOnClose} />);
