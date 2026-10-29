@@ -1,9 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Workspace as WorkspaceGlyph } from '@/icons';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Pencil } from '@/icons';
 import { IconPickerPanel } from '@/components/page/IconPickerPanel';
-import { PageIcon } from '@/components/page/PageIcon';
+import { PICKER_PANEL_WIDTH } from '@/components/page/PickerShell';
+import {
+  WorkspaceIconTile,
+  workspaceIconTileStyle,
+} from '@/components/workspace/WorkspaceIconTile';
+import { useAnchoredPanel } from '@/hooks/useAnchoredPanel.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { toIconRequestPayload } from '@/lib/document-icon.util';
 import { dispatchWorkspaceUpdated } from '@/lib/workspace-event.util';
@@ -19,19 +24,22 @@ import {
   WorkspacePanelSignedOut,
 } from '../workspace/WorkspacePanelStates';
 
-function iconKey(icon: DocumentIcon | null): string {
-  return icon ? `${icon.type}:${icon.value}:${icon.color ?? ''}` : '';
-}
-
 function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function iconKey(icon: DocumentIcon | null | undefined): string {
+  return icon ? `${icon.type}:${icon.value}:${icon.color ?? ''}` : '';
 }
 
 const INPUT_CLASS_NAME =
   'h-9 w-full rounded-md border border-border bg-transparent px-3 py-1.5 text-[13px] shadow-xs transition-colors placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:w-64';
 
-const BUTTON_CLASS_NAME =
-  'inline-flex h-8 flex-shrink-0 items-center justify-center rounded-md px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer disabled:cursor-not-allowed disabled:opacity-50';
+/** The draft a failed save should put back, when that draft is still on screen. */
+interface SaveRevert {
+  name?: string;
+  icon?: DocumentIcon | null;
+}
 
 export function WorkspaceGeneralPanel() {
   const { isAuthenticated, isInitializing, accessToken } = useAuth();
@@ -41,10 +49,20 @@ export function WorkspaceGeneralPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+
+  const iconPanel = useAnchoredPanel({ width: PICKER_PANEL_WIDTH, align: 'left' });
+
+  const workspaceRef = useRef<Workspace | null>(null);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  const committingNameRef = useRef<string | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSavesRef = useRef(0);
 
   useEffect(() => {
     if (!isAuthenticated || !accessToken) {
@@ -100,6 +118,60 @@ export function WorkspaceGeneralPanel() {
     setReloadKey((key) => key + 1);
   };
 
+  /**
+   * Queues a workspace patch. Requests run one at a time so an older response can
+   * never land on top of a newer one, and the response updates only the server
+   * copy — never the drafts being edited. A failure puts back the value this
+   * request sent, and only while that value is still what the user sees.
+   */
+  const enqueueSave = useCallback(
+    (patch: WorkspaceUpdateInput, revert?: SaveRevert) => {
+      const current = workspaceRef.current;
+      if (!accessToken || !current || current.role !== 'OWNER') {
+        return Promise.resolve();
+      }
+
+      pendingSavesRef.current += 1;
+      setIsSaving(true);
+      setSaveError(null);
+
+      const task = saveQueueRef.current
+        .then(async () => {
+          const next = await workspaceApiService.updateCurrent(accessToken, patch);
+          setWorkspace(next);
+          dispatchWorkspaceUpdated(next);
+        })
+        .catch((error: unknown) => {
+          setSaveError(messageFor(error, 'Could not save the workspace.'));
+          if (revert?.name !== undefined) {
+            setName((draft) =>
+              draft.trim() === revert.name ? (workspaceRef.current?.name ?? draft) : draft
+            );
+          }
+          if (revert && 'icon' in revert) {
+            setIcon((draft) =>
+              iconKey(draft) === iconKey(revert.icon) ? (workspaceRef.current?.icon ?? null) : draft
+            );
+          }
+          if (error instanceof ApiError && error.status === 403) {
+            // The caller's role changed while the panel was open. Reload so the
+            // controls retire instead of offering a save that cannot succeed.
+            setReloadKey((key) => key + 1);
+          }
+        })
+        .finally(() => {
+          pendingSavesRef.current -= 1;
+          if (pendingSavesRef.current === 0) {
+            setIsSaving(false);
+          }
+        });
+
+      saveQueueRef.current = task;
+      return task;
+    },
+    [accessToken]
+  );
+
   if (isInitializing) {
     return <WorkspacePanelLoading label="Loading account…" />;
   }
@@ -123,95 +195,72 @@ export function WorkspaceGeneralPanel() {
   }
 
   const canEdit = workspace.role === 'OWNER';
-  const trimmedName = name.trim();
-  const nameChanged = trimmedName !== workspace.name;
-  const iconChanged = iconKey(icon) !== iconKey(workspace.icon);
-  const isDirty = nameChanged || iconChanged;
-  const canSave = canEdit && isDirty && trimmedName.length > 0 && !isSaving;
+  const tile = workspaceIconTileStyle(icon);
 
-  const handleSave = async () => {
-    if (!accessToken || !canSave) {
+  const handleNameCommit = () => {
+    const current = workspaceRef.current;
+    if (!current || current.role !== 'OWNER') {
       return;
     }
-
-    const patch: WorkspaceUpdateInput = {};
-    if (nameChanged) {
-      patch.name = trimmedName;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setName(current.name);
+      return;
     }
-    if (iconChanged) {
-      patch.icon = toIconRequestPayload(icon);
+    if (trimmed === current.name || trimmed === committingNameRef.current) {
+      return;
     }
-
-    setIsSaving(true);
-    setSaveError(null);
-    setStatus(null);
-    try {
-      const next = await workspaceApiService.updateCurrent(accessToken, patch);
-      setWorkspace(next);
-      setName(next.name);
-      setIcon(next.icon ?? null);
-      setStatus('Workspace saved.');
-      dispatchWorkspaceUpdated(next);
-    } catch (error) {
-      setSaveError(messageFor(error, 'Could not save the workspace.'));
-      if (error instanceof ApiError && error.status === 403) {
-        // The caller's role changed while the panel was open. Reload so the
-        // controls retire instead of offering a save that cannot succeed.
-        setReloadKey((key) => key + 1);
+    committingNameRef.current = trimmed;
+    void enqueueSave({ name: trimmed }, { name: trimmed }).finally(() => {
+      if (committingNameRef.current === trimmed) {
+        committingNameRef.current = null;
       }
-    } finally {
-      setIsSaving(false);
-    }
+    });
+  };
+
+  const handleIconChange = (nextIcon: DocumentIcon | null) => {
+    setIcon(nextIcon);
+    void enqueueSave({ icon: toIconRequestPayload(nextIcon) }, { icon: nextIcon });
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <SettingsSection
-        title="Workspace"
-        description="This identity appears at the top of the sidebar for everyone in the workspace."
-      >
+    <div className="flex flex-col gap-6" aria-busy={isSaving}>
+      <SettingsSection title="Workspace">
         <SettingsRow
           label="Workspace icon"
           description="An emoji, a built-in icon, an image link, or an uploaded image."
           control={
             <div className="flex items-center gap-2">
-              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]">
-                {icon ? (
-                  <PageIcon
-                    icon={icon}
-                    size={32}
-                    accessToken={accessToken}
-                    label="Workspace icon"
-                  />
-                ) : (
-                  <WorkspaceGlyph size={22} aria-hidden="true" />
-                )}
-              </span>
               {canEdit ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setIsPickerOpen((open) => !open)}
-                    aria-expanded={isPickerOpen}
-                    className={`${BUTTON_CLASS_NAME} border border-border hover:bg-foreground/[0.06]`}
+                <button
+                  type="button"
+                  ref={iconPanel.triggerRef}
+                  onClick={iconPanel.toggle}
+                  aria-label={icon ? 'Change workspace icon' : 'Add icon'}
+                  aria-haspopup="dialog"
+                  aria-expanded={iconPanel.isOpen}
+                  title={icon ? 'Change workspace icon' : 'Add icon'}
+                  style={tile.style}
+                  className={`group relative flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-md transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${tile.className}`}
+                >
+                  <span className="inline-flex h-full w-full items-center justify-center overflow-hidden rounded-md">
+                    <WorkspaceIconTile icon={icon} size={40} accessToken={accessToken} />
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-0 flex items-center justify-center rounded-md bg-black/45 text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100"
                   >
-                    {icon ? 'Change' : 'Add icon'}
-                  </button>
-                  {icon ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIcon(null);
-                        setStatus(null);
-                        setSaveError(null);
-                      }}
-                      className={`${BUTTON_CLASS_NAME} text-muted-foreground hover:text-destructive`}
-                    >
-                      Remove
-                    </button>
-                  ) : null}
-                </>
-              ) : null}
+                    <Pencil size={16} strokeWidth={2} />
+                  </span>
+                </button>
+              ) : (
+                <span
+                  style={tile.style}
+                  className={`flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-md ${tile.className}`}
+                >
+                  <WorkspaceIconTile icon={icon} size={40} accessToken={accessToken} />
+                </span>
+              )}
             </div>
           }
         />
@@ -227,13 +276,14 @@ export function WorkspaceGeneralPanel() {
                 maxLength={255}
                 onChange={(event) => {
                   setName(event.target.value);
-                  setStatus(null);
                   setSaveError(null);
                 }}
+                onBlur={handleNameCommit}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && canSave) {
+                  if (event.key === 'Enter') {
                     event.preventDefault();
-                    void handleSave();
+                    handleNameCommit();
+                    event.currentTarget.blur();
                   }
                 }}
                 placeholder="Workspace name"
@@ -252,56 +302,43 @@ export function WorkspaceGeneralPanel() {
           control={<SettingsValue>{workspaceRoleLabel(workspace.role)}</SettingsValue>}
         />
 
-        {canEdit && isPickerOpen ? (
-          <div className="border-t border-border py-3.5">
-            <IconPickerPanel
-              icon={icon ?? undefined}
-              accessToken={accessToken}
-              canUpload
-              inline
-              label="Choose a workspace icon"
-              uploadFile={uploadWorkspaceIcon}
-              onSelect={(next) => {
-                setIcon(next);
-                setStatus(null);
-                setSaveError(null);
-              }}
-              onRemove={() => {
-                setIcon(null);
-                setStatus(null);
-                setSaveError(null);
-              }}
-              onClose={() => setIsPickerOpen(false)}
-            />
-          </div>
+        {saveError ? (
+          <p
+            role="alert"
+            className="border-t border-border py-3.5 text-[12.5px] leading-snug text-destructive"
+          >
+            {saveError}
+          </p>
         ) : null}
 
-        {canEdit ? (
-          <div className="flex flex-col gap-2 border-t border-border py-3.5 sm:flex-row sm:items-center sm:justify-between">
-            <p
-              role={saveError ? 'alert' : undefined}
-              className={`text-[12.5px] leading-snug ${
-                saveError ? 'text-destructive' : 'text-muted-foreground'
-              }`}
-            >
-              {saveError ?? status ?? 'Changes are visible to everyone in the workspace.'}
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={!canSave}
-              className={`${BUTTON_CLASS_NAME} bg-foreground text-background hover:opacity-90 sm:self-auto`}
-            >
-              {isSaving ? 'Saving…' : 'Save changes'}
-            </button>
-          </div>
-        ) : (
+        {!canEdit ? (
           <p className="border-t border-border py-3.5 text-[12.5px] leading-relaxed text-muted-foreground">
             Only the workspace owner can change the name and icon. You can still see everyone in the
             People page.
           </p>
-        )}
+        ) : null}
       </SettingsSection>
+
+      {canEdit && iconPanel.isOpen ? (
+        <IconPickerPanel
+          icon={icon ?? undefined}
+          accessToken={accessToken}
+          canUpload
+          panelRef={iconPanel.panelRef}
+          panelStyle={iconPanel.panelStyle}
+          label="Choose a workspace icon"
+          uploadFile={uploadWorkspaceIcon}
+          onSelect={(next) => {
+            void handleIconChange(next);
+            iconPanel.close();
+          }}
+          onRemove={() => {
+            void handleIconChange(null);
+            iconPanel.close();
+          }}
+          onClose={iconPanel.close}
+        />
+      ) : null}
     </div>
   );
 }
