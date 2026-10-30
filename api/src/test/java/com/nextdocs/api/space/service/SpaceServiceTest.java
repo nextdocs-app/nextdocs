@@ -250,8 +250,7 @@ class SpaceServiceTest {
         when(spaceAccessService.requireRead(actorId, space.getId()))
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(3L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(7L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(7L);
 
         SpaceResponse response = spaceService.getSpace(actorId, space.getId());
 
@@ -268,8 +267,7 @@ class SpaceServiceTest {
         when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(2L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(0L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
         SpaceResponse response = spaceService.updateSpace(
                 actorId,
@@ -623,8 +621,7 @@ class SpaceServiceTest {
         when(userRepository.findById(actorId)).thenReturn(Optional.of(actor));
         when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(4L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(4L);
 
         SpaceResponse response = spaceService.archiveSpace(actorId, space.getId());
 
@@ -646,8 +643,7 @@ class SpaceServiceTest {
         when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(4L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(4L);
 
         SpaceResponse response = spaceService.restoreSpace(actorId, space.getId());
 
@@ -673,7 +669,7 @@ class SpaceServiceTest {
         when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space, publicSpace));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
-        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
 
         List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
 
@@ -721,7 +717,7 @@ class SpaceServiceTest {
         when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space, publicSpace));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
-        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
         when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {publicSpace.getId(), "a1"}));
 
@@ -737,7 +733,7 @@ class SpaceServiceTest {
         when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
-        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
         when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {space.getId(), "~reindex-0"}));
 
@@ -773,8 +769,7 @@ class SpaceServiceTest {
         when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
                 .thenReturn(Optional.of(order));
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(3L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(3L);
 
         SpaceResponse response =
                 spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(null, nextSpace.getId()));
@@ -834,8 +829,7 @@ class SpaceServiceTest {
         when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
                 .thenReturn(Optional.of(order));
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(0L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
         SpaceResponse response =
                 spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(prevSpace.getId(), null));
@@ -877,8 +871,7 @@ class SpaceServiceTest {
         when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
                 .thenReturn(Optional.of(order));
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(0L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
         SpaceResponse response = spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(null, null));
 
@@ -948,8 +941,7 @@ class SpaceServiceTest {
                 .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(memberRepository.countBySpace_Id(space.getId())).thenReturn(3L);
-        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .thenReturn(0L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
         List<List<String>> keySnapshots = new ArrayList<>();
         doAnswer(invocation -> {
@@ -1010,7 +1002,7 @@ class SpaceServiceTest {
         when(spaceRepository.findAllActiveForUser(workspace.getId(), actorId)).thenReturn(List.of(space));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of());
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
-        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
 
         List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
 
@@ -1041,7 +1033,7 @@ class SpaceServiceTest {
                         .accessLevel(DocumentAccessLevel.OWNER)
                         .build()));
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
-        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
 
         List<SpaceResponse> spaces = spaceService.listSpaces(actorId, true);
 

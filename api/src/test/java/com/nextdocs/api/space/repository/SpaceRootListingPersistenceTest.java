@@ -97,8 +97,33 @@ class SpaceRootListingPersistenceTest {
 
         // The space's own listing runs resolve_effective_access, so it is pinned against
         // PostgreSQL in SpacePermissionMigrationPostgresTest; the count is plain SQL.
-        assertThat(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
-                .isEqualTo(1);
+        assertThat(documentRepository.countBySpace_Id(space.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void spacePageCounts_includePagesInTrash() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("space-count-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        Space space = spaceRepository.saveAndFlush(Space.builder()
+                .workspace(workspace)
+                .name("Engineering")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build());
+
+        page(owner, space, "Active");
+        Document trashed = page(owner, space, "Trashed");
+        trashed.setDeletedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        documentRepository.saveAndFlush(trashed);
+
+        // A trashed page still blocks deletion, so the summary must report it.
+        assertThat(documentRepository.countBySpace_Id(space.getId())).isEqualTo(2);
+        assertThat(documentRepository.countBySpaceIds(List.of(space.getId())))
+                .singleElement()
+                .satisfies(row -> assertThat(((Number) row[1]).longValue()).isEqualTo(2));
     }
 
     @Test

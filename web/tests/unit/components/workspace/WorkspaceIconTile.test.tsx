@@ -47,6 +47,12 @@ describe('WorkspaceIconTile', () => {
     expect(container.querySelector('svg')).toBeInTheDocument();
   });
 
+  it('renders the layers mark when fallback is space and there is no icon', () => {
+    const { container } = render(<WorkspaceIconTile icon={null} size={40} fallback="space" />);
+
+    expect(container.querySelector('svg')?.querySelectorAll('path')).toHaveLength(3);
+  });
+
   it('insets a builtin glyph inside the tile', () => {
     const { container } = render(
       <WorkspaceIconTile icon={{ type: 'builtin', value: 'rocket', color: 'red' }} size={40} />

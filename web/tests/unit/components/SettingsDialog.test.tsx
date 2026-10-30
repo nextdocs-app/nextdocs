@@ -13,6 +13,9 @@ jest.mock('../../../components/settings/panels/WorkspaceGeneralPanel', () => ({
 jest.mock('../../../components/settings/panels/WorkspacePeoplePanel', () => ({
   WorkspacePeoplePanel: () => <div>Workspace people panel</div>,
 }));
+jest.mock('../../../components/settings/panels/WorkspaceSpacesPanel', () => ({
+  WorkspaceSpacesPanel: () => <div>Workspace spaces panel</div>,
+}));
 
 const mockSetTheme = jest.fn();
 const mockOnClose = jest.fn();
@@ -95,6 +98,17 @@ it('opens the People page from the Workspace group', async () => {
   expect(screen.getByRole('heading', { name: 'People' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'People' })).toHaveAttribute('aria-current', 'page');
   expect(screen.getByText('Workspace people panel')).toBeInTheDocument();
+});
+
+it('opens the Spaces page from the Workspace group', async () => {
+  const user = userEvent.setup();
+  render(<SettingsDialog onClose={mockOnClose} />);
+
+  await user.click(screen.getByRole('button', { name: 'Spaces' }));
+
+  expect(screen.getByRole('heading', { name: 'Spaces' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Spaces' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByText('Workspace spaces panel')).toBeInTheDocument();
 });
 
 it('hides workspace pages from guests', () => {

@@ -25,6 +25,8 @@ export { EyeOff } from './EyeOff';
 export { UserCircle } from './UserCircle';
 export { Users } from './Users';
 export { Workspace } from './Workspace';
+export { Spaces } from './Spaces';
+export { Layers } from './Layers';
 export { Plus } from './Plus';
 export { TriangleAlert } from './TriangleAlert';
 export { CircleAlert } from './CircleAlert';

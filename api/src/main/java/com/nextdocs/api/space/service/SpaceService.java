@@ -273,7 +273,7 @@ public class SpaceService {
                 context.accessLevel(),
                 context.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
-                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
+                documentRepository.countBySpace_Id(spaceId));
     }
 
     /**
@@ -302,7 +302,7 @@ public class SpaceService {
                 spaceAccessService.resolveLevel(userId, space),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
-                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
+                documentRepository.countBySpace_Id(spaceId));
     }
 
     /** Restores an archived space to normal navigation and writes. Idempotent. */
@@ -324,7 +324,7 @@ public class SpaceService {
                 spaceAccessService.resolveLevel(userId, space),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
-                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
+                documentRepository.countBySpace_Id(spaceId));
     }
 
     /**
@@ -442,7 +442,6 @@ public class SpaceService {
             revalidateUploadIcon(icon, iconScope);
             applyIcon(space, icon);
         }
-
         Space saved = spaceRepository.save(space);
         return toResponse(
                 saved,
@@ -450,7 +449,7 @@ public class SpaceService {
                 spaceAccessService.resolveLevel(userId, saved),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
-                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
+                documentRepository.countBySpace_Id(spaceId));
     }
 
     /**
@@ -653,7 +652,7 @@ public class SpaceService {
                 context.accessLevel(),
                 context.canAdminister(),
                 memberRepository.countBySpace_Id(space.getId()),
-                documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()));
+                documentRepository.countBySpace_Id(space.getId()));
     }
 
     private String orderKey(UUID userId, UUID spaceId) {
@@ -818,7 +817,7 @@ public class SpaceService {
 
     private Map<UUID, Long> fetchPageCounts(List<UUID> spaceIds) {
         Map<UUID, Long> counts = new HashMap<>();
-        for (Object[] row : documentRepository.countNonTrashedBySpaceIds(spaceIds)) {
+        for (Object[] row : documentRepository.countBySpaceIds(spaceIds)) {
             counts.put((UUID) row[0], ((Number) row[1]).longValue());
         }
         return counts;

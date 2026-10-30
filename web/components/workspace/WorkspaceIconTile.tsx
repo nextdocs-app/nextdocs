@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { PageIcon } from '@/components/page/PageIcon';
-import { Workspace } from '@/icons';
+import { Layers, Workspace } from '@/icons';
 import { isIconColorId } from '@/lib/document-icon.util';
 import type { DocumentIcon } from '@/types/document.types';
 
@@ -53,15 +53,18 @@ export function WorkspaceIconTile({
   size,
   accessToken,
   className = '',
+  fallback = 'workspace',
 }: {
   icon?: DocumentIcon | null;
   /** Tile edge in px. */
   size: number;
   accessToken?: string | null;
   className?: string;
+  fallback?: 'workspace' | 'space';
 }) {
   if (!icon) {
-    return <Workspace size={Math.round(size * 0.6)} aria-hidden="true" />;
+    const FallbackIcon = fallback === 'space' ? Layers : Workspace;
+    return <FallbackIcon size={Math.round(size * 0.6)} aria-hidden="true" />;
   }
 
   const isMedia = icon.type === 'upload' || icon.type === 'link';
