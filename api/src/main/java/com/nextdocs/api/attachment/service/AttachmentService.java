@@ -42,11 +42,12 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * Owns the attachment lifecycle: store on upload, hand out short-lived signed URLs (read
  * access required, or ANYONE_WITH_LINK for anonymous viewers), and clean up files when the
- * owning document is permanently removed or a workspace icon is replaced. Which scope an
- * attachment belongs to changes the authorization (one {@link AttachmentAccessPolicy}),
- * the foreign key it is bound to (one {@link AttachmentScopeBinder}), and whether the
- * upload must be a raster image (workspace uploads can only become the icon); storage,
- * quota, hashing, and signing stay scope-blind.
+ * owning document is permanently removed or an icon that adopted the upload is replaced.
+ * Which scope an attachment belongs to changes the authorization (one
+ * {@link AttachmentAccessPolicy}), the foreign key it is bound to (one
+ * {@link AttachmentScopeBinder}), and whether the upload must be a raster image
+ * (workspace-scoped uploads can only become workspace or space icons); storage, quota,
+ * hashing, and signing stay scope-blind.
  *
  * <p>Blocks store the host-independent path {@code /api/v1/attachments/{id}} — never an absolute
  * or signed URL — so documents stay portable between self-hosted deployments and no perishable
@@ -101,6 +102,18 @@ public class AttachmentService {
      */
     public AttachmentResponse uploadWorkspaceAttachment(UUID userId, MultipartFile file) {
         UUID workspaceId = accessPolicy.requireWorkspaceUpload(userId);
+        return uploadAuthorized(userId, AttachmentScope.workspace(workspaceId), file);
+    }
+
+    /**
+     * Stores an image a space icon can reference. The caller has already authorized the
+     * workspace: creating a space is open to every member, so the workspace-owner check
+     * that guards workspace branding cannot guard this upload. Space icons share the
+     * workspace bucket, so they count against the uploader's quota and the abandoned-upload
+     * sweep reclaims files no icon adopts. Private until an icon adopts it, and even then
+     * never anonymous: a space is not public branding.
+     */
+    public AttachmentResponse uploadSpaceIconAttachment(UUID userId, UUID workspaceId, MultipartFile file) {
         return uploadAuthorized(userId, AttachmentScope.workspace(workspaceId), file);
     }
 
@@ -332,6 +345,21 @@ public class AttachmentService {
             return;
         }
         attachment.setVisibility(AttachmentVisibility.PUBLIC);
+    }
+
+    /**
+     * Makes a workspace upload private again. Called when the workspace icon stops rendering
+     * an upload a space icon still shows: the file survives for the space, but spaces are not
+     * anonymous branding, so share-link visitors must lose read access to it. A missing row
+     * or one outside {@code workspaceId} is a no-op.
+     */
+    @Transactional
+    public void restrictWorkspaceUpload(UUID workspaceId, UUID attachmentId) {
+        Attachment attachment = findWorkspaceUpload(workspaceId, attachmentId);
+        if (attachment == null) {
+            return;
+        }
+        attachment.setVisibility(AttachmentVisibility.PRIVATE);
     }
 
     /**

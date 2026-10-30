@@ -40,7 +40,7 @@ import tools.jackson.databind.ObjectMapper;
  *   on bytes read rather than on the declared Content-Length which chunked
  *   uploads omit).
  * - {@code upload-ip:<ip>} + {@code upload:<userId>} — authenticated attachment uploads
- *   (POST .../attachments: document blocks and the workspace icon). Consumes both
+ *   (POST .../attachments: document blocks, the workspace icon, and space icons). Consumes both
  *   buckets so neither one account nor one egress address can queue disk-filling
  *   requests. A declared body over the multipart
  *   ceiling is rejected before the container buffers it, and because the multipart
@@ -74,6 +74,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
     private static final String WORKSPACE_PATH_PREFIX = "/api/v1/workspaces/";
     private static final String WORKSPACE_ATTACHMENTS_REMAINDER = "current/attachments";
+    private static final String SPACES_PATH_PREFIX = "/api/v1/spaces/";
+    private static final String SPACE_ATTACHMENTS_REMAINDER = "attachments";
     private static final String INSTANCE_STATUS_PATH = "/api/v1/instance/status";
     private static final String ICON_CATALOG_PATH = "/api/v1/icons";
     private static final String ICON_PATH_PREFIX = "/api/v1/icons/";
@@ -374,6 +376,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
             if ("POST".equalsIgnoreCase(request.getMethod())
                     && stripTrailingSlashes(uri.substring(WORKSPACE_PATH_PREFIX.length()))
                             .equals(WORKSPACE_ATTACHMENTS_REMAINDER)) {
+                return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
+            }
+            return Verdict.unlimited();
+        }
+
+        // Space routes are space administration behind a JWT: unlimited, except the icon
+        // upload, the one write that can consume unbounded disk.
+        if (uri.startsWith(SPACES_PATH_PREFIX)) {
+            if ("POST".equalsIgnoreCase(request.getMethod())
+                    && stripTrailingSlashes(uri.substring(SPACES_PATH_PREFIX.length()))
+                            .equals(SPACE_ATTACHMENTS_REMAINDER)) {
                 return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
             }
             return Verdict.unlimited();

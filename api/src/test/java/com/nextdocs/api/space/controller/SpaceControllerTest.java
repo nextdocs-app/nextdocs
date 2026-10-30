@@ -8,11 +8,13 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
@@ -38,8 +40,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 
 @WebMvcTest(SpaceController.class)
 @Import({
@@ -152,6 +156,29 @@ class SpaceControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(spaceService, never()).createSpace(any(), any());
+    }
+
+    @Test
+    void uploadAttachment_returnsTheStoredAttachment() throws Exception {
+        AttachmentResponse stored = new AttachmentResponse(
+                UUID.randomUUID(), null, "icon.png", "image/png", 8, "/api/v1/attachments/x", OffsetDateTime.now());
+        when(spaceService.uploadIconAttachment(eq(userId), any())).thenReturn(stored);
+
+        mockMvc.perform(declaredUpload(multipart(SpaceController.ATTACHMENTS_PATH)
+                                .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[] {1, 2, 3})))
+                        .with(user(principal)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(stored.id().toString()));
+
+        verify(spaceService).uploadIconAttachment(eq(userId), any());
+    }
+
+    @Test
+    void uploadAttachment_withoutAuthentication_returns401() throws Exception {
+        mockMvc.perform(declaredUpload(multipart(SpaceController.ATTACHMENTS_PATH)
+                        .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[] {1}))))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -334,5 +361,16 @@ class SpaceControllerTest {
                 .andExpect(status().isNoContent());
 
         verify(spaceService).detachPage(userId, spaceId, documentId);
+    }
+
+    /**
+     * MockMvc omits Content-Length for a multipart body, and the upload budget rejects a
+     * body it cannot bound. Setting empty content declares a length the filter accepts.
+     */
+    private static <T extends AbstractMockHttpServletRequestBuilder<T>> T declaredUpload(T builder) {
+        return builder.with(request -> {
+            request.setContent(new byte[0]);
+            return request;
+        });
     }
 }

@@ -551,6 +551,7 @@ describe('DocToolbar sidebar toggle', () => {
     searchQuery: '',
     isPrivateOpen: true,
     isSharedOpen: true,
+    isSpacesOpen: true,
     docActionsAnchor: null,
     isMobileNavOpen: false,
   };

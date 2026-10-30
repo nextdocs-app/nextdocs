@@ -343,6 +343,35 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void spaceUploadPath_consumesCallerAndAddressBuckets() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post("/api/v1/spaces/attachments").remoteAddress("10.0.7.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.7.1", "upload:" + callerId);
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void spaceUploadPath_withEncodedPrefix_staysOnTheUploadBudget() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(post(URI.create("/api/v1/%73paces/attachments")).remoteAddress("10.0.7.2"));
+
+        assertThat(rateLimiter.lastKey).isEqualTo("upload:" + callerId);
+    }
+
+    @Test
+    void spaceAdministrationPaths_stayUnlimited() throws Exception {
+        mockMvc.perform(get("/api/v1/spaces/{id}", UUID.randomUUID()).remoteAddress("10.0.7.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
     void workspaceAdministrationPaths_stayUnlimited() throws Exception {
         mockMvc.perform(get("/api/v1/workspaces/current").remoteAddress("10.0.6.3"))
                 .andExpect(status().isOk());
@@ -1080,6 +1109,16 @@ class RateLimitFilterTest {
 
         @PostMapping("/api/v1/workspaces/current/attachments")
         ResponseEntity<String> uploadWorkspaceIcon() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @PostMapping("/api/v1/spaces/attachments")
+        ResponseEntity<String> uploadSpaceIcon() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/spaces/{id}")
+        ResponseEntity<String> getSpace(@PathVariable String id) {
             return ResponseEntity.ok("ok");
         }
 

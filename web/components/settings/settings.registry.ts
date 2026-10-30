@@ -1,9 +1,10 @@
-import { Sliders, UserCircle, Users, Workspace } from '@/icons';
+import { Sliders, Spaces, UserCircle, Users, Workspace } from '@/icons';
 import type { SettingsEntry, SettingsEntryId, SettingsGroup } from './types';
 import { PreferencesPanel } from './panels/PreferencesPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
 import { WorkspaceGeneralPanel } from './panels/WorkspaceGeneralPanel';
 import { WorkspacePeoplePanel } from './panels/WorkspacePeoplePanel';
+import { WorkspaceSpacesPanel } from './panels/WorkspaceSpacesPanel';
 
 /**
  * The settings catalog. Everything the dialog shows — nav order, group
@@ -53,6 +54,14 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: Users,
         requiresAuth: true,
         Panel: WorkspacePeoplePanel,
+      },
+      {
+        id: 'workspace-spaces',
+        label: 'Spaces',
+        description: 'Group documents into spaces and choose who can open them.',
+        icon: Spaces,
+        requiresAuth: true,
+        Panel: WorkspaceSpacesPanel,
       },
     ],
   },

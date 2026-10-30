@@ -5,6 +5,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import sidebarReducer from '../../../stores/sidebar/sidebar.slice';
 import sidebarTreeReducer from '../../../stores/sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from '../../../stores/sharedTree/sharedTree.slice';
+import spaceTreeReducer from '../../../stores/spaceTree/spaceTree.slice';
 import authReducer from '../../../stores/auth/auth.slice';
 import documentListReducer from '../../../stores/documentList/documentList.slice';
 import uiReducer from '../../../stores/ui/ui.slice';
@@ -73,6 +74,7 @@ const render = (
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       auth: authReducer,
       ui: uiReducer,
       documentList: documentListReducer,
@@ -291,6 +293,7 @@ it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       auth: authReducer,
       ui: uiReducer,
       documentList: documentListReducer,
@@ -304,6 +307,7 @@ it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
         searchQuery: '',
         isPrivateOpen: true,
         isSharedOpen: true,
+        isSpacesOpen: true,
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -910,6 +914,7 @@ it('renders skeleton rows instead of a loading badge while loading more in the d
         sidebar: sidebarReducer,
         sidebarTree: sidebarTreeReducer,
         sharedTree: sharedTreeReducer,
+        spaceTree: spaceTreeReducer,
         auth: authReducer,
         ui: uiReducer,
       },
@@ -1300,6 +1305,7 @@ it('renders private panel with hasMore true when there are fewer than 7 private 
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       auth: authReducer,
       ui: uiReducer,
       documentList: documentListReducer,
@@ -1463,6 +1469,7 @@ it('moves a child document to trash in shared tree when user has edit access', a
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       auth: authReducer,
       ui: uiReducer,
     },
@@ -1472,6 +1479,7 @@ it('moves a child document to trash in shared tree when user has edit access', a
         sidebarWidth: 256,
         isPrivateOpen: true,
         isSharedOpen: true,
+        isSpacesOpen: true,
         panelMode: null,
         searchQuery: '',
         docActionsAnchor: null,
@@ -1935,6 +1943,7 @@ it('excludes shared documents from the private section', async () => {
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
       documentList: documentListReducer,
     },
@@ -2010,6 +2019,7 @@ it('excludes shared documents from the private documents panel', async () => {
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
       documentList: documentListReducer,
     },
@@ -2116,6 +2126,7 @@ it('keeps nested owner-shared documents in the private section under their paren
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
       documentList: documentListReducer,
     },
@@ -2191,6 +2202,7 @@ it('shows "Show More" in the private section only when more than 7 root document
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
     },
     preloadedState: {
@@ -2253,6 +2265,7 @@ it('keeps the open document visible when it sorts past the visible root limit', 
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
     },
     preloadedState: {
@@ -2416,6 +2429,7 @@ it('renders the "Add a document inside" button for a collaborator document with 
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
     },
     preloadedState: {
@@ -2502,6 +2516,7 @@ it('does not render the "Add a document inside" button for a collaborator docume
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
     },
     preloadedState: {
@@ -2581,6 +2596,7 @@ function makeGuestStore(options: {
       sidebar: sidebarReducer,
       sidebarTree: sidebarTreeReducer,
       sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
       ui: uiReducer,
     },
     preloadedState: {

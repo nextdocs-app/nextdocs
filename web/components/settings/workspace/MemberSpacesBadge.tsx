@@ -3,7 +3,7 @@
 import { useId } from 'react';
 import { PageIcon } from '@/components/page/PageIcon';
 import { useAnchoredPanel } from '@/hooks/useAnchoredPanel.hook';
-import { ChevronDown, Workspace as WorkspaceGlyph } from '@/icons';
+import { ChevronDown, Layers } from '@/icons';
 import type { WorkspaceMemberSpaceSummary } from '@/types/workspace.types';
 
 type SpaceAccessLevel = WorkspaceMemberSpaceSummary['accessLevel'];
@@ -92,7 +92,7 @@ export function MemberSpacesBadge({
                     {space.icon ? (
                       <PageIcon icon={space.icon} size={15} />
                     ) : (
-                      <WorkspaceGlyph size={14} className="opacity-70" />
+                      <Layers size={14} className="opacity-70" />
                     )}
                   </span>
                   <span className="truncate font-medium">{space.name}</span>

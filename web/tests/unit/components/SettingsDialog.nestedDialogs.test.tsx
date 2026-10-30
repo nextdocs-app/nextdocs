@@ -15,6 +15,9 @@ jest.mock('../../../components/settings/panels/WorkspaceGeneralPanel', () => ({
 jest.mock('../../../components/settings/panels/WorkspacePeoplePanel', () => ({
   WorkspacePeoplePanel: () => <div>Workspace people panel</div>,
 }));
+jest.mock('../../../components/settings/panels/WorkspaceSpacesPanel', () => ({
+  WorkspaceSpacesPanel: () => <div>Workspace spaces panel</div>,
+}));
 
 const mockCloseSettings = jest.fn();
 const mockCloseNested = jest.fn();

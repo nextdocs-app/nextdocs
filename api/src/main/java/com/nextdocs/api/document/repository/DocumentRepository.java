@@ -100,18 +100,16 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     Page<Document> findSpaceRootDocuments(
             @Param("userId") UUID userId, @Param("spaceId") UUID spaceId, Pageable pageable);
 
-    long countBySpace_IdAndDeletedAtIsNull(UUID spaceId);
-
     /**
      * Every root page that still references the space, active or trashed. A space anchors
      * root pages and purging a root deletes its descendants first, so zero here means the
-     * space is truly empty; a trashed page still blocks a hard delete.
+     * space is truly empty; a trashed page still blocks a hard delete. Space summaries
+     * report this same count, so the settings delete gate matches the delete endpoint.
      */
     long countBySpace_Id(UUID spaceId);
 
-    @Query("SELECT d.space.id, COUNT(d) FROM Document d "
-            + "WHERE d.space.id IN :spaceIds AND d.deletedAt IS NULL GROUP BY d.space.id")
-    List<Object[]> countNonTrashedBySpaceIds(@Param("spaceIds") Collection<UUID> spaceIds);
+    @Query("SELECT d.space.id, COUNT(d) FROM Document d WHERE d.space.id IN :spaceIds GROUP BY d.space.id")
+    List<Object[]> countBySpaceIds(@Param("spaceIds") Collection<UUID> spaceIds);
 
     // Sibling max key among direct children under a parent
     @Query("SELECT MAX(d.siblingOrderKey) FROM Document d "

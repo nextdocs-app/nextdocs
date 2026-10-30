@@ -5,6 +5,7 @@ import documentListReducer from './documentList/documentList.slice';
 import sidebarReducer from './sidebar/sidebar.slice';
 import sidebarTreeReducer from './sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from './sharedTree/sharedTree.slice';
+import spaceTreeReducer from './spaceTree/spaceTree.slice';
 import uiReducer from './ui/ui.slice';
 import themeReducer from './theme/theme.slice';
 import toastsReducer from './toasts/toasts.slice';
@@ -17,6 +18,7 @@ export const store = configureStore({
     sidebar: sidebarReducer,
     sidebarTree: sidebarTreeReducer,
     sharedTree: sharedTreeReducer,
+    spaceTree: spaceTreeReducer,
     ui: uiReducer,
     theme: themeReducer,
     toasts: toastsReducer,

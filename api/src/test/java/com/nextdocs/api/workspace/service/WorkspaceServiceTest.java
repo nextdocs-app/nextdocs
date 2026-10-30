@@ -421,6 +421,7 @@ class WorkspaceServiceTest {
 
         assertThat(workspace.getIconType()).isEqualTo(PageIconType.EMOJI);
         verify(attachmentService).deleteWorkspaceUpload(workspaceId, oldAttachmentId);
+        verify(attachmentService, never()).restrictWorkspaceUpload(any(), any());
     }
 
     @Test
@@ -453,6 +454,26 @@ class WorkspaceServiceTest {
 
         verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
         verify(attachmentService).publishWorkspaceUpload(workspaceId, attachmentId);
+    }
+
+    @Test
+    void updateCurrent_keepsAnUploadASpaceStillRenders() {
+        UUID sharedAttachmentId = UUID.randomUUID();
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(sharedAttachmentId.toString());
+        givenOwner();
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.countByWorkspaceId(workspaceId)).thenReturn(1L);
+        when(spaceRepository.existsByWorkspace_IdAndIconTypeAndIconValue(
+                        workspaceId, PageIconType.UPLOAD, sharedAttachmentId.toString()))
+                .thenReturn(true);
+
+        workspaceService.updateCurrent(actorId, new WorkspaceUpdateRequest(null, new PageIconRequest("emoji", "📝")));
+
+        assertThat(workspace.getIconType()).isEqualTo(PageIconType.EMOJI);
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+        // The file survives for the space, but it must stop resolving anonymously.
+        verify(attachmentService).restrictWorkspaceUpload(workspaceId, sharedAttachmentId);
     }
 
     @Test
@@ -511,6 +532,22 @@ class WorkspaceServiceTest {
 
         verify(attachmentService).deleteWorkspaceUpload(workspaceId, abandonedId);
         verify(attachmentService, never()).deleteWorkspaceUpload(workspaceId, liveId);
+    }
+
+    @Test
+    void purgeAbandonedIconUploads_keepsAnUploadASpaceStillRenders() {
+        UUID spaceIconId = UUID.randomUUID();
+        UUID abandonedId = UUID.randomUUID();
+        when(attachmentService.findWorkspaceUploadsCreatedBefore(any()))
+                .thenReturn(List.of(workspaceUpload(spaceIconId), workspaceUpload(abandonedId)));
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findIconValueByWorkspace_IdAndIconType(workspaceId, PageIconType.UPLOAD))
+                .thenReturn(List.of(spaceIconId.toString()));
+
+        assertThat(workspaceService.purgeAbandonedIconUploads()).isEqualTo(1);
+
+        verify(attachmentService).deleteWorkspaceUpload(workspaceId, abandonedId);
+        verify(attachmentService, never()).deleteWorkspaceUpload(workspaceId, spaceIconId);
     }
 
     @Test

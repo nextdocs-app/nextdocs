@@ -1,5 +1,6 @@
 package com.nextdocs.api.space.repository;
 
+import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.space.entity.Space;
 import jakarta.persistence.LockModeType;
 import java.util.List;
@@ -63,6 +64,23 @@ public interface SpaceRepository extends JpaRepository<Space, UUID> {
     List<Space> findAllVisibleToUser(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     Optional<Space> findByIdAndWorkspace_Id(UUID id, UUID workspaceId);
+
+    /**
+     * Upload icon values the workspace's spaces reference. The abandoned-upload sweep reads
+     * this so a space's icon file is not reclaimed while it is still rendered. The value is
+     * selected explicitly: a derived finder would load the space rows, which cannot be
+     * converted to the icon values the sweep compares against.
+     */
+    @Query("SELECT s.iconValue FROM Space s WHERE s.workspace.id = :workspaceId AND s.iconType = :iconType")
+    List<String> findIconValueByWorkspace_IdAndIconType(
+            @Param("workspaceId") UUID workspaceId, @Param("iconType") PageIconType iconType);
+
+    /** Whether some space other than {@code excludedId} still renders this upload. */
+    boolean existsByWorkspace_IdAndIconTypeAndIconValueAndIdNot(
+            UUID workspaceId, PageIconType iconType, String iconValue, UUID excludedId);
+
+    /** Whether any space in the workspace still renders this upload. */
+    boolean existsByWorkspace_IdAndIconTypeAndIconValue(UUID workspaceId, PageIconType iconType, String iconValue);
 
     /**
      * Row-locks the space so role mutations serialize: two concurrent owner demotions
