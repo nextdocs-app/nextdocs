@@ -8,19 +8,23 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
+import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
+import com.nextdocs.api.space.dto.request.SpaceMoveRequest;
 import com.nextdocs.api.space.dto.request.SpaceUpdateRequest;
 import com.nextdocs.api.space.dto.response.SpaceMemberResponse;
 import com.nextdocs.api.space.dto.response.SpaceResponse;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.entity.UserSpaceOrder;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.space.repository.UserSpaceOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
@@ -36,6 +40,9 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,6 +63,11 @@ public class SpaceService {
 
     private static final String LAST_OWNER_LEAVE_MESSAGE = "Make another member an owner before leaving this space.";
 
+    /** Order-key collisions are the only expected integrity failure; retry a bounded time. */
+    private static final int MAX_ORDER_ATTEMPTS = 3;
+
+    private static final int REINDEX_GAP = 8;
+
     /** Levels a member row may carry; NO_ACCESS has nothing above it to shadow. */
     private static final Set<DocumentAccessLevel> MEMBER_LEVELS = Set.of(
             DocumentAccessLevel.VIEW, DocumentAccessLevel.COMMENT, DocumentAccessLevel.EDIT, DocumentAccessLevel.OWNER);
@@ -66,6 +78,7 @@ public class SpaceService {
 
     private final SpaceRepository spaceRepository;
     private final SpaceMemberRepository memberRepository;
+    private final UserSpaceOrderRepository userSpaceOrderRepository;
     private final DocumentRepository documentRepository;
     private final WorkspaceAccessService workspaceAccessService;
     private final WorkspaceMemberRepository workspaceMemberRepository;
@@ -74,10 +87,15 @@ public class SpaceService {
     private final DocumentService documentService;
     private final PageIconValidator pageIconValidator;
 
+    @Autowired
+    @Lazy
+    private SpaceService selfProxy;
+
     /**
-     * Active spaces the caller can see, oldest first: their memberships, every PUBLIC
-     * space of the workspace, and — for a workspace owner or admin — all of them, with
-     * {@code myAccessLevel} null for the ones they are not part of.
+     * Active spaces the caller can see, in the caller's personal order: their
+     * memberships, every PUBLIC space of the workspace, and — for a workspace owner or
+     * admin — all of them, with {@code myAccessLevel} null for the ones they are not part
+     * of. Spaces without an order row keep their creation order after the ordered ones.
      *
      * <p>With {@code archived=true} the result is the restore view instead: archived
      * spaces only, limited to the ones the caller can administer.
@@ -99,7 +117,7 @@ public class SpaceService {
                     : spaceRepository.findArchivedOwnedByUser(workspace.getId(), userId);
         } else {
             spaces = workspaceAdmin
-                    ? spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspace.getId())
+                    ? spaceRepository.findAllActiveForUser(workspace.getId(), userId)
                     : spaceRepository.findAllVisibleToUser(workspace.getId(), userId);
         }
         if (spaces.isEmpty()) {
@@ -109,6 +127,7 @@ public class SpaceService {
         List<UUID> spaceIds = spaces.stream().map(Space::getId).toList();
         Map<UUID, Long> memberCounts = fetchMemberCounts(spaceIds);
         Map<UUID, Long> pageCounts = fetchPageCounts(spaceIds);
+        Map<UUID, String> orderKeys = fetchOrderKeys(userId, spaceIds);
 
         List<SpaceResponse> responses = new ArrayList<>(spaces.size());
         for (Space space : spaces) {
@@ -118,6 +137,7 @@ public class SpaceService {
             }
             responses.add(toResponse(
                     space,
+                    orderKeys.get(space.getId()),
                     level,
                     workspaceAdmin || level == DocumentAccessLevel.OWNER,
                     memberCounts.getOrDefault(space.getId(), 0L),
@@ -130,7 +150,122 @@ public class SpaceService {
     @Transactional(readOnly = true)
     public SpaceResponse getSpace(UUID userId, UUID spaceId) {
         SpaceContext context = spaceAccessService.requireRead(userId, spaceId);
-        return toResponse(context);
+        return toResponse(context, orderKey(userId, spaceId));
+    }
+
+    /**
+     * Moves a space in the caller's personal sidebar order. Any caller who can read the
+     * space may move it: the shared space row is untouched, only the caller's
+     * {@code user_space_orders} position changes. Archived spaces are not navigable and
+     * are therefore rejected.
+     */
+    public SpaceResponse moveSpace(UUID userId, UUID spaceId, SpaceMoveRequest request) {
+        int attempt = 0;
+        while (true) {
+            try {
+                return selfProxy != null
+                        ? selfProxy.moveSpaceAndPersist(userId, spaceId, request, attempt > 0)
+                        : moveSpaceAndPersist(userId, spaceId, request, attempt > 0);
+            } catch (DataIntegrityViolationException ex) {
+                log.warn(
+                        "Concurrent space position change during move attempt={} userId={} spaceId={}",
+                        attempt,
+                        userId,
+                        spaceId,
+                        ex);
+                attempt++;
+                if (attempt >= MAX_ORDER_ATTEMPTS) {
+                    throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
+                }
+            }
+        }
+    }
+
+    /** Runs in its own transaction so a key collision can roll back and retry. */
+    @Transactional
+    public SpaceResponse moveSpaceAndPersist(
+            UUID userId, UUID spaceId, SpaceMoveRequest request, boolean rebuildFirst) {
+        WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(userId);
+        SpaceContext context = spaceAccessService.requireRead(userId, spaceId);
+        Space space = context.space();
+        if (space.getArchivedAt() != null) {
+            throw new ApiException(ErrorCode.CONFLICT, "This space is archived. Restore it before reordering.");
+        }
+
+        if (rebuildFirst) {
+            reindexSpaceOrders(userId);
+        }
+        materializeSpaceOrders(userId, membership);
+
+        String prevKey = resolveSpaceNeighborKey(userId, request.prevSiblingId(), spaceId);
+        String nextKey = resolveSpaceNeighborKey(userId, request.nextSiblingId(), spaceId);
+
+        if (prevKey != null && nextKey != null && prevKey.compareTo(nextKey) > 0) {
+            String lower = prevKey;
+            prevKey = nextKey;
+            nextKey = lower;
+        }
+
+        if (prevKey != null && !FractionalIndex.isValidOrderKey(prevKey)
+                || nextKey != null && !FractionalIndex.isValidOrderKey(nextKey)
+                || prevKey != null && prevKey.equals(nextKey)) {
+            reindexSpaceOrders(userId);
+            materializeSpaceOrders(userId, membership);
+            prevKey = resolveSpaceNeighborKey(userId, request.prevSiblingId(), spaceId);
+            nextKey = resolveSpaceNeighborKey(userId, request.nextSiblingId(), spaceId);
+
+            if (prevKey != null && nextKey != null && prevKey.compareTo(nextKey) > 0) {
+                String lower = prevKey;
+                prevKey = nextKey;
+                nextKey = lower;
+            }
+        }
+
+        String newOrderKey;
+        try {
+            if (prevKey != null) {
+                // The requested neighbour is adjacent in the caller's active list, but
+                // archived spaces share the same key space, so take the actual successor.
+                String actualSuccessor = userSpaceOrderRepository
+                        .findMinOrderKeyGreaterThan(userId, prevKey, spaceId)
+                        .filter(FractionalIndex::isValidOrderKey)
+                        .orElse(null);
+                newOrderKey = FractionalIndex.keyBetween(prevKey, actualSuccessor);
+            } else if (nextKey != null) {
+                String actualPredecessor = userSpaceOrderRepository
+                        .findMaxOrderKeyLessThan(userId, nextKey, spaceId)
+                        .filter(FractionalIndex::isValidOrderKey)
+                        .orElse(null);
+                newOrderKey = FractionalIndex.keyBetween(actualPredecessor, nextKey);
+            } else {
+                String maxKey = userSpaceOrderRepository
+                        .findMaxOrderKeyByUserId(userId, spaceId)
+                        .filter(FractionalIndex::isValidOrderKey)
+                        .orElse(null);
+                newOrderKey = FractionalIndex.keyBetween(maxKey, null);
+            }
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid space order key interval: prevKey={} nextKey={}", prevKey, nextKey, ex);
+            throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
+        }
+
+        UserSpaceOrder order = userSpaceOrderRepository
+                .findByUser_IdAndSpace_Id(userId, spaceId)
+                .orElseGet(() -> {
+                    User user =
+                            userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+                    return UserSpaceOrder.builder().user(user).space(space).build();
+                });
+        order.setOrderKey(newOrderKey);
+        userSpaceOrderRepository.saveAndFlush(order);
+
+        return toResponse(
+                space,
+                newOrderKey,
+                context.accessLevel(),
+                context.canAdminister(),
+                memberRepository.countBySpace_Id(spaceId),
+                documentRepository.countBySpace_IdAndDeletedAtIsNull(spaceId));
     }
 
     /**
@@ -155,6 +290,7 @@ public class SpaceService {
         }
         return toResponse(
                 space,
+                orderKey(userId, spaceId),
                 spaceAccessService.resolveLevel(userId, space),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
@@ -176,6 +312,7 @@ public class SpaceService {
         }
         return toResponse(
                 space,
+                orderKey(userId, spaceId),
                 spaceAccessService.resolveLevel(userId, space),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
@@ -184,10 +321,26 @@ public class SpaceService {
 
     /**
      * Creates the space and makes the caller its first owner. The caller must be a
-     * workspace member (already guaranteed by the access service).
+     * workspace member (already guaranteed by the access service). A new space goes to
+     * the top of the creator's sidebar, matching a newly created root page.
      */
-    @Transactional
     public SpaceResponse createSpace(UUID userId, SpaceCreateRequest request) {
+        int attempt = 0;
+        while (true) {
+            try {
+                return selfProxy != null ? selfProxy.insertSpace(userId, request) : insertSpace(userId, request);
+            } catch (DataIntegrityViolationException ex) {
+                log.warn("Concurrent space order collision during create attempt={} userId={}", attempt, userId, ex);
+                attempt++;
+                if (attempt >= MAX_ORDER_ATTEMPTS) {
+                    throw new ApiException(ErrorCode.CONFLICT, "Could not assign a space position. Please retry.");
+                }
+            }
+        }
+    }
+
+    @Transactional
+    public SpaceResponse insertSpace(UUID userId, SpaceCreateRequest request) {
         WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(userId);
         Workspace workspace = membership.workspace();
         User creator = membership.member().getUser();
@@ -215,8 +368,15 @@ public class SpaceService {
                 .accessLevel(DocumentAccessLevel.OWNER)
                 .build());
 
+        String orderKey = initialSpaceOrderKey(userId);
+        userSpaceOrderRepository.saveAndFlush(UserSpaceOrder.builder()
+                .user(creator)
+                .space(saved)
+                .orderKey(orderKey)
+                .build());
+
         log.info("Created space {} in workspace {} owned by {}", saved.getId(), workspace.getId(), userId);
-        return toResponse(saved, DocumentAccessLevel.OWNER, true, 1L, 0L);
+        return toResponse(saved, orderKey, DocumentAccessLevel.OWNER, true, 1L, 0L);
     }
 
     /** Renames, re-shares, or re-icons a space. Space owner or workspace admin. */
@@ -257,6 +417,7 @@ public class SpaceService {
         Space saved = spaceRepository.save(space);
         return toResponse(
                 saved,
+                orderKey(userId, spaceId),
                 spaceAccessService.resolveLevel(userId, saved),
                 lockedContext.canAdminister(),
                 memberRepository.countBySpace_Id(spaceId),
@@ -283,6 +444,10 @@ public class SpaceService {
                             + "Permanently delete them first, or archive the space.");
         }
 
+        // The production FK is ON DELETE CASCADE, but tests create the schema from the
+        // entities, where no cascade is declared. Delete the personal rows explicitly,
+        // before the space row, so the flush inside the delete query cannot hit the FK.
+        userSpaceOrderRepository.deleteBySpace_Id(spaceId);
         spaceRepository.delete(space);
         log.info("Deleted empty space {}", spaceId);
     }
@@ -441,14 +606,159 @@ public class SpaceService {
         return memberRepository.countBySpace_IdAndAccessLevel(spaceId, DocumentAccessLevel.OWNER);
     }
 
-    private SpaceResponse toResponse(SpaceContext context) {
+    private SpaceResponse toResponse(SpaceContext context, String orderKey) {
         Space space = context.space();
         return toResponse(
                 space,
+                orderKey,
                 context.accessLevel(),
                 context.canAdminister(),
                 memberRepository.countBySpace_Id(space.getId()),
                 documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()));
+    }
+
+    private String orderKey(UUID userId, UUID spaceId) {
+        return userSpaceOrderRepository
+                .findOrderKeyByUserIdAndSpaceId(userId, spaceId)
+                .filter(FractionalIndex::isValidOrderKey)
+                .orElse(null);
+    }
+
+    private Map<UUID, String> fetchOrderKeys(UUID userId, List<UUID> spaceIds) {
+        Map<UUID, String> keys = new HashMap<>();
+        for (Object[] row : userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(userId, spaceIds)) {
+            String key = (String) row[1];
+            // An unparseable key is treated as no key: listings fall back to creation
+            // order, and a move rebuilds the row instead of chaining off garbage.
+            if (FractionalIndex.isValidOrderKey(key)) {
+                keys.put((UUID) row[0], key);
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Key for a space created now: before every other space of the caller. This mirrors
+     * root-page creation, where a new page also lands at the top of the personal order.
+     */
+    private String initialSpaceOrderKey(UUID userId) {
+        String minKey = userSpaceOrderRepository
+                .findMinOrderKeyByUserId(userId)
+                .filter(FractionalIndex::isValidOrderKey)
+                .orElse(null);
+        return FractionalIndex.keyBetween(null, minKey);
+    }
+
+    /**
+     * Gives every visible active space a personal key before a move. Spaces without a
+     * row currently sort by creation time after the keyed ones, so walking the displayed
+     * order and appending each missing key preserves exactly what the caller sees.
+     *
+     * <p>Only the moved space and its requested neighbours strictly need a row, but
+     * materialising the whole list keeps later moves stable and guarantees a neighbour
+     * always has a key to compute against.
+     */
+    private void materializeSpaceOrders(UUID userId, WorkspaceAccessService.Membership membership) {
+        Workspace workspace = membership.workspace();
+        List<Space> visible = membership.member().getRole().canManageMembers()
+                ? spaceRepository.findAllActiveForUser(workspace.getId(), userId)
+                : spaceRepository.findAllVisibleToUser(workspace.getId(), userId);
+        if (visible.isEmpty()) {
+            return;
+        }
+        Map<UUID, String> keys =
+                fetchOrderKeys(userId, visible.stream().map(Space::getId).toList());
+        User user = null;
+        String previousKey = null;
+        for (Space space : visible) {
+            String key = keys.get(space.getId());
+            if (key == null) {
+                if (user == null) {
+                    user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+                }
+                key = nextFreeSpaceOrderKey(userId, previousKey);
+                userSpaceOrderRepository.save(UserSpaceOrder.builder()
+                        .user(user)
+                        .space(space)
+                        .orderKey(key)
+                        .build());
+            }
+            previousKey = key;
+        }
+        userSpaceOrderRepository.flush();
+    }
+
+    private String nextFreeSpaceOrderKey(UUID userId, String previousKey) {
+        String candidate = FractionalIndex.keyBetween(previousKey, null);
+        while (userSpaceOrderRepository.existsByUser_IdAndOrderKey(userId, candidate)) {
+            candidate = FractionalIndex.keyBetween(candidate, null);
+        }
+        return candidate;
+    }
+
+    private void reindexSpaceOrders(UUID userId) {
+        List<UserSpaceOrder> orders = userSpaceOrderRepository.findAllForReindex(userId);
+        if (orders.isEmpty()) {
+            return;
+        }
+        // Park every row on a temporary key first: a row's final key can equal a
+        // neighbour's current key, and uq_user_space_orders_user_order_key rejects that
+        // transient state whatever order the flush happens to write rows in.
+        for (int i = 0; i < orders.size(); i++) {
+            orders.get(i).setOrderKey("~reindex-" + i);
+        }
+        userSpaceOrderRepository.flush();
+
+        String[] newKeys = FractionalIndex.nKeysBetweenSpaced(null, null, orders.size(), REINDEX_GAP);
+        for (int i = 0; i < orders.size(); i++) {
+            orders.get(i).setOrderKey(newKeys[i]);
+        }
+        userSpaceOrderRepository.flush();
+    }
+
+    private String resolveSpaceNeighborKey(UUID userId, UUID siblingId, UUID excludedSpaceId) {
+        if (siblingId == null) {
+            return null;
+        }
+        if (siblingId.equals(excludedSpaceId)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "A space cannot be its own sibling reference.");
+        }
+        SpaceContext sibling = spaceAccessService.requireRead(userId, siblingId);
+        if (sibling.space().getArchivedAt() != null) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "An archived space cannot be a navigation sibling.");
+        }
+        return userSpaceOrderRepository
+                .findOrderKeyByUserIdAndSpaceId(userId, siblingId)
+                .filter(FractionalIndex::isValidOrderKey)
+                .orElse(null);
+    }
+
+    private static SpaceResponse toResponse(
+            Space space,
+            String orderKey,
+            DocumentAccessLevel myAccessLevel,
+            boolean canAdminister,
+            long memberCount,
+            long pageCount) {
+        // An archived space caps content at VIEW; reporting the pre-archive membership
+        // level as "effective" would advertise a write grant the page endpoints deny.
+        // canAdminister stays the restore flag.
+        DocumentAccessLevel effectiveLevel =
+                myAccessLevel != null && space.getArchivedAt() != null ? DocumentAccessLevel.VIEW : myAccessLevel;
+        return new SpaceResponse(
+                space.getId(),
+                space.getName(),
+                orderKey,
+                PageIconResponse.from(space.getIconType(), space.getIconValue(), space.getIconColor()),
+                space.getAccessMode(),
+                space.getEveryoneAccessLevel(),
+                effectiveLevel,
+                canAdminister,
+                memberCount,
+                pageCount,
+                space.getArchivedAt(),
+                space.getCreatedAt(),
+                space.getUpdatedAt());
     }
 
     private Map<UUID, DocumentAccessLevel> memberLevels(UUID userId) {
@@ -473,28 +783,6 @@ public class SpaceService {
             counts.put((UUID) row[0], ((Number) row[1]).longValue());
         }
         return counts;
-    }
-
-    private static SpaceResponse toResponse(
-            Space space, DocumentAccessLevel myAccessLevel, boolean canAdminister, long memberCount, long pageCount) {
-        // An archived space caps content at VIEW; reporting the pre-archive membership
-        // level as "effective" would advertise a write grant the page endpoints deny.
-        // canAdminister stays the restore flag.
-        DocumentAccessLevel effectiveLevel =
-                myAccessLevel != null && space.getArchivedAt() != null ? DocumentAccessLevel.VIEW : myAccessLevel;
-        return new SpaceResponse(
-                space.getId(),
-                space.getName(),
-                PageIconResponse.from(space.getIconType(), space.getIconValue(), space.getIconColor()),
-                space.getAccessMode(),
-                space.getEveryoneAccessLevel(),
-                effectiveLevel,
-                canAdminister,
-                memberCount,
-                pageCount,
-                space.getArchivedAt(),
-                space.getCreatedAt(),
-                space.getUpdatedAt());
     }
 
     private static SpaceMemberResponse toMemberResponse(SpaceMember member) {

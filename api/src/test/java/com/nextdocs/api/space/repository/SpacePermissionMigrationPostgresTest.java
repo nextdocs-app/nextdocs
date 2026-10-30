@@ -247,6 +247,17 @@ class SpacePermissionMigrationPostgresTest {
         return scalarOne("SELECT sibling_order_key FROM documents WHERE id = ?", documentId);
     }
 
+    private void insertUserSpaceOrder(UUID userId, UUID spaceId, String orderKey) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO user_space_orders (user_id, space_id, order_key, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, now(), now())")) {
+            stmt.setObject(1, userId);
+            stmt.setObject(2, spaceId);
+            stmt.setString(3, orderKey);
+            stmt.executeUpdate();
+        }
+    }
+
     private void insertCollaborator(UUID documentId, UUID userId, String accessLevel) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(
                 "INSERT INTO document_collaborators (document_id, user_id, access_level, created_at, updated_at) "
@@ -575,6 +586,29 @@ class SpacePermissionMigrationPostgresTest {
                 .isInstanceOf(SQLException.class)
                 .hasMessageContaining("idx_documents_space_sibling_order_key_unique");
         insertSpaceDoc(UUID.randomUUID(), owner, spaceId, "a0", Instant.parse("2026-01-04T00:00:00Z"), true);
+    }
+
+    @Test
+    void v29UserSpaceOrders_keepOnePositionPerSpaceAndCascadeWithTheSpace() throws SQLException {
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID otherSpaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+
+        insertUserSpaceOrder(owner, spaceId, "a0");
+        // One row per user and space, and one key per user, so two spaces can never
+        // claim the same sidebar position.
+        assertThatThrownBy(() -> insertUserSpaceOrder(owner, spaceId, "a1"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("uq_user_space_orders_user_space");
+        assertThatThrownBy(() -> insertUserSpaceOrder(owner, otherSpaceId, "a0"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("uq_user_space_orders_user_order_key");
+
+        // Deleting a space takes every personal position with it.
+        deleteSpaceRow(spaceId);
+        assertThat(scalarOne("SELECT COUNT(*) FROM user_space_orders WHERE space_id = ?", spaceId))
+                .isEqualTo("0");
     }
 
     @Test

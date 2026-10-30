@@ -10,6 +10,7 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.entity.UserSpaceOrder;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.nio.charset.StandardCharsets;
@@ -45,6 +46,9 @@ class SpaceRootListingPersistenceTest {
 
     @Autowired
     private SpaceMemberRepository spaceMemberRepository;
+
+    @Autowired
+    private UserSpaceOrderRepository userSpaceOrderRepository;
 
     private Document page(User owner, Space space, String title) {
         return documentRepository.saveAndFlush(Document.builder()
@@ -134,6 +138,44 @@ class SpaceRootListingPersistenceTest {
                 .name(name)
                 .accessMode(SpaceAccessMode.CUSTOM)
                 .archivedAt(archivedAt)
+                .build());
+    }
+
+    @Test
+    void activeSpaceListings_followTheCallersPersonalOrderWithUnkeyedLast() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("space-order-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        Space unkeyed = publicSpace(workspace, "Unkeyed");
+        Space first = publicSpace(workspace, "First");
+        Space second = publicSpace(workspace, "Second");
+
+        // Personal keys, not creation order: the space created last moves first.
+        userSpaceOrderRepository.saveAndFlush(UserSpaceOrder.builder()
+                .user(owner)
+                .space(second)
+                .orderKey("a1")
+                .build());
+        userSpaceOrderRepository.saveAndFlush(
+                UserSpaceOrder.builder().user(owner).space(first).orderKey("a0").build());
+
+        assertThat(spaceRepository.findAllActiveForUser(workspace.getId(), owner.getId()))
+                .extracting(Space::getId)
+                .containsExactly(first.getId(), second.getId(), unkeyed.getId());
+        assertThat(spaceRepository.findAllVisibleToUser(workspace.getId(), owner.getId()))
+                .extracting(Space::getId)
+                .containsExactly(first.getId(), second.getId(), unkeyed.getId());
+    }
+
+    private Space publicSpace(Workspace workspace, String name) {
+        return spaceRepository.saveAndFlush(Space.builder()
+                .workspace(workspace)
+                .name(name)
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
                 .build());
     }
 }

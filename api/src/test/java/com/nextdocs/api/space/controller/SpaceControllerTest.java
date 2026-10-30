@@ -22,6 +22,7 @@ import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
+import com.nextdocs.api.space.dto.request.SpaceMoveRequest;
 import com.nextdocs.api.space.dto.request.SpaceUpdateRequest;
 import com.nextdocs.api.space.dto.response.SpaceMemberResponse;
 import com.nextdocs.api.space.dto.response.SpaceResponse;
@@ -81,6 +82,7 @@ class SpaceControllerTest {
         return new SpaceResponse(
                 spaceId,
                 "Engineering",
+                "a1",
                 new PageIconResponse("emoji", "🚀"),
                 SpaceAccessMode.PUBLIC,
                 DocumentAccessLevel.VIEW,
@@ -159,6 +161,22 @@ class SpaceControllerTest {
         mockMvc.perform(get(SpaceController.BASE_PATH + "/{id}", spaceId).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.id").value(spaceId.toString()));
+    }
+
+    @Test
+    void move_passesTheNeighboursAndReturnsTheUpdatedSpace() throws Exception {
+        UUID prevId = UUID.randomUUID();
+        when(spaceService.moveSpace(eq(userId), eq(spaceId), any(SpaceMoveRequest.class)))
+                .thenReturn(response());
+
+        mockMvc.perform(post(SpaceController.MOVE_PATH, spaceId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"prevSiblingId\": \"" + prevId + "\", \"nextSiblingId\": null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.orderKey").value("a1"));
+
+        verify(spaceService).moveSpace(eq(userId), eq(spaceId), any(SpaceMoveRequest.class));
     }
 
     @Test

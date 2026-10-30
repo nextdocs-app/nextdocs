@@ -14,8 +14,21 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface SpaceRepository extends JpaRepository<Space, UUID> {
 
-    /** Active spaces of a workspace, oldest first: the sidebar's stable base order. */
+    /** Active spaces of a workspace, oldest first: the workspace roster's space list. */
     List<Space> findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(UUID workspaceId);
+
+    /**
+     * Every active space of the workspace, in the caller's personal order: the sidebar a
+     * workspace admin sees. Spaces without an order row (new to the caller, or created
+     * before personal ordering existed) sort after the ordered ones by creation time,
+     * which keeps a stable base order until the caller moves one.
+     */
+    @Query("SELECT s FROM Space s "
+            + "LEFT JOIN UserSpaceOrder uso ON uso.space.id = s.id AND uso.user.id = :userId "
+            + "WHERE s.workspace.id = :workspaceId AND s.archivedAt IS NULL "
+            + "ORDER BY CASE WHEN uso.orderKey IS NULL THEN 1 ELSE 0 END, uso.orderKey ASC, "
+            + "s.createdAt ASC, s.id ASC")
+    List<Space> findAllActiveForUser(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     /** Archived spaces of a workspace, newest archive first: the restore view. */
     List<Space> findAllByWorkspace_IdAndArchivedAtIsNotNullOrderByArchivedAtDescIdDesc(UUID workspaceId);
@@ -34,17 +47,19 @@ public interface SpaceRepository extends JpaRepository<Space, UUID> {
     List<Space> findArchivedOwnedByUser(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     /**
-     * Spaces a plain member can see: the ones they are listed on plus every PUBLIC space.
-     * Public is resolved from the mode alone — a PUBLIC space is readable by the whole
-     * workspace whatever its everyone-else level is. Archived spaces are hidden from
-     * normal navigation and listed separately.
+     * Spaces a plain member can see: the ones they are listed on plus every PUBLIC space,
+     * in the caller's personal order. Public is resolved from the mode alone — a PUBLIC
+     * space is readable by the whole workspace whatever its everyone-else level is.
+     * Archived spaces are hidden from normal navigation and listed separately.
      */
     @Query("SELECT s FROM Space s "
+            + "LEFT JOIN UserSpaceOrder uso ON uso.space.id = s.id AND uso.user.id = :userId "
             + "WHERE s.workspace.id = :workspaceId "
             + "AND s.archivedAt IS NULL "
             + "AND (s.accessMode = com.nextdocs.api.space.entity.SpaceAccessMode.PUBLIC "
             + "     OR EXISTS (SELECT 1 FROM SpaceMember m WHERE m.space.id = s.id AND m.user.id = :userId)) "
-            + "ORDER BY s.createdAt ASC, s.id ASC")
+            + "ORDER BY CASE WHEN uso.orderKey IS NULL THEN 1 ELSE 0 END, uso.orderKey ASC, "
+            + "s.createdAt ASC, s.id ASC")
     List<Space> findAllVisibleToUser(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     Optional<Space> findByIdAndWorkspace_Id(UUID id, UUID workspaceId);
