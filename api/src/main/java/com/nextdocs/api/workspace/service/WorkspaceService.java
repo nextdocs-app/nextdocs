@@ -34,9 +34,11 @@ import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -211,12 +213,14 @@ public class WorkspaceService {
     }
 
     /**
-     * Sweeps workspace icon uploads the owner never applied (or uploaded twice before
-     * saving): the workspace row is the only thing that can reference one, so every
-     * upload older than the grace period except the current icon is dead.
+     * Sweeps workspace icon uploads nobody applied (or uploaded twice before saving): the
+     * workspace icon and its spaces' icons are the only things that can reference one, so
+     * every upload older than the grace period that no icon renders is dead.
      *
-     * <p>Each workspace is read with a row lock, the same lock an icon update takes, so
-     * an apply racing the sweep serializes instead of pointing the icon at a swept row.
+     * <p>Each workspace is read with a row lock, the same lock the workspace icon update takes
+     * and that space create and update operations take before touching the space row when
+     * they adopt or release an upload. Those applies serialize with the sweep instead of
+     * racing its reference read and file delete.
      *
      * @return number of uploads deleted
      */
@@ -228,18 +232,29 @@ public class WorkspaceService {
             return 0;
         }
         Map<UUID, Workspace> workspaces = new HashMap<>();
+        Map<UUID, Set<String>> spaceIconValues = new HashMap<>();
         for (UUID workspaceId : uploads.stream()
                 .map(upload -> upload.getWorkspace().getId())
                 .distinct()
                 .toList()) {
             workspaceRepository.findByIdForUpdate(workspaceId).ifPresent(w -> workspaces.put(workspaceId, w));
+            // Read under the workspace lock, like a space create or update that adopts or
+            // releases an upload: neither can commit between this read and the delete.
+            spaceIconValues.put(
+                    workspaceId,
+                    new HashSet<>(
+                            spaceRepository.findIconValueByWorkspace_IdAndIconType(workspaceId, PageIconType.UPLOAD)));
         }
 
         int purged = 0;
         for (Attachment upload : uploads) {
             UUID workspaceId = upload.getWorkspace().getId();
             Workspace workspace = workspaces.get(workspaceId);
-            if (workspace != null && upload.getId().toString().equals(currentUploadIconId(workspace))) {
+            String uploadId = upload.getId().toString();
+            if (workspace != null && uploadId.equals(currentUploadIconId(workspace))) {
+                continue;
+            }
+            if (spaceIconValues.getOrDefault(workspaceId, Set.of()).contains(uploadId)) {
                 continue;
             }
             attachmentService.deleteWorkspaceUpload(workspaceId, upload.getId());
@@ -335,8 +350,7 @@ public class WorkspaceService {
      * an attachment that must belong to this workspace; the endpoint that stores one is
      * the only way to obtain such an id, and adopting it publishes the file for
      * anonymous share pages. Replacing or clearing an upload icon reclaims the replaced
-     * file and its quota: workspaces have no document-style purge path that would sweep
-     * it up later.
+     * file and its quota unless a space icon still renders that same upload.
      */
     private void applyIcon(Workspace workspace, PageIconValidator.ValidatedIcon icon) {
         if (icon.type() == null) {
@@ -360,7 +374,9 @@ public class WorkspaceService {
 
     /**
      * Deletes the file behind the current upload icon unless {@code keepValue} is
-     * that same id. The stored value is always one this class wrote through
+     * that same id or a space still renders it. The workspace icon and every space
+     * share one upload bucket, so reclaiming a file a space icon shows would break
+     * that icon. The stored value is always one this class wrote through
      * {@link PageIconValidator#validateUpload}, so it parses as a UUID.
      */
     private void releaseReplacedIconUpload(Workspace workspace, String keepValue) {
@@ -369,6 +385,13 @@ public class WorkspaceService {
         }
         String currentValue = workspace.getIconValue();
         if (currentValue == null || currentValue.equals(keepValue)) {
+            return;
+        }
+        if (spaceRepository.existsByWorkspace_IdAndIconTypeAndIconValue(
+                workspace.getId(), PageIconType.UPLOAD, currentValue)) {
+            // The file stays for the space icon, but the workspace icon was what made it
+            // anonymous branding: demote it so share links cannot read it any more.
+            attachmentService.restrictWorkspaceUpload(workspace.getId(), UUID.fromString(currentValue));
             return;
         }
         attachmentService.deleteWorkspaceUpload(workspace.getId(), UUID.fromString(currentValue));

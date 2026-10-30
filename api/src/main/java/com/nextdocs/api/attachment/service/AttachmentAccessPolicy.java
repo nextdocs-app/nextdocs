@@ -20,9 +20,11 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>document uploads need EDIT access and downloads follow the document access
  *       rules, including trash and anonymous share links;</li>
- *   <li>workspace uploads are owner-only. A public workspace attachment (the icon,
- *       instance branding) is readable by anyone so public share pages can render it;
- *       every private workspace attachment still requires membership and masks
+ *   <li>workspace uploads are owner-only through this policy. A space icon upload is
+ *       authorized by its service for any workspace member and stored in the same bucket,
+ *       because opening a space is open to members. A public workspace attachment (the
+ *       icon, instance branding) is readable by anyone so public share pages can render
+ *       it; every private workspace attachment still requires membership and masks
  *       anonymous callers as 404.</li>
  * </ul>
  */

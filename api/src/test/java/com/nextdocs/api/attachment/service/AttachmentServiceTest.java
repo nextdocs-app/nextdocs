@@ -1120,6 +1120,30 @@ class AttachmentServiceTest {
     }
 
     @Test
+    void restrictWorkspaceUpload_makesTheFilePrivateAgain() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PUBLIC);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.restrictWorkspaceUpload(workspaceId, attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PRIVATE);
+        // Private again means share-link visitors can no longer resolve it.
+        assertThatThrownBy(() -> attachmentService.resolveUrl(null, attachment.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    @Test
+    void restrictWorkspaceUpload_rowOfAnotherWorkspace_isLeftPublic() {
+        Attachment attachment = workspaceAttachment(AttachmentVisibility.PUBLIC);
+        when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));
+
+        attachmentService.restrictWorkspaceUpload(UUID.randomUUID(), attachment.getId());
+
+        assertThat(attachment.getVisibility()).isEqualTo(AttachmentVisibility.PUBLIC);
+    }
+
+    @Test
     void deleteWorkspaceUpload_deletesRowReleasesQuotaAndFile() {
         Attachment attachment = workspaceAttachment();
         when(attachmentRepository.findById(attachment.getId())).thenReturn(Optional.of(attachment));

@@ -5,12 +5,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
+import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -19,6 +25,8 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
@@ -39,6 +47,7 @@ import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -50,9 +59,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.web.multipart.MultipartFile;
 
 @ExtendWith(MockitoExtension.class)
 class SpaceServiceTest {
@@ -73,6 +84,9 @@ class SpaceServiceTest {
     private WorkspaceAccessService workspaceAccessService;
 
     @Mock
+    private WorkspaceRepository workspaceRepository;
+
+    @Mock
     private WorkspaceMemberRepository workspaceMemberRepository;
 
     @Mock
@@ -86,6 +100,9 @@ class SpaceServiceTest {
 
     @Mock
     private PageIconValidator pageIconValidator;
+
+    @Mock
+    private AttachmentService attachmentService;
 
     private SpaceService spaceService;
 
@@ -102,11 +119,13 @@ class SpaceServiceTest {
                 userSpaceOrderRepository,
                 documentRepository,
                 workspaceAccessService,
+                workspaceRepository,
                 workspaceMemberRepository,
                 userRepository,
                 spaceAccessService,
                 documentService,
-                pageIconValidator);
+                pageIconValidator,
+                attachmentService);
 
         workspace = Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
         actor = User.builder().email("owner@example.com").displayName("Owner").build();
@@ -154,7 +173,7 @@ class SpaceServiceTest {
     @Test
     void createSpace_makesTheCreatorTheFirstOwner() {
         callerIsWorkspaceMember(WorkspaceRole.MEMBER);
-        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> {
+        when(spaceRepository.saveAndFlush(any(Space.class))).thenAnswer(invocation -> {
             Space saved = invocation.getArgument(0);
             saved.setId(space.getId());
             saved.setCreatedAt(OffsetDateTime.now());
@@ -176,12 +195,13 @@ class SpaceServiceTest {
         assertThat(response.myAccessLevel()).isEqualTo(DocumentAccessLevel.OWNER);
         assertThat(response.canAdminister()).isTrue();
         assertThat(response.memberCount()).isEqualTo(1);
+        assertThat(response.createdAt()).isNotNull();
     }
 
     @Test
     void createSpace_publicKeepsTheChosenEveryoneLevel() {
         callerIsWorkspaceMember(WorkspaceRole.MEMBER);
-        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceRepository.saveAndFlush(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         SpaceResponse response = spaceService.createSpace(
                 actorId,
@@ -200,7 +220,7 @@ class SpaceServiceTest {
                         new SpaceCreateRequest("Engineering", null, SpaceAccessMode.PUBLIC, DocumentAccessLevel.OWNER)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
-        verify(spaceRepository, never()).save(any(Space.class));
+        verify(spaceRepository, never()).saveAndFlush(any(Space.class));
     }
 
     @Test
@@ -259,6 +279,115 @@ class SpaceServiceTest {
         assertThat(response.name()).isEqualTo("Platform");
         assertThat(response.accessMode()).isEqualTo(SpaceAccessMode.PUBLIC);
         assertThat(response.everyoneAccessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+    }
+
+    @Test
+    void createSpace_acceptsAnIconUploadedToTheWorkspace() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        UUID uploadId = UUID.randomUUID();
+        PageIconRequest icon = new PageIconRequest("UPLOAD", uploadId.toString());
+        AttachmentScope scope = AttachmentScope.workspace(workspace.getId());
+        when(pageIconValidator.validateSpaceIcon(icon, scope))
+                .thenReturn(new PageIconValidator.ValidatedIcon(PageIconType.UPLOAD, uploadId.toString(), null));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.saveAndFlush(any(Space.class))).thenAnswer(invocation -> {
+            Space saved = invocation.getArgument(0);
+            saved.setId(space.getId());
+            saved.setCreatedAt(OffsetDateTime.now());
+            saved.setUpdatedAt(OffsetDateTime.now());
+            return saved;
+        });
+
+        SpaceResponse response =
+                spaceService.createSpace(actorId, new SpaceCreateRequest("Engineering", icon, null, null));
+
+        assertThat(response.icon()).isNotNull();
+        assertThat(response.icon().type()).isEqualTo("upload");
+        assertThat(response.icon().value()).isEqualTo(uploadId.toString());
+        verify(pageIconValidator).validateUploadReference("Icon", uploadId.toString(), scope);
+        verify(workspaceRepository).findByIdForUpdate(workspace.getId());
+        // A brand-new space has no previous icon to release.
+        verifyNoInteractions(attachmentService);
+    }
+
+    @Test
+    void updateSpace_releasesTheUploadIconItReplaces() {
+        UUID oldUploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(oldUploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        PageIconRequest icon = new PageIconRequest("EMOJI", "🚀");
+        when(pageIconValidator.validateSpaceIcon(icon, AttachmentScope.workspace(workspace.getId())))
+                .thenReturn(new PageIconValidator.ValidatedIcon(PageIconType.EMOJI, "🚀", null));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+
+        spaceService.updateSpace(actorId, space.getId(), new SpaceUpdateRequest(null, icon, null, null));
+
+        // Both the sweep and this path take the workspace lock first, then the space row.
+        InOrder locks = inOrder(workspaceRepository, spaceRepository);
+        locks.verify(workspaceRepository).findByIdForUpdate(workspace.getId());
+        locks.verify(spaceRepository).findByIdForUpdate(space.getId());
+        verify(attachmentService).deleteWorkspaceUpload(workspace.getId(), oldUploadId);
+    }
+
+    @Test
+    void updateSpace_keepsAnUploadTheWorkspaceIconStillRenders() {
+        UUID sharedUploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(sharedUploadId.toString());
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(sharedUploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        PageIconRequest icon = new PageIconRequest("EMOJI", "🚀");
+        when(pageIconValidator.validateSpaceIcon(icon, AttachmentScope.workspace(workspace.getId())))
+                .thenReturn(new PageIconValidator.ValidatedIcon(PageIconType.EMOJI, "🚀", null));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+
+        spaceService.updateSpace(actorId, space.getId(), new SpaceUpdateRequest(null, icon, null, null));
+
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+    }
+
+    @Test
+    void updateSpace_keepsAnUploadAnotherSpaceStillRenders() {
+        UUID sharedUploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(sharedUploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        PageIconRequest icon = new PageIconRequest("EMOJI", "🚀");
+        when(pageIconValidator.validateSpaceIcon(icon, AttachmentScope.workspace(workspace.getId())))
+                .thenReturn(new PageIconValidator.ValidatedIcon(PageIconType.EMOJI, "🚀", null));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(spaceRepository.existsByWorkspace_IdAndIconTypeAndIconValueAndIdNot(
+                        workspace.getId(), PageIconType.UPLOAD, sharedUploadId.toString(), space.getId()))
+                .thenReturn(true);
+
+        spaceService.updateSpace(actorId, space.getId(), new SpaceUpdateRequest(null, icon, null, null));
+
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+    }
+
+    @Test
+    void uploadIconAttachment_storesUnderTheCallersWorkspace() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        MultipartFile file = mock(MultipartFile.class);
+        AttachmentResponse stored = new AttachmentResponse(
+                UUID.randomUUID(), null, "icon.png", "image/png", 8, "/api/v1/attachments/x", OffsetDateTime.now());
+        when(attachmentService.uploadSpaceIconAttachment(actorId, workspace.getId(), file))
+                .thenReturn(stored);
+
+        assertThat(spaceService.uploadIconAttachment(actorId, file)).isSameAs(stored);
+
+        verify(attachmentService).uploadSpaceIconAttachment(actorId, workspace.getId(), file);
     }
 
     @Test
@@ -558,7 +687,7 @@ class SpaceServiceTest {
     @Test
     void createSpace_placesTheNewSpaceAtTheTopOfTheCallersOrder() {
         callerIsWorkspaceMember(WorkspaceRole.MEMBER);
-        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> {
+        when(spaceRepository.saveAndFlush(any(Space.class))).thenAnswer(invocation -> {
             Space saved = invocation.getArgument(0);
             saved.setId(space.getId());
             saved.setCreatedAt(OffsetDateTime.now());

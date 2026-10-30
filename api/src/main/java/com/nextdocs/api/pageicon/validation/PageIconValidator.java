@@ -91,19 +91,16 @@ public class PageIconValidator {
     }
 
     /**
-     * Validates an icon for a space. Uploads are rejected rather than silently unsupported:
-     * an uploaded icon must belong to an attachment scope, and spaces do not own attachments
-     * yet (a space upload would have nowhere to be scoped, swept, or quota-counted).
+     * Validates an icon for a space. Uploads are accepted when they belong to the space's
+     * workspace: a space does not own attachments, so its images live in the workspace
+     * bucket, where they are quota-counted and swept like workspace icons. The upload stays
+     * private — only workspace members resolve its URL — and is never anonymous branding.
      */
-    public ValidatedIcon validateSpaceIcon(PageIconRequest request) {
+    public ValidatedIcon validateSpaceIcon(PageIconRequest request, AttachmentScope scope) {
         if (request == null) {
             return null;
         }
-        if (request.type() != null && !request.type().isBlank() && parseType(request.type()) == PageIconType.UPLOAD) {
-            throw new ApiException(
-                    ErrorCode.VALIDATION_FAILED, "Space icons must be an emoji, a builtin icon, or an https link.");
-        }
-        return validateIcon(request, null);
+        return validateIcon(request, scope);
     }
 
     /** Parses a case-insensitive icon source name; unknown values are a validation error. */

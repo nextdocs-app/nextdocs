@@ -1,5 +1,8 @@
 package com.nextdocs.api.space.service;
 
+import com.nextdocs.api.attachment.AttachmentScope;
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
+import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -9,6 +12,7 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
@@ -28,6 +32,7 @@ import com.nextdocs.api.space.repository.UserSpaceOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -45,6 +50,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * Spaces: an optional container of root pages with Public or Custom access.
@@ -81,11 +87,13 @@ public class SpaceService {
     private final UserSpaceOrderRepository userSpaceOrderRepository;
     private final DocumentRepository documentRepository;
     private final WorkspaceAccessService workspaceAccessService;
+    private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
     private final UserRepository userRepository;
     private final SpaceAccessService spaceAccessService;
     private final DocumentService documentService;
     private final PageIconValidator pageIconValidator;
+    private final AttachmentService attachmentService;
 
     @Autowired
     @Lazy
@@ -346,8 +354,9 @@ public class SpaceService {
         User creator = membership.member().getUser();
 
         String name = normalizeName(request.name());
+        AttachmentScope iconScope = AttachmentScope.workspace(workspace.getId());
         PageIconValidator.ValidatedIcon icon =
-                request.icon() == null ? null : pageIconValidator.validateSpaceIcon(request.icon());
+                request.icon() == null ? null : pageIconValidator.validateSpaceIcon(request.icon(), iconScope);
         SpaceAccessMode accessMode = request.accessMode() == null ? SpaceAccessMode.CUSTOM : request.accessMode();
         DocumentAccessLevel everyoneLevel = request.everyoneAccessLevel() == null
                 ? DocumentAccessLevel.VIEW
@@ -359,8 +368,18 @@ public class SpaceService {
                 .accessMode(accessMode)
                 .everyoneAccessLevel(everyoneLevel)
                 .build();
+        if (icon != null) {
+            // The sweep and the workspace icon update read icon references under the
+            // workspace row lock; take the same lock so this adoption cannot commit
+            // between their snapshot and the file delete. Validation ran before the
+            // lock, so re-read the upload under it.
+            lockWorkspace(workspace.getId());
+            revalidateUploadIcon(icon, iconScope);
+        }
         applyIcon(space, icon);
-        Space saved = spaceRepository.save(space);
+        // Flush so @CreationTimestamp fills createdAt/updatedAt before the response:
+        // the client sorts spaces by createdAt and requires it on create.
+        Space saved = spaceRepository.saveAndFlush(space);
 
         memberRepository.save(SpaceMember.builder()
                 .space(saved)
@@ -387,12 +406,19 @@ public class SpaceService {
 
         // Validate icon bytes and level values before taking the row lock: storage I/O
         // and pure validation must not serialize every membership change behind them.
+        AttachmentScope iconScope = AttachmentScope.workspace(workspaceId);
         PageIconValidator.ValidatedIcon icon =
-                request.icon() == null ? null : pageIconValidator.validateSpaceIcon(request.icon());
+                request.icon() == null ? null : pageIconValidator.validateSpaceIcon(request.icon(), iconScope);
         DocumentAccessLevel everyoneLevel =
                 request.everyoneAccessLevel() == null ? null : normalizeEveryoneLevel(request.everyoneAccessLevel());
         String name = request.name() == null ? null : normalizeName(request.name());
 
+        // Take the workspace lock before the space row: adopting or releasing an upload
+        // must serialize with the sweep and the workspace icon update, which read icon
+        // references while holding that lock. Every path locks them in this order.
+        if (icon != null) {
+            lockWorkspace(workspaceId);
+        }
         Space space = lockSpace(spaceId);
         if (!space.getWorkspace().getId().equals(workspaceId)) {
             throw new ApiException(ErrorCode.NOT_FOUND);
@@ -411,6 +437,9 @@ public class SpaceService {
             space.setEveryoneAccessLevel(everyoneLevel);
         }
         if (icon != null) {
+            // Validation ran before the lock: re-read so an upload the sweep already deleted
+            // by the time this transaction got here is refused instead of adopted.
+            revalidateUploadIcon(icon, iconScope);
             applyIcon(space, icon);
         }
 
@@ -588,6 +617,16 @@ public class SpaceService {
                 spaceRepository.findByIdForUpdate(spaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
         spaceAccessService.refreshForLock(space);
         return space;
+    }
+
+    /**
+     * Row-locks the workspace around an icon reference change. The abandoned-upload sweep
+     * and the workspace icon update take this lock before consulting space icon references,
+     * so holding it here keeps an adopted upload from being swept or a released one from
+     * being adopted concurrently.
+     */
+    private void lockWorkspace(UUID workspaceId) {
+        workspaceRepository.findByIdForUpdate(workspaceId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
     }
 
     private List<SpaceMemberResponse> roster(UUID spaceId) {
@@ -797,23 +836,77 @@ public class SpaceService {
     }
 
     /**
-     * Applies an already-validated icon: a value with a null type clears it. Spaces accept
-     * emoji, builtin, and link icons for now; uploads need an attachment scope spaces do
-     * not carry yet (see {@link PageIconValidator#validateSpaceIcon}).
+     * Stores an image a space icon can reference. Any workspace member may upload: opening
+     * a space is open to members, and an upload no icon adopts stays private and is swept,
+     * so a file only becomes an icon through create or update. Set the returned id with
+     * icon type {@code UPLOAD}.
      */
-    private static void applyIcon(Space space, PageIconValidator.ValidatedIcon icon) {
+    public AttachmentResponse uploadIconAttachment(UUID userId, MultipartFile file) {
+        WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(userId);
+        return attachmentService.uploadSpaceIconAttachment(
+                userId, membership.workspace().getId(), file);
+    }
+
+    /**
+     * Applies an already-validated icon: a value with a null type clears it. Uploads
+     * reference a workspace-scoped attachment, and replacing or clearing one reclaims the
+     * file and its quota unless another icon still renders that same upload.
+     */
+    private void applyIcon(Space space, PageIconValidator.ValidatedIcon icon) {
         if (icon == null) {
             return;
         }
         if (icon.type() == null) {
+            releaseReplacedIconUpload(space, null);
             space.setIconType(null);
             space.setIconValue(null);
             space.setIconColor(null);
             return;
         }
+        releaseReplacedIconUpload(space, icon.type() == PageIconType.UPLOAD ? icon.value() : null);
         space.setIconType(icon.type());
         space.setIconValue(icon.value());
         space.setIconColor(icon.color());
+    }
+
+    /**
+     * Deletes the file behind the current upload icon unless {@code keepValue} is that
+     * same id. The stored value is always one this class wrote through
+     * {@link PageIconValidator#validateUpload}, so it parses as a UUID.
+     */
+    private void releaseReplacedIconUpload(Space space, String keepValue) {
+        if (space.getIconType() != PageIconType.UPLOAD) {
+            return;
+        }
+        String currentValue = space.getIconValue();
+        if (currentValue == null || currentValue.equals(keepValue)) {
+            return;
+        }
+        Workspace workspace = space.getWorkspace();
+        if (isUploadStillReferenced(workspace, currentValue, space.getId())) {
+            return;
+        }
+        attachmentService.deleteWorkspaceUpload(workspace.getId(), UUID.fromString(currentValue));
+    }
+
+    /**
+     * The workspace icon and every space share one upload bucket, and a client can point
+     * two icons at the same upload. Reclaiming a file another icon still renders would
+     * break that icon, so the sweep and this check both skip referenced uploads.
+     */
+    private boolean isUploadStillReferenced(Workspace workspace, String value, UUID exceptSpaceId) {
+        if (workspace.getIconType() == PageIconType.UPLOAD && value.equals(workspace.getIconValue())) {
+            return true;
+        }
+        return spaceRepository.existsByWorkspace_IdAndIconTypeAndIconValueAndIdNot(
+                workspace.getId(), PageIconType.UPLOAD, value, exceptSpaceId);
+    }
+
+    /** An adopted upload must still exist, still be raster, and still belong to the workspace. */
+    private void revalidateUploadIcon(PageIconValidator.ValidatedIcon icon, AttachmentScope scope) {
+        if (icon != null && icon.type() == PageIconType.UPLOAD) {
+            pageIconValidator.validateUploadReference("Icon", icon.value(), scope);
+        }
     }
 
     private static String normalizeName(String raw) {

@@ -1,5 +1,6 @@
 package com.nextdocs.api.space.controller;
 
+import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
@@ -21,6 +22,7 @@ import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -31,7 +33,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @Tag(name = "Spaces", description = "Space-level permissions: Public and Custom containers of pages")
 @RestController
@@ -48,6 +52,8 @@ public class SpaceController {
     public static final String PAGES_PATH = BASE_PATH + "/{id}/pages";
 
     public static final String MOVE_PATH = BASE_PATH + "/{id}/move";
+
+    public static final String ATTACHMENTS_PATH = BASE_PATH + "/attachments";
 
     private final SpaceService spaceService;
 
@@ -77,7 +83,8 @@ public class SpaceController {
             summary = "Create a space",
             description = "Creates a space owned by the caller. Defaults to CUSTOM access (only listed members); "
                     + "PUBLIC spaces additionally grant every workspace member `everyoneAccessLevel`. "
-                    + "Icons may be an emoji, a builtin icon, or an https link.",
+                    + "Icons may be an emoji, a builtin icon, an https link, or an uploaded image id "
+                    + "from the spaces attachments route.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "201",
@@ -94,6 +101,36 @@ public class SpaceController {
             @AuthenticationPrincipal UserPrincipal principal, @Valid @RequestBody SpaceCreateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(spaceService.createSpace(callerId(principal), request), "Space created."));
+    }
+
+    @Operation(
+            summary = "Upload a space icon image",
+            description = "Stores a raster image a space icon can reference and returns its id. Any "
+                    + "workspace member may upload: opening a space is open to members, and an "
+                    + "upload no icon adopts is private and swept. Set the returned id through "
+                    + "create or update with icon type UPLOAD; the file is never anonymous.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "201",
+                        description = "Attachment stored"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "400",
+                        description = "Empty or invalid file"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "403",
+                        description = "Caller is not a member of the workspace"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "413",
+                        description = "File exceeds the configured size limit")
+            })
+    @PostMapping(value = "/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<AttachmentResponse>> uploadAttachment(
+            @AuthenticationPrincipal UserPrincipal principal, @RequestPart("file") MultipartFile file) {
+        AttachmentResponse response = spaceService.uploadIconAttachment(callerId(principal), file);
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response, "Attachment uploaded."));
     }
 
     @Operation(
