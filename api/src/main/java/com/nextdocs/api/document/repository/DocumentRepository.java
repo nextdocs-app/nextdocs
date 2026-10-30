@@ -77,18 +77,20 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
-    // Root pages filed into one space, in the caller's personal navigation order.
+    // Root pages filed into one space, in the space's shared order.
     //
     // Gated on the effective level per page, not just on space membership: a NO_ACCESS
     // breakpoint on one page must hide that page from the space listing too, or the sidebar
     // would advertise a page that answers 404. The same expression PUBLIC_CHILDREN_SQL uses
     // keeps the readable set narrow. A constant so the PostgreSQL test runs this exact text.
+    //
+    // Ordering is documents.sibling_order_key, not the caller's user_document_orders row:
+    // pages in a space are shared content, so every member sees the order the space defines,
+    // exactly like nested pages. The personal row is kept for detach, not for this listing.
     String SPACE_PAGES_SQL = "SELECT d.* FROM documents d "
-            + "LEFT JOIN user_document_orders udo "
-            + "       ON udo.document_id = d.id AND udo.user_id = :userId "
             + "WHERE d.space_id = :spaceId AND d.parent_id IS NULL AND d.deleted_at IS NULL "
             + "AND resolve_effective_access(:userId, d.id) IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER') "
-            + "ORDER BY udo.order_key ASC NULLS LAST, d.created_at ASC, d.id ASC";
+            + "ORDER BY d.sibling_order_key ASC, d.created_at ASC, d.id ASC";
 
     String SPACE_PAGES_COUNT_SQL = "SELECT COUNT(*) FROM documents d "
             + "WHERE d.space_id = :spaceId AND d.parent_id IS NULL AND d.deleted_at IS NULL "
@@ -128,6 +130,27 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // Sibling key for a specific child document
     @Query("SELECT d.siblingOrderKey FROM Document d WHERE d.id = :id AND d.deletedAt IS NULL")
     Optional<String> findSiblingOrderKeyById(@Param("id") UUID id);
+
+    // Sibling max key among root pages of a space
+    @Query("SELECT MAX(d.siblingOrderKey) FROM Document d "
+            + "WHERE d.space.id = :spaceId AND d.parent IS NULL "
+            + "AND d.deletedAt IS NULL "
+            + "AND d.id <> :excludeId")
+    Optional<String> findMaxSpaceSiblingOrderKey(@Param("spaceId") UUID spaceId, @Param("excludeId") UUID excludeId);
+
+    // Sibling min key among root pages of a space
+    @Query("SELECT MIN(d.siblingOrderKey) FROM Document d "
+            + "WHERE d.space.id = :spaceId AND d.parent IS NULL "
+            + "AND d.deletedAt IS NULL "
+            + "AND d.id <> :excludeId")
+    Optional<String> findMinSpaceSiblingOrderKey(@Param("spaceId") UUID spaceId, @Param("excludeId") UUID excludeId);
+
+    // Fetch all non-trashed root pages of a space to re-index
+    @Query("SELECT d FROM Document d "
+            + "WHERE d.space.id = :spaceId AND d.parent IS NULL "
+            + "AND d.deletedAt IS NULL "
+            + "ORDER BY d.siblingOrderKey ASC, d.createdAt ASC, d.id ASC")
+    List<Document> findAllSpaceRootSiblingsForReindex(@Param("spaceId") UUID spaceId);
 
     // Fetch all non-trashed siblings under a parent to re-index
     @Query("SELECT d FROM Document d "

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nextdocs.api.PostgresTestSupport;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.document.util.FractionalIndex;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -13,6 +14,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
@@ -31,7 +33,8 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
  * space is the outermost grant (document ownership, collaborator rows, NO_ACCESS breakpoints,
  * and link grants all still win), a PUBLIC grant requires workspace membership, and the V24
  * migration applies on top of a database that already holds V1..V23 data without touching a
- * single existing page.
+ * single existing page. V28's space-page ordering is pinned the same way: the backfill, the
+ * not-null invariant, and the per-space uniqueness of active keys.
  */
 class SpacePermissionMigrationPostgresTest {
 
@@ -180,7 +183,10 @@ class SpacePermissionMigrationPostgresTest {
             stmt.setBytes(6, "seed".getBytes(StandardCharsets.UTF_8));
             stmt.setString(7, linkMode == null ? "RESTRICTED" : linkMode);
             stmt.setString(8, linkLevel == null ? "VIEW" : linkLevel);
-            stmt.setString(9, parentId != null ? "a" + id.toString().substring(0, 4) : null);
+            String siblingOrderKey = parentId != null
+                    ? "a" + id.toString().substring(0, 4)
+                    : spaceId != null ? "a" + id.toString().replace("-", "") : null;
+            stmt.setString(9, siblingOrderKey);
             stmt.setTimestamp(10, trashed ? Timestamp.from(Instant.now()) : null);
             stmt.executeUpdate();
         }
@@ -196,6 +202,49 @@ class SpacePermissionMigrationPostgresTest {
             stmt.setBytes(3, "seed".getBytes(StandardCharsets.UTF_8));
             stmt.executeUpdate();
         }
+    }
+
+    /** A space-root page with an explicit creation time and key, so backfill order is deterministic. */
+    private void insertSpaceDoc(
+            UUID id, UUID ownerId, UUID spaceId, String siblingOrderKey, Instant createdAt, boolean trashed)
+            throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO documents (id, user_id, space_id, title, yjs_state, general_access_mode, "
+                        + "link_access_level, sibling_order_key, deleted_at, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, 'Space Page', ?, 'RESTRICTED', 'VIEW', ?, ?, ?, now())")) {
+            stmt.setObject(1, id);
+            stmt.setObject(2, ownerId);
+            stmt.setObject(3, spaceId);
+            stmt.setBytes(4, "seed".getBytes(StandardCharsets.UTF_8));
+            stmt.setString(5, siblingOrderKey);
+            stmt.setTimestamp(6, trashed ? Timestamp.from(Instant.now()) : null);
+            stmt.setTimestamp(7, Timestamp.from(createdAt));
+            stmt.executeUpdate();
+        }
+    }
+
+    private void insertUserDocumentOrder(UUID userId, UUID documentId, String orderKey) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO user_document_orders (user_id, document_id, order_key, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, now(), now())")) {
+            stmt.setObject(1, userId);
+            stmt.setObject(2, documentId);
+            stmt.setString(3, orderKey);
+            stmt.executeUpdate();
+        }
+    }
+
+    private void updateSiblingOrderKey(UUID documentId, String orderKey) throws SQLException {
+        try (PreparedStatement stmt =
+                connection.prepareStatement("UPDATE documents SET sibling_order_key = ? WHERE id = ?")) {
+            stmt.setString(1, orderKey);
+            stmt.setObject(2, documentId);
+            stmt.executeUpdate();
+        }
+    }
+
+    private String siblingOrderKey(UUID documentId) throws SQLException {
+        return scalarOne("SELECT sibling_order_key FROM documents WHERE id = ?", documentId);
     }
 
     private void insertCollaborator(UUID documentId, UUID userId, String accessLevel) throws SQLException {
@@ -464,6 +513,68 @@ class SpacePermissionMigrationPostgresTest {
                 .containsExactly(visible);
         assertThat(jdbc.queryForObject(DocumentRepository.SPACE_PAGES_COUNT_SQL, params, Long.class))
                 .isEqualTo(1L);
+    }
+
+    @Test
+    void spaceListingQuery_ordersByTheSpacesSharedKeyNotTheCallersOrder() throws SQLException {
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, owner, "OWNER");
+
+        UUID createdFirst = UUID.randomUUID();
+        UUID createdSecond = UUID.randomUUID();
+        insertSpaceDoc(createdFirst, owner, spaceId, "b0", Instant.parse("2026-01-01T00:00:00Z"), false);
+        insertSpaceDoc(createdSecond, owner, spaceId, "a0", Instant.parse("2026-01-02T00:00:00Z"), false);
+
+        // The caller's personal order says the opposite; the space listing must ignore it
+        // so every member sees the order the space defines.
+        insertUserDocumentOrder(owner, createdFirst, "a1");
+        insertUserDocumentOrder(owner, createdSecond, "a2");
+
+        var params = new MapSqlParameterSource().addValue("userId", owner).addValue("spaceId", spaceId);
+        var jdbc = new NamedParameterJdbcTemplate(new SingleConnectionDataSource(connection, true));
+
+        assertThat(jdbc.query(
+                        DocumentRepository.SPACE_PAGES_SQL, params, (rs, rowNum) -> rs.getObject("id", UUID.class)))
+                .containsExactly(createdSecond, createdFirst);
+    }
+
+    @Test
+    void v28BackfillsSpacePageKeysAndEnforcesTheSharedOrderConstraints() throws SQLException {
+        migrateTo("27");
+
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        UUID stale = UUID.randomUUID();
+        insertSpaceDoc(first, owner, spaceId, null, Instant.parse("2026-01-01T00:00:00Z"), false);
+        insertSpaceDoc(second, owner, spaceId, null, Instant.parse("2026-01-02T00:00:00Z"), false);
+        // A key left by an earlier attempt is canonicalised like the missing ones.
+        insertSpaceDoc(stale, owner, spaceId, "zz", Instant.parse("2026-01-03T00:00:00Z"), false);
+
+        migrateFurther();
+
+        // V9-style keys, assigned in creation order.
+        assertThat(List.of(siblingOrderKey(first), siblingOrderKey(second), siblingOrderKey(stale)))
+                .containsExactly("a0", "a1", "a2")
+                .allSatisfy(
+                        key -> assertThat(FractionalIndex.isValidOrderKey(key)).isTrue());
+
+        // A space page can no longer lose its key.
+        assertThatThrownBy(() -> updateSiblingOrderKey(first, null))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("chk_documents_space_sibling_order");
+
+        // Active keys are unique per space; a trashed page may retain a position an
+        // active page has since taken, otherwise trashing would block reordering.
+        assertThatThrownBy(() -> insertSpaceDoc(
+                        UUID.randomUUID(), owner, spaceId, "a0", Instant.parse("2026-01-04T00:00:00Z"), false))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("idx_documents_space_sibling_order_key_unique");
+        insertSpaceDoc(UUID.randomUUID(), owner, spaceId, "a0", Instant.parse("2026-01-04T00:00:00Z"), true);
     }
 
     @Test
