@@ -456,9 +456,19 @@ public class SpaceService {
      * Deletes a space only when it is truly empty: no document row may still reference
      * it. Trashed pages keep their space_id, so they block deletion until they are
      * permanently deleted. A populated space must be archived instead.
+     *
+     * <p>The space's icon upload is released with the space unless the workspace icon or
+     * another space still renders it. That check takes the workspace lock before the
+     * space row, like adoption and the sweep, so neither can race the reference read.
      */
     @Transactional
     public void deleteSpace(UUID userId, UUID spaceId) {
+        UUID workspaceId = spaceAccessService
+                .requireAdministration(userId, spaceId)
+                .space()
+                .getWorkspace()
+                .getId();
+        lockWorkspace(workspaceId);
         Space space = lockSpace(spaceId);
         // Checked under the lock: a space member promoted while this transaction waited
         // must be able to administer the deletion it is holding the row for.
@@ -471,6 +481,10 @@ public class SpaceService {
                     "This space still contains pages, including pages in trash. "
                             + "Permanently delete them first, or archive the space.");
         }
+
+        // No space row keeps the file alive any more: release it now instead of leaving
+        // the uploader's quota consumed until the sweep reaches an abandoned upload.
+        releaseReplacedIconUpload(space, null);
 
         // The production FK is ON DELETE CASCADE, but tests create the schema from the
         // entities, where no cascade is declared. Delete the personal rows explicitly,

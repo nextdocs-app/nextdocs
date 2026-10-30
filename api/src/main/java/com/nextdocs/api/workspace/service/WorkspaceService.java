@@ -218,9 +218,9 @@ public class WorkspaceService {
      * every upload older than the grace period that no icon renders is dead.
      *
      * <p>Each workspace is read with a row lock, the same lock the workspace icon update takes
-     * and that space create and update operations take before touching the space row when
-     * they adopt or release an upload. Those applies serialize with the sweep instead of
-     * racing its reference read and file delete.
+     * and that space create, update, and delete operations take before touching the space
+     * row when they adopt or release an upload. Those applies serialize with the sweep
+     * instead of racing its reference read and file delete.
      *
      * @return number of uploads deleted
      */
@@ -238,8 +238,8 @@ public class WorkspaceService {
                 .distinct()
                 .toList()) {
             workspaceRepository.findByIdForUpdate(workspaceId).ifPresent(w -> workspaces.put(workspaceId, w));
-            // Read under the workspace lock, like a space create or update that adopts or
-            // releases an upload: neither can commit between this read and the delete.
+            // Read under the workspace lock, like any space create, update, or delete that
+            // adopts or releases an upload: none can commit between this read and the delete.
             spaceIconValues.put(
                     workspaceId,
                     new HashSet<>(

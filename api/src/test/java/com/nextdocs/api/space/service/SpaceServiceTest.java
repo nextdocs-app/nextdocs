@@ -593,6 +593,7 @@ class SpaceServiceTest {
     @Test
     void deleteSpace_refusesASpaceThatStillHasPagesIncludingTrash() {
         callerAdministers(DocumentAccessLevel.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(documentRepository.countBySpace_Id(space.getId())).thenReturn(2L);
 
@@ -600,16 +601,75 @@ class SpaceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
         verify(spaceRepository, never()).delete(any(Space.class));
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
     }
 
     @Test
     void deleteSpace_deletesAnEmptySpace() {
         callerAdministers(DocumentAccessLevel.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
 
         spaceService.deleteSpace(actorId, space.getId());
 
+        verify(spaceRepository).delete(space);
+    }
+
+    @Test
+    void deleteSpace_releasesTheUploadIconNoOtherIconUses() {
+        UUID uploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(uploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+
+        spaceService.deleteSpace(actorId, space.getId());
+
+        // The file is released immediately instead of waiting for the abandoned sweep.
+        verify(attachmentService).deleteWorkspaceUpload(workspace.getId(), uploadId);
+        InOrder locks = inOrder(workspaceRepository, spaceRepository);
+        locks.verify(workspaceRepository).findByIdForUpdate(workspace.getId());
+        locks.verify(spaceRepository).findByIdForUpdate(space.getId());
+        verify(spaceRepository).delete(space);
+    }
+
+    @Test
+    void deleteSpace_keepsAnUploadTheWorkspaceIconStillRenders() {
+        UUID uploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(uploadId.toString());
+        workspace.setIconType(PageIconType.UPLOAD);
+        workspace.setIconValue(uploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+
+        spaceService.deleteSpace(actorId, space.getId());
+
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
+        verify(spaceRepository).delete(space);
+    }
+
+    @Test
+    void deleteSpace_keepsAnUploadAnotherSpaceStillRenders() {
+        UUID uploadId = UUID.randomUUID();
+        space.setIconType(PageIconType.UPLOAD);
+        space.setIconValue(uploadId.toString());
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+        when(spaceRepository.existsByWorkspace_IdAndIconTypeAndIconValueAndIdNot(
+                        workspace.getId(), PageIconType.UPLOAD, uploadId.toString(), space.getId()))
+                .thenReturn(true);
+
+        spaceService.deleteSpace(actorId, space.getId());
+
+        verify(attachmentService, never()).deleteWorkspaceUpload(any(), any());
         verify(spaceRepository).delete(space);
     }
 
