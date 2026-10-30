@@ -23,6 +23,7 @@ import {
 } from '@/stores/documentList/documentList.slice';
 import { resetTree as resetSidebarTree } from '@/stores/sidebarTree/sidebarTree.slice';
 import { resetTree as resetSharedTree } from '@/stores/sharedTree/sharedTree.slice';
+import { resetAllTrees as resetSpaceTrees } from '@/stores/spaceTree/spaceTree.slice';
 import { subscribeDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 
 export type { LocalDocumentEntry, SharedDocumentEntry };
@@ -72,6 +73,7 @@ export function useDocumentList() {
       dispatch(resetOnAuthTransition({ isAuthenticated }));
       dispatch(resetSidebarTree());
       dispatch(resetSharedTree());
+      dispatch(resetSpaceTrees());
     }
 
     prevIsAuthenticatedRef.current = isAuthenticated;

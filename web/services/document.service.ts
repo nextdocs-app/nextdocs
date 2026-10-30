@@ -450,7 +450,8 @@ class DocumentService {
     size = 20,
     options?: {
       parentId?: string;
-      scope?: 'all' | 'private' | 'shared';
+      scope?: 'all' | 'private' | 'shared' | 'space';
+      spaceId?: string;
       trashed?: boolean;
       sort?: string;
     }
@@ -465,6 +466,9 @@ class DocumentService {
     }
     if (options?.scope) {
       params.set('scope', options.scope);
+    }
+    if (options?.spaceId) {
+      params.set('spaceId', options.spaceId);
     }
     if (options?.trashed) {
       params.set('trashed', 'true');
@@ -545,19 +549,21 @@ class DocumentService {
     }
   }
 
-  public async listRootTreeNodes(accessToken: string, page = 0, size = 50): Promise<TreeNodePage> {
-    const pageResult = await this.listCloudDocuments(accessToken, page, size, {
-      parentId: 'root',
-      scope: 'private',
-    });
-
+  /**
+   * Sidebar tree nodes for one listing page. The tree listings differ only in the
+   * access level they fall back to, so the mapping lives here once.
+   */
+  private toTreeNodePage(
+    pageResult: CloudDocumentsPage,
+    accessLevelOf: (item: CloudDocumentsPage['items'][number]) => TreeNode['effectiveAccessLevel']
+  ): TreeNodePage {
     const items = pageResult.items.map((item) => ({
       id: item.id,
       title: item.meta.title,
       parentId: item.parentId,
       orderKey: item.orderKey ?? '',
       hasChildren: item.hasChildren ?? false,
-      effectiveAccessLevel: sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER'),
+      effectiveAccessLevel: accessLevelOf(item),
       createdAt: item.meta.createdAt,
       updatedAt: item.meta.updatedAt,
       // `toDocumentMeta` already sanitized, but re-validate at the tree
@@ -576,6 +582,17 @@ class DocumentService {
     };
   }
 
+  public async listRootTreeNodes(accessToken: string, page = 0, size = 50): Promise<TreeNodePage> {
+    const pageResult = await this.listCloudDocuments(accessToken, page, size, {
+      parentId: 'root',
+      scope: 'private',
+    });
+
+    return this.toTreeNodePage(pageResult, (item) =>
+      sanitizeDocumentAccessLevel(item.accessLevel, 'OWNER')
+    );
+  }
+
   public async listChildTreeNodes(
     parentId: string,
     accessToken: string,
@@ -586,27 +603,7 @@ class DocumentService {
       parentId,
     });
 
-    const items = pageResult.items.map((item) => ({
-      id: item.id,
-      title: item.meta.title,
-      parentId: item.parentId,
-      orderKey: item.orderKey ?? '',
-      hasChildren: item.hasChildren ?? false,
-      effectiveAccessLevel: sanitizeNullableAccessLevel(item.accessLevel),
-      createdAt: item.meta.createdAt,
-      updatedAt: item.meta.updatedAt,
-      icon: sanitizeDocumentIcon(item.meta.icon) ?? null,
-    }));
-    this.cacheParentLinks(items);
-
-    return {
-      items,
-      page: pageResult.page,
-      size: pageResult.size,
-      totalElements: pageResult.totalElements,
-      totalPages: pageResult.totalPages,
-      hasMore: pageResult.hasMore,
-    };
+    return this.toTreeNodePage(pageResult, (item) => sanitizeNullableAccessLevel(item.accessLevel));
   }
 
   public async moveDocument(
@@ -808,6 +805,25 @@ class DocumentService {
     });
   }
 
+  /**
+   * Root documents filed into one space, as tree nodes for the sidebar's space
+   * groups. The server already drops documents the caller cannot open, so callers
+   * render what arrives; nested documents load through `listChildTreeNodes`.
+   */
+  public async listSpaceRootTreeNodes(
+    accessToken: string,
+    spaceId: string,
+    page = 0,
+    size = 100
+  ): Promise<TreeNodePage> {
+    const pageResult = await this.listCloudDocuments(accessToken, page, size, {
+      scope: 'space',
+      spaceId,
+    });
+
+    return this.toTreeNodePage(pageResult, (item) => sanitizeNullableAccessLevel(item.accessLevel));
+  }
+
   /** One collaborator row, from any endpoint that answers with collaborator rows. */
   private toCollaborator(item: ApiCollaborator): Collaborator {
     return {
@@ -973,7 +989,8 @@ class DocumentService {
     createdBy?: string | null,
     parentId?: string | null,
     prevSiblingId?: string | null,
-    nextSiblingId?: string | null
+    nextSiblingId?: string | null,
+    spaceId?: string | null
   ): Promise<{ id: string; ydoc: Y.Doc; meta: DocumentMeta }> {
     const documentYDoc = ydoc ?? createYjsDoc();
     const payload = {
@@ -984,6 +1001,7 @@ class DocumentService {
       parentId: parentId ?? null,
       prevSiblingId: prevSiblingId ?? null,
       nextSiblingId: nextSiblingId ?? null,
+      spaceId: spaceId ?? null,
     };
 
     const body = await this.fetchApi<ApiDocument>('/api/v1/documents', {

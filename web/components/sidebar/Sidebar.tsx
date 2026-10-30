@@ -18,6 +18,7 @@ import {
   setSearchQuery,
   togglePrivateOpen,
   toggleSharedOpen,
+  toggleSpacesOpen,
   setDocActionsAnchor,
 } from '@/stores/sidebar/sidebar.slice';
 import {
@@ -74,10 +75,15 @@ import {
   moveDocumentThunk as sharedMoveDocumentThunk,
   resetTree as resetSharedTree,
 } from '@/stores/sharedTree/sharedTree.slice';
+import {
+  removeDocument as removeSpaceTreeDocument,
+  resetAllTrees as resetSpaceTrees,
+} from '@/stores/spaceTree/spaceTree.slice';
 
 // Import sub-components
 import { SharedTree } from './SharedTree';
 import { SidebarTree } from './SidebarTree';
+import { SpacesSection } from './SpacesSection';
 import { WorkspaceLockup } from './WorkspaceLockup';
 import { WorkspaceMenuPopup } from './WorkspaceMenuPopup';
 import { ProfileMenuPopup } from './ProfileMenuPopup';
@@ -156,6 +162,7 @@ function Sidebar() {
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isPrivateOpen = useAppSelector((state) => state.sidebar.isPrivateOpen);
   const isSharedOpen = useAppSelector((state) => state.sidebar.isSharedOpen);
+  const isSpacesOpen = useAppSelector((state) => state.sidebar.isSpacesOpen);
   const documentsPanelMode = useAppSelector((state) => state.sidebar.panelMode);
   const docActionsAnchor = useAppSelector((state) => state.sidebar.docActionsAnchor);
   const searchQuery = useAppSelector((state) => state.sidebar.searchQuery);
@@ -960,6 +967,7 @@ function Sidebar() {
         dispatch(setDocActionsAnchor(null));
         dispatch(removeNode(docId));
         dispatch(sharedRemoveNode(docId));
+        dispatch(removeSpaceTreeDocument(docId));
 
         if (activeDocId === docId) {
           await navigateToResolvedRootDocument({ excludedDocumentIds: [docId] });
@@ -1194,6 +1202,27 @@ function Sidebar() {
       {/* Document sections and account menu */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
         <div className="ml-1">
+          {/* Spaces sit above the documents: their documents are no longer part of
+              the Private tree, so this is where a filed document is reachable. */}
+          {isAuthenticated && accessToken && (
+            <SpacesSection
+              accessToken={accessToken}
+              activeDocId={activeDocId}
+              isOpen={isSpacesOpen}
+              onToggle={() => dispatch(toggleSpacesOpen())}
+              onSelectDocument={(documentId) => {
+                dispatch(setDocActionsAnchor(null));
+                handleSelectDocument(documentId);
+              }}
+              selfId={user?.id ?? null}
+              theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+              sidebarRef={sidebarRef}
+              docActionsAnchor={docActionsAnchor}
+              onToggleDocumentActions={handleToggleDocumentActions}
+              className="mb-1"
+            />
+          )}
+
           <SidebarTreeDndContext treeApi={sidebarTreeApi}>
             {/* Guests have no private workspace: their only documents are
                   share links, which the Shared section below lists. */}
@@ -1343,6 +1372,7 @@ function Sidebar() {
             dispatch(setAccountMenuOpen(false));
             dispatch(resetSidebarTree());
             dispatch(resetSharedTree());
+            dispatch(resetSpaceTrees());
             await logout();
             await navigateToResolvedRootDocument({
               isAuthenticated: false,

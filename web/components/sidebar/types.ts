@@ -19,6 +19,16 @@ export type DocActionsAnchor = {
   panelEdgeX: number | null;
 };
 
+/**
+ * An open space menu, anchored the same way as a document's: the trigger's
+ * viewport rect plus the rail edge the menu straddles on desktop.
+ */
+export type SpaceActionsAnchor = {
+  spaceId: string;
+  trigger: MenuRect;
+  panelEdgeX: number | null;
+};
+
 export type SidebarSectionDocument = LocalDocumentEntry | SharedDocumentEntry;
 
 export const SIDEBAR_VISIBLE_COUNT = 7;

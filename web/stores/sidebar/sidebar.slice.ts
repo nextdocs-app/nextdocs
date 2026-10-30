@@ -9,6 +9,7 @@ export interface SidebarState {
   searchQuery: string;
   isPrivateOpen: boolean;
   isSharedOpen: boolean;
+  isSpacesOpen: boolean;
   docActionsAnchor: DocActionsAnchor | null;
   /**
    * Mobile only: whether the off-canvas navigation drawer is showing. Kept
@@ -25,6 +26,7 @@ const initialState: SidebarState = {
   searchQuery: '',
   isPrivateOpen: true,
   isSharedOpen: true,
+  isSpacesOpen: true,
   docActionsAnchor: null,
   isMobileNavOpen: false,
 };
@@ -57,6 +59,9 @@ const sidebarSlice = createSlice({
     toggleSharedOpen(state) {
       state.isSharedOpen = !state.isSharedOpen;
     },
+    toggleSpacesOpen(state) {
+      state.isSpacesOpen = !state.isSpacesOpen;
+    },
     setDocActionsAnchor(state, action: PayloadAction<DocActionsAnchor | null>) {
       state.docActionsAnchor = action.payload;
     },
@@ -78,6 +83,7 @@ export const {
   setSearchQuery,
   togglePrivateOpen,
   toggleSharedOpen,
+  toggleSpacesOpen,
   setDocActionsAnchor,
   resetSidebar,
 } = sidebarSlice.actions;
