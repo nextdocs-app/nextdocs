@@ -180,6 +180,11 @@ public class DocumentService {
             }
             siblingOrderKey = resolveInitialSiblingOrderKey(
                     request.parentId(), request.prevSiblingId(), request.nextSiblingId(), documentId);
+        } else if (space != null) {
+            // Space-root pages share one order for every member, so the key lives on the
+            // document just like a nested page's key, not in the caller's personal table.
+            siblingOrderKey = resolveInitialSpaceSiblingOrderKey(
+                    space.getId(), request.prevSiblingId(), request.nextSiblingId(), documentId);
         }
 
         Document document = Document.builder()
@@ -202,8 +207,12 @@ public class DocumentService {
         Document saved = documentRepository.saveAndFlush(document);
 
         if (parent == null) {
-            String userOrderKey =
-                    resolveInitialUserOrderKey(userId, request.prevSiblingId(), request.nextSiblingId(), documentId);
+            // A space page's sidebar position comes from the shared key above. Its personal
+            // row only matters if the page is later detached, so it is placed at the top of
+            // the caller's private navigation instead of using the space siblings' keys.
+            String userOrderKey = space != null
+                    ? resolveInitialUserOrderKey(userId, null, null, documentId)
+                    : resolveInitialUserOrderKey(userId, request.prevSiblingId(), request.nextSiblingId(), documentId);
             UserDocumentOrder udo = UserDocumentOrder.builder()
                     .user(user)
                     .document(saved)
@@ -659,7 +668,14 @@ public class DocumentService {
             }
             throw new ApiException(ErrorCode.CONFLICT, "The page already belongs to another space.");
         }
+        // Append inside the space's shared order. The page may have carried a sibling key
+        // from a space it left earlier, but only the unique active keys of this space matter.
+        String maxKey = documentRepository
+                .findMaxSpaceSiblingOrderKey(spaceId, documentId)
+                .filter(FractionalIndex::isValidOrderKey)
+                .orElse(null);
         document.setSpace(space);
+        document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
         return toResponse(documentRepository.save(document), true, userId);
     }
 
@@ -678,7 +694,13 @@ public class DocumentService {
             throw new ApiException(ErrorCode.NOT_FOUND, "The page is not in this space.");
         }
         document.setSpace(null);
+        // Root-page ordering outside a space is the caller's personal navigation row,
+        // so the shared key has no meaning once the page is detached.
+        document.setSiblingOrderKey(null);
         documentRepository.save(document);
+        // The page lands in the owner's Private section, where its position is personal:
+        // without a row it has none, so give it a fresh slot at the top.
+        ensurePersonalOrderRow(document.getUser(), document);
     }
 
     public DocumentResponse restore(UUID userId, UUID documentId) {
@@ -722,24 +744,39 @@ public class DocumentService {
                 document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
             }
         } else {
-            UUID ownerId = document.getUser().getId();
-            java.util.Optional<UserDocumentOrder> existingOpt =
-                    userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId);
-            String existingKey = existingOpt.map(UserDocumentOrder::getOrderKey).orElse(null);
-            boolean needsRegenerate =
-                    forceRegenerate || existingOpt.isEmpty() || !FractionalIndex.isValidOrderKey(existingKey);
-            if (needsRegenerate) {
-                String maxKey = userDocumentOrderRepository
-                        .findMaxOrderKeyByUserId(ownerId, documentId)
-                        .filter(FractionalIndex::isValidOrderKey)
-                        .orElse(null);
-                String newKey = FractionalIndex.keyBetween(maxKey, null);
-                UserDocumentOrder udo = existingOpt.orElseGet(() -> UserDocumentOrder.builder()
-                        .user(document.getUser())
-                        .document(document)
-                        .build());
-                udo.setOrderKey(newKey);
-                userDocumentOrderRepository.saveAndFlush(udo);
+            if (document.getSpace() != null) {
+                // A space page's position is shared and unique among active pages of that
+                // space. A valid key may still collide if another page took the position
+                // while this one sat in trash; that retries with forceRegenerate after the
+                // unique index rejects the flush.
+                if (forceRegenerate || !FractionalIndex.isValidOrderKey(document.getSiblingOrderKey())) {
+                    String maxKey = documentRepository
+                            .findMaxSpaceSiblingOrderKey(document.getSpace().getId(), document.getId())
+                            .filter(FractionalIndex::isValidOrderKey)
+                            .orElse(null);
+                    document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
+                }
+            } else {
+                UUID ownerId = document.getUser().getId();
+                java.util.Optional<UserDocumentOrder> existingOpt =
+                        userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId);
+                String existingKey =
+                        existingOpt.map(UserDocumentOrder::getOrderKey).orElse(null);
+                boolean needsRegenerate =
+                        forceRegenerate || existingOpt.isEmpty() || !FractionalIndex.isValidOrderKey(existingKey);
+                if (needsRegenerate) {
+                    String maxKey = userDocumentOrderRepository
+                            .findMaxOrderKeyByUserId(ownerId, documentId)
+                            .filter(FractionalIndex::isValidOrderKey)
+                            .orElse(null);
+                    String newKey = FractionalIndex.keyBetween(maxKey, null);
+                    UserDocumentOrder udo = existingOpt.orElseGet(() -> UserDocumentOrder.builder()
+                            .user(document.getUser())
+                            .document(document)
+                            .build());
+                    udo.setOrderKey(newKey);
+                    userDocumentOrderRepository.saveAndFlush(udo);
+                }
             }
 
             for (DocumentCollaborator collaborator : collaboratorRepository.findAllByDocument_Id(documentId)) {
@@ -970,7 +1007,11 @@ public class DocumentService {
         }
 
         String orderKey;
-        if (callerUserId != null && !document.getUser().getId().equals(callerUserId)) {
+        if (document.getParent() == null && document.getSpace() != null) {
+            // Space pages are shared content: the space's key wins for every caller,
+            // including the owner and collaborators who also carry a personal row.
+            orderKey = document.getSiblingOrderKey();
+        } else if (callerUserId != null && !document.getUser().getId().equals(callerUserId)) {
             boolean isFloatedOrRoot;
             if (document.getParent() == null) {
                 isFloatedOrRoot = true;
@@ -1075,20 +1116,23 @@ public class DocumentService {
         if (collaborator.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
             return;
         }
-        UUID collaboratorId = collaborator.getUser().getId();
-        if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, document.getId())) {
+        ensurePersonalOrderRow(collaborator.getUser(), document);
+    }
+
+    /** Gives a user without a personal navigation row a fresh position at the top. */
+    private void ensurePersonalOrderRow(User user, Document document) {
+        if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(user.getId(), document.getId())) {
             return;
         }
         String minKey = userDocumentOrderRepository
-                .findMinOrderKeyByUserId(collaboratorId, document.getId())
+                .findMinOrderKeyByUserId(user.getId(), document.getId())
                 .filter(FractionalIndex::isValidOrderKey)
                 .orElse(null);
-        UserDocumentOrder cudo = UserDocumentOrder.builder()
-                .user(collaborator.getUser())
+        userDocumentOrderRepository.saveAndFlush(UserDocumentOrder.builder()
+                .user(user)
                 .document(document)
                 .orderKey(FractionalIndex.keyBetween(null, minKey))
-                .build();
-        userDocumentOrderRepository.saveAndFlush(cudo);
+                .build());
     }
 
     private String resolveInitialSiblingOrderKey(UUID parentId, UUID prevSiblingId, UUID nextSiblingId, UUID selfId) {
@@ -1148,6 +1192,69 @@ public class DocumentService {
             return FractionalIndex.keyBetween(prevKey, nextKey);
         } catch (IllegalArgumentException ex) {
             throw new ApiException(ErrorCode.CONFLICT, "The sibling ordering has changed concurrently. Please retry.");
+        }
+    }
+
+    private String resolveInitialSpaceSiblingOrderKey(
+            UUID spaceId, UUID prevSiblingId, UUID nextSiblingId, UUID selfId) {
+        String prevKey = null;
+        if (prevSiblingId != null) {
+            Document prevDoc = documentRepository
+                    .findByIdAndDeletedAtIsNull(prevSiblingId)
+                    .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "prevSiblingId not found."));
+            validateSpaceSibling(prevDoc, spaceId, "prevSiblingId");
+            String rawPrev = prevDoc.getSiblingOrderKey();
+            if (rawPrev == null || !FractionalIndex.isValidOrderKey(rawPrev)) {
+                throw new ApiException(
+                        ErrorCode.VALIDATION_FAILED, "prevSiblingId has an invalid order key; reindex required.");
+            }
+            prevKey = rawPrev;
+        }
+
+        String nextKey = null;
+        if (nextSiblingId != null) {
+            Document nextDoc = documentRepository
+                    .findByIdAndDeletedAtIsNull(nextSiblingId)
+                    .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "nextSiblingId not found."));
+            validateSpaceSibling(nextDoc, spaceId, "nextSiblingId");
+            String rawNext = nextDoc.getSiblingOrderKey();
+            if (rawNext == null || !FractionalIndex.isValidOrderKey(rawNext)) {
+                throw new ApiException(
+                        ErrorCode.VALIDATION_FAILED, "nextSiblingId has an invalid order key; reindex required.");
+            }
+            nextKey = rawNext;
+        }
+
+        if (prevKey != null && nextKey != null) {
+            if (prevKey.compareTo(nextKey) > 0) {
+                String temp = prevKey;
+                prevKey = nextKey;
+                nextKey = temp;
+            } else if (prevKey.equals(nextKey)) {
+                throw new ApiException(ErrorCode.CONFLICT, "Sibling order keys are identical. Please retry.");
+            }
+        }
+
+        if (prevKey == null && nextKey == null) {
+            String minKey = documentRepository
+                    .findMinSpaceSiblingOrderKey(spaceId, selfId)
+                    .filter(FractionalIndex::isValidOrderKey)
+                    .orElse(null);
+            return FractionalIndex.keyBetween(null, minKey);
+        }
+
+        try {
+            return FractionalIndex.keyBetween(prevKey, nextKey);
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(ErrorCode.CONFLICT, "The sibling ordering has changed concurrently. Please retry.");
+        }
+    }
+
+    private static void validateSpaceSibling(Document sibling, UUID spaceId, String label) {
+        if (sibling.getParent() != null
+                || sibling.getSpace() == null
+                || !sibling.getSpace().getId().equals(spaceId)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, label + " does not belong to the specified space.");
         }
     }
 

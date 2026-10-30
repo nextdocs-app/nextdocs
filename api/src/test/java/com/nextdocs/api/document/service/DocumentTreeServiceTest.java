@@ -5,9 +5,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.auth.entity.User;
@@ -23,6 +25,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.space.entity.Space;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -1002,5 +1005,154 @@ class DocumentTreeServiceTest {
         ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertEquals("sibling does not belong to root navigation", ex.getMessage());
+    }
+
+    // --- space-root pages ---
+
+    private Document spacePage(UUID id, Space space, String siblingOrderKey) {
+        return Document.builder()
+                .id(id)
+                .user(user)
+                .title("Space Page")
+                .space(space)
+                .siblingOrderKey(siblingOrderKey)
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+    }
+
+    @Test
+    void move_spaceRootPage_updatesTheSpacesSharedKeyAndNoPersonalOrder() {
+        UUID docId = UUID.randomUUID();
+        UUID prevSiblingId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+
+        Document doc = spacePage(docId, space, "a5");
+        Document prevSibling = spacePage(prevSiblingId, space, "a0");
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        DocumentResponse result =
+                documentTreeService.move(userId, docId, new DocumentMoveRequest(null, prevSiblingId, null));
+
+        assertNull(result.parentId());
+        assertTrue(result.orderKey().compareTo("a0") > 0);
+        assertTrue(result.orderKey().compareTo("a5") < 0);
+        assertEquals(result.orderKey(), doc.getSiblingOrderKey());
+        // The row itself carries the order; no personal navigation row is written.
+        verifyNoInteractions(userDocumentOrderRepository);
+    }
+
+    @Test
+    void move_spaceRootPage_toTheEnd_appendsAfterTheSpacesLastPage() {
+        UUID docId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document doc = spacePage(docId, space, "a5");
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.findMaxSpaceSiblingOrderKey(space.getId(), docId))
+                .thenReturn(Optional.of("a5"));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        DocumentResponse result = documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null));
+
+        assertEquals("a6", result.orderKey());
+    }
+
+    @Test
+    void move_spaceRootPage_rejectsASiblingFromAnotherSpace() {
+        UUID docId = UUID.randomUUID();
+        UUID siblingId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Space otherSpace =
+                Space.builder().id(UUID.randomUUID()).name("Handbook").build();
+        Document doc = spacePage(docId, space, "a1");
+        Document sibling = spacePage(siblingId, otherSpace, "a0");
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(documentRepository.findByIdAndDeletedAtIsNull(siblingId)).thenReturn(Optional.of(sibling));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, siblingId, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("specified space"));
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void move_spaceRootPage_requiresEditEvenForAReader() {
+        UUID docId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document doc = spacePage(docId, space, "a1");
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.requireEditAccess(userId, docId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void move_spaceRootPage_collision_reindexesTheSpaceSiblingsAndRetries() {
+        UUID docId = UUID.randomUUID();
+        UUID prevSiblingId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document doc = spacePage(docId, space, "a5");
+        Document prevSibling = spacePage(prevSiblingId, space, "a0");
+        List<Document> siblings = List.of(prevSibling, doc);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.findAllSpaceRootSiblingsForReindex(space.getId()))
+                .thenReturn(siblings);
+        when(documentRepository.saveAndFlush(any(Document.class)))
+                .thenThrow(new DataIntegrityViolationException("sibling_order_key unique violation"))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        List<List<String>> keySnapshots = new ArrayList<>();
+        doAnswer(invocation -> {
+                    keySnapshots.add(
+                            siblings.stream().map(Document::getSiblingOrderKey).toList());
+                    return null;
+                })
+                .when(documentRepository)
+                .flush();
+
+        DocumentResponse result =
+                documentTreeService.move(userId, docId, new DocumentMoveRequest(null, prevSiblingId, null));
+
+        assertNotNull(result.orderKey());
+        verify(documentRepository, times(2)).saveAndFlush(any(Document.class));
+        verify(documentRepository).findAllSpaceRootSiblingsForReindex(space.getId());
+
+        // The retry parks every page on a distinct temporary key, so no page can collide
+        // with a sibling's not-yet-replaced key under the unique index...
+        assertEquals(2, keySnapshots.size());
+        List<String> parkedKeys = keySnapshots.get(0);
+        assertEquals(siblings.size(), parkedKeys.stream().distinct().count());
+        parkedKeys.forEach(key -> assertFalse(FractionalIndex.isValidOrderKey(key)));
+
+        // ...before writing the final keys in one ordered, collision-free pass.
+        List<String> finalKeys = keySnapshots.get(1);
+        finalKeys.forEach(key -> assertTrue(FractionalIndex.isValidOrderKey(key)));
+        assertEquals(finalKeys.stream().sorted().toList(), finalKeys);
     }
 }

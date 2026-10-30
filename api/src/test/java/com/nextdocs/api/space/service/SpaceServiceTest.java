@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,18 +18,22 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
+import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
+import com.nextdocs.api.space.dto.request.SpaceMoveRequest;
 import com.nextdocs.api.space.dto.request.SpaceUpdateRequest;
 import com.nextdocs.api.space.dto.response.SpaceMemberResponse;
 import com.nextdocs.api.space.dto.response.SpaceResponse;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.entity.UserSpaceOrder;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.space.repository.UserSpaceOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
@@ -35,15 +41,18 @@ import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 class SpaceServiceTest {
@@ -53,6 +62,9 @@ class SpaceServiceTest {
 
     @Mock
     private SpaceMemberRepository memberRepository;
+
+    @Mock
+    private UserSpaceOrderRepository userSpaceOrderRepository;
 
     @Mock
     private DocumentRepository documentRepository;
@@ -87,6 +99,7 @@ class SpaceServiceTest {
         spaceService = new SpaceService(
                 spaceRepository,
                 memberRepository,
+                userSpaceOrderRepository,
                 documentRepository,
                 workspaceAccessService,
                 workspaceMemberRepository,
@@ -543,10 +556,329 @@ class SpaceServiceTest {
     }
 
     @Test
+    void createSpace_placesTheNewSpaceAtTheTopOfTheCallersOrder() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> {
+            Space saved = invocation.getArgument(0);
+            saved.setId(space.getId());
+            saved.setCreatedAt(OffsetDateTime.now());
+            saved.setUpdatedAt(OffsetDateTime.now());
+            return saved;
+        });
+        when(userSpaceOrderRepository.findMinOrderKeyByUserId(actorId)).thenReturn(Optional.of("a5"));
+
+        SpaceResponse response =
+                spaceService.createSpace(actorId, new SpaceCreateRequest("Engineering", null, null, null));
+
+        ArgumentCaptor<UserSpaceOrder> captor = ArgumentCaptor.forClass(UserSpaceOrder.class);
+        verify(userSpaceOrderRepository).saveAndFlush(captor.capture());
+        UserSpaceOrder order = captor.getValue();
+        assertThat(order.getUser()).isSameAs(actor);
+        assertThat(order.getSpace().getId()).isEqualTo(space.getId());
+        assertThat(order.getOrderKey()).isLessThan("a5");
+        assertThat(response.orderKey()).isEqualTo(order.getOrderKey());
+    }
+
+    @Test
+    void listSpaces_carriesEachSpacesPersonalOrderKey() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space publicSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space, publicSpace));
+        when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
+        when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {publicSpace.getId(), "a1"}));
+
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
+
+        assertThat(spaces).extracting(SpaceResponse::name).containsExactly("Engineering", "Handbook");
+        assertThat(spaces).extracting(SpaceResponse::orderKey).containsExactly(null, "a1");
+    }
+
+    @Test
+    void listSpaces_omitsAnInvalidPersonalOrderKey() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space));
+        when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of(member(actor, DocumentAccessLevel.OWNER)));
+        when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {space.getId(), "~reindex-0"}));
+
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
+
+        // An unparseable position is no position: the client keeps creation order until
+        // a move rebuilds the row.
+        assertThat(spaces.get(0).orderKey()).isNull();
+    }
+
+    @Test
+    void moveSpace_prependsBeforeTheNextSibling() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space nextSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(spaceAccessService.requireRead(actorId, nextSpace.getId()))
+                .thenReturn(new SpaceContext(nextSpace, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(nextSpace, space));
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(
+                        List.<Object[]>of(new Object[] {nextSpace.getId(), "a1"}, new Object[] {space.getId(), "a2"}));
+        when(userSpaceOrderRepository.findOrderKeyByUserIdAndSpaceId(actorId, nextSpace.getId()))
+                .thenReturn(Optional.of("a1"));
+        UserSpaceOrder order =
+                UserSpaceOrder.builder().user(actor).space(space).orderKey("a2").build();
+        when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
+                .thenReturn(Optional.of(order));
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(3L);
+
+        SpaceResponse response =
+                spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(null, nextSpace.getId()));
+
+        assertThat(response.orderKey()).isLessThan("a1");
+        assertThat(order.getOrderKey()).isEqualTo(response.orderKey());
+        verify(userSpaceOrderRepository).saveAndFlush(order);
+    }
+
+    @Test
+    void moveSpace_rejectsAnArchivedSpace() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        space.setArchivedAt(OffsetDateTime.now());
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+
+        assertThatThrownBy(() -> spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(null, null)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+        verify(userSpaceOrderRepository, never()).saveAndFlush(any(UserSpaceOrder.class));
+    }
+
+    @Test
+    void moveSpace_afterThePreviousSibling_landsBeforeTheActualSuccessor() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space prevSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        Space successor = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Design")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(spaceAccessService.requireRead(actorId, prevSpace.getId()))
+                .thenReturn(new SpaceContext(prevSpace, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId))
+                .thenReturn(List.of(prevSpace, successor, space));
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(
+                        new Object[] {prevSpace.getId(), "a1"},
+                        new Object[] {successor.getId(), "a2"},
+                        new Object[] {space.getId(), "a5"}));
+        when(userSpaceOrderRepository.findOrderKeyByUserIdAndSpaceId(actorId, prevSpace.getId()))
+                .thenReturn(Optional.of("a1"));
+        when(userSpaceOrderRepository.findMinOrderKeyGreaterThan(actorId, "a1", space.getId()))
+                .thenReturn(Optional.of("a2"));
+        UserSpaceOrder order =
+                UserSpaceOrder.builder().user(actor).space(space).orderKey("a5").build();
+        when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
+                .thenReturn(Optional.of(order));
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(0L);
+
+        SpaceResponse response =
+                spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(prevSpace.getId(), null));
+
+        // The new key fills the gap after the previous sibling, before the space that
+        // currently follows it - not merely somewhere after the previous sibling.
+        assertThat(response.orderKey()).isGreaterThan("a1").isLessThan("a2");
+        verify(userSpaceOrderRepository).findMinOrderKeyGreaterThan(actorId, "a1", space.getId());
+    }
+
+    @Test
+    void moveSpace_toTheEnd_materializesMissingRowsInDisplayedOrderThenAppends() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space second = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        Space third = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Design")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId))
+                .thenReturn(List.of(space, second, third));
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {space.getId(), "a1"}));
+        when(userRepository.findById(actorId)).thenReturn(Optional.of(actor));
+        when(userSpaceOrderRepository.findMaxOrderKeyByUserId(actorId, space.getId()))
+                .thenReturn(Optional.of("a3"));
+        UserSpaceOrder order =
+                UserSpaceOrder.builder().user(actor).space(space).orderKey("a1").build();
+        when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
+                .thenReturn(Optional.of(order));
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(1L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(0L);
+
+        SpaceResponse response = spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(null, null));
+
+        // The unseen spaces get keys in the order the caller already sees them, and the
+        // moved space then appends after the last of them.
+        ArgumentCaptor<UserSpaceOrder> created = ArgumentCaptor.forClass(UserSpaceOrder.class);
+        verify(userSpaceOrderRepository, times(2)).save(created.capture());
+        assertThat(created.getAllValues()).extracting(UserSpaceOrder::getSpace).containsExactly(second, third);
+        assertThat(created.getAllValues())
+                .extracting(UserSpaceOrder::getOrderKey)
+                .containsExactly("a2", "a3");
+        verify(userSpaceOrderRepository).flush();
+        assertThat(order.getOrderKey()).isEqualTo("a4");
+        assertThat(response.orderKey()).isEqualTo("a4");
+    }
+
+    @Test
+    void moveSpace_afterACollision_reindexesThroughTemporaryKeys() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space nextSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        Space thirdSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Design")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        UserSpaceOrder nextOrder = UserSpaceOrder.builder()
+                .user(actor)
+                .space(nextSpace)
+                .orderKey("a1")
+                .build();
+        UserSpaceOrder movedOrder =
+                UserSpaceOrder.builder().user(actor).space(space).orderKey("a2").build();
+        UserSpaceOrder thirdOrder = UserSpaceOrder.builder()
+                .user(actor)
+                .space(thirdSpace)
+                .orderKey("a3")
+                .build();
+        List<UserSpaceOrder> existingOrders = List.of(nextOrder, movedOrder, thirdOrder);
+
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(spaceAccessService.requireRead(actorId, nextSpace.getId()))
+                .thenReturn(new SpaceContext(nextSpace, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId))
+                .thenReturn(List.of(nextSpace, space, thirdSpace));
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(
+                        new Object[] {nextSpace.getId(), "a1"},
+                        new Object[] {space.getId(), "a2"},
+                        new Object[] {thirdSpace.getId(), "a3"}));
+        when(userSpaceOrderRepository.findOrderKeyByUserIdAndSpaceId(actorId, nextSpace.getId()))
+                .thenReturn(Optional.of("a1"));
+        when(userSpaceOrderRepository.findMinOrderKeyGreaterThan(actorId, "a1", space.getId()))
+                .thenReturn(Optional.of("a3"));
+        when(userSpaceOrderRepository.findByUser_IdAndSpace_Id(actorId, space.getId()))
+                .thenReturn(Optional.of(movedOrder));
+        when(userSpaceOrderRepository.findAllForReindex(actorId)).thenReturn(existingOrders);
+        when(userSpaceOrderRepository.saveAndFlush(movedOrder))
+                .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(3L);
+        when(documentRepository.countBySpace_IdAndDeletedAtIsNull(space.getId()))
+                .thenReturn(0L);
+
+        List<List<String>> keySnapshots = new ArrayList<>();
+        doAnswer(invocation -> {
+                    keySnapshots.add(existingOrders.stream()
+                            .map(UserSpaceOrder::getOrderKey)
+                            .toList());
+                    return null;
+                })
+                .when(userSpaceOrderRepository)
+                .flush();
+
+        SpaceResponse response =
+                spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(nextSpace.getId(), null));
+
+        assertThat(response.orderKey()).isEqualTo("a2");
+        verify(userSpaceOrderRepository).findAllForReindex(actorId);
+
+        // The retry parks every row on a distinct temporary key, so no row can collide
+        // with a neighbour's not-yet-replaced key under the unique constraint...
+        int parkedAt = IntStream.range(0, keySnapshots.size())
+                .filter(i -> keySnapshots.get(i).size() == existingOrders.size()
+                        && keySnapshots.get(i).stream().noneMatch(FractionalIndex::isValidOrderKey))
+                .findFirst()
+                .orElseThrow();
+        assertThat(keySnapshots.get(parkedAt)).doesNotHaveDuplicates();
+
+        // ...before writing the final keys in one ordered, collision-free pass.
+        assertThat(keySnapshots.get(parkedAt + 1))
+                .hasSize(existingOrders.size())
+                .allSatisfy(
+                        key -> assertThat(FractionalIndex.isValidOrderKey(key)).isTrue())
+                .isSorted()
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
+    void moveSpace_rejectsASiblingTheCallerCannotRead() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        UUID invisibleSiblingId = UUID.randomUUID();
+        when(spaceAccessService.requireRead(actorId, space.getId()))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(space));
+        when(userSpaceOrderRepository.findOrderKeysByUserIdAndSpaceIds(eq(actorId), any()))
+                .thenReturn(List.<Object[]>of(new Object[] {space.getId(), "a1"}));
+        when(spaceAccessService.requireRead(actorId, invisibleSiblingId))
+                .thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        assertThatThrownBy(() ->
+                        spaceService.moveSpace(actorId, space.getId(), new SpaceMoveRequest(invisibleSiblingId, null)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        verify(userSpaceOrderRepository, never()).saveAndFlush(any(UserSpaceOrder.class));
+    }
+
+    @Test
     void listSpaces_givesAWorkspaceAdminEveryActiveSpace() {
         callerIsWorkspaceMember(WorkspaceRole.ADMIN);
-        when(spaceRepository.findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(workspace.getId()))
-                .thenReturn(List.of(space));
+        when(spaceRepository.findAllActiveForUser(workspace.getId(), actorId)).thenReturn(List.of(space));
         when(memberRepository.findAllByUser_Id(actorId)).thenReturn(List.of());
         when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
         when(documentRepository.countNonTrashedBySpaceIds(any())).thenReturn(List.<Object[]>of());
@@ -557,7 +889,7 @@ class SpaceServiceTest {
         assertThat(spaces.get(0).myAccessLevel()).isNull();
         assertThat(spaces.get(0).canAdminister()).isTrue();
         verify(spaceRepository, never()).findAllVisibleToUser(any(), any());
-        verify(spaceRepository).findAllByWorkspace_IdAndArchivedAtIsNullOrderByCreatedAtAsc(eq(workspace.getId()));
+        verify(spaceRepository).findAllActiveForUser(workspace.getId(), actorId);
     }
 
     @Test

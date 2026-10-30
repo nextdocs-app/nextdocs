@@ -230,7 +230,7 @@ public class DocumentListQueryHelper {
     }
 
     /**
-     * Root pages filed into one space, in the caller's personal order. Gated on content
+     * Root pages filed into one space, in the space's shared order. Gated on content
      * read only: a workspace admin who is not a member may administer the space but must
      * not enumerate the pages inside it.
      */
@@ -244,7 +244,6 @@ public class DocumentListQueryHelper {
         }
 
         List<UUID> docIds = docs.stream().map(Document::getId).toList();
-        Map<UUID, String> orderKeys = fetchUserOrderKeys(userId, docIds);
         Map<UUID, Long> childCounts = fetchChildCounts(docIds);
         Set<UUID> collaboratorDocIds = new HashSet<>(collaboratorRepository.findDocumentIdsWithCollaborators(docIds));
         // Resolve owned pages too: an archived space caps every level, ownership included,
@@ -257,7 +256,7 @@ public class DocumentListQueryHelper {
             DocumentAccessLevel access = accessLevels.getOrDefault(doc.getId(), null);
 
             return DocumentResponses.of(
-                    doc, null, orderKeys.get(doc.getId()), hasChildren, hasCollaborators, access, null, null);
+                    doc, null, doc.getSiblingOrderKey(), hasChildren, hasCollaborators, access, null, null);
         });
     }
 
@@ -388,7 +387,11 @@ public class DocumentListQueryHelper {
         return page.map(doc -> {
             boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
             boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
-            String orderKey = doc.getParent() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
+            // A root page inside a space uses the space's shared key; a Private/Shared
+            // root uses the caller's personal navigation key.
+            String orderKey = doc.getParent() != null
+                    ? doc.getSiblingOrderKey()
+                    : doc.getSpace() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
             UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
 
             return DocumentResponses.of(
@@ -438,7 +441,7 @@ public class DocumentListQueryHelper {
 
     private Map<UUID, String> fetchRootOrderKeys(UUID userId, List<Document> docs) {
         List<UUID> rootIds = docs.stream()
-                .filter(document -> document.getParent() == null)
+                .filter(document -> document.getParent() == null && document.getSpace() == null)
                 .map(Document::getId)
                 .toList();
         return fetchUserOrderKeys(userId, rootIds);

@@ -174,6 +174,11 @@ public class DocumentTreeService {
             Document targetDoc = documentRepository
                     .findByIdAndDeletedAtIsNull(documentId)
                     .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+            if (targetDoc.getParent() == null && targetDoc.getSpace() != null) {
+                // Pages filed into a space follow the space's shared order, like nested
+                // pages under a parent: EDIT is required and the key lives on the row.
+                return moveSpaceRootPage(userId, targetDoc, request, rebuildFirst);
+            }
             if (targetDoc.getUser().getId().equals(userId)) {
                 permissionService.requireEditAccess(userId, documentId);
             } else {
@@ -324,6 +329,81 @@ public class DocumentTreeService {
         documentRepository.saveAll(siblings);
     }
 
+    /** Reorders a space-root page inside the space's shared order, never the personal one. */
+    private DocumentResponse moveSpaceRootPage(
+            UUID userId, Document doc, DocumentMoveRequest request, boolean rebuildFirst) {
+        permissionService.requireEditAccess(userId, doc.getId());
+        UUID spaceId = doc.getSpace().getId();
+
+        if (rebuildFirst) {
+            reindexSpaceSiblings(spaceId);
+        }
+
+        String prevKey = resolveSpaceSiblingNeighborKey(request.prevSiblingId(), doc.getId(), spaceId);
+        String nextKey = resolveSpaceSiblingNeighborKey(request.nextSiblingId(), doc.getId(), spaceId);
+
+        if (prevKey != null && nextKey != null && prevKey.compareTo(nextKey) > 0) {
+            String lower = prevKey;
+            prevKey = nextKey;
+            nextKey = lower;
+        }
+
+        if (prevKey != null && !FractionalIndex.isValidOrderKey(prevKey)
+                || nextKey != null && !FractionalIndex.isValidOrderKey(nextKey)
+                || prevKey != null && prevKey.equals(nextKey)) {
+            reindexSpaceSiblings(spaceId);
+            prevKey = resolveSpaceSiblingNeighborKey(request.prevSiblingId(), doc.getId(), spaceId);
+            nextKey = resolveSpaceSiblingNeighborKey(request.nextSiblingId(), doc.getId(), spaceId);
+
+            if (prevKey != null && nextKey != null && prevKey.compareTo(nextKey) > 0) {
+                String lower = prevKey;
+                prevKey = nextKey;
+                nextKey = lower;
+            }
+        }
+
+        if (prevKey == null && nextKey == null) {
+            prevKey = documentRepository
+                    .findMaxSpaceSiblingOrderKey(spaceId, doc.getId())
+                    .filter(FractionalIndex::isValidOrderKey)
+                    .orElse(null);
+        }
+
+        String newSiblingOrderKey;
+        try {
+            newSiblingOrderKey = FractionalIndex.keyBetween(prevKey, nextKey);
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid space sibling key interval: prevKey={} nextKey={}", prevKey, nextKey, ex);
+            throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
+        }
+
+        doc.setSiblingOrderKey(newSiblingOrderKey);
+        Document saved = documentRepository.saveAndFlush(doc);
+
+        boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(doc.getId());
+        boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(doc.getId());
+        DocumentAccessLevel access = permissionService.resolveAccess(userId, doc.getId());
+        return DocumentResponses.of(saved, null, newSiblingOrderKey, hasChildren, hasCollaborators, access, null, null);
+    }
+
+    private void reindexSpaceSiblings(UUID spaceId) {
+        List<Document> siblings = documentRepository.findAllSpaceRootSiblingsForReindex(spaceId);
+        if (siblings.isEmpty()) return;
+        // Park every page on a temporary key first: a page's final key can equal a
+        // sibling's current key, and idx_documents_space_sibling_order_key_unique rejects
+        // that transient state whatever order the flush happens to write rows in.
+        for (int i = 0; i < siblings.size(); i++) {
+            siblings.get(i).setSiblingOrderKey("~reindex-" + i);
+        }
+        documentRepository.flush();
+
+        String[] newKeys = FractionalIndex.nKeysBetweenSpaced(null, null, siblings.size(), REINDEX_GAP);
+        for (int i = 0; i < siblings.size(); i++) {
+            siblings.get(i).setSiblingOrderKey(newKeys[i]);
+        }
+        documentRepository.flush();
+    }
+
     private void reindexUserOrders(UUID userId) {
         List<UserDocumentOrder> orders = userDocumentOrderRepository.findAllForReindex(userId);
         if (orders.isEmpty()) return;
@@ -381,6 +461,24 @@ public class DocumentTreeService {
             throw new ApiException(
                     ErrorCode.VALIDATION_FAILED,
                     "Sibling document does not belong to the specified parent: " + siblingId);
+        }
+        return sibling.getSiblingOrderKey();
+    }
+
+    private String resolveSpaceSiblingNeighborKey(UUID siblingId, UUID excludedDocId, UUID spaceId) {
+        if (siblingId == null) return null;
+        if (siblingId.equals(excludedDocId)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "A document cannot be its own sibling reference.");
+        }
+        Document sibling = documentRepository
+                .findByIdAndDeletedAtIsNull(siblingId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Sibling document not found: " + siblingId));
+        if (sibling.getParent() != null
+                || sibling.getSpace() == null
+                || !sibling.getSpace().getId().equals(spaceId)) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Sibling document does not belong to the specified space: " + siblingId);
         }
         return sibling.getSiblingOrderKey();
     }

@@ -3,6 +3,8 @@ package com.nextdocs.api.document.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.auth.entity.User;
@@ -422,6 +424,7 @@ class DocumentListQueryHelperTest {
                 .user(user)
                 .title("Space Page")
                 .space(spaceWith(spaceId))
+                .siblingOrderKey("a1")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
@@ -436,8 +439,6 @@ class DocumentListQueryHelperTest {
                 .thenReturn(new PageImpl<>(List.of(page), pageable, 1));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(collaboratorRepository.findDocumentIdsWithCollaborators(any())).thenReturn(List.of());
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
-                .thenReturn(List.<Object[]>of(new Object[] {page.getId(), "a1"}));
         when(permissionService.resolveAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(page.getId(), DocumentAccessLevel.OWNER));
 
@@ -449,6 +450,7 @@ class DocumentListQueryHelperTest {
         assertEquals("a1", item.orderKey());
         assertEquals(spaceId, item.spaceId());
         assertEquals(DocumentAccessLevel.OWNER, item.accessLevel());
+        verify(userDocumentOrderRepository, never()).findOrderKeysByUserIdAndDocumentIds(any(), any());
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.nextdocs.api.space.dto.request.SpaceAttachPageRequest;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
+import com.nextdocs.api.space.dto.request.SpaceMoveRequest;
 import com.nextdocs.api.space.dto.request.SpaceUpdateRequest;
 import com.nextdocs.api.space.dto.response.SpaceMemberResponse;
 import com.nextdocs.api.space.dto.response.SpaceResponse;
@@ -45,6 +46,8 @@ public class SpaceController {
     public static final String MEMBERS_PATH = BASE_PATH + "/{id}/members";
 
     public static final String PAGES_PATH = BASE_PATH + "/{id}/pages";
+
+    public static final String MOVE_PATH = BASE_PATH + "/{id}/move";
 
     private final SpaceService spaceService;
 
@@ -109,6 +112,34 @@ public class SpaceController {
     public ResponseEntity<ApiResponse<SpaceResponse>> get(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
         return ResponseEntity.ok(ApiResponse.ok(spaceService.getSpace(callerId(principal), id)));
+    }
+
+    @Operation(
+            summary = "Move a space in the caller's sidebar",
+            description = "Any caller who can read the space may move it. Space order is personal: only the "
+                    + "caller's navigation changes, never the shared space row. prevSiblingId places the space "
+                    + "immediately after that neighbour, nextSiblingId immediately before it; both neighbours "
+                    + "must be visible, active spaces. An archived space cannot be moved.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Space moved, updated projection returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "400",
+                        description = "Invalid sibling reference"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Space or sibling not found or not visible to the caller"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "409",
+                        description = "Space is archived or the position changed concurrently")
+            })
+    @PostMapping("/{id}/move")
+    public ResponseEntity<ApiResponse<SpaceResponse>> move(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID id,
+            @Valid @RequestBody SpaceMoveRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(spaceService.moveSpace(callerId(principal), id, request)));
     }
 
     @Operation(

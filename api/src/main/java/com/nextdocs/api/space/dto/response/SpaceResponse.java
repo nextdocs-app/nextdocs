@@ -13,6 +13,11 @@ public record SpaceResponse(
 
         @Schema(description = "Space name") String name,
 
+        @Schema(
+                description = "The caller's fractional navigation key for this space; null when the caller has "
+                        + "not positioned it yet. Spaces sort by this key, then by creation time.")
+        String orderKey,
+
         @Schema(description = "Space icon, null when it has none")
         PageIconResponse icon,
 
