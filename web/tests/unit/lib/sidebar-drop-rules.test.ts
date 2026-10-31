@@ -30,9 +30,13 @@ describe('isSidebarDropAllowed', () => {
     expect(isSidebarDropAllowed('top', sharedDrag())).toBe(true);
     expect(isSidebarDropAllowed('bottom', sharedDrag())).toBe(true);
 
-    // Nesting under another shared doc is blocked.
+    // Nesting under another shared doc is blocked for non-owners.
     expect(isSidebarDropAllowed('mid', sharedDrag())).toBe(false);
     expect(isSidebarDropAllowed('empty', sharedDrag())).toBe(false);
+
+    // Nesting under another shared doc is allowed for owners of the dragged document.
+    expect(isSidebarDropAllowed('mid', sharedDrag({ draggedAccessLevel: 'OWNER' }))).toBe(true);
+    expect(isSidebarDropAllowed('empty', sharedDrag({ draggedAccessLevel: 'OWNER' }))).toBe(true);
 
     // Reordering inside a different parent is a reparent - blocked.
     expect(
@@ -62,7 +66,7 @@ describe('isSidebarDropAllowed', () => {
     expect(isSidebarDropAllowed('empty', ctx)).toBe(true);
   });
 
-  it('blocks shared -> private entirely', () => {
+  it('blocks shared -> private for non-owners but allows for owners', () => {
     const ctx = {
       draggedId: 'shared-1',
       draggedIsShared: true,
@@ -72,6 +76,8 @@ describe('isSidebarDropAllowed', () => {
     };
     expect(isSidebarDropAllowed('mid', ctx)).toBe(false);
     expect(isSidebarDropAllowed('top', ctx)).toBe(false);
+
+    expect(isSidebarDropAllowed('mid', { ...ctx, draggedAccessLevel: 'OWNER' })).toBe(true);
   });
 });
 

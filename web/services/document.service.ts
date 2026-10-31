@@ -146,12 +146,41 @@ function sanitizeGeneralAccessMode(
   return isValidGeneralAccessMode(value) ? value : fallback;
 }
 
+function sanitizeDocumentSpace(
+  space: ApiDocumentSpace | null | undefined
+): DocumentSpaceSummary | null {
+  if (!space || typeof space.id !== 'string') {
+    return null;
+  }
+  return {
+    id: space.id,
+    name: space.name,
+    accessMode: space.accessMode === 'PUBLIC' ? 'PUBLIC' : 'CUSTOM',
+    everyoneAccessLevel: sanitizeNullableAccessLevel(space.everyoneAccessLevel),
+    myAccessLevel: sanitizeNullableAccessLevel(space.myAccessLevel),
+    canAdminister: space.canAdminister ?? false,
+    archived: space.archived ?? false,
+  };
+}
+
 interface ApiDocumentAccess {
   documentId: string;
   allowed: boolean;
   accessLevel: DocumentAccessLevel | null;
   owner: boolean;
   trashed?: boolean;
+  canManageSharing?: boolean;
+  space?: ApiDocumentSpace | null;
+}
+
+interface ApiDocumentSpace {
+  id: string;
+  name: string;
+  accessMode: 'PUBLIC' | 'CUSTOM';
+  everyoneAccessLevel?: DocumentAccessLevel | null;
+  myAccessLevel?: DocumentAccessLevel | null;
+  canAdminister?: boolean;
+  archived?: boolean;
 }
 
 interface ApiCollaborator {
@@ -165,10 +194,18 @@ interface ApiCollaborator {
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   inheritedAccessLevel?: DocumentAccessLevel | null;
+  effectiveAccessLevel?: CollaboratorAccessLevel | null;
 }
 
-interface ApiDocumentBreadcrumbItem extends Omit<DocumentBreadcrumbItem, 'icon'> {
+interface ApiBreadcrumbSpace {
+  id: string;
+  name: string;
   icon?: ApiDocumentIcon | null;
+}
+
+interface ApiDocumentBreadcrumbItem extends Omit<DocumentBreadcrumbItem, 'icon' | 'space'> {
+  icon?: ApiDocumentIcon | null;
+  space?: ApiBreadcrumbSpace | null;
 }
 
 interface ApiSharingSettings {
@@ -198,6 +235,16 @@ export interface CloudDocumentsPage {
   hasMore: boolean;
 }
 
+export interface DocumentSpaceSummary {
+  id: string;
+  name: string;
+  accessMode: 'PUBLIC' | 'CUSTOM';
+  everyoneAccessLevel: DocumentAccessLevel | null;
+  myAccessLevel: DocumentAccessLevel | null;
+  canAdminister: boolean;
+  archived: boolean;
+}
+
 export interface DocumentAccess {
   documentId: string;
   allowed: boolean;
@@ -205,6 +252,10 @@ export interface DocumentAccess {
   owner: boolean;
   /** True when the document is in trash; accessLevel then reflects pre-trash access. */
   trashed?: boolean;
+  /** Server-authoritative sharing gate: space administration for space pages. */
+  canManageSharing?: boolean;
+  /** Space context when the page lives in a space. */
+  space?: DocumentSpaceSummary | null;
 }
 
 export interface Collaborator {
@@ -218,6 +269,8 @@ export interface Collaborator {
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   inheritedAccessLevel?: DocumentAccessLevel | null;
+  /** What the person can actually do after space/archive resolution. */
+  effectiveAccessLevel?: CollaboratorAccessLevel;
 }
 
 export interface SharingSettings {
@@ -231,6 +284,12 @@ export interface SharingSettings {
   linkInheritBlocked?: boolean;
 }
 
+export interface DocumentBreadcrumbSpace {
+  id: string;
+  name: string;
+  icon?: DocumentIcon | null;
+}
+
 export interface DocumentBreadcrumbItem {
   id: string;
   title: string;
@@ -240,6 +299,7 @@ export interface DocumentBreadcrumbItem {
   accessLevel?: DocumentAccessLevel | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  space?: DocumentBreadcrumbSpace | null;
 }
 
 export class DocumentServiceApiError extends Error {
@@ -563,6 +623,7 @@ class DocumentService {
       parentId: item.parentId,
       orderKey: item.orderKey ?? '',
       hasChildren: item.hasChildren ?? false,
+      hasCollaborators: item.hasCollaborators ?? false,
       effectiveAccessLevel: accessLevelOf(item),
       createdAt: item.meta.createdAt,
       updatedAt: item.meta.updatedAt,
@@ -711,6 +772,13 @@ class DocumentService {
       const crumbs = items.map((item) => ({
         ...item,
         icon: sanitizeDocumentIcon(item.icon) ?? null,
+        space: item.space
+          ? {
+              id: item.space.id,
+              name: item.space.name,
+              icon: sanitizeDocumentIcon(item.space.icon) ?? null,
+            }
+          : null,
       }));
 
       // Private breadcrumbs describe the same hierarchy the offline fallback
@@ -738,6 +806,8 @@ class DocumentService {
       accessLevel: sanitizeNullableAccessLevel(body.accessLevel),
       owner: body.owner,
       trashed: body.trashed,
+      canManageSharing: body.canManageSharing ?? false,
+      space: sanitizeDocumentSpace(body.space),
     };
   }
 
@@ -757,6 +827,8 @@ class DocumentService {
         accessLevel: sanitizeNullableAccessLevel(body.accessLevel),
         owner: body.owner,
         trashed: body.trashed,
+        canManageSharing: body.canManageSharing ?? false,
+        space: sanitizeDocumentSpace(body.space),
       };
     });
   }
@@ -837,6 +909,10 @@ class DocumentService {
       inheritedFromId: item.inheritedFromId ?? null,
       inheritedFromTitle: item.inheritedFromTitle ?? null,
       inheritedAccessLevel: sanitizeNullableAccessLevel(item.inheritedAccessLevel),
+      effectiveAccessLevel:
+        item.effectiveAccessLevel === undefined
+          ? undefined
+          : sanitizeCollaboratorAccessLevel(item.effectiveAccessLevel, 'NO_ACCESS'),
     };
   }
 

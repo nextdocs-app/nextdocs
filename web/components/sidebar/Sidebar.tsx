@@ -247,6 +247,20 @@ function Sidebar() {
         fetchChildren: (parentId) => void dispatch(fetchSharedChildrenThunk({ parentId })),
         moveDocument: (args) => void dispatch(sharedMoveDocumentThunk(args)),
         canPlaceAtRoot: (draggedId) => sharedTreeNodes[draggedId]?.parentId == null,
+        resolveDrop: (draggedId, { nodeId, zone }) => {
+          const dragged = sharedTreeNodes[draggedId];
+          const targetNode = sharedTreeNodes[nodeId];
+          if (!dragged || !targetNode) return false;
+          return isSidebarDropAllowed(zone as SidebarDropZone, {
+            draggedId,
+            draggedIsShared: true,
+            targetIsShared: true,
+            draggedParentId: dragged.parentId ?? null,
+            targetParentId: targetNode.parentId ?? null,
+            draggedAccessLevel: dragged.effectiveAccessLevel,
+            targetHasCollaborators: targetNode.hasCollaborators,
+          });
+        },
       };
     }
 
@@ -434,6 +448,8 @@ function Sidebar() {
           targetIsShared: isSharedNode(nodeId),
           draggedParentId: mergedNodes[draggedId]?.parentId ?? null,
           targetParentId: mergedNodes[nodeId]?.parentId ?? null,
+          draggedAccessLevel: mergedNodes[draggedId]?.effectiveAccessLevel,
+          targetHasCollaborators: mergedNodes[nodeId]?.hasCollaborators,
         }),
       moveDocument: handleSidebarTreeMove,
     };

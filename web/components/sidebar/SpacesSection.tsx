@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -27,6 +27,10 @@ import { SpaceSettingsModal } from '@/components/settings/workspace/SpaceSetting
 import type { SpaceNotice } from '@/components/settings/workspace/space-access.util';
 import { generateDocumentId } from '@/lib/document-id.util';
 import { dispatchSpacesUpdated, SPACES_UPDATED_EVENT } from '@/lib/spaces-event.util';
+import {
+  OPEN_SPACE_SETTINGS_EVENT,
+  parseOpenSpaceSettingsEvent,
+} from '@/lib/space-settings-event.util';
 import { discardPendingDocument } from '@/lib/pending-cloud-create.util';
 import { documentService } from '@/services/document.service';
 import { spaceApiService } from '@/services/space.service';
@@ -37,6 +41,7 @@ import {
   fetchSpaceRootsThunk,
   resetTree,
   setNodeExpanded,
+  setStoredSpaces,
   updateNodeMeta,
   type SpaceTree as SpaceTreeState,
 } from '@/stores/spaceTree/spaceTree.slice';
@@ -217,6 +222,7 @@ export function SpacesSection({
 
     try {
       const items = await spaceApiService.list(accessToken);
+      dispatch(setStoredSpaces(items));
       // Spaces in the sidebar are for browsing and editing documents. A workspace admin
       // can see all spaces of the workspace for administration (in Settings), but
       // spaces they are not part of (myAccessLevel === null) must not appear in the rail.
@@ -304,6 +310,46 @@ export function SpacesSection({
       window.removeEventListener('local-documents-changed', handleDocumentsChanged);
     };
   }, [dispatch, expandedSpaceIds, loadSpaces]);
+
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // The share panel's Space members / Everyone rows ask for the same modal the
+  // sidebar menus open. The requested space may be absent from the rail (a
+  // workspace admin who is not a member), so fall back to a direct fetch.
+  useEffect(() => {
+    const handleOpenSpaceSettings = async (event: Event) => {
+      const detail = parseOpenSpaceSettingsEvent(event);
+      if (!detail || !accessToken) {
+        return;
+      }
+
+      const known = spaces?.find((item) => item.id === detail.spaceId);
+      if (known) {
+        setSettingsView({ space: known, tab: detail.tab ?? 'general' });
+        return;
+      }
+
+      try {
+        const space = await spaceApiService.get(accessToken, detail.spaceId);
+        if (isMountedRef.current) {
+          setSettingsView({ space, tab: detail.tab ?? 'general' });
+        }
+      } catch (error) {
+        console.error('Failed to open space settings:', error);
+      }
+    };
+
+    window.addEventListener(OPEN_SPACE_SETTINGS_EVENT, handleOpenSpaceSettings);
+    return () => {
+      window.removeEventListener(OPEN_SPACE_SETTINGS_EVENT, handleOpenSpaceSettings);
+    };
+  }, [accessToken, spaces]);
 
   useTreeMetaSync(dispatch, updateNodeMeta);
 
@@ -535,10 +581,28 @@ export function SpacesSection({
     [dispatch]
   );
 
+  // The settings dialog can be opened for a space that is not in the rail (a
+  // workspace admin who is not a member), including when the rail is empty, so
+  // it is rendered independently of the list below.
+  const settingsModal =
+    settingsView && accessToken ? (
+      <SpaceSettingsModal
+        key={settingsView.space.id}
+        space={settingsView.space}
+        initialTab={settingsView.tab}
+        accessToken={accessToken}
+        selfId={selfId}
+        onClose={() => setSettingsView(null)}
+        onSpaceChange={handleSpaceChange}
+        onSpaceRemoved={handleSpaceRemoved}
+        onNotice={handleSpaceNotice}
+      />
+    ) : null;
+
   // Nothing to show while the first fetch runs, and nothing at all for a
   // workspace without spaces: an empty "Spaces" header would be dead chrome.
   if (!spaces || spaces.length === 0) {
-    return null;
+    return settingsModal;
   }
 
   const menuSpace = menuAnchor
@@ -737,6 +801,7 @@ export function SpacesSection({
                                     spaceId={space.id}
                                     tree={tree}
                                     activeDocId={activeDocId}
+                                    canAdministerSpace={space.canAdminister}
                                     onSelectDocument={(documentId) => {
                                       setMenuAnchor(null);
                                       onSelectDocument(documentId);
@@ -789,19 +854,7 @@ export function SpacesSection({
         />
       )}
 
-      {settingsView && accessToken && (
-        <SpaceSettingsModal
-          key={settingsView.space.id}
-          space={settingsView.space}
-          initialTab={settingsView.tab}
-          accessToken={accessToken}
-          selfId={selfId}
-          onClose={() => setSettingsView(null)}
-          onSpaceChange={handleSpaceChange}
-          onSpaceRemoved={handleSpaceRemoved}
-          onNotice={handleSpaceNotice}
-        />
-      )}
+      {settingsModal}
     </div>
   );
 }

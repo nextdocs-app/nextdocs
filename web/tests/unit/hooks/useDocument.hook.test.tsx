@@ -1388,6 +1388,53 @@ describe('useDocument', () => {
     expect(ydoc.getMap('meta').has('cover')).toBe(false);
   });
 
+  it('should expose the server sharing context for a space page', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Space Page',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getMyAccessSpy.mockResolvedValue({
+      documentId: 'space-doc-id',
+      allowed: true,
+      accessLevel: 'VIEW',
+      owner: true,
+      canManageSharing: false,
+      space: {
+        id: 'space-1',
+        name: 'Engineering',
+        accessMode: 'CUSTOM',
+        everyoneAccessLevel: 'VIEW',
+        myAccessLevel: 'VIEW',
+        canAdminister: false,
+        archived: false,
+      },
+    });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+    const { result } = renderHook(() => useDocument('space-doc-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('VIEW');
+    expect(result.current.canManageSharing).toBe(false);
+    expect(result.current.documentSpace).toEqual({
+      id: 'space-1',
+      name: 'Engineering',
+      accessMode: 'CUSTOM',
+      everyoneAccessLevel: 'VIEW',
+      myAccessLevel: 'VIEW',
+      canAdminister: false,
+      archived: false,
+    });
+  });
+
   it('should seed the Yjs meta map for a document created before meta sync existed', async () => {
     const ydoc = new Y.Doc();
     const meta = {

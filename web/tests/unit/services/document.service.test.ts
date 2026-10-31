@@ -664,6 +664,8 @@ describe('document.service', () => {
         accessLevel: 'EDIT',
         owner: false,
         trashed: true,
+        canManageSharing: false,
+        space: null,
       });
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/documents/doc-123/my-access'),
@@ -674,6 +676,47 @@ describe('document.service', () => {
           }),
         })
       );
+    });
+
+    it('should map the sharing gate and space context from my-access', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            documentId: 'doc-123',
+            allowed: true,
+            accessLevel: 'VIEW',
+            owner: true,
+            trashed: false,
+            canManageSharing: false,
+            space: {
+              id: 'space-1',
+              name: 'Engineering',
+              accessMode: 'CUSTOM',
+              everyoneAccessLevel: 'VIEW',
+              myAccessLevel: 'VIEW',
+              canAdminister: false,
+              archived: false,
+            },
+          },
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const access = await documentService.getMyAccess('doc-123', 'access-token');
+
+      expect(access.canManageSharing).toBe(false);
+      expect(access.space).toEqual({
+        id: 'space-1',
+        name: 'Engineering',
+        accessMode: 'CUSTOM',
+        everyoneAccessLevel: 'VIEW',
+        myAccessLevel: 'VIEW',
+        canAdminister: false,
+        archived: false,
+      });
     });
   });
 
@@ -911,6 +954,39 @@ describe('document.service', () => {
 
       expect(crumbs[1].icon).toBeNull();
     });
+
+    it('should map and sanitize breadcrumb space when present', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              id: 'doc-1',
+              title: 'Space Page',
+              parentId: null,
+              space: {
+                id: 'space-1',
+                name: 'My Space',
+                icon: { type: 'emoji', value: '🪐' },
+              },
+            },
+          ],
+          error: null,
+        }),
+      } as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const crumbs = await documentService.getDocumentBreadcrumbs('doc-1');
+
+      expect(crumbs[0].space).toEqual({
+        id: 'space-1',
+        name: 'My Space',
+        icon: { type: 'emoji', value: '🪐' },
+      });
+    });
   });
 
   describe('offline hierarchy caching', () => {
@@ -1085,6 +1161,41 @@ describe('document.service', () => {
 
       expect(rows[0].accessLevel).toBe('VIEW');
       expect(rows[0].inheritedAccessLevel).toBeNull();
+    });
+
+    it('should map effective levels and treat malformed ones as blocked', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              userId: 'u-1',
+              email: 'a@example.com',
+              displayName: 'A',
+              accessLevel: 'OWNER',
+              addedAt: '2024-01-01T00:00:00.000Z',
+              effectiveAccessLevel: 'VIEW',
+            },
+            {
+              userId: 'u-2',
+              email: 'b@example.com',
+              displayName: 'B',
+              accessLevel: 'EDIT',
+              addedAt: '2024-01-01T00:00:00.000Z',
+              effectiveAccessLevel: 'SUPERADMIN',
+            },
+          ],
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const rows = await documentService.listCollaborators('doc-1', 'tok');
+
+      expect(rows[0].effectiveAccessLevel).toBe('VIEW');
+      // An unknown effective level must never become edit capability.
+      expect(rows[1].effectiveAccessLevel).toBe('NO_ACCESS');
     });
   });
 

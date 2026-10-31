@@ -8,6 +8,8 @@ export interface LocalDocumentEntry {
   orderKey?: string | null;
   /** Real parent in the owning user's tree (null for root-level documents). */
   parentId?: string | null;
+  /** Whether this document has external collaborators. */
+  hasCollaborators?: boolean;
   /** Document access level for the current user. */
   accessLevel?: DocumentAccessLevel | null;
 }
