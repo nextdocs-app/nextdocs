@@ -63,21 +63,43 @@ const nodes: Record<string, SidebarTreeNode> = {
 };
 
 describe('canDropWithinSpace', () => {
+  const owner = (id: string, parentId: string | null = null): SidebarTreeNode => ({
+    ...node(id, parentId),
+    effectiveAccessLevel: 'OWNER',
+  });
+
   it('lets a space root reorder against other roots', () => {
     expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'top' })).toBe(true);
     expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'bottom' })).toBe(true);
   });
 
-  it('lets a space root move inside another root or nested document', () => {
-    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(true);
-    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'empty' })).toBe(true);
-    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'child', zone: 'mid' })).toBe(true);
-    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'child', zone: 'top' })).toBe(true);
+  it('blocks an editor from moving a document inside another document', () => {
+    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(false);
+    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'empty' })).toBe(false);
+    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'child', zone: 'mid' })).toBe(false);
+    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'child', zone: 'top' })).toBe(false);
+    expect(canDropWithinSpace(nodes, 'child', { nodeId: 'otherRoot', zone: 'mid' })).toBe(false);
+    expect(canDropWithinSpace(nodes, 'child', { nodeId: 'otherRoot', zone: 'empty' })).toBe(false);
   });
 
-  it('lets a nested document move inside another document in the space', () => {
-    expect(canDropWithinSpace(nodes, 'child', { nodeId: 'otherRoot', zone: 'mid' })).toBe(true);
-    expect(canDropWithinSpace(nodes, 'child', { nodeId: 'otherRoot', zone: 'empty' })).toBe(true);
+  it('lets a document owner move it inside another document', () => {
+    const ownerNodes = { ...nodes, root: owner('root'), child: owner('child', 'root') };
+    expect(canDropWithinSpace(ownerNodes, 'root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(true);
+    expect(canDropWithinSpace(ownerNodes, 'root', { nodeId: 'child', zone: 'mid' })).toBe(true);
+    expect(canDropWithinSpace(ownerNodes, 'child', { nodeId: 'otherRoot', zone: 'empty' })).toBe(
+      true
+    );
+  });
+
+  it('uses the node access level, so a page-level grant wins over the space grant', () => {
+    // The API resolves lowest-ancestor-wins into effectiveAccessLevel: a page-level
+    // OWNER shows as OWNER here, and a page-level EDIT shows as EDIT even when the
+    // space grants OWNER. The drop rule must not consult space administration.
+    const pageOwnerNodes = { ...nodes, root: owner('root') };
+    expect(canDropWithinSpace(pageOwnerNodes, 'root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(
+      true
+    );
+    expect(canDropWithinSpace(nodes, 'root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(false);
   });
 
   it('prevents a nested document from being dropped at the space root level', () => {
@@ -93,6 +115,16 @@ describe('canDropWithinSpace', () => {
   it('refuses a drop it cannot resolve', () => {
     expect(canDropWithinSpace(nodes, 'missing', { nodeId: 'root', zone: 'mid' })).toBe(false);
     expect(canDropWithinSpace(nodes, 'child', { nodeId: 'missing', zone: 'mid' })).toBe(false);
+  });
+
+  it('allows sibling reorder even if the parent has collaborators', () => {
+    const treeNodes: Record<string, SidebarTreeNode> = {
+      parentCollab: { ...node('parentCollab'), hasCollaborators: true },
+      child1: node('child1', 'parentCollab'),
+      child2: node('child2', 'parentCollab'),
+    };
+
+    expect(canDropWithinSpace(treeNodes, 'child1', { nodeId: 'child2', zone: 'top' })).toBe(true);
   });
 });
 
@@ -139,7 +171,7 @@ describe('SpaceTree component', () => {
     jest.clearAllMocks();
   });
 
-  it('renders root nodes and exposes treeApi with drop policies allowing intra-space nesting', () => {
+  it('renders root nodes and exposes treeApi with the editor drop policy', () => {
     const store = makeStore();
     const treeState = {
       nodes: {
@@ -167,8 +199,9 @@ describe('SpaceTree component', () => {
     );
 
     expect(capturedTreeApi).not.toBeNull();
-    // Verify resolveDrop allows moving root into otherRoot
-    expect(capturedTreeApi!.resolveDrop!('root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(true);
+    // Editors may reorder siblings but may not move a document inside another.
+    expect(capturedTreeApi!.resolveDrop!('root', { nodeId: 'otherRoot', zone: 'mid' })).toBe(false);
+    expect(capturedTreeApi!.resolveDrop!('root', { nodeId: 'otherRoot', zone: 'top' })).toBe(true);
     // Verify canPlaceAtRoot allows root but not child
     expect(capturedTreeApi!.canPlaceAtRoot('root')).toBe(true);
     expect(capturedTreeApi!.canPlaceAtRoot('child')).toBe(false);
@@ -180,7 +213,7 @@ describe('SpaceTree component', () => {
     targetParent.hasChildren = true;
     targetParent.childrenLoaded = false;
 
-    const movingDoc = node('doc-to-move');
+    const movingDoc = node('doc-to-move', null, { effectiveAccessLevel: 'OWNER' });
 
     const treeState = {
       nodes: {
@@ -253,7 +286,7 @@ describe('SpaceTree component', () => {
     targetParent.childrenLoaded = true;
     targetParent.children = ['existing-child'];
 
-    const movingDoc = node('doc-to-move');
+    const movingDoc = node('doc-to-move', null, { effectiveAccessLevel: 'OWNER' });
 
     const treeState = {
       nodes: {

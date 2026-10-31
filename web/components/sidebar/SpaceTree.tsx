@@ -16,8 +16,8 @@ import type { DocActionsAnchor, DocActionType } from './types';
 
 /**
  * Which drops one space accepts. Documents in a space can be reordered at root
- * (only existing root documents may live at root level) or moved inside another
- * document in the same space (both root and nested documents).
+ * (only existing root documents may live at root level). A document owner may
+ * also move a document inside another document in the space.
  */
 export function canDropWithinSpace(
   nodes: Record<string, SidebarTreeNode>,
@@ -40,7 +40,19 @@ export function canDropWithinSpace(
     return dragged.parentId == null;
   }
 
-  return true;
+  // Sibling reorder within the same parent is always allowed for space members.
+  const isSiblingReorder =
+    (target.zone === 'top' || target.zone === 'bottom') &&
+    (dragged.parentId ?? null) === (targetNode.parentId ?? null);
+  if (isSiblingReorder) {
+    return true;
+  }
+
+  // Reparenting changes the document's location and access chain. EDIT can
+  // reorder siblings, but only an OWNER may move it inside another document.
+  // A space is a shared root document, so its OWNER grant shows up on the node;
+  // a page-level grant that is lower or higher wins over it.
+  return dragged.effectiveAccessLevel === 'OWNER';
 }
 
 export type SpaceTreeProps = {

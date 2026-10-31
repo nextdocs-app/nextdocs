@@ -30,9 +30,13 @@ describe('isSidebarDropAllowed', () => {
     expect(isSidebarDropAllowed('top', sharedDrag())).toBe(true);
     expect(isSidebarDropAllowed('bottom', sharedDrag())).toBe(true);
 
-    // Nesting under another shared doc is blocked.
+    // Nesting under another shared doc is blocked for non-owners.
     expect(isSidebarDropAllowed('mid', sharedDrag())).toBe(false);
     expect(isSidebarDropAllowed('empty', sharedDrag())).toBe(false);
+
+    // Nesting under another shared doc is allowed for owners of the dragged document.
+    expect(isSidebarDropAllowed('mid', sharedDrag({ draggedAccessLevel: 'OWNER' }))).toBe(true);
+    expect(isSidebarDropAllowed('empty', sharedDrag({ draggedAccessLevel: 'OWNER' }))).toBe(true);
 
     // Reordering inside a different parent is a reparent - blocked.
     expect(
@@ -62,7 +66,7 @@ describe('isSidebarDropAllowed', () => {
     expect(isSidebarDropAllowed('empty', ctx)).toBe(true);
   });
 
-  it('blocks shared -> private entirely', () => {
+  it('blocks shared -> private for non-owners but allows for owners', () => {
     const ctx = {
       draggedId: 'shared-1',
       draggedIsShared: true,
@@ -72,6 +76,8 @@ describe('isSidebarDropAllowed', () => {
     };
     expect(isSidebarDropAllowed('mid', ctx)).toBe(false);
     expect(isSidebarDropAllowed('top', ctx)).toBe(false);
+
+    expect(isSidebarDropAllowed('mid', { ...ctx, draggedAccessLevel: 'OWNER' })).toBe(true);
   });
 });
 
@@ -100,10 +106,59 @@ describe('resolveSidebarMoveRoute', () => {
     expect(route).toEqual({ kind: 'shared-reorder' });
   });
 
+  it('routes nested sibling reorders for non-owners to the shared store', () => {
+    const route = resolveSidebarMoveRoute(
+      { documentId: 'shared-1', newParentId: 'shared-parent' },
+      {
+        draggedIsShared: true,
+        targetParentIdIsShared: true,
+        draggedParentId: 'shared-parent',
+        draggedAccessLevel: 'EDIT',
+      }
+    );
+    expect(route).toEqual({ kind: 'shared-reorder' });
+  });
+
   it('blocks shared moves that would change parentage', () => {
     const route = resolveSidebarMoveRoute(
       { documentId: 'shared-1', newParentId: 'some-other-parent' },
       { draggedIsShared: true, targetParentIdIsShared: false }
+    );
+    expect(route).toEqual({ kind: 'blocked' });
+  });
+
+  it('routes OWNER shared moves into shared parents and private trees', () => {
+    expect(
+      resolveSidebarMoveRoute(
+        { documentId: 'shared-1', newParentId: 'shared-parent' },
+        {
+          draggedIsShared: true,
+          targetParentIdIsShared: true,
+          draggedAccessLevel: 'OWNER',
+        }
+      )
+    ).toEqual({ kind: 'shared-reorder' });
+
+    expect(
+      resolveSidebarMoveRoute(
+        { documentId: 'shared-1', newParentId: 'private-parent' },
+        {
+          draggedIsShared: true,
+          targetParentIdIsShared: false,
+          draggedAccessLevel: 'OWNER',
+        }
+      )
+    ).toEqual({ kind: 'private' });
+  });
+
+  it('blocks shared moves into shared parents for non-owners', () => {
+    const route = resolveSidebarMoveRoute(
+      { documentId: 'shared-1', newParentId: 'shared-parent' },
+      {
+        draggedIsShared: true,
+        targetParentIdIsShared: true,
+        draggedAccessLevel: 'EDIT',
+      }
     );
     expect(route).toEqual({ kind: 'blocked' });
   });
