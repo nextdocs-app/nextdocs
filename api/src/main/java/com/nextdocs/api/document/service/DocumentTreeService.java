@@ -83,6 +83,7 @@ public class DocumentTreeService {
             int newParentChainNodes = validateNoCycle(documentId, request.newParentId());
             validateSubtreeFitsDepth(documentId, newParentChainNodes);
             Document newParent = permissionService.requireEditAccess(userId, request.newParentId());
+            validateReparentAuthorization(userId, doc, newParent);
 
             if (rebuildFirst) {
                 reindexSiblings(request.newParentId());
@@ -307,6 +308,60 @@ public class DocumentTreeService {
 
             return DocumentResponses.of(
                     doc, resultParentId, newUserOrderKey, hasChildren, hasCollaborators, access, null, null);
+        }
+    }
+
+    private void validateReparentAuthorization(UUID userId, Document doc, Document newParent) {
+        Space sourceSpace = permissionService.resolveSpace(doc);
+        SpaceAccessService.SpaceContext spaceContext =
+                sourceSpace != null ? spaceAccessService.load(userId, sourceSpace.getId()) : null;
+        boolean isOwner = (sourceSpace != null)
+                ? (spaceContext != null && spaceContext.canAdminister())
+                : (doc.getUser().getId().equals(userId)
+                        || permissionService.resolveAccess(userId, doc.getId()) == DocumentAccessLevel.OWNER);
+
+        if (isOwner) {
+            // A document owner or space administrator has full authority over the moved
+            // document and its sharing. Edit access on newParent is sufficient.
+            return;
+        }
+
+        // The caller is only an editor on the moved document. An editor cannot manage
+        // collaborators or transfer ownership.
+        Space targetSpace = permissionService.resolveSpace(newParent);
+        if (sourceSpace != null || targetSpace != null) {
+            // Cannot move documents across space boundaries or in/out of spaces.
+            if (sourceSpace == null
+                    || targetSpace == null
+                    || !sourceSpace.getId().equals(targetSpace.getId())) {
+                throw new ApiException(
+                        ErrorCode.FORBIDDEN,
+                        "Only document owners or space administrators may move documents across spaces.");
+            }
+        } else {
+            // For standalone documents, an editor cannot graft into a different owner's tree.
+            if (!newParent.getUser().getId().equals(doc.getUser().getId())) {
+                throw new ApiException(
+                        ErrorCode.FORBIDDEN,
+                        "Only the document owner may move this document into another user's tree.");
+            }
+        }
+
+        // An editor cannot move a document into a parent that grants access to external collaborators
+        // or the public.
+        List<UUID> targetChainIds = new ArrayList<>();
+        targetChainIds.add(newParent.getId());
+        targetChainIds.addAll(documentRepository.findAncestorChainIds(newParent.getId()));
+
+        boolean targetHasCollaborators = !collaboratorRepository
+                .findDocumentIdsWithCollaborators(targetChainIds)
+                .isEmpty();
+        boolean targetHasPublicAccess = permissionService.resolvePublicAccess(newParent.getId()) != null;
+
+        if (targetHasCollaborators || targetHasPublicAccess) {
+            throw new ApiException(
+                    ErrorCode.FORBIDDEN,
+                    "Only document owners or space administrators may move a document into a location with collaborators.");
         }
     }
 

@@ -28,6 +28,7 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -1222,5 +1223,281 @@ class DocumentTreeServiceTest {
         verify(documentRepository).saveAndFlush(doc);
         assertNull(doc.getParent());
         assertNull(doc.getSiblingOrderKey());
+    }
+
+    @Test
+    void move_editorMovesDocumentUnderParentWithCollaborators_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        Document doc =
+                Document.builder().id(docId).user(owner).title("Shared Doc").build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(owner)
+                .title("Target Parent")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(List.of(parentId)))
+                .thenReturn(List.of(parentId));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("collaborators"));
+    }
+
+    @Test
+    void move_editorMovesDocumentUnderParentWithPublicAccess_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        Document doc =
+                Document.builder().id(docId).user(owner).title("Shared Doc").build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(owner)
+                .title("Public Parent")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(List.of(parentId)))
+                .thenReturn(List.of());
+        when(permissionService.resolvePublicAccess(parentId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("collaborators"));
+    }
+
+    @Test
+    void move_editorMovesDocumentToDifferentOwnerTree_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User owner1 = User.builder().id(UUID.randomUUID()).build();
+        User owner2 = User.builder().id(UUID.randomUUID()).build();
+
+        Document doc =
+                Document.builder().id(docId).user(owner1).title("Shared Doc").build();
+        Document parent =
+                Document.builder().id(parentId).user(owner2).title("Other Tree").build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("another user's tree"));
+    }
+
+    @Test
+    void move_ownerMovesDocumentUnderParentWithCollaborators_succeeds() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(otherOwner)
+                .title("Collaborator Parent")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
+        when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        DocumentResponse response =
+                documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
+
+        assertEquals(parentId, response.parentId());
+        assertEquals(otherOwner.getId(), doc.getUser().getId());
+    }
+
+    @Test
+    void move_spaceEditorMovesPageUnderSpacePageWithCollaborators_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .space(space)
+                .title("Page A")
+                .build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(user)
+                .space(space)
+                .title("Page B")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(permissionService.resolveSpace(parent)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId))
+                .thenReturn(new SpaceAccessService.SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(List.of(parentId)))
+                .thenReturn(List.of(parentId));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("collaborators"));
+    }
+
+    @Test
+    void move_spaceAdminMovesPageUnderSpacePageWithCollaborators_succeeds() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .space(space)
+                .title("Page A")
+                .build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(user)
+                .space(space)
+                .title("Page B")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId))
+                .thenReturn(
+                        new SpaceAccessService.SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER));
+        when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
+
+        DocumentResponse response =
+                documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
+
+        assertEquals(parentId, response.parentId());
+    }
+
+    @Test
+    void move_spaceEditorMovesPageUnderSpacePageWithoutCollaborators_succeeds() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .space(space)
+                .title("Page A")
+                .build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(user)
+                .space(space)
+                .title("Page B")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(permissionService.resolveSpace(parent)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId))
+                .thenReturn(new SpaceAccessService.SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(List.of());
+        when(collaboratorRepository.findDocumentIdsWithCollaborators(List.of(parentId)))
+                .thenReturn(List.of());
+        when(permissionService.resolvePublicAccess(parentId)).thenReturn(null);
+        when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+
+        DocumentResponse response =
+                documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
+
+        assertEquals(parentId, response.parentId());
+    }
+
+    @Test
+    void move_spaceEditorMovesPageAcrossSpaces_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID space1Id = UUID.randomUUID();
+        UUID space2Id = UUID.randomUUID();
+        Space space1 = Space.builder().id(space1Id).name("Space 1").build();
+        Space space2 = Space.builder().id(space2Id).name("Space 2").build();
+
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .space(space1)
+                .title("Page 1")
+                .build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(user)
+                .space(space2)
+                .title("Page 2")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveSpace(doc)).thenReturn(space1);
+        when(permissionService.resolveSpace(parent)).thenReturn(space2);
+        when(spaceAccessService.load(userId, space1Id))
+                .thenReturn(
+                        new SpaceAccessService.SpaceContext(space1, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("across spaces"));
     }
 }
