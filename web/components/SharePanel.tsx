@@ -9,17 +9,19 @@ import {
   type CollaboratorAccessLevel,
   type DocumentAccessLevel,
   type DocumentGeneralAccessMode,
+  type DocumentSpaceSummary,
   type SharingSettings,
 } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { ChainLink, Close, Globe, Lock } from '@/icons';
+import { dispatchOpenSpaceSettings } from '@/lib/space-settings-event.util';
 import { AccessDropdown } from './share/AccessDropdown';
 import { CollaboratorRow } from './share/CollaboratorRow';
 import {
   ACCESS_ACTION_LABELS,
   getGeneralAccessViewModel,
   getGeneralModeOptions,
-  INVITE_ACCESS_OPTIONS,
+  getInviteAccessOptions,
   LINK_ACCESS_OPTIONS,
   type CollaboratorDropdownValue,
   type GeneralModeDropdownValue,
@@ -33,6 +35,7 @@ interface SharePanelProps {
   onClose: () => void;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   canManageSharing?: boolean;
+  documentSpace?: DocumentSpaceSummary | null;
   onNavigate?: (documentId: string) => void;
 }
 
@@ -44,6 +47,7 @@ export function SharePanel({
   onClose,
   anchorRef,
   canManageSharing = false,
+  documentSpace = null,
   onNavigate,
 }: SharePanelProps) {
   const router = useRouter();
@@ -62,6 +66,15 @@ export function SharePanel({
   const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+
+  const space = documentSpace;
+  const isSpacePage = space != null;
+
+  // The invite dropdown loses its Full access option inside a space. If that
+  // level was already selected before the space context arrived, fall back to
+  // the highest level a space page owner may grant.
+  const effectiveInviteAccess: DocumentAccessLevel =
+    isSpacePage && inviteAccess === 'OWNER' ? 'EDIT' : inviteAccess;
 
   useEffect(
     () => () => {
@@ -203,7 +216,7 @@ export function SharePanel({
       setError(null);
       const next = await documentService.upsertCollaborator(
         documentId,
-        { email: inviteEmail.trim(), accessLevel: inviteAccess },
+        { email: inviteEmail.trim(), accessLevel: effectiveInviteAccess },
         accessToken
       );
       setCollaborators(next);
@@ -356,6 +369,10 @@ export function SharePanel({
   };
 
   const handleNavigate = (targetDocId: string) => {
+    if (space && targetDocId === space.id) {
+      openSpaceSettings('members');
+      return;
+    }
     onClose();
     if (onNavigate) {
       onNavigate(targetDocId);
@@ -379,6 +396,24 @@ export function SharePanel({
   const activeCollaboratorsCount = collaborators.filter(
     (c) => c.accessLevel !== 'NO_ACCESS'
   ).length;
+
+  // Page-level OWNER no longer implies sharing rights inside a space: space
+  // owners administer the page. Do not offer a level whose description promises
+  // something the server will refuse.
+  const inviteAccessOptions = getInviteAccessOptions(!isSpacePage);
+  const sharingRestrictionMessage = space
+    ? space.archived
+      ? `${space.name} is archived. Restore the space to manage who can access this page.`
+      : space.canAdminister
+        ? 'Sharing is unavailable right now.'
+        : `Only owners of ${space.name} can manage sharing for this page.`
+    : 'You need owner access to manage sharing.';
+
+  const openSpaceSettings = (tab: 'general' | 'members' = 'members') => {
+    if (!space) return;
+    onClose();
+    dispatchOpenSpaceSettings({ spaceId: space.id, tab });
+  };
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -437,9 +472,7 @@ export function SharePanel({
           <p className="py-2 text-[13.5px] text-muted-foreground">Sign in to manage sharing.</p>
         ) : !canManageSharing ? (
           <div className="py-1">
-            <p className="text-[13px] text-muted-foreground">
-              You need owner access to manage sharing.
-            </p>
+            <p className="text-[13px] text-muted-foreground">{sharingRestrictionMessage}</p>
             {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
           </div>
         ) : (
@@ -465,8 +498,8 @@ export function SharePanel({
               {inviteEmail.trim().length > 0 && (
                 <>
                   <AccessDropdown
-                    value={inviteAccess}
-                    options={INVITE_ACCESS_OPTIONS}
+                    value={effectiveInviteAccess}
+                    options={inviteAccessOptions}
                     onChange={setInviteAccess}
                     align="right"
                   />
@@ -519,14 +552,16 @@ export function SharePanel({
                 <section className="pb-3">
                   <p className="mb-2 text-[13.5px] font-medium text-muted-foreground/80 select-none flex items-center gap-1.5">
                     <span>People with access</span>
-                    <span className="text-[12px] text-muted-foreground/60 font-normal">
-                      ({activeCollaboratorsCount})
-                    </span>
+                    {activeCollaboratorsCount > 0 && (
+                      <span className="text-[12px] text-muted-foreground/60 font-normal">
+                        ({activeCollaboratorsCount})
+                      </span>
+                    )}
                   </p>
                   <ul className="space-y-1">
                     {collaborators.map((collab) => {
                       const isSelf = collab.userId === user?.id;
-                      const isDirectOwner = Boolean(collab.owner);
+                      const isDirectOwner = Boolean(collab.owner) && !isSpacePage;
                       // Any inherited grant is overridable here, including an ancestor
                       // full-access grant; only the document's own owner stays locked.
                       const canEditRow = canManageSharing && !isSelf && !isDirectOwner;
@@ -537,6 +572,7 @@ export function SharePanel({
                           collab={collab}
                           isSelf={isSelf}
                           canEditRow={canEditRow}
+                          allowOwnerLevel={!isSpacePage}
                           hasEffectivePublicLink={hasEffectivePublicLink}
                           effectiveLinkAction={effectiveLinkAction}
                           onAccessSelect={(v) => handleCollaboratorAccessSelect(collab, v)}

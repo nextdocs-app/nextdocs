@@ -123,4 +123,13 @@ describe('getCollaboratorRowOptions', () => {
   it('normalizes titles to single spaces', () => {
     expect(normalizeTitle('  Parent   Wiki ')).toBe('Parent Wiki');
   });
+
+  it('omits the page-level Full access option inside a space', () => {
+    expect(
+      getCollaboratorRowOptions(baseCollab, false).some((option) => option.value === 'OWNER')
+    ).toBe(false);
+    expect(getCollaboratorRowOptions(baseCollab).some((option) => option.value === 'OWNER')).toBe(
+      true
+    );
+  });
 });
