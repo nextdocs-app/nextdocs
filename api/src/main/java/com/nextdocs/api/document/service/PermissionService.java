@@ -5,6 +5,8 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -26,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class PermissionService {
 
     private final DocumentRepository documentRepository;
+    private final SpaceAccessService spaceAccessService;
 
     /**
      * Resolves the effective access level of a user for a document.
@@ -81,6 +84,35 @@ public class PermissionService {
             String joined = joinIds(documentIds);
             return joined == null ? List.of() : documentRepository.resolvePublicAccessBatch(joined);
         });
+    }
+
+    /**
+     * Resolves one document's effective level for several users at once. The
+     * collaborator roster needs this: each row reports what that person can
+     * actually do here, so a page owner demoted by their space membership no
+     * longer displays as full access. Keys are present even when the level is
+     * null, so a caller can tell "blocked" from "not queried".
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveAccessForUsers(
+            UUID documentId, Collection<UUID> userIds, boolean trashed) {
+        String joined = joinIds(userIds);
+        if (joined == null) {
+            return Map.of();
+        }
+        List<Object[]> rows = trashed
+                ? documentRepository.resolveTrashAccessForUsers(documentId, joined)
+                : documentRepository.resolveEffectiveAccessForUsers(documentId, joined);
+        Map<UUID, DocumentAccessLevel> result = new HashMap<>();
+        for (Object[] row : rows) {
+            if (row[0] == null) {
+                continue;
+            }
+            UUID userId = toUuid(row[0]);
+            DocumentAccessLevel level = row[1] == null ? null : DocumentAccessLevel.valueOf(row[1].toString());
+            result.put(userId, level != null && level.allowsRead() ? level : null);
+        }
+        return result;
     }
 
     /**
@@ -187,23 +219,34 @@ public class PermissionService {
     }
 
     /**
-     * Enforces that the user has administrative sharing access (OWNER level) to the document.
-     * Applicable across active and trashed documents so owners and full-access collaborators
-     * can manage sharing regardless of trash state. A page in an archived space is rejected
-     * with 409 for callers who can read it: the archive freezes sharing until the space is
-     * restored. Callers without read access keep the 404 existence mask.
+     * Enforces that the user may administer sharing for the document. A page inside
+     * a space is shared through the space: its administrator (space OWNER or a
+     * workspace admin) is the authority, even when the caller's effective page
+     * level is lower than OWNER. A standalone page keeps the effective-OWNER gate,
+     * including trashed-page breakpoints and the existence mask for callers with
+     * no access. An archived space is rejected with 409 before any mutation.
      *
-     * @return the Document if the user has OWNER access in trash scope
+     * @return the Document when the caller may administer sharing
      */
     @Transactional(readOnly = true)
     public Document requireSharingAdminAccess(UUID userId, UUID documentId) {
-        // Resolve read access before the archive state: a caller who cannot read the page
-        // must not learn that it still exists, while a reader can be told to restore the
-        // space. Trash scope returns null in an archived space by design.
-        Document doc = requireReadAccessIncludingTrash(userId, documentId);
-        requireActiveSpace(doc);
+        Document active =
+                documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
+        Document doc = active != null
+                ? active
+                : documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
-        DocumentAccessLevel access = resolveTrashAccess(userId, documentId);
+        Space space = resolveSpace(doc);
+        if (space != null) {
+            // Space administration is the sharing gate for space content. The
+            // caller may be a workspace admin without a content grant, which is
+            // why this deliberately does not start from the page access level.
+            spaceAccessService.requireActiveAdministration(userId, space.getId());
+            return doc;
+        }
+
+        DocumentAccessLevel access =
+                active != null ? resolveAccess(userId, documentId) : resolveTrashAccess(userId, documentId);
         if (access == null) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
@@ -246,18 +289,29 @@ public class PermissionService {
      * see null and would otherwise mask an existing page as deleted.
      */
     public void requireActiveSpace(Document doc) {
+        Space space = resolveSpace(doc);
+        if (space != null && space.getArchivedAt() != null) {
+            throw new ApiException(
+                    ErrorCode.CONFLICT, "This page is in an archived space. Restore the space to manage sharing.");
+        }
+    }
+
+    /**
+     * The space anchoring this document's tree, or null for a standalone page.
+     * Only a root page carries {@code space_id}, so a child has to walk up; the
+     * bound mirrors the permission functions' 100-level recursion cap.
+     */
+    public Space resolveSpace(Document doc) {
         Document current = doc;
-        while (current != null) {
+        int depth = 0;
+        while (current != null && depth < 100) {
             if (current.getSpace() != null) {
-                if (current.getSpace().getArchivedAt() != null) {
-                    throw new ApiException(
-                            ErrorCode.CONFLICT,
-                            "This page is in an archived space. Restore the space to manage sharing.");
-                }
-                return;
+                return current.getSpace();
             }
             current = current.getParent();
+            depth++;
         }
+        return null;
     }
 
     /**

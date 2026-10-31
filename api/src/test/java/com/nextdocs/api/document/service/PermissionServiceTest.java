@@ -9,6 +9,8 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,11 +26,14 @@ class PermissionServiceTest {
     @Mock
     private DocumentRepository documentRepository;
 
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
     private PermissionService permissionService;
 
     @BeforeEach
     void setUp() {
-        permissionService = new PermissionService(documentRepository);
+        permissionService = new PermissionService(documentRepository, spaceAccessService);
     }
 
     @Test
@@ -344,13 +349,13 @@ class PermissionServiceTest {
     }
 
     @Test
-    void requireSharingAdminAccess_noTrashAccess_throwsNotFound() {
+    void requireSharingAdminAccess_noAccess_throwsNotFound() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document doc = Document.builder().id(documentId).build();
 
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
-        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn(null);
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
 
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
@@ -363,8 +368,8 @@ class PermissionServiceTest {
         UUID documentId = UUID.randomUUID();
         Document doc = Document.builder().id(documentId).build();
 
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
-        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("EDIT");
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("EDIT");
 
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
@@ -377,8 +382,8 @@ class PermissionServiceTest {
         UUID documentId = UUID.randomUUID();
         Document doc = Document.builder().id(documentId).build();
 
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(doc));
-        when(documentRepository.resolveTrashAccess(userId, documentId)).thenReturn("OWNER");
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("OWNER");
 
         Document result = permissionService.requireSharingAdminAccess(userId, documentId);
 
@@ -407,47 +412,67 @@ class PermissionServiceTest {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         // A child does not repeat the space: the gate has to walk to the root anchor.
-        Document archivedRoot = Document.builder()
+        Space archivedSpace = Space.builder()
                 .id(UUID.randomUUID())
-                .space(com.nextdocs.api.space.entity.Space.builder()
-                        .id(UUID.randomUUID())
-                        .name("Archived")
-                        .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
-                        .build())
+                .name("Archived")
+                .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
+        Document archivedRoot =
+                Document.builder().id(UUID.randomUUID()).space(archivedSpace).build();
         Document doc = Document.builder().id(documentId).parent(archivedRoot).build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
-        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+        when(spaceAccessService.requireActiveAdministration(userId, archivedSpace.getId()))
+                .thenThrow(new ApiException(ErrorCode.CONFLICT));
 
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
         assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
-        // The archive check must answer before the null trash scope masks it as deleted.
+        // The space gate answers before the page access resolution can mask the archive.
         verify(documentRepository, never()).resolveTrashAccess(any(), any());
+        verify(documentRepository, never()).resolveEffectiveAccess(any(), any());
     }
 
     @Test
     void requireSharingAdminAccess_archivedSpaceWithoutReadAccess_throwsNotFound() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        Document archivedRoot = Document.builder()
+        Space archivedSpace = Space.builder()
                 .id(UUID.randomUUID())
-                .space(com.nextdocs.api.space.entity.Space.builder()
-                        .id(UUID.randomUUID())
-                        .name("Archived")
-                        .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
-                        .build())
+                .name("Archived")
+                .archivedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
+        Document archivedRoot =
+                Document.builder().id(UUID.randomUUID()).space(archivedSpace).build();
         Document doc = Document.builder().id(documentId).parent(archivedRoot).build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
-        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
+        when(spaceAccessService.requireActiveAdministration(userId, archivedSpace.getId()))
+                .thenThrow(new ApiException(ErrorCode.NOT_FOUND));
 
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
-        // No read access means the caller never learns whether the page still exists.
+        // No standing means the caller never learns whether the page still exists.
+        verify(documentRepository, never()).resolveTrashAccess(any(), any());
+    }
+
+    @Test
+    void requireSharingAdminAccess_spacePage_delegatesToSpaceAdministration() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Team").build();
+        Document root = Document.builder().id(UUID.randomUUID()).space(space).build();
+        Document doc = Document.builder().id(documentId).parent(root).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+
+        Document result = permissionService.requireSharingAdminAccess(userId, documentId);
+
+        assertEquals(doc, result);
+        verify(spaceAccessService).requireActiveAdministration(userId, space.getId());
+        // The caller's page level is irrelevant: space ownership decides.
+        verify(documentRepository, never()).resolveEffectiveAccess(any(), any());
         verify(documentRepository, never()).resolveTrashAccess(any(), any());
     }
 

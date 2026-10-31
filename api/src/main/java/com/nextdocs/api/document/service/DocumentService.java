@@ -131,7 +131,7 @@ public class DocumentService {
                     ErrorCode.CONFLICT,
                     "A trashed document already exists with this ID. Restore or permanently delete it first.");
         }
-        boolean isOwner = existing.getUser().getId().equals(userId);
+        boolean isOwner = existing.getUser().getId().equals(userId) && permissionService.resolveSpace(existing) == null;
         if (!isOwner && permissionService.resolveAccess(userId, existing.getId()) == null) {
             throw new ApiException(ErrorCode.CONFLICT, "A document already exists with this ID.");
         }
@@ -187,12 +187,13 @@ public class DocumentService {
                     space.getId(), request.prevSiblingId(), request.nextSiblingId(), documentId);
         }
 
+        Space targetSpace = space != null ? space : (parent != null ? permissionService.resolveSpace(parent) : null);
+
         Document document = Document.builder()
                 .id(documentId)
-                // Location authority: a nested document belongs to its host tree, so it
-                // inherits the parent's owner and, through ancestor resolution, the parent's
-                // access chain. The creator is recorded in `createdBy`.
-                .user(parent != null ? parent.getUser() : user)
+                // In a space, content belongs to the space; the author is recorded in user.
+                // In a standalone tree, nested documents inherit the tree's owner.
+                .user(targetSpace != null ? user : (parent != null ? parent.getUser() : user))
                 .title(normalizeTitle(request.title()))
                 .yjsState(decodeBase64State(yjsState))
                 .createdBy(request.createdBy())

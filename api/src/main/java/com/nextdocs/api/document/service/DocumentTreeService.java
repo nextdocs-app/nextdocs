@@ -17,6 +17,8 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -44,6 +46,7 @@ public class DocumentTreeService {
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final SpaceAccessService spaceAccessService;
 
     @Autowired
     @Lazy
@@ -179,7 +182,16 @@ public class DocumentTreeService {
                 // pages under a parent: EDIT is required and the key lives on the row.
                 return moveSpaceRootPage(userId, targetDoc, request, rebuildFirst);
             }
-            if (targetDoc.getUser().getId().equals(userId)) {
+            Space targetSpace = permissionService.resolveSpace(targetDoc);
+            if (targetSpace != null
+                    && targetDoc.getParent() != null
+                    && Boolean.TRUE.equals(request.detachFromParent())) {
+                // Unparenting a page inside a space detaches it from the space container:
+                // only active space administrators may move content out of the space.
+                spaceAccessService.requireActiveAdministration(userId, targetSpace.getId());
+            }
+            boolean isOwner = targetSpace == null && targetDoc.getUser().getId().equals(userId);
+            if (isOwner || (targetSpace != null && targetDoc.getParent() != null)) {
                 permissionService.requireEditAccess(userId, documentId);
             } else {
                 permissionService.requireReadAccess(userId, documentId);
@@ -251,8 +263,23 @@ public class DocumentTreeService {
                 throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
             }
 
+            User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
             if (doc.getParent() != null) {
-                if (doc.getUser().getId().equals(userId)) {
+                if (targetSpace != null) {
+                    if (Boolean.TRUE.equals(request.detachFromParent())) {
+                        // Space content belongs to the container, not to the author row.
+                        // Once the page becomes standalone the administrator performing
+                        // the detach owns it, and descendants follow so access keeps
+                        // flowing from the new root instead of reverting to authors.
+                        adoptHostTreeOwnership(doc, user);
+                        doc.setParent(null);
+                        doc.setSiblingOrderKey(null);
+                        documentRepository.saveAndFlush(doc);
+                        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+                    }
+                    // Otherwise this is only a Shared-section reorder: keep the real parent.
+                } else if (doc.getUser().getId().equals(userId)) {
                     // Owner: this is a private-tree move to the root level, so un-parent.
                     doc.setParent(null);
                     doc.setSiblingOrderKey(null);
@@ -265,8 +292,6 @@ public class DocumentTreeService {
                 // the Shared section is only being reordered in the caller's personal
                 // navigation. The document stays under its real parent.
             }
-
-            User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
             UserDocumentOrder udo = userDocumentOrderRepository
                     .findByUser_IdAndDocument_Id(userId, documentId)
@@ -281,9 +306,11 @@ public class DocumentTreeService {
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
             boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
-            DocumentAccessLevel access = doc.getUser().getId().equals(userId)
-                    ? DocumentAccessLevel.OWNER
-                    : permissionService.resolveAccess(userId, documentId);
+            Space spaceAfter = permissionService.resolveSpace(doc);
+            DocumentAccessLevel access =
+                    (spaceAfter == null && doc.getUser().getId().equals(userId))
+                            ? DocumentAccessLevel.OWNER
+                            : permissionService.resolveAccess(userId, documentId);
 
             UUID resultParentId = doc.getParent() != null ? doc.getParent().getId() : null;
 
