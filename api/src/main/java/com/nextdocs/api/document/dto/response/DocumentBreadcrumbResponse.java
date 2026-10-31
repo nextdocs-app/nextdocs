@@ -17,9 +17,12 @@ public record DocumentBreadcrumbResponse(
         @Schema(description = "Sibling order key") String orderKey,
         @Schema(description = "Effective access level") DocumentAccessLevel accessLevel,
         @Schema(description = "Created timestamp") OffsetDateTime createdAt,
-        @Schema(description = "Updated timestamp") OffsetDateTime updatedAt) {
+        @Schema(description = "Updated timestamp") OffsetDateTime updatedAt,
+
+        @Schema(description = "Space containing this document hierarchy, or null")
+        BreadcrumbSpaceResponse space) {
 
     public DocumentBreadcrumbResponse(UUID id, String title, DocumentIconResponse icon, UUID parentId) {
-        this(id, title, icon, parentId, null, null, null, null);
+        this(id, title, icon, parentId, null, null, null, null, null);
     }
 }

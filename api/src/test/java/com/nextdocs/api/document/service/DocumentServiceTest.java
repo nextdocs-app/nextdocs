@@ -35,7 +35,9 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.service.WorkspaceService;
@@ -1781,10 +1783,69 @@ class DocumentServiceTest {
         assertEquals(3, crumbs.size());
         assertEquals("Root", crumbs.get(0).title());
         assertNull(crumbs.get(0).parentId());
+        assertNull(crumbs.get(0).space());
         assertEquals("Child", crumbs.get(1).title());
         assertEquals(root.getId(), crumbs.get(1).parentId());
+        assertNull(crumbs.get(1).space());
         assertEquals("SubChild", crumbs.get(2).title());
         assertEquals(child.getId(), crumbs.get(2).parentId());
+        assertNull(crumbs.get(2).space());
+    }
+
+    @Test
+    void getBreadcrumbs_documentInSpace_includesSpace() {
+        UUID ownerId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+        Space space = Space.builder()
+                .id(UUID.randomUUID())
+                .name("Engineering")
+                .iconType(PageIconType.BUILTIN)
+                .iconValue("layers")
+                .iconColor("blue")
+                .build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Root")
+                .parent(null)
+                .space(space)
+                .build();
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Child")
+                .parent(root)
+                .build();
+
+        when(documentRepository.findById(child.getId())).thenReturn(Optional.of(child));
+        when(permissionService.resolveAccess(ownerId, child.getId())).thenReturn(DocumentAccessLevel.OWNER);
+        when(documentRepository.findAncestorChainIds(child.getId())).thenReturn(List.of(root.getId()));
+        when(documentRepository.findAllById(List.of(child.getId(), root.getId())))
+                .thenReturn(List.of(child, root));
+        when(permissionService.resolveAccessBatch(ownerId, List.of(child.getId(), root.getId())))
+                .thenReturn(Map.of(
+                        child.getId(), DocumentAccessLevel.OWNER,
+                        root.getId(), DocumentAccessLevel.OWNER));
+        when(permissionService.resolveTrashAccessBatch(ownerId, List.of(child.getId(), root.getId())))
+                .thenReturn(Map.of());
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, child.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Root", crumbs.get(0).title());
+        assertNotNull(crumbs.get(0).space());
+        assertEquals(space.getId(), crumbs.get(0).space().id());
+        assertEquals("Engineering", crumbs.get(0).space().name());
+        assertEquals("builtin", crumbs.get(0).space().icon().type());
+        assertEquals("layers", crumbs.get(0).space().icon().value());
+        assertEquals("blue", crumbs.get(0).space().icon().color());
+
+        assertEquals("Child", crumbs.get(1).title());
+        assertNotNull(crumbs.get(1).space());
+        assertEquals(space.getId(), crumbs.get(1).space().id());
+        assertEquals("Engineering", crumbs.get(1).space().name());
     }
 
     @Test
@@ -1954,6 +2015,93 @@ class DocumentServiceTest {
         assertEquals(1, crumbs.size());
         assertEquals("Public Spec", crumbs.get(0).title());
         assertNull(crumbs.get(0).parentId());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_publicDocWithPrivateParentInSpace_doesNotLeakSpaceMetadata() {
+        Space space = Space.builder()
+                .id(UUID.randomUUID())
+                .name("Internal Secret Space")
+                .iconType(PageIconType.BUILTIN)
+                .iconValue("shield")
+                .iconColor("red")
+                .build();
+
+        Document privateRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Private Org")
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .space(space)
+                .parent(null)
+                .build();
+
+        Document publicDoc = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Spec")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(privateRoot)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicDoc.getId())).thenReturn(Optional.of(publicDoc));
+        when(permissionService.resolvePublicAccess(publicDoc.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(publicDoc.getId())).thenReturn(List.of(privateRoot.getId()));
+        when(documentRepository.findAllById(List.of(publicDoc.getId(), privateRoot.getId())))
+                .thenReturn(List.of(publicDoc, privateRoot));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicDoc.getId(), privateRoot.getId())))
+                .thenReturn(Map.of(publicDoc.getId(), DocumentAccessLevel.VIEW));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicDoc.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Public Spec", crumbs.get(0).title());
+        assertNull(crumbs.get(0).parentId());
+        assertNull(crumbs.get(0).space());
+    }
+
+    @Test
+    void getPublicBreadcrumbs_publicDocWithPublicParentInSpace_includesSpaceMetadata() {
+        Space space = Space.builder()
+                .id(UUID.randomUUID())
+                .name("Public Space")
+                .iconType(PageIconType.BUILTIN)
+                .iconValue("globe")
+                .iconColor("green")
+                .build();
+
+        Document publicRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Root")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .space(space)
+                .parent(null)
+                .build();
+
+        Document publicChild = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Public Child")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .parent(publicRoot)
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(publicChild.getId())).thenReturn(Optional.of(publicChild));
+        when(permissionService.resolvePublicAccess(publicChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(publicChild.getId())).thenReturn(List.of(publicRoot.getId()));
+        when(documentRepository.findAllById(List.of(publicChild.getId(), publicRoot.getId())))
+                .thenReturn(List.of(publicChild, publicRoot));
+        when(permissionService.resolvePublicAccessBatch(List.of(publicChild.getId(), publicRoot.getId())))
+                .thenReturn(Map.of(
+                        publicChild.getId(), DocumentAccessLevel.VIEW,
+                        publicRoot.getId(), DocumentAccessLevel.VIEW));
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getPublicBreadcrumbs(publicChild.getId());
+
+        assertEquals(2, crumbs.size());
+        assertEquals("Public Root", crumbs.get(0).title());
+        assertNotNull(crumbs.get(0).space());
+        assertEquals("Public Space", crumbs.get(0).space().name());
+        assertEquals("Public Child", crumbs.get(1).title());
+        assertNotNull(crumbs.get(1).space());
+        assertEquals("Public Space", crumbs.get(1).space().name());
     }
 
     @Test
