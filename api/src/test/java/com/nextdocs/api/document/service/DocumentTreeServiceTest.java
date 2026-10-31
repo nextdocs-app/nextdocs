@@ -27,6 +27,7 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -60,6 +61,9 @@ class DocumentTreeServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
     private DocumentTreeService documentTreeService;
 
     private UUID userId;
@@ -78,7 +82,8 @@ class DocumentTreeServiceTest {
                 collaboratorRepository,
                 userDocumentOrderRepository,
                 userRepository,
-                permissionService);
+                permissionService,
+                spaceAccessService);
     }
 
     @Test
@@ -1154,5 +1159,68 @@ class DocumentTreeServiceTest {
         List<String> finalKeys = keySnapshots.get(1);
         finalKeys.forEach(key -> assertTrue(FractionalIndex.isValidOrderKey(key)));
         assertEquals(finalKeys.stream().sorted().toList(), finalKeys);
+    }
+
+    @Test
+    void move_unparentNestedSpacePageWithoutSpaceAdmin_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document parentDoc = spacePage(parentId, space, "a0");
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .parent(parentDoc)
+                .siblingOrderKey("a1")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+    }
+
+    @Test
+    void move_unparentNestedSpacePageWithSpaceAdmin_succeedsAndDetaches() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document parentDoc = spacePage(parentId, space, "a0");
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .parent(parentDoc)
+                .siblingOrderKey("a1")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolveSpace(doc)).thenReturn(space, (Space) null);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
+                .thenReturn(Optional.empty());
+        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.of("a0"));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(collaboratorRepository.findAllByDocument_Id(docId)).thenReturn(List.of());
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+
+        DocumentResponse response = documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null));
+
+        assertNull(response.parentId());
+        assertEquals(DocumentAccessLevel.OWNER, response.accessLevel());
+        verify(spaceAccessService).requireActiveAdministration(userId, space.getId());
+        verify(documentRepository).saveAndFlush(doc);
+        assertNull(doc.getParent());
+        assertNull(doc.getSiblingOrderKey());
     }
 }

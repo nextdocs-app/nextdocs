@@ -998,6 +998,31 @@ class DocumentServiceTest {
     }
 
     @Test
+    void create_clientIdMatchesCreatorInSpaceWithoutCurrentAccess_throwsConflict() {
+        UUID creatorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document existing = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(creatorId).build())
+                .title("Space Spec")
+                .space(space)
+                .build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(documentId, "Retry", "AQID", "Author", null, null, null, null, null, null);
+
+        when(userRepository.findById(creatorId))
+                .thenReturn(Optional.of(User.builder().id(creatorId).build()));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
+        when(permissionService.resolveSpace(existing)).thenReturn(space);
+        when(permissionService.resolveAccess(creatorId, documentId)).thenReturn(null);
+
+        ApiException exception = assertThrows(ApiException.class, () -> documentService.create(creatorId, request));
+
+        assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
+    }
+
+    @Test
     void create_nestedDocWithIdenticalSiblingKeys_throwsConflict() {
         UUID userId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();

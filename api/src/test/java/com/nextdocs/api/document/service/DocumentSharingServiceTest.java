@@ -31,11 +31,18 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,6 +74,9 @@ class DocumentSharingServiceTest {
     @Mock
     private SpaceAccessService spaceAccessService;
 
+    @Mock
+    private SpaceMemberRepository spaceMemberRepository;
+
     private DocumentSharingService sharingService;
 
     @BeforeEach
@@ -77,7 +87,8 @@ class DocumentSharingServiceTest {
                 userDocumentOrderRepository,
                 userRepository,
                 permissionService,
-                spaceAccessService);
+                spaceAccessService,
+                spaceMemberRepository);
     }
 
     @Test
@@ -708,6 +719,68 @@ class DocumentSharingServiceTest {
         assertFalse(result.get(1).owner());
         assertEquals(collabOwnerRoleId, result.get(1).userId());
         assertEquals(DocumentAccessLevel.OWNER, result.get(1).accessLevel());
+    }
+
+    @Test
+    void listCollaborators_reportsEffectiveLevelForDemotedOwnerAndBlockedRow() {
+        UUID ownerId = UUID.randomUUID();
+        UUID demotedOwnerId = UUID.randomUUID();
+        UUID blockedId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User docOwner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .displayName("Doc Owner")
+                .build();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(docOwner)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        DocumentCollaborator demotedOwner = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(doc)
+                .user(User.builder()
+                        .id(demotedOwnerId)
+                        .email("demoted@example.com")
+                        .displayName("Demoted Owner")
+                        .build())
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        DocumentCollaborator blocked = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(doc)
+                .user(User.builder()
+                        .id(blockedId)
+                        .email("blocked@example.com")
+                        .displayName("Blocked")
+                        .build())
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
+                .thenReturn(doc);
+        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(demotedOwner, blocked));
+        Map<UUID, DocumentAccessLevel> effective = new HashMap<>();
+        effective.put(ownerId, DocumentAccessLevel.OWNER);
+        effective.put(demotedOwnerId, DocumentAccessLevel.VIEW);
+        effective.put(blockedId, null);
+        when(permissionService.resolveAccessForUsers(documentId, List.of(ownerId, demotedOwnerId, blockedId), false))
+                .thenReturn(effective);
+
+        List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, documentId);
+
+        assertEquals(3, result.size());
+        assertEquals(DocumentAccessLevel.OWNER, result.get(0).effectiveAccessLevel());
+        // The stored grant stays OWNER (that is what the row edits), while the
+        // space caps what the person can actually do.
+        assertEquals(DocumentAccessLevel.OWNER, result.get(1).accessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, result.get(1).effectiveAccessLevel());
+        // A missing map entry means blocked, not "not queried".
+        assertEquals(DocumentAccessLevel.NO_ACCESS, result.get(2).effectiveAccessLevel());
     }
 
     @Test
@@ -1836,5 +1909,187 @@ class DocumentSharingServiceTest {
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
+    }
+
+    @Test
+    void listCollaborators_spaceRootDocument_surfacesSpaceMembersWithViaProvenance() {
+        UUID requesterId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+
+        Space space = Space.builder()
+                .id(spaceId)
+                .name("Engineering")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build();
+
+        User creator = User.builder()
+                .id(requesterId)
+                .email("creator@example.com")
+                .displayName("Creator")
+                .build();
+
+        User memberUser = User.builder()
+                .id(UUID.randomUUID())
+                .email("member@example.com")
+                .displayName("Member")
+                .build();
+
+        Document doc = Document.builder()
+                .id(documentId)
+                .title("Architecture")
+                .user(creator)
+                .space(space)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        SpaceMember sm = SpaceMember.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(memberUser)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(requesterId, documentId))
+                .thenReturn(doc);
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(spaceAccessService.load(requesterId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+        when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
+                .thenReturn(List.of(sm));
+        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of());
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+
+        List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
+
+        assertEquals(1, roster.size());
+        CollaboratorResponse row = roster.get(0);
+        assertEquals(memberUser.getId(), row.userId());
+        assertEquals("Engineering", row.inheritedFromTitle());
+        assertEquals(spaceId, row.inheritedFromId());
+        assertTrue(row.inherited());
+        assertEquals(DocumentAccessLevel.EDIT, row.accessLevel());
+    }
+
+    @Test
+    void listCollaborators_directOverrideOnSpaceMember_reportsOverridesSpaceProvenance() {
+        UUID requesterId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+
+        Space space = Space.builder()
+                .id(spaceId)
+                .name("Product")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build();
+
+        User creator = User.builder()
+                .id(requesterId)
+                .email("creator@example.com")
+                .displayName("Creator")
+                .build();
+
+        User memberUser = User.builder()
+                .id(memberId)
+                .email("member@example.com")
+                .displayName("Member")
+                .build();
+
+        Document doc = Document.builder()
+                .id(documentId)
+                .title("Roadmap")
+                .user(creator)
+                .space(space)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        SpaceMember sm = SpaceMember.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(memberUser)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        DocumentCollaborator directOverride = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(doc)
+                .user(memberUser)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(requesterId, documentId))
+                .thenReturn(doc);
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(spaceAccessService.load(requesterId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+        when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
+                .thenReturn(List.of(sm));
+        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(directOverride));
+        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(documentId))
+                .thenReturn(List.of(memberId));
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+
+        List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
+
+        assertEquals(1, roster.size());
+        CollaboratorResponse row = roster.get(0);
+        assertEquals(memberId, row.userId());
+        assertFalse(row.inherited());
+        assertEquals("Product", row.inheritedFromTitle());
+        assertEquals(spaceId, row.inheritedFromId());
+        assertEquals(DocumentAccessLevel.EDIT, row.inheritedAccessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, row.accessLevel());
+    }
+
+    @Test
+    void getMyAccess_externalCollaboratorNotInWorkspace_returnsAccessWithoutSpaceSummary() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(permissionService.resolveSpace(document)).thenReturn(space);
+        when(spaceAccessService.load(requesterId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessResponse response = sharingService.getMyAccess(requesterId, documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.EDIT, response.accessLevel());
+        assertFalse(response.owner());
+        assertFalse(response.canManageSharing());
+        assertNull(response.space());
+    }
+
+    @Test
+    void getCollaborators_creatorRemovedFromSpaceWithPublicLink_deniesRosterAccess() {
+        UUID creatorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        User creator = User.builder().id(creatorId).email("creator@example.com").build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(creator)
+                .title("Space doc")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(creatorId, documentId))
+                .thenReturn(document);
+        when(permissionService.resolveSpace(document)).thenReturn(space);
+        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, creatorId))
+                .thenReturn(Optional.empty());
+        when(collaboratorRepository.hasPositiveAncestorGrant(creatorId, documentId))
+                .thenReturn(false);
+        when(spaceAccessService.load(creatorId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        assertThrows(ApiException.class, () -> sharingService.listCollaborators(creatorId, documentId));
     }
 }

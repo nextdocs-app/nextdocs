@@ -28,7 +28,12 @@ public record CollaboratorResponse(
         String inheritedFromTitle,
 
         @Schema(description = "Access level granted on the ancestor document")
-        DocumentAccessLevel inheritedAccessLevel) {
+        DocumentAccessLevel inheritedAccessLevel,
+
+        @Schema(
+                description = "What this person can actually do on this document after space, link, and archive "
+                        + "resolution; NO_ACCESS when blocked")
+        DocumentAccessLevel effectiveAccessLevel) {
 
     public CollaboratorResponse(
             UUID userId,
@@ -37,6 +42,31 @@ public record CollaboratorResponse(
             DocumentAccessLevel accessLevel,
             OffsetDateTime addedAt,
             boolean owner) {
-        this(userId, email, displayName, accessLevel, addedAt, owner, false, null, null, null);
+        this(userId, email, displayName, accessLevel, addedAt, owner, false, null, null, null, accessLevel);
+    }
+
+    public CollaboratorResponse(
+            UUID userId,
+            String email,
+            String displayName,
+            DocumentAccessLevel accessLevel,
+            OffsetDateTime addedAt,
+            boolean owner,
+            boolean inherited,
+            UUID inheritedFromId,
+            String inheritedFromTitle,
+            DocumentAccessLevel inheritedAccessLevel) {
+        this(
+                userId,
+                email,
+                displayName,
+                accessLevel,
+                addedAt,
+                owner,
+                inherited,
+                inheritedFromId,
+                inheritedFromTitle,
+                inheritedAccessLevel,
+                accessLevel);
     }
 }
