@@ -21,6 +21,30 @@ function mockStore() {
           },
         },
         sharedTree: { nodes: {} },
+        spaceTree: {
+          trees: {
+            'space-1': {
+              nodes: {
+                'space-root': { id: 'space-root', title: 'Space Root', icon: null, parentId: null },
+                'space-child': {
+                  id: 'space-child',
+                  title: 'Space Child',
+                  icon: null,
+                  parentId: 'space-root',
+                },
+              },
+              rootIds: ['space-root'],
+              isRootLoading: false,
+            },
+          },
+          spaces: {
+            'space-1': {
+              id: 'space-1',
+              name: 'Design Space',
+              icon: { type: 'builtin', value: 'palette', color: 'purple' },
+            },
+          },
+        },
         auth: { accessToken: null },
       })
   );
@@ -69,5 +93,50 @@ describe('useDocumentBreadcrumbs', () => {
 
     expect(result.current.breadcrumbs[1]).toMatchObject({ id: 'leaf' });
     expect(result.current.breadcrumbs[1].icon).toBeNull();
+  });
+
+  it('resolves space hierarchy from local spaceTree nodes', async () => {
+    const { result } = renderHook(() => useDocumentBreadcrumbs('space-child', 'Space Child', null));
+
+    await waitFor(() => {
+      expect(result.current.breadcrumbs).toHaveLength(2);
+    });
+
+    expect(result.current.space).toEqual({
+      id: 'space-1',
+      name: 'Design Space',
+      icon: { type: 'builtin', value: 'palette', color: 'purple' },
+    });
+    expect(result.current.breadcrumbs[0]).toMatchObject({
+      id: 'space-root',
+      title: 'Space Root',
+      space: { id: 'space-1', name: 'Design Space' },
+    });
+  });
+
+  it('resolves space from server breadcrumbs', async () => {
+    breadcrumbsSpy.mockResolvedValue([
+      {
+        id: 'doc-remote',
+        title: 'Remote Doc',
+        parentId: null,
+        space: {
+          id: 'space-2',
+          name: 'Server Space',
+          icon: { type: 'emoji', value: '🌟' },
+        },
+      },
+    ]);
+
+    const { result } = renderHook(() => useDocumentBreadcrumbs('doc-remote', 'Remote Doc', null));
+
+    await waitFor(() => {
+      expect(result.current.space).toEqual({
+        id: 'space-2',
+        name: 'Server Space',
+        icon: { type: 'emoji', value: '🌟' },
+      });
+      expect(result.current.breadcrumbs[0].title).toBe('Remote Doc');
+    });
   });
 });

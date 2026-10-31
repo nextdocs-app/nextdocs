@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppSelector } from '@/stores/hooks';
-import { documentService, type DocumentBreadcrumbItem } from '@/services/document.service';
+import {
+  documentService,
+  type DocumentBreadcrumbItem,
+  type DocumentBreadcrumbSpace,
+} from '@/services/document.service';
 import type { DocumentIcon } from '@/types/document.types';
 import type { SidebarTreeNode } from '@/types/tree.types';
+import type { SpaceTree, SpaceSummary } from '@/stores/spaceTree/spaceTree.slice';
 
 const EMPTY_NODES: Record<string, SidebarTreeNode> = {};
+const EMPTY_SPACE_TREES: Record<string, SpaceTree> = {};
 
 export function useDocumentBreadcrumbs(
   documentId: string,
@@ -12,6 +18,7 @@ export function useDocumentBreadcrumbs(
   currentIcon?: DocumentIcon | null
 ): {
   breadcrumbs: DocumentBreadcrumbItem[];
+  space: DocumentBreadcrumbSpace | null;
   isLoading: boolean;
 } {
   const privateNodes: Record<string, SidebarTreeNode> = useAppSelector(
@@ -19,6 +26,12 @@ export function useDocumentBreadcrumbs(
   );
   const sharedNodes: Record<string, SidebarTreeNode> = useAppSelector(
     (state) => state?.sharedTree?.nodes ?? EMPTY_NODES
+  );
+  const spaceTrees: Record<string, SpaceTree> = useAppSelector(
+    (state) => state?.spaceTree?.trees ?? EMPTY_SPACE_TREES
+  );
+  const spaceSummaries: Record<string, SpaceSummary> | undefined = useAppSelector(
+    (state) => state?.spaceTree?.spaces
   );
   const accessToken = useAppSelector((state) => state?.auth?.accessToken ?? null);
 
@@ -29,16 +42,39 @@ export function useDocumentBreadcrumbs(
   const [isLoading, setIsLoading] = useState(false);
 
   // Compute breadcrumbs from local Redux tree nodes (0ms instant render)
-  const localBreadcrumbs = useMemo<DocumentBreadcrumbItem[]>(() => {
-    if (!documentId) return [];
+  const { localBreadcrumbs, localSpace, matchedSpaceId } = useMemo<{
+    localBreadcrumbs: DocumentBreadcrumbItem[];
+    localSpace: DocumentBreadcrumbSpace | null;
+    matchedSpaceId: string | null;
+  }>(() => {
+    if (!documentId) {
+      return { localBreadcrumbs: [], localSpace: null, matchedSpaceId: null };
+    }
+
+    // Check if the document belongs to a space tree
+    let foundSpaceId: string | null = null;
+    let spaceNodes: Record<string, SidebarTreeNode> | null = null;
+
+    for (const [spaceId, tree] of Object.entries(spaceTrees)) {
+      if (tree?.nodes?.[documentId]) {
+        foundSpaceId = spaceId;
+        spaceNodes = tree.nodes;
+        break;
+      }
+    }
 
     const items: DocumentBreadcrumbItem[] = [];
     let currentId: string | null = documentId;
     const visited = new Set<string>();
 
+    const resolvedLocalSpace: DocumentBreadcrumbSpace | null = foundSpaceId
+      ? (spaceSummaries?.[foundSpaceId] ?? { id: foundSpaceId, name: 'Space', icon: null })
+      : null;
+
     while (currentId && !visited.has(currentId)) {
       visited.add(currentId);
-      const node: SidebarTreeNode | undefined = privateNodes[currentId] || sharedNodes[currentId];
+      const node: SidebarTreeNode | undefined =
+        spaceNodes?.[currentId] || privateNodes[currentId] || sharedNodes[currentId];
       if (!node) {
         break;
       }
@@ -47,23 +83,41 @@ export function useDocumentBreadcrumbs(
         title: node.title || 'Untitled',
         icon: node.icon,
         parentId: node.parentId,
+        space: resolvedLocalSpace,
       });
       currentId = node.parentId;
     }
 
     if (items.length === 0) {
-      return [
-        {
-          id: documentId,
-          title: currentTitle || 'Untitled',
-          icon: currentIcon ?? null,
-          parentId: null,
-        },
-      ];
+      return {
+        localBreadcrumbs: [
+          {
+            id: documentId,
+            title: currentTitle || 'Untitled',
+            icon: currentIcon ?? null,
+            parentId: null,
+            space: resolvedLocalSpace,
+          },
+        ],
+        localSpace: resolvedLocalSpace,
+        matchedSpaceId: foundSpaceId,
+      };
     }
 
-    return items.reverse();
-  }, [documentId, privateNodes, sharedNodes, currentTitle, currentIcon]);
+    return {
+      localBreadcrumbs: items.reverse(),
+      localSpace: resolvedLocalSpace,
+      matchedSpaceId: foundSpaceId,
+    };
+  }, [
+    documentId,
+    privateNodes,
+    sharedNodes,
+    spaceTrees,
+    spaceSummaries,
+    currentTitle,
+    currentIcon,
+  ]);
 
   // Fetch full path from server to catch any non-loaded ancestor levels
   useEffect(() => {
@@ -94,11 +148,17 @@ export function useDocumentBreadcrumbs(
     };
   }, [documentId, accessToken]);
 
+  const serverBreadcrumbs =
+    serverState && serverState.documentId === documentId ? serverState.items : [];
+
+  const serverSpace = useMemo(() => {
+    return serverBreadcrumbs.find((b) => b.space)?.space ?? null;
+  }, [serverBreadcrumbs]);
+
+  const effectiveSpace = serverSpace ?? localSpace;
+
   // Merge and apply reactive live updates to titles
   const breadcrumbs = useMemo<DocumentBreadcrumbItem[]>(() => {
-    const serverBreadcrumbs =
-      serverState && serverState.documentId === documentId ? serverState.items : [];
-
     const rawList =
       serverBreadcrumbs.length > 0 &&
       serverBreadcrumbs[serverBreadcrumbs.length - 1]?.id === documentId
@@ -112,6 +172,7 @@ export function useDocumentBreadcrumbs(
           title: currentTitle || 'Untitled',
           icon: currentIcon ?? null,
           parentId: null,
+          space: effectiveSpace,
         },
       ];
     }
@@ -121,6 +182,7 @@ export function useDocumentBreadcrumbs(
       if (isCurrent) {
         return {
           ...item,
+          space: effectiveSpace ?? item.space ?? null,
           title: currentTitle && currentTitle.trim() ? currentTitle : 'Untitled',
           // Only fall back while meta is unknown (`undefined`). A known
           // deletion (`null`) must win — otherwise the old icon flashes back.
@@ -129,27 +191,35 @@ export function useDocumentBreadcrumbs(
       }
 
       // Check if ancestor title/icon was updated in local tree store
-      const localNode = privateNodes[item.id] || sharedNodes[item.id];
+      const localNode =
+        privateNodes[item.id] ||
+        sharedNodes[item.id] ||
+        (matchedSpaceId ? spaceTrees[matchedSpaceId]?.nodes[item.id] : undefined);
       const liveTitle = localNode?.title || item.title || 'Untitled';
 
       return {
         ...item,
+        space: effectiveSpace ?? item.space ?? null,
         title: liveTitle,
         icon: localNode?.icon === undefined ? item.icon : localNode.icon,
       };
     });
   }, [
-    serverState,
+    serverBreadcrumbs,
     localBreadcrumbs,
+    effectiveSpace,
     documentId,
     currentTitle,
     currentIcon,
     privateNodes,
     sharedNodes,
+    spaceTrees,
+    matchedSpaceId,
   ]);
 
   return {
     breadcrumbs,
+    space: effectiveSpace,
     isLoading,
   };
 }

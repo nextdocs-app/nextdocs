@@ -4,12 +4,17 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SharePanel } from '@/components/SharePanel';
 import { Comments, MoreHorizontal, Share } from '@/icons/index';
-import { useAppSelector } from '@/stores/hooks';
+import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { setCollapsed, toggleSpacesOpen } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { PageIcon } from '@/components/page/PageIcon';
-import type { DocumentBreadcrumbItem } from '@/services/document.service';
+import {
+  WorkspaceIconTile,
+  workspaceIconTileStyle,
+} from '@/components/workspace/WorkspaceIconTile';
+import type { DocumentBreadcrumbItem, DocumentSpaceSummary } from '@/services/document.service';
 import type { DocumentIcon } from '@/types/document.types';
 
 function formatLastEdited(dateStr: string | undefined | null): string {
@@ -71,6 +76,8 @@ interface DocToolbarProps {
   canManageTrash?: boolean;
   /** Whether the viewer may manage sharing settings (OWNER access or full-access collaborator) */
   canManageSharing?: boolean;
+  /** Space context for the share panel when the page lives in a space */
+  documentSpace?: DocumentSpaceSummary | null;
   /** Callback to restore the document from trash */
   onRestore?: () => void;
 }
@@ -93,6 +100,7 @@ export function DocToolbar({
   showTrashNotice = false,
   canManageTrash = false,
   canManageSharing = false,
+  documentSpace = null,
   onRestore,
 }: DocToolbarProps) {
   const router = useRouter();
@@ -103,10 +111,22 @@ export function DocToolbar({
   const shareButtonRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
 
+  const dispatch = useAppDispatch();
   const isSidebarCollapsed = useAppSelector((state) => state?.sidebar?.isCollapsed ?? false);
+  const isSpacesOpen = useAppSelector((state) => state?.sidebar?.isSpacesOpen ?? true);
+  const accessToken = useAppSelector((state) => state?.auth?.accessToken ?? null);
 
   // Hook to get full document hierarchy (reactive to live title edits and tree updates)
-  const { breadcrumbs } = useDocumentBreadcrumbs(documentId, documentTitle, documentIcon);
+  const { breadcrumbs, space } = useDocumentBreadcrumbs(documentId, documentTitle, documentIcon);
+
+  const handleSpaceClick = useCallback(() => {
+    if (isSidebarCollapsed) {
+      dispatch(setCollapsed(false));
+    }
+    if (!isSpacesOpen) {
+      dispatch(toggleSpacesOpen());
+    }
+  }, [dispatch, isSidebarCollapsed, isSpacesOpen]);
 
   const handleShareToggle = useCallback(() => {
     setIsShareOpen((prev) => !prev);
@@ -186,6 +206,8 @@ export function DocToolbar({
       ? breadcrumbs[breadcrumbs.length - 1]
       : { id: documentId, title: documentTitle || 'Untitled', icon: documentIcon ?? null };
 
+  const spaceTile = workspaceIconTileStyle(space?.icon);
+
   // Left offset tracking: aligns pixel-perfectly with the left sidebar edge.
   // When the rail is closed (or off-canvas on mobile), the shell's navigation
   // toggle leads the row, so the toolbar clears it.
@@ -217,6 +239,47 @@ export function DocToolbar({
         role="navigation"
         aria-label="Document hierarchy"
       >
+        {space && (
+          <>
+            <button
+              type="button"
+              onClick={handleSpaceClick}
+              title={`Space "${space.name}"`}
+              aria-label={`Space "${space.name}"`}
+              className="
+                hidden md:inline-flex
+                group/crumb items-center gap-1.5 rounded-sm px-1.5 py-0.5
+                text-[14px] font-normal leading-normal text-muted-foreground
+                hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
+                transition-colors duration-150 max-w-[130px] sm:max-w-[170px]
+                cursor-pointer shrink-0
+                focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
+              "
+            >
+              <span
+                style={spaceTile.style}
+                className={`flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center overflow-hidden rounded-[4px] ${spaceTile.className}`}
+                data-testid={space.icon ? undefined : 'space-placeholder'}
+              >
+                <WorkspaceIconTile
+                  icon={space.icon}
+                  size={18}
+                  fallback="space"
+                  accessToken={accessToken}
+                />
+              </span>
+              <span className="truncate leading-normal">{space.name}</span>
+            </button>
+
+            <span
+              className="hidden md:inline text-muted-foreground/35 select-none text-[13px] font-light px-0.5 shrink-0"
+              aria-hidden="true"
+            >
+              /
+            </span>
+          </>
+        )}
+
         {shouldCollapseBreadcrumbs ? (
           <>
             {/* Root Document */}
@@ -650,6 +713,7 @@ export function DocToolbar({
           onClose={() => setIsShareOpen(false)}
           anchorRef={shareButtonRef}
           canManageSharing={canManageSharing}
+          documentSpace={documentSpace}
           onNavigate={handleNavigate}
         />
       )}

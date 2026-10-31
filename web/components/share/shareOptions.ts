@@ -38,6 +38,17 @@ export const INVITE_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'VIEW', label: 'Can view' },
 ];
 
+/**
+ * Levels offered when inviting someone. A page inside a space is shared by the
+ * space's owners, so the page-level Full access grant is not on offer there:
+ * the description would promise rights the server refuses.
+ */
+export function getInviteAccessOptions(allowOwner = true): DropdownOption<DocumentAccessLevel>[] {
+  return allowOwner
+    ? [...INVITE_ACCESS_OPTIONS]
+    : INVITE_ACCESS_OPTIONS.filter((option) => option.value !== 'OWNER');
+}
+
 export const LINK_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'VIEW', label: 'Can view' },
   { value: 'COMMENT', label: 'Can comment' },
