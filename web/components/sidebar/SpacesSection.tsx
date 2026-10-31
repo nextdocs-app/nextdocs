@@ -801,6 +801,7 @@ export function SpacesSection({
                                     spaceId={space.id}
                                     tree={tree}
                                     activeDocId={activeDocId}
+                                    canAdministerSpace={space.canAdminister}
                                     onSelectDocument={(documentId) => {
                                       setMenuAnchor(null);
                                       onSelectDocument(documentId);

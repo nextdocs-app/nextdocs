@@ -15,6 +15,7 @@ import type { SharedDocumentEntry } from '@/stores/documentList/documentList.typ
 import { SidebarSection } from './SidebarSection';
 import { SidebarTreeItem } from './SidebarTreeItem';
 import { SidebarTreeDndContext, useTreeDndOptional, type TreeApi } from './SidebarTreeDndContext';
+import { isSidebarDropAllowed, type SidebarDropZone } from '@/lib/sidebar-drop-rules';
 import { useTreeMetaSync } from '@/hooks/useTreeMetaSync.hook';
 import type { DocActionsAnchor, DocActionType } from './types';
 import { SIDEBAR_VISIBLE_COUNT } from './types';
@@ -94,6 +95,20 @@ export function SharedTree({
       // is already a root; children are shared only through their root parent,
       // so they must never be moved out of the shared tree's root level.
       canPlaceAtRoot: (draggedId) => nodes[draggedId]?.parentId == null,
+      resolveDrop: (draggedId, target) => {
+        const dragged = nodes[draggedId];
+        const targetNode = nodes[target.nodeId];
+        if (!dragged || !targetNode) return false;
+        return isSidebarDropAllowed(target.zone as SidebarDropZone, {
+          draggedId,
+          draggedIsShared: true,
+          targetIsShared: true,
+          draggedParentId: dragged.parentId ?? null,
+          targetParentId: targetNode.parentId ?? null,
+          draggedAccessLevel: dragged.effectiveAccessLevel,
+          targetHasCollaborators: targetNode.hasCollaborators,
+        });
+      },
     }),
     [nodes, rootIds, dispatch, isAuthenticated]
   );

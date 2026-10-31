@@ -43,6 +43,7 @@ export function toSidebarTreeNode(node: TreeNode, isExpanded = false): SidebarTr
     parentId: node.parentId,
     orderKey: node.orderKey,
     hasChildren: node.hasChildren,
+    hasCollaborators: node.hasCollaborators ?? false,
     effectiveAccessLevel: node.effectiveAccessLevel,
     // Tree nodes feed the sidebar icon render; re-validate so stale IndexedDB
     // or a compromised payload degrades to no icon instead of reaching img/CSS.

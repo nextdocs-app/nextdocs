@@ -94,6 +94,61 @@ describe('canDropWithinSpace', () => {
     expect(canDropWithinSpace(nodes, 'missing', { nodeId: 'root', zone: 'mid' })).toBe(false);
     expect(canDropWithinSpace(nodes, 'child', { nodeId: 'missing', zone: 'mid' })).toBe(false);
   });
+
+  it('blocks nesting under a target with collaborators for non-admin editors', () => {
+    const nodesWithCollabs: Record<string, SidebarTreeNode> = {
+      ...nodes,
+      sharedTarget: { ...node('sharedTarget'), hasCollaborators: true },
+    };
+
+    // Ordinary editor without admin: blocked
+    expect(
+      canDropWithinSpace(nodesWithCollabs, 'root', { nodeId: 'sharedTarget', zone: 'mid' }, false)
+    ).toBe(false);
+
+    // Space administrator: allowed
+    expect(
+      canDropWithinSpace(nodesWithCollabs, 'root', { nodeId: 'sharedTarget', zone: 'mid' }, true)
+    ).toBe(true);
+
+    // Document owner: allowed
+    const ownerDoc = { ...node('ownerDoc'), effectiveAccessLevel: 'OWNER' as const };
+    const nodesWithOwner = { ...nodesWithCollabs, ownerDoc };
+    expect(
+      canDropWithinSpace(nodesWithOwner, 'ownerDoc', { nodeId: 'sharedTarget', zone: 'mid' }, false)
+    ).toBe(true);
+  });
+
+  it('allows sibling reorder even if parent has collaborators, but blocks external reparenting into it', () => {
+    const parentWithCollabs = { ...node('parentCollab'), hasCollaborators: true };
+    const child1 = node('child1', 'parentCollab');
+    const child2 = node('child2', 'parentCollab');
+    const otherChild = node('otherChild', 'otherParent');
+    const otherParent = node('otherParent');
+
+    const treeNodes: Record<string, SidebarTreeNode> = {
+      parentCollab: parentWithCollabs,
+      child1,
+      child2,
+      otherChild,
+      otherParent,
+    };
+
+    // Sibling reorder between child1 and child2: allowed
+    expect(canDropWithinSpace(treeNodes, 'child1', { nodeId: 'child2', zone: 'top' }, false)).toBe(
+      true
+    );
+
+    // Reparenting otherChild under parentCollab via drop above child1: blocked for non-admin
+    expect(
+      canDropWithinSpace(treeNodes, 'otherChild', { nodeId: 'child1', zone: 'top' }, false)
+    ).toBe(false);
+
+    // Reparenting otherChild under parentCollab via drop above child1: allowed for space admin
+    expect(
+      canDropWithinSpace(treeNodes, 'otherChild', { nodeId: 'child1', zone: 'top' }, true)
+    ).toBe(true);
+  });
 });
 
 describe('SpaceTree component', () => {

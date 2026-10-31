@@ -623,6 +623,7 @@ class DocumentService {
       parentId: item.parentId,
       orderKey: item.orderKey ?? '',
       hasChildren: item.hasChildren ?? false,
+      hasCollaborators: item.hasCollaborators ?? false,
       effectiveAccessLevel: accessLevelOf(item),
       createdAt: item.meta.createdAt,
       updatedAt: item.meta.updatedAt,
