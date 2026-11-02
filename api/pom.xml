@@ -35,7 +35,7 @@
 		<bucket4j.version>8.21.0</bucket4j.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<!-- springdoc 3.x supports Spring Boot 4 -->
-		<springdoc.version>3.1.1</springdoc.version>
+		<springdoc.version>3.2.0</springdoc.version>
 	</properties>
 	<dependencies>
 		<!-- Web MVC -->
