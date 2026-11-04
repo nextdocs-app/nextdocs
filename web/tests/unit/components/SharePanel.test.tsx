@@ -4,6 +4,7 @@ import React from 'react';
 import { SharePanel } from '../../../components/SharePanel';
 import { documentService } from '../../../services/document.service';
 import { useAuth } from '../../../hooks/useAuth.hook';
+import { OPEN_SPACE_SETTINGS_EVENT } from '../../../lib/space-settings-event.util';
 
 const mockPush = jest.fn();
 
@@ -213,6 +214,169 @@ describe('SharePanel', () => {
 
       expect(screen.queryByLabelText('Remove collaborator')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Can edit/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Space-aware sharing', () => {
+    const space = {
+      id: 'space-1',
+      name: 'Engineering',
+      accessMode: 'CUSTOM' as const,
+      everyoneAccessLevel: 'VIEW' as const,
+      myAccessLevel: 'VIEW' as const,
+      canAdminister: false,
+      archived: false,
+    };
+
+    const ownerRow = {
+      userId: 'user-1',
+      email: 'owner@example.com',
+      displayName: 'Doc Owner',
+      accessLevel: 'OWNER' as const,
+      effectiveAccessLevel: 'VIEW' as const,
+      addedAt: '2026-01-01T00:00:00Z',
+      owner: true,
+    };
+
+    it('shows effective access for a page owner demoted by the space', async () => {
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([ownerRow]);
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={false}
+          documentSpace={space}
+        />
+      );
+
+      expect(await screen.findByText('Doc Owner')).toBeInTheDocument();
+      expect(screen.queryByText('Space members')).not.toBeInTheDocument();
+      expect(screen.queryByText('Everyone at this workspace')).not.toBeInTheDocument();
+      // The stored grant is OWNER, but the space caps what it actually does.
+      expect(screen.queryByText('Full access')).not.toBeInTheDocument();
+      expect(screen.getByText('Can view')).toBeInTheDocument();
+      expect(
+        screen.getByText('Only owners of Engineering can manage sharing for this page.')
+      ).toBeInTheDocument();
+    });
+
+    it('omits Full access from space-page invites', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([ownerRow]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+          documentSpace={{ ...space, canAdminister: true, myAccessLevel: 'OWNER' }}
+        />
+      );
+
+      await user.type(await screen.findByPlaceholderText('Add people by email'), 'new@example.com');
+      await user.click(screen.getByRole('button', { name: 'Can edit' }));
+
+      expect(screen.getByRole('listbox')).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Full access' })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Can edit' })).toBeInTheDocument();
+    });
+
+    it('opens space members settings when clicking via space badge', async () => {
+      const user = userEvent.setup();
+      const listener = jest.fn();
+      window.addEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
+
+      try {
+        const inheritedMember = {
+          userId: 'user-2',
+          email: 'member@example.com',
+          displayName: 'Space Collab',
+          accessLevel: 'EDIT' as const,
+          inherited: true,
+          inheritedFromTitle: 'Engineering',
+          inheritedFromId: 'space-1',
+          owner: false,
+        };
+        (documentService.listCollaborators as jest.Mock).mockResolvedValue([inheritedMember]);
+
+        render(
+          <SharePanel
+            documentId="doc-1"
+            isOpen={true}
+            onClose={mockOnClose}
+            anchorRef={anchorRef}
+            canManageSharing={true}
+            documentSpace={{ ...space, canAdminister: true, myAccessLevel: 'OWNER' }}
+          />
+        );
+
+        const viaBtn = await screen.findByRole('button', { name: 'via Engineering' });
+        expect(viaBtn).toBeInTheDocument();
+        await user.click(viaBtn);
+
+        expect(mockOnClose).toHaveBeenCalled();
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({
+          spaceId: 'space-1',
+          tab: 'members',
+        });
+      } finally {
+        window.removeEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
+      }
+    });
+
+    it('opens space members settings when clicking Overrides space badge', async () => {
+      const user = userEvent.setup();
+      const listener = jest.fn();
+      window.addEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
+
+      try {
+        const overriddenMember = {
+          userId: 'user-3',
+          email: 'override@example.com',
+          displayName: 'Overridden Collab',
+          accessLevel: 'COMMENT' as const,
+          inherited: false,
+          inheritedFromTitle: 'Engineering',
+          inheritedFromId: 'space-1',
+          inheritedAccessLevel: 'EDIT' as const,
+          owner: false,
+        };
+        (documentService.listCollaborators as jest.Mock).mockResolvedValue([overriddenMember]);
+
+        render(
+          <SharePanel
+            documentId="doc-1"
+            isOpen={true}
+            onClose={mockOnClose}
+            anchorRef={anchorRef}
+            canManageSharing={true}
+            documentSpace={{ ...space, canAdminister: true, myAccessLevel: 'OWNER' }}
+          />
+        );
+
+        const overridesBtn = await screen.findByRole('button', { name: 'Overrides Engineering' });
+        expect(overridesBtn).toBeInTheDocument();
+        await user.click(overridesBtn);
+
+        expect(mockOnClose).toHaveBeenCalled();
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({
+          spaceId: 'space-1',
+          tab: 'members',
+        });
+      } finally {
+        window.removeEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
+      }
     });
   });
 

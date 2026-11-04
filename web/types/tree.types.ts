@@ -17,6 +17,7 @@ export interface TreeNode {
   parentId: string | null;
   orderKey: string;
   hasChildren: boolean;
+  hasCollaborators?: boolean;
   effectiveAccessLevel: DocumentAccessLevel | null;
   createdAt: string;
   updatedAt: string;
@@ -44,6 +45,7 @@ export interface SidebarTreeNode {
   parentId: string | null;
   orderKey: string;
   hasChildren: boolean;
+  hasCollaborators?: boolean;
   effectiveAccessLevel: DocumentAccessLevel | null;
   icon?: DocumentIcon | null;
   isExpanded: boolean;

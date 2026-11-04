@@ -9,6 +9,7 @@ import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
+import com.nextdocs.api.document.dto.response.DocumentSpaceResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -19,7 +20,12 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.entity.SpaceMember;
+import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -47,6 +53,7 @@ public class DocumentSharingService {
     private final UserRepository userRepository;
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
+    private final SpaceMemberRepository spaceMemberRepository;
 
     @Autowired
     @Lazy
@@ -60,20 +67,23 @@ public class DocumentSharingService {
         Set<UUID> directUserIds = new HashSet<>();
         List<CollaboratorResponse> result = new ArrayList<>();
 
-        // 1. Direct document owner
-        User owner = doc.getUser();
-        directUserIds.add(owner.getId());
-        result.add(new CollaboratorResponse(
-                owner.getId(),
-                owner.getEmail(),
-                owner.getDisplayName(),
-                DocumentAccessLevel.OWNER,
-                doc.getCreatedAt(),
-                true,
-                false,
-                null,
-                null,
-                null));
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null) {
+            // 1. Direct document owner (only standalone documents have an owner)
+            User owner = doc.getUser();
+            directUserIds.add(owner.getId());
+            result.add(new CollaboratorResponse(
+                    owner.getId(),
+                    owner.getEmail(),
+                    owner.getDisplayName(),
+                    DocumentAccessLevel.OWNER,
+                    doc.getCreatedAt(),
+                    true,
+                    false,
+                    null,
+                    null,
+                    null));
+        }
 
         // 2. Direct collaborators on this document
         List<DocumentCollaborator> directCollaborators = collaboratorRepository.findAllByDocument_Id(documentId);
@@ -104,27 +114,29 @@ public class DocumentSharingService {
                 ancestorTitle = "Parent document";
             }
 
-            // Ancestor owner
-            User ancestorOwner = ancestor.getUser();
-            UUID ownerId = ancestorOwner.getId();
-            if (directNeedsAncestor.contains(ownerId)) {
-                directAncestorGrants.put(
-                        ownerId, new AncestorGrantInfo(ancestor.getId(), ancestorTitle, DocumentAccessLevel.OWNER));
-                directNeedsAncestor.remove(ownerId);
-            }
-            if (!directUserIds.contains(ownerId) && !handledAncestorUserIds.contains(ownerId)) {
-                handledAncestorUserIds.add(ownerId);
-                inheritedResponses.add(new CollaboratorResponse(
-                        ancestorOwner.getId(),
-                        ancestorOwner.getEmail(),
-                        ancestorOwner.getDisplayName(),
-                        DocumentAccessLevel.OWNER,
-                        ancestor.getCreatedAt(),
-                        false,
-                        true,
-                        ancestor.getId(),
-                        ancestorTitle,
-                        null));
+            // Ancestor owner (only standalone trees carry ancestor owners)
+            if (space == null) {
+                User ancestorOwner = ancestor.getUser();
+                UUID ownerId = ancestorOwner.getId();
+                if (directNeedsAncestor.contains(ownerId)) {
+                    directAncestorGrants.put(
+                            ownerId, new AncestorGrantInfo(ancestor.getId(), ancestorTitle, DocumentAccessLevel.OWNER));
+                    directNeedsAncestor.remove(ownerId);
+                }
+                if (!directUserIds.contains(ownerId) && !handledAncestorUserIds.contains(ownerId)) {
+                    handledAncestorUserIds.add(ownerId);
+                    inheritedResponses.add(new CollaboratorResponse(
+                            ancestorOwner.getId(),
+                            ancestorOwner.getEmail(),
+                            ancestorOwner.getDisplayName(),
+                            DocumentAccessLevel.OWNER,
+                            ancestor.getCreatedAt(),
+                            false,
+                            true,
+                            ancestor.getId(),
+                            ancestorTitle,
+                            null));
+                }
             }
 
             // Ancestor collaborators
@@ -164,6 +176,43 @@ public class DocumentSharingService {
             }
         }
 
+        // 4. Space container as the root of the hierarchy
+        if (space != null) {
+            String spaceTitle = space.getName();
+            List<SpaceMember> spaceMembers = spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(space.getId());
+            for (SpaceMember sm : spaceMembers) {
+                UUID uid = sm.getUser().getId();
+                if (directNeedsAncestor.contains(uid)) {
+                    directAncestorGrants.put(
+                            uid, new AncestorGrantInfo(space.getId(), spaceTitle, sm.getAccessLevel()));
+                    directNeedsAncestor.remove(uid);
+                }
+
+                if (!directUserIds.contains(uid) && !handledAncestorUserIds.contains(uid)) {
+                    handledAncestorUserIds.add(uid);
+                    inheritedResponses.add(new CollaboratorResponse(
+                            sm.getUser().getId(),
+                            sm.getUser().getEmail(),
+                            sm.getUser().getDisplayName(),
+                            sm.getAccessLevel(),
+                            sm.getCreatedAt(),
+                            false,
+                            true,
+                            space.getId(),
+                            spaceTitle,
+                            null));
+                }
+            }
+
+            if (space.getAccessMode() == SpaceAccessMode.PUBLIC && !directNeedsAncestor.isEmpty()) {
+                for (UUID uid : new ArrayList<>(directNeedsAncestor)) {
+                    directAncestorGrants.put(
+                            uid, new AncestorGrantInfo(space.getId(), spaceTitle, space.getEveryoneAccessLevel()));
+                    directNeedsAncestor.remove(uid);
+                }
+            }
+        }
+
         for (DocumentCollaborator c : directCollaborators) {
             UUID uid = c.getUser().getId();
             AncestorGrantInfo grantInfo = directAncestorGrants.get(uid);
@@ -185,7 +234,51 @@ public class DocumentSharingService {
         }
 
         result.addAll(inheritedResponses);
+        attachEffectiveAccessLevels(doc, result);
         return result;
+    }
+
+    /**
+     * Reports what each roster row can actually do here. The stored grant stays in
+     * {@code accessLevel} (that is what the dropdown edits); the effective level
+     * accounts for a space cap, the archive, or a NO_ACCESS breakpoint, so a page
+     * owner demoted by space membership no longer renders as "Full access".
+     */
+    private void attachEffectiveAccessLevels(Document doc, List<CollaboratorResponse> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        List<UUID> userIds =
+                rows.stream().map(CollaboratorResponse::userId).distinct().toList();
+        Map<UUID, DocumentAccessLevel> effective =
+                permissionService.resolveAccessForUsers(doc.getId(), userIds, doc.getDeletedAt() != null);
+        if (effective.isEmpty()) {
+            // A stubbed/older resolver answered nothing: keep the stored level
+            // rather than erasing every row's label.
+            return;
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            CollaboratorResponse row = rows.get(i);
+            if (!effective.containsKey(row.userId())) {
+                continue;
+            }
+            rows.set(
+                    i,
+                    new CollaboratorResponse(
+                            row.userId(),
+                            row.email(),
+                            row.displayName(),
+                            row.accessLevel(),
+                            row.addedAt(),
+                            row.owner(),
+                            row.inherited(),
+                            row.inheritedFromId(),
+                            row.inheritedFromTitle(),
+                            row.inheritedAccessLevel(),
+                            effective.get(row.userId()) == null
+                                    ? DocumentAccessLevel.NO_ACCESS
+                                    : effective.get(row.userId())));
+        }
     }
 
     public CollaboratorResponse upsertCollaborator(UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
@@ -220,7 +313,8 @@ public class DocumentSharingService {
                 .findByEmail(request.email().strip().toLowerCase())
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "User not found for the provided email."));
 
-        if (targetUser.getId().equals(doc.getUser().getId())) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null && targetUser.getId().equals(doc.getUser().getId())) {
             throw new ApiException(ErrorCode.CONFLICT, "Document owner already has owner access.");
         }
 
@@ -269,7 +363,8 @@ public class DocumentSharingService {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
-        if (doc.getUser().getId().equals(collaboratorUserId)) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null && doc.getUser().getId().equals(collaboratorUserId)) {
             // The document's own owner resolves as OWNER at depth 0, so an override row
             // here would be inert; reject it instead of storing dead state.
             throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be overridden or removed.");
@@ -351,7 +446,8 @@ public class DocumentSharingService {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot remove yourself as collaborator. Use leave instead.");
         }
 
-        if (doc.getUser().getId().equals(collaboratorUserId)) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null && doc.getUser().getId().equals(collaboratorUserId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
         }
 
@@ -374,7 +470,8 @@ public class DocumentSharingService {
         Document doc = permissionService.requireReadAccessIncludingTrash(userId, documentId);
         permissionService.requireActiveSpace(doc);
 
-        if (doc.getUser().getId().equals(userId)) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null && doc.getUser().getId().equals(userId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Owners cannot leave their own documents.");
         }
 
@@ -512,7 +609,7 @@ public class DocumentSharingService {
         Document active =
                 documentRepository.findByIdAndDeletedAtIsNull(documentId).orElse(null);
         if (active != null) {
-            return computeActiveAccess(userId, documentId, active);
+            return computeActiveAccess(userId, documentId, active, true);
         }
 
         // Trashed documents: report the caller's pre-trash access so the UI can offer a
@@ -521,13 +618,16 @@ public class DocumentSharingService {
         // OWNER-level collaborator reports accessLevel=OWNER with owner=false.
         DocumentAccessLevel trashAccess = permissionService.resolveTrashAccess(userId, documentId);
         if (trashAccess == null) {
-            return new DocumentAccessResponse(documentId, false, null, false, true);
+            return new DocumentAccessResponse(documentId, false, null, false, true, false, null);
         }
-        boolean owner = documentRepository
-                .findById(documentId)
-                .map(doc -> doc.getUser().getId().equals(userId))
-                .orElse(false);
-        return new DocumentAccessResponse(documentId, true, trashAccess, owner, true);
+        Document trashed = documentRepository.findById(documentId).orElse(null);
+        Space space = trashed != null ? permissionService.resolveSpace(trashed) : null;
+        boolean owner =
+                space == null && trashed != null && trashed.getUser().getId().equals(userId);
+        SharingContext sharing =
+                trashed != null ? resolveSharingContext(userId, trashed, trashAccess) : SharingContext.NONE;
+        return new DocumentAccessResponse(
+                documentId, true, trashAccess, owner, true, sharing.canManageSharing(), sharing.space());
     }
 
     @Transactional(readOnly = true)
@@ -570,19 +670,61 @@ public class DocumentSharingService {
             // Strict: realtime connection gating relies on trashed documents being denied here.
             return new DocumentAccessResponse(documentId, false, null, false, true);
         }
-        return computeActiveAccess(userId, documentId, doc);
+        return computeActiveAccess(userId, documentId, doc, false);
     }
 
-    private DocumentAccessResponse computeActiveAccess(UUID userId, UUID documentId, Document doc) {
-        boolean isOwner = doc.getUser().getId().equals(userId);
+    private DocumentAccessResponse computeActiveAccess(
+            UUID userId, UUID documentId, Document doc, boolean includeSharingContext) {
+        Space space = permissionService.resolveSpace(doc);
+        boolean isOwner = space == null && doc.getUser().getId().equals(userId);
         // Resolve through SQL even for the owner: an archived space caps every level,
         // ownership included, at VIEW. Realtime treats OWNER as a write grant, so a
         // short-circuit here would keep an archived space editable for page owners.
         DocumentAccessLevel level = permissionService.resolveAccess(userId, documentId);
         if (level == null) {
-            return new DocumentAccessResponse(documentId, false, null, false, false);
+            return new DocumentAccessResponse(documentId, false, null, false, false, false, null);
         }
-        return new DocumentAccessResponse(documentId, true, level, isOwner, false);
+        if (!includeSharingContext) {
+            return new DocumentAccessResponse(documentId, true, level, isOwner, false);
+        }
+        SharingContext sharing = resolveSharingContext(userId, doc, level);
+        return new DocumentAccessResponse(
+                documentId, true, level, isOwner, false, sharing.canManageSharing(), sharing.space());
+    }
+
+    /**
+     * Sharing authority and the space display summary for one document. A page
+     * inside a space reports its space so the share panel can show the space
+     * members row and the workspace-wide grant row; administration follows the
+     * space (OWNER or workspace admin), not the effective page level.
+     */
+    private SharingContext resolveSharingContext(UUID userId, Document doc, DocumentAccessLevel effectiveLevel) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null) {
+            return new SharingContext(effectiveLevel == DocumentAccessLevel.OWNER, null);
+        }
+
+        SpaceContext context;
+        try {
+            context = spaceAccessService.load(userId, space.getId());
+        } catch (ApiException ex) {
+            if (ex.getErrorCode() == ErrorCode.NOT_FOUND) {
+                return SharingContext.NONE;
+            }
+            throw ex;
+        }
+        boolean archived = space.getArchivedAt() != null;
+        DocumentAccessLevel myAccessLevel =
+                archived && context.accessLevel() != null ? DocumentAccessLevel.VIEW : context.accessLevel();
+        DocumentSpaceResponse summary = new DocumentSpaceResponse(
+                space.getId(),
+                space.getName(),
+                space.getAccessMode(),
+                space.getEveryoneAccessLevel(),
+                myAccessLevel,
+                context.canAdminister(),
+                archived);
+        return new SharingContext(context.canAdminister() && !archived, summary);
     }
 
     private static DocumentAccessLevel normalizeCollaboratorAccess(DocumentAccessLevel accessLevel) {
@@ -770,7 +912,8 @@ public class DocumentSharingService {
      * holders cannot distinguish a private document from a hidden roster.
      */
     private void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
-        if (doc.getUser().getId().equals(requesterId)) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null && doc.getUser().getId().equals(requesterId)) {
             return;
         }
         boolean directGrant = collaboratorRepository
@@ -791,26 +934,25 @@ public class DocumentSharingService {
 
     /**
      * A space grant is an identity grant: a space member already sees the space roster, so
-     * hiding this page's roster from them would be theatre. Link-only readers still get
-     * nothing, which is why this walks to the space anchor instead of trusting
+     * hiding this page's roster from them would be theatre. Space administrators count too,
+     * even without a content level, because sharing is their call. Link-only readers still
+     * get nothing, which is why this resolves the space grant instead of trusting
      * {@code resolveAccess} — its link grants are capabilities, not identities.
      */
     private boolean hasSpaceGrant(UUID userId, Document doc) {
-        Document root = doc;
-        if (doc.getParent() != null) {
-            List<UUID> chain = documentRepository.findAncestorChainIds(doc.getId());
-            if (chain.isEmpty()) {
-                return false;
-            }
-            root = documentRepository.findById(chain.get(chain.size() - 1)).orElse(null);
-            if (root == null) {
-                return false;
-            }
-        }
-        if (root.getSpace() == null) {
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null) {
             return false;
         }
-        return spaceAccessService.resolveLevel(userId, root.getSpace()) != null;
+        try {
+            SpaceContext context = spaceAccessService.load(userId, space.getId());
+            return context != null && (context.accessLevel() != null || context.canAdminister());
+        } catch (ApiException ex) {
+            if (ex.getErrorCode() == ErrorCode.NOT_FOUND) {
+                return false;
+            }
+            throw ex;
+        }
     }
 
     private record AncestorContext(
@@ -821,4 +963,8 @@ public class DocumentSharingService {
     private record LinkGrant(UUID docId, String title, DocumentAccessLevel linkAccessLevel) {}
 
     private record AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level) {}
+
+    private record SharingContext(boolean canManageSharing, DocumentSpaceResponse space) {
+        private static final SharingContext NONE = new SharingContext(false, null);
+    }
 }

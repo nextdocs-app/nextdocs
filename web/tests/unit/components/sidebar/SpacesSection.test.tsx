@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -10,9 +10,11 @@ import { documentService } from '@/services/document.service';
 import { spaceApiService } from '@/services/space.service';
 import type { Space } from '@/types/space.types';
 import type { TreeNode } from '@/types/tree.types';
+import { dispatchOpenSpaceSettings } from '@/lib/space-settings-event.util';
+import { dispatchSpacesUpdated } from '@/lib/spaces-event.util';
 
 jest.mock('../../../../services/space.service', () => ({
-  spaceApiService: { list: jest.fn() },
+  spaceApiService: { list: jest.fn(), get: jest.fn() },
 }));
 
 jest.mock('../../../../hooks/useMediaQuery.hook', () => ({
@@ -347,5 +349,81 @@ describe('SpacesSection', () => {
 
     expect(screen.queryByLabelText('Spaces')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Confidential Finance space' })).toBeNull();
+  });
+
+  it('opens the requested space settings tab from the share panel event', async () => {
+    renderSection([makeSpace({ id: 'space-1', name: 'Team' })]);
+
+    await screen.findByRole('button', { name: 'Team space' });
+
+    act(() => {
+      dispatchOpenSpaceSettings({ spaceId: 'space-1', tab: 'members' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('space-settings-modal')).toHaveAttribute('data-tab', 'members');
+    });
+  });
+
+  it('fetches a space that is absent from the rail before opening its settings', async () => {
+    const adminOnlySpace = makeSpace({
+      id: 'space-admin',
+      name: 'Confidential Finance',
+      myAccessLevel: null,
+      canAdminister: true,
+    });
+    mockedSpaceService.get.mockResolvedValue(adminOnlySpace);
+    renderSection([]);
+
+    await waitFor(() => {
+      expect(mockedSpaceService.list).toHaveBeenCalled();
+    });
+
+    act(() => {
+      dispatchOpenSpaceSettings({ spaceId: 'space-admin', tab: 'general' });
+    });
+
+    await waitFor(() => {
+      expect(mockedSpaceService.get).toHaveBeenCalledWith('token-1', 'space-admin');
+      expect(screen.getByTestId('space-settings-modal')).toHaveAttribute('data-tab', 'general');
+    });
+  });
+
+  it('opens space settings even if spaces reload occurs while fetch is in-flight', async () => {
+    const adminOnlySpace = makeSpace({
+      id: 'space-admin-2',
+      name: 'Legal',
+      myAccessLevel: null,
+      canAdminister: true,
+    });
+
+    let resolveGet!: (value: typeof adminOnlySpace) => void;
+    mockedSpaceService.get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve;
+        })
+    );
+    renderSection([]);
+
+    await waitFor(() => {
+      expect(mockedSpaceService.list).toHaveBeenCalled();
+    });
+
+    act(() => {
+      dispatchOpenSpaceSettings({ spaceId: 'space-admin-2', tab: 'members' });
+    });
+
+    act(() => {
+      dispatchSpacesUpdated();
+    });
+
+    await act(async () => {
+      resolveGet(adminOnlySpace);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('space-settings-modal')).toHaveAttribute('data-tab', 'members');
+    });
   });
 });

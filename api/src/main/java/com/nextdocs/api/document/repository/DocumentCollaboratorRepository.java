@@ -52,10 +52,14 @@ public interface DocumentCollaboratorRepository extends JpaRepository<DocumentCo
             @org.springframework.data.repository.query.Param("documentIds") java.util.Collection<UUID> documentIds);
 
     /**
-     * Whether a grant outside this document's own collaborator row lets the user in: an
-     * ancestor's ownership or collaborator row, or — since V25 — the space anchoring the
-     * tree root (including the document's own space, which is why the space root page
-     * answers true). Link grants never count: they are capabilities, not identities.
+     * Whether an identity grant outside this document's own collaborator row exists to
+     * shadow: an ancestor's ownership or collaborator row, or — since V25 — the space
+     * anchoring the tree root (including the document's own space, which is why the space
+     * root page answers true). Since V30 the space caps implicit ownership but explicit
+     * page collaborator rows override it, so a positive answer no longer guarantees the
+     * user has access — a removed page owner still owns the row — but it does mean a
+     * NO_ACCESS breakpoint has something real to revoke. Link grants never count: they
+     * are capabilities, not identities.
      *
      * <p>The V13 function deliberately ignores {@code deleted_at} while
      * {@code DocumentSharingService#loadAncestors} stops at the first trashed ancestor: a

@@ -7,6 +7,7 @@ import { DocToolbar } from '../../../components/DocToolbar';
 import sidebarReducer from '../../../stores/sidebar/sidebar.slice';
 import sidebarTreeReducer from '../../../stores/sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from '../../../stores/sharedTree/sharedTree.slice';
+import spaceTreeReducer from '../../../stores/spaceTree/spaceTree.slice';
 import authReducer from '../../../stores/auth/auth.slice';
 import { documentService } from '../../../services/document.service';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
@@ -42,6 +43,7 @@ const testReducers = {
   sidebar: sidebarReducer,
   sidebarTree: sidebarTreeReducer,
   sharedTree: sharedTreeReducer,
+  spaceTree: spaceTreeReducer,
   auth: authReducer,
 };
 
@@ -56,8 +58,14 @@ function createTestStore(preloadedState?: Partial<TestRootState>) {
   });
 }
 
-function renderWithStore(ui: React.ReactElement, preloadedState?: Partial<TestRootState>) {
-  const store = createTestStore(preloadedState);
+function renderWithStore(
+  ui: React.ReactElement,
+  preloadedState?: Partial<TestRootState> | ReturnType<typeof createTestStore>
+) {
+  const store =
+    preloadedState && 'dispatch' in preloadedState
+      ? (preloadedState as ReturnType<typeof createTestStore>)
+      : createTestStore(preloadedState);
   return {
     ...baseRender(<Provider store={store}>{ui}</Provider>),
     store,
@@ -540,6 +548,142 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     const activeItem = screen.getByText('Active Page').closest('span[aria-current="page"]');
     expect(activeItem).toBeInTheDocument();
     expect(activeItem).not.toHaveAttribute('title');
+  });
+
+  it('renders space in breadcrumbs when document belongs to a space from server', async () => {
+    (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
+      {
+        id: 'doc-in-space',
+        title: 'Project Roadmap',
+        parentId: null,
+        space: {
+          id: 'space-eng',
+          name: 'Engineering',
+          icon: { type: 'builtin', value: 'layers', color: 'blue' },
+        },
+      },
+    ]);
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-in-space"
+        documentTitle="Project Roadmap"
+        isShareEnabled={false}
+        isOffline={false}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Space "Engineering"' })).toBeInTheDocument();
+      expect(screen.getByText('Engineering')).toBeInTheDocument();
+      expect(screen.getByText('Project Roadmap')).toBeInTheDocument();
+    });
+  });
+
+  it('renders space in breadcrumbs from local Redux tree nodes', () => {
+    const preloadedState = {
+      spaceTree: {
+        trees: {
+          'space-prod': {
+            nodes: {
+              'doc-root': {
+                id: 'doc-root',
+                title: 'Product Specs',
+                parentId: null,
+                orderKey: 'a0',
+                hasChildren: false,
+                effectiveAccessLevel: 'OWNER' as const,
+                isExpanded: false,
+                isLoading: false,
+                children: [],
+                childrenLoaded: true,
+                createdAt: '2026-01-01T00:00:00Z',
+                updatedAt: '2026-01-01T00:00:00Z',
+              },
+            },
+            rootIds: ['doc-root'],
+            isRootLoading: false,
+          },
+        },
+        spaces: {
+          'space-prod': {
+            id: 'space-prod',
+            name: 'Product',
+            icon: { type: 'emoji', value: '🚀' } as const,
+          },
+        },
+      },
+    };
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-root"
+        documentTitle="Product Specs"
+        isShareEnabled={false}
+        isOffline={false}
+      />,
+      preloadedState
+    );
+
+    expect(screen.getByRole('button', { name: 'Space "Product"' })).toBeInTheDocument();
+    expect(screen.getByText('Product')).toBeInTheDocument();
+    expect(screen.getByText('Product Specs')).toBeInTheDocument();
+  });
+
+  it('expands collapsed sidebar and spaces section when space breadcrumb is clicked', async () => {
+    const user = userEvent.setup();
+    const store = createTestStore({
+      sidebar: {
+        isCollapsed: true,
+        sidebarWidth: 256,
+        panelMode: null,
+        searchQuery: '',
+        isPrivateOpen: true,
+        isSharedOpen: true,
+        isSpacesOpen: false,
+        docActionsAnchor: null,
+        isMobileNavOpen: false,
+      },
+      spaceTree: {
+        trees: {},
+        spaces: {
+          'space-1': {
+            id: 'space-1',
+            name: 'Operations',
+            icon: null,
+          },
+        },
+      },
+    });
+
+    (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
+      {
+        id: 'doc-ops',
+        title: 'Runbook',
+        parentId: null,
+        space: { id: 'space-1', name: 'Operations', icon: null },
+      },
+    ]);
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-ops"
+        documentTitle="Runbook"
+        isShareEnabled={false}
+        isOffline={false}
+      />,
+      store
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Space "Operations"' })).toBeInTheDocument();
+    });
+
+    const spaceButton = screen.getByRole('button', { name: 'Space "Operations"' });
+    await user.click(spaceButton);
+
+    expect(store.getState().sidebar.isCollapsed).toBe(false);
+    expect(store.getState().sidebar.isSpacesOpen).toBe(true);
   });
 });
 

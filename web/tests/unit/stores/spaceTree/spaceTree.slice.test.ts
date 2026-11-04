@@ -4,6 +4,7 @@ import spaceTreeReducer, {
   fetchSpaceRootsThunk,
   moveSpaceDocumentThunk,
   removeDocument,
+  setStoredSpaces,
   type SpaceTreeState,
 } from '@/stores/spaceTree/spaceTree.slice';
 import { documentService } from '../../../../services/document.service';
@@ -358,5 +359,20 @@ describe('spaceTree.slice', () => {
 
     expect(store.getState().spaceTree.trees['space-1'].rootIds).toEqual([]);
     expect(store.getState().spaceTree.trees['space-2'].rootIds).toEqual(['doc-2']);
+  });
+
+  it('stores space metadata via setStoredSpaces', () => {
+    const store = makeStore();
+    store.dispatch(
+      setStoredSpaces([
+        { id: 'space-1', name: 'Design', icon: { type: 'emoji', value: '🎨' } },
+        { id: 'space-2', name: 'Engineering', icon: null },
+      ])
+    );
+
+    expect(store.getState().spaceTree.spaces).toEqual({
+      'space-1': { id: 'space-1', name: 'Design', icon: { type: 'emoji', value: '🎨' } },
+      'space-2': { id: 'space-2', name: 'Engineering', icon: null },
+    });
   });
 });

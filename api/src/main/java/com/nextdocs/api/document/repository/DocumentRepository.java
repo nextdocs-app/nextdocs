@@ -174,6 +174,14 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             nativeQuery = true)
     List<Object[]> resolveEffectiveAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
 
+    // One document's effective level for several users, for the sharing roster.
+    @Query(
+            value = "SELECT u.id::uuid AS user_id, resolve_effective_access(u.id::uuid, :documentId) AS access_level "
+                    + "FROM unnest(string_to_array(:userIds, ',')) AS u(id)",
+            nativeQuery = true)
+    List<Object[]> resolveEffectiveAccessForUsers(
+            @Param("documentId") UUID documentId, @Param("userIds") String userIds);
+
     /**
      * Topmost documents whose trash retention has elapsed. Roots, not every expired row:
      * purging a root removes its (also trashed) subtree, so batch transactions can never
@@ -236,6 +244,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
                     + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
             nativeQuery = true)
     List<Object[]> resolveTrashAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
+
+    @Query(
+            value = "SELECT u.id::uuid AS user_id, resolve_trash_access(u.id::uuid, :documentId) AS access_level "
+                    + "FROM unnest(string_to_array(:userIds, ',')) AS u(id)",
+            nativeQuery = true)
+    List<Object[]> resolveTrashAccessForUsers(@Param("documentId") UUID documentId, @Param("userIds") String userIds);
 
     // Trashed documents the user may manage: EDIT-level trash access on the trash bundle root.
     // Documents grafted into another user's trashed subtree follow that subtree's fate and are

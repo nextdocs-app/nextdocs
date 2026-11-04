@@ -10,6 +10,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
+import com.nextdocs.api.document.dto.response.BreadcrumbSpaceResponse;
 import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentIconCoverMapper;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
@@ -22,6 +23,7 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -131,7 +133,7 @@ public class DocumentService {
                     ErrorCode.CONFLICT,
                     "A trashed document already exists with this ID. Restore or permanently delete it first.");
         }
-        boolean isOwner = existing.getUser().getId().equals(userId);
+        boolean isOwner = existing.getUser().getId().equals(userId) && permissionService.resolveSpace(existing) == null;
         if (!isOwner && permissionService.resolveAccess(userId, existing.getId()) == null) {
             throw new ApiException(ErrorCode.CONFLICT, "A document already exists with this ID.");
         }
@@ -187,12 +189,13 @@ public class DocumentService {
                     space.getId(), request.prevSiblingId(), request.nextSiblingId(), documentId);
         }
 
+        Space targetSpace = space != null ? space : (parent != null ? permissionService.resolveSpace(parent) : null);
+
         Document document = Document.builder()
                 .id(documentId)
-                // Location authority: a nested document belongs to its host tree, so it
-                // inherits the parent's owner and, through ancestor resolution, the parent's
-                // access chain. The creator is recorded in `createdBy`.
-                .user(parent != null ? parent.getUser() : user)
+                // In a space, content belongs to the space; the author is recorded in user.
+                // In a standalone tree, nested documents inherit the tree's owner.
+                .user(targetSpace != null ? user : (parent != null ? parent.getUser() : user))
                 .title(normalizeTitle(request.title()))
                 .yjsState(decodeBase64State(yjsState))
                 .createdBy(request.createdBy())
@@ -430,6 +433,7 @@ public class DocumentService {
         }
         Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveAccessBatch(userId, allIds);
         Map<UUID, DocumentAccessLevel> trashAccessById = permissionService.resolveTrashAccessBatch(userId, allIds);
+        BreadcrumbSpaceResponse space = resolveBreadcrumbSpace(docsById.values());
 
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         List<UUID> orderedIds = new ArrayList<>(allIds);
@@ -474,7 +478,8 @@ public class DocumentService {
                     current.getSiblingOrderKey(),
                     level,
                     current.getCreatedAt(),
-                    current.getUpdatedAt()));
+                    current.getUpdatedAt(),
+                    space));
 
             if (parentId == null) {
                 break;
@@ -508,6 +513,7 @@ public class DocumentService {
         }
         Map<UUID, DocumentAccessLevel> publicAccessById = permissionService.resolvePublicAccessBatch(allIds);
 
+        List<Document> visibleDocs = new ArrayList<>();
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         int depth = 0;
         for (int i = 0; i < allIds.size(); i++) {
@@ -523,6 +529,7 @@ public class DocumentService {
             if (level == null) {
                 break;
             }
+            visibleDocs.add(current);
             UUID parentId = null;
             int currentIndex = i;
             if (currentIndex + 1 < allIds.size()) {
@@ -540,12 +547,31 @@ public class DocumentService {
                     current.getSiblingOrderKey(),
                     level,
                     current.getCreatedAt(),
-                    current.getUpdatedAt()));
+                    current.getUpdatedAt(),
+                    null));
 
             if (parentId == null) {
                 break;
             }
             depth++;
+        }
+
+        BreadcrumbSpaceResponse space = resolveBreadcrumbSpace(visibleDocs);
+        if (space != null) {
+            List<DocumentBreadcrumbResponse> withSpace = new ArrayList<>(path.size());
+            for (DocumentBreadcrumbResponse item : path) {
+                withSpace.add(new DocumentBreadcrumbResponse(
+                        item.id(),
+                        item.title(),
+                        item.icon(),
+                        item.parentId(),
+                        item.orderKey(),
+                        item.accessLevel(),
+                        item.createdAt(),
+                        item.updatedAt(),
+                        space));
+            }
+            path = withSpace;
         }
         Collections.reverse(path);
         return path;
@@ -943,6 +969,19 @@ public class DocumentService {
 
     private static String formatBreadcrumbTitle(String title) {
         return (title == null || title.isBlank()) ? "Untitled" : title.strip();
+    }
+
+    private static BreadcrumbSpaceResponse resolveBreadcrumbSpace(Collection<Document> documents) {
+        for (Document doc : documents) {
+            if (doc != null && doc.getSpace() != null) {
+                Space space = doc.getSpace();
+                return new BreadcrumbSpaceResponse(
+                        space.getId(),
+                        space.getName(),
+                        PageIconResponse.from(space.getIconType(), space.getIconValue(), space.getIconColor()));
+            }
+        }
+        return null;
     }
 
     private static ApiException publicStateTooLarge() {

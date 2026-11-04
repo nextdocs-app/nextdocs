@@ -26,10 +26,11 @@ export function ShareAvatar({ seed, label }: { seed: string; label: string }) {
 }
 
 export function getCollaboratorRowOptions(
-  collab: Collaborator
+  collab: Collaborator,
+  allowOwnerLevel = true
 ): DropdownOption<CollaboratorDropdownValue>[] {
   const options: DropdownOption<CollaboratorDropdownValue>[] = [
-    { value: 'OWNER', label: 'Full access' },
+    ...(allowOwnerLevel ? [{ value: 'OWNER' as const, label: 'Full access' }] : []),
     { value: 'EDIT', label: 'Can edit' },
     { value: 'COMMENT', label: 'Can comment' },
     { value: 'VIEW', label: 'Can view' },
@@ -109,6 +110,7 @@ export function CollaboratorRow({
   collab,
   isSelf,
   canEditRow,
+  allowOwnerLevel = true,
   hasEffectivePublicLink,
   effectiveLinkAction,
   onAccessSelect,
@@ -117,12 +119,18 @@ export function CollaboratorRow({
   collab: Collaborator;
   isSelf: boolean;
   canEditRow: boolean;
+  /** False inside a space, where ownership of the space administers the page. */
+  allowOwnerLevel?: boolean;
   hasEffectivePublicLink: boolean;
   effectiveLinkAction: string;
   onAccessSelect: (value: CollaboratorDropdownValue) => void;
   onNavigateTo: (documentId: string) => void;
 }) {
   const isInherited = Boolean(collab.inherited);
+  // The stored grant is what the dropdown edits; the effective level is what
+  // the person can actually do. A page owner demoted by space membership must
+  // not keep displaying "Full access" while sharing is refused.
+  const displayLevel = collab.effectiveAccessLevel ?? collab.accessLevel;
   // "comment this document" is ungrammatical; every other action reads fine.
   const linkActionPhrase = effectiveLinkAction === 'comment' ? 'comment on' : effectiveLinkAction;
 
@@ -165,8 +173,8 @@ export function CollaboratorRow({
         {canEditRow ? (
           <div className="flex items-center gap-1 flex-shrink-0">
             <AccessDropdown
-              value={collab.accessLevel}
-              options={getCollaboratorRowOptions(collab)}
+              value={displayLevel}
+              options={getCollaboratorRowOptions(collab, allowOwnerLevel)}
               onChange={onAccessSelect}
               align="right"
               muted
@@ -175,13 +183,13 @@ export function CollaboratorRow({
         ) : (
           <div className="flex items-center gap-1 flex-shrink-0">
             <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[13px] text-muted-foreground/80 font-medium select-none">
-              <span>{ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel}</span>
+              <span>{ACCESS_LABELS[displayLevel] ?? displayLevel}</span>
             </span>
           </div>
         )}
       </div>
 
-      {collab.accessLevel === 'NO_ACCESS' && hasEffectivePublicLink && (
+      {displayLevel === 'NO_ACCESS' && hasEffectivePublicLink && (
         <p className="mt-1 pl-10 text-[11.5px] text-amber-600 dark:text-amber-400/90 leading-tight">
           {collab.displayName || collab.email} is blocked while signed in; anyone with the public
           link can still {linkActionPhrase} this document.

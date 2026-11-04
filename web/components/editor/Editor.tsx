@@ -39,6 +39,8 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
     awareness,
     meta,
     accessLevel,
+    canManageSharing,
+    documentSpace,
     isReadOnly,
     isGuestShareLink,
     realtimeProvider,
@@ -244,7 +246,8 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         onGuestNoticeCtaClick={goToSignIn}
         showTrashNotice={isTrashedDocument}
         canManageTrash={canManageTrash}
-        canManageSharing={accessLevel === 'OWNER'}
+        canManageSharing={canManageSharing}
+        documentSpace={documentSpace}
         onRestore={handleRestore}
         showCommentsButton={showCommentsButton}
         isCommentsSidebarOpen={isCommentsSidebarOpen}

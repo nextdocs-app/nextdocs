@@ -15,8 +15,15 @@ export interface SpaceTree {
   isRootLoading: boolean;
 }
 
+export interface SpaceSummary {
+  id: string;
+  name: string;
+  icon: SidebarTreeNode['icon'];
+}
+
 export interface SpaceTreeState {
   trees: Record<string, SpaceTree>;
+  spaces?: Record<string, SpaceSummary>;
 }
 
 const initialState: SpaceTreeState = {
@@ -155,6 +162,23 @@ const spaceTreeSlice = createSlice({
   name: 'spaceTree',
   initialState,
   reducers: {
+    setStoredSpaces(
+      state,
+      action: PayloadAction<
+        Array<{ id: string; name: string; icon?: SidebarTreeNode['icon'] | null }>
+      >
+    ) {
+      const record: Record<string, SpaceSummary> = {};
+      for (const space of action.payload) {
+        record[space.id] = {
+          id: space.id,
+          name: space.name,
+          icon: space.icon ?? null,
+        };
+      }
+      state.spaces = record;
+    },
+
     toggleNodeExpanded(state, action: PayloadAction<{ spaceId: string; nodeId: string }>) {
       const { spaceId, nodeId } = action.payload;
       const node = state.trees[spaceId]?.nodes[nodeId];
@@ -335,6 +359,7 @@ const spaceTreeSlice = createSlice({
 });
 
 export const {
+  setStoredSpaces,
   toggleNodeExpanded,
   setNodeExpanded,
   updateNodeMeta,

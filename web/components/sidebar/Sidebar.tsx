@@ -247,6 +247,20 @@ function Sidebar() {
         fetchChildren: (parentId) => void dispatch(fetchSharedChildrenThunk({ parentId })),
         moveDocument: (args) => void dispatch(sharedMoveDocumentThunk(args)),
         canPlaceAtRoot: (draggedId) => sharedTreeNodes[draggedId]?.parentId == null,
+        resolveDrop: (draggedId, { nodeId, zone }) => {
+          const dragged = sharedTreeNodes[draggedId];
+          const targetNode = sharedTreeNodes[nodeId];
+          if (!dragged || !targetNode) return false;
+          return isSidebarDropAllowed(zone as SidebarDropZone, {
+            draggedId,
+            draggedIsShared: true,
+            targetIsShared: true,
+            draggedParentId: dragged.parentId ?? null,
+            targetParentId: targetNode.parentId ?? null,
+            draggedAccessLevel: dragged.effectiveAccessLevel,
+            targetHasCollaborators: targetNode.hasCollaborators,
+          });
+        },
       };
     }
 
@@ -308,12 +322,12 @@ function Sidebar() {
   /**
    * Cross-tree move router for the unified sidebar DnD context.
    *
-   * Moving a document between two shared documents remains blocked in the UI because
-   * a move only needs EDIT on the target parent (shared→shared reparenting requires
-   * separate move-authorization). Only sibling reordering inside the Shared section
-   * is offered. Dropping a private document into a shared document IS allowed: the
-   * backend transfers ownership of the moved subtree to the host tree's owner
-   * (location authority), and access then flows from the new parent chain.
+   * Reparenting between two shared documents requires OWNER on the dragged
+   * document, so an editor cannot expose someone else's content to the target's
+   * collaborators; sibling reordering stays available. Dropping a private
+   * document into a shared document is allowed because the caller owns it, and
+   * the backend transfers ownership of the moved subtree to the host tree's
+   * owner (location authority).
    */
   const handleSidebarTreeMove = useCallback(
     (args: MoveDocumentArgs) => {
@@ -328,7 +342,16 @@ function Sidebar() {
         return;
       }
 
-      const route = resolveSidebarMoveRoute(args, { draggedIsShared, targetParentIdIsShared });
+      const route = resolveSidebarMoveRoute(args, {
+        draggedIsShared,
+        targetParentIdIsShared,
+        draggedParentId: draggedIsShared
+          ? (sharedTreeNodes[args.documentId]?.parentId ?? null)
+          : null,
+        draggedAccessLevel: draggedIsShared
+          ? sharedTreeNodes[args.documentId]?.effectiveAccessLevel
+          : null,
+      });
 
       if (route.kind === 'shared-reorder') {
         void dispatch(sharedMoveDocumentThunk(args))
@@ -434,6 +457,8 @@ function Sidebar() {
           targetIsShared: isSharedNode(nodeId),
           draggedParentId: mergedNodes[draggedId]?.parentId ?? null,
           targetParentId: mergedNodes[nodeId]?.parentId ?? null,
+          draggedAccessLevel: mergedNodes[draggedId]?.effectiveAccessLevel,
+          targetHasCollaborators: mergedNodes[nodeId]?.hasCollaborators,
         }),
       moveDocument: handleSidebarTreeMove,
     };

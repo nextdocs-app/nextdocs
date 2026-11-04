@@ -15,10 +15,9 @@ import { SidebarTreeItem } from './SidebarTreeItem';
 import type { DocActionsAnchor, DocActionType } from './types';
 
 /**
- * Which drops one space accepts. A space root document anchors the space: the move
- * API clears a document's space when it is reparented, so nesting a root would
- * silently take it out of this group. Roots therefore only reorder; documents
- * already nested may be moved freely within the space.
+ * Which drops one space accepts. Documents in a space can be reordered at root
+ * (only existing root documents may live at root level). A document owner may
+ * also move a document inside another document in the space.
  */
 export function canDropWithinSpace(
   nodes: Record<string, SidebarTreeNode>,
@@ -31,11 +30,29 @@ export function canDropWithinSpace(
     return false;
   }
 
-  if (dragged.parentId != null) {
+  if (draggedId === target.nodeId) {
+    return false;
+  }
+
+  // Dropping at top/bottom of a space root places the document at the root level.
+  // Only existing root documents may live at the space root level.
+  if (targetNode.parentId == null && (target.zone === 'top' || target.zone === 'bottom')) {
+    return dragged.parentId == null;
+  }
+
+  // Sibling reorder within the same parent is always allowed for space members.
+  const isSiblingReorder =
+    (target.zone === 'top' || target.zone === 'bottom') &&
+    (dragged.parentId ?? null) === (targetNode.parentId ?? null);
+  if (isSiblingReorder) {
     return true;
   }
 
-  return targetNode.parentId == null && (target.zone === 'top' || target.zone === 'bottom');
+  // Reparenting changes the document's location and access chain. EDIT can
+  // reorder siblings, but only an OWNER may move it inside another document.
+  // A space is a shared root document, so its OWNER grant shows up on the node;
+  // a page-level grant that is lower or higher wins over it.
+  return dragged.effectiveAccessLevel === 'OWNER';
 }
 
 export type SpaceTreeProps = {
@@ -80,6 +97,19 @@ export function SpaceTree({
       moveDocument: (args) => {
         void dispatch(moveSpaceDocumentThunk({ spaceId, ...args }))
           .unwrap()
+          .then((result) => {
+            if (result.updatedNode.parentId) {
+              const targetParent = nodes[result.updatedNode.parentId];
+              if (targetParent && !targetParent.childrenLoaded && !targetParent.isLoading) {
+                void dispatch(
+                  fetchSpaceChildrenThunk({
+                    spaceId,
+                    parentId: result.updatedNode.parentId,
+                  })
+                );
+              }
+            }
+          })
           .catch((error) => {
             console.error('Failed to move space document:', error);
             dispatch(
@@ -87,7 +117,7 @@ export function SpaceTree({
             );
           });
       },
-      canPlaceAtRoot: (draggedId) => nodes[draggedId]?.parentId == null,
+      canPlaceAtRoot: (draggedId) => Boolean(nodes[draggedId] && nodes[draggedId].parentId == null),
       resolveDrop: (draggedId, target) => canDropWithinSpace(nodes, draggedId, target),
     }),
     [dispatch, nodes, spaceId, tree.rootIds]

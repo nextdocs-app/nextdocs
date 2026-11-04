@@ -4,7 +4,7 @@ import {
   DocumentServiceApiError,
   isValidDocumentAccessLevel,
 } from '@/services/document.service';
-import type { DocumentAccessLevel } from '@/services/document.service';
+import type { DocumentAccessLevel, DocumentSpaceSummary } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import {
   setCurrentDocument,
@@ -70,6 +70,29 @@ export interface DocumentErrorState {
 
 export interface UseDocumentOptions {
   isSharedDocument?: boolean;
+}
+
+/** Server-authoritative sharing state, kept apart from the editable access level. */
+interface DocumentSharingContext {
+  canManageSharing: boolean;
+  space: DocumentSpaceSummary | null;
+}
+
+const EMPTY_SHARING_CONTEXT: DocumentSharingContext = {
+  canManageSharing: false,
+  space: null,
+};
+
+function toSharingContext(
+  access: {
+    canManageSharing?: boolean;
+    space?: DocumentSpaceSummary | null;
+  } | null
+): DocumentSharingContext {
+  return {
+    canManageSharing: access?.canManageSharing === true,
+    space: access?.space ?? null,
+  };
 }
 
 function buildDocumentErrorState(error: unknown): DocumentErrorState {
@@ -228,6 +251,8 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // does too once resolved.
   const [accessResolved, setAccessResolved] = useState(false);
   const accessResolvedRef = useRef(false);
+  const [sharingContext, setSharingContext] =
+    useState<DocumentSharingContext>(EMPTY_SHARING_CONTEXT);
   // Single writer for the access level so `accessLevelRef` (used by write
   // guards) and `accessResolved` (used by the Yjs seeder) never drift from
   // the state that re-renders. Always prefer this over raw `setAccessLevel`.
@@ -440,6 +465,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       lastLoadContextKeyRef.current = null;
       const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
       setResolvedAccessLevel(initialLevel, false);
+      setSharingContext(EMPTY_SHARING_CONTEXT);
       return;
     }
 
@@ -465,6 +491,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     lastLoadContextKeyRef.current = loadContextKey;
     const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
     setResolvedAccessLevel(initialLevel, false);
+    setSharingContext(EMPTY_SHARING_CONTEXT);
     // Reset before the load decides, so a share-link notice never lingers over the
     // document this device opened next.
     setIsGuestShareLink(isSharedDocument);
@@ -641,6 +668,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               // stays read-only via meta.deletedAt regardless of cached level.
               writeCachedDocumentAccessLevel(effectiveId, myAccess.accessLevel);
               setResolvedAccessLevel(myAccess.accessLevel, true);
+              setSharingContext(toSharingContext(myAccess));
             } catch (accessErr) {
               if (
                 accessErr instanceof DocumentServiceApiError &&
@@ -857,6 +885,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           if (token) {
             const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
             if (closeHandlerCancelled) return;
+            if (myAccess.allowed) {
+              setSharingContext(toSharingContext(myAccess));
+            }
             if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
               // The realtime server strictly rejects access checks for trashed documents,
               // so a 1008 close here means the document moved to trash (from another
@@ -1162,6 +1193,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       }
       try {
         const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+        if (myAccess.allowed) {
+          setSharingContext(toSharingContext(myAccess));
+        }
         if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
           // The document moved to trash between polls - swap to the read-only trash view
           // for anyone who held pre-trash access.
@@ -1417,6 +1451,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           if (token) {
             try {
               const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+              if (myAccess.allowed) {
+                setSharingContext(toSharingContext(myAccess));
+              }
               if (myAccess.allowed && myAccess.accessLevel) {
                 nextLevel = myAccess.accessLevel;
               }
@@ -1459,6 +1496,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     let nextLevel: DocumentAccessLevel = accessLevelRef.current ?? 'OWNER';
     try {
       const myAccess = await documentService.getMyAccess(resolvedDocumentId, accessToken);
+      if (myAccess.allowed) {
+        setSharingContext(toSharingContext(myAccess));
+      }
       if (myAccess.allowed && myAccess.accessLevel) {
         nextLevel = myAccess.accessLevel;
       }
@@ -1497,6 +1537,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     awareness,
     meta,
     accessLevel,
+    /** Server-authoritative sharing gate; space membership decides inside a space. */
+    canManageSharing: sharingContext.canManageSharing,
+    /** Space context for the share panel's members and workspace rows. */
+    documentSpace: sharingContext.space,
     isReadOnly:
       isReadOnlyAccessLevel(accessLevel) ||
       (isSharedDocument && accessLevel === null) ||

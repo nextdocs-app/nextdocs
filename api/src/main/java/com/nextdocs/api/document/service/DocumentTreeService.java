@@ -17,6 +17,8 @@ import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -44,6 +46,7 @@ public class DocumentTreeService {
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final SpaceAccessService spaceAccessService;
 
     @Autowired
     @Lazy
@@ -80,6 +83,14 @@ public class DocumentTreeService {
             int newParentChainNodes = validateNoCycle(documentId, request.newParentId());
             validateSubtreeFitsDepth(documentId, newParentChainNodes);
             Document newParent = permissionService.requireEditAccess(userId, request.newParentId());
+            // Dropping among the current siblings is a reorder, not a reparent: an
+            // editor does not need the move-authorization required to graft the
+            // subtree somewhere new, and ownership must stay with its author.
+            boolean sameParent =
+                    doc.getParent() != null && doc.getParent().getId().equals(newParent.getId());
+            if (!sameParent) {
+                validateReparentAuthorization(userId, doc);
+            }
 
             if (rebuildFirst) {
                 reindexSiblings(request.newParentId());
@@ -122,47 +133,61 @@ public class DocumentTreeService {
                 log.warn("Invalid sibling key interval: prevKey={} nextKey={}", prevKey, nextKey, ex);
                 throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
             }
-            // Location authority: a subtree grafted into another user's tree joins that
-            // tree - the host becomes the owner of the moved document and everything
-            // beneath it, so access keeps flowing from the new parent chain.
-            User previousOwner = doc.getUser();
-            if (!newParent.getUser().getId().equals(doc.getUser().getId())) {
-                adoptHostTreeOwnership(doc, newParent.getUser());
-            }
+            Document saved;
+            if (sameParent) {
+                doc.setSiblingOrderKey(newSiblingOrderKey);
+                saved = documentRepository.saveAndFlush(doc);
+            } else {
+                // A destination inside a space keeps user_id as author attribution: the space
+                // root is the permission anchor, so the move must not rewrite the author or
+                // prune page-level NO_ACCESS breakpoints against it.
+                boolean joinsSpace = permissionService.resolveSpace(newParent) != null;
+                User previousOwner = doc.getUser();
+                if (!joinsSpace
+                        && !newParent.getUser().getId().equals(doc.getUser().getId())) {
+                    // Location authority: a subtree grafted into another user's standalone
+                    // tree joins that tree - the host becomes the owner of the moved document
+                    // and everything beneath it, so access keeps flowing from the new parent
+                    // chain.
+                    adoptHostTreeOwnership(doc, newParent.getUser());
+                }
 
-            doc.setParent(newParent);
-            doc.setSiblingOrderKey(newSiblingOrderKey);
-            // A space anchors at a root page only (V24's chk_documents_space_root). Moving a
-            // page under another page therefore leaves the space: the page's new home is the
-            // host tree, whose access chain governs it from here.
-            doc.setSpace(null);
-            Document saved = documentRepository.saveAndFlush(doc);
+                doc.setParent(newParent);
+                doc.setSiblingOrderKey(newSiblingOrderKey);
+                // A space anchors at a root page only (V24's chk_documents_space_root), so a
+                // page moved under another page drops its own anchor. If the destination is in
+                // the same space, that space still anchors the page through the new ancestor.
+                doc.setSpace(null);
+                saved = documentRepository.saveAndFlush(doc);
 
-            // Reparenting to a new parent: delete the owner's root UserDocumentOrder row.
-            // Collaborators' UserDocumentOrder rows MUST NOT be wiped, because direct
-            // collaborators still see this document floated in their Shared section.
-            userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(
-                    newParent.getUser().getId(), documentId);
-            if (!previousOwner.getId().equals(newParent.getUser().getId())) {
-                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(previousOwner.getId(), documentId);
-            }
+                if (!joinsSpace) {
+                    // Reparenting to a new parent: delete the owner's root UserDocumentOrder row.
+                    // Collaborators' UserDocumentOrder rows MUST NOT be wiped, because direct
+                    // collaborators still see this document floated in their Shared section.
+                    userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(
+                            newParent.getUser().getId(), documentId);
+                    if (!previousOwner.getId().equals(newParent.getUser().getId())) {
+                        userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(previousOwner.getId(), documentId);
+                    }
 
-            // Collect new-ancestor owners in fixed queries instead of one lazy
-            // parent load plus one delete CTE per level.
-            List<UUID> ancestorIds = new ArrayList<>();
-            ancestorIds.add(newParent.getId());
-            ancestorIds.addAll(documentRepository.findAncestorChainIds(newParent.getId()));
-            Set<UUID> ownerIds = new HashSet<>();
-            ownerIds.add(newParent.getUser().getId());
-            for (Document ancestor : documentRepository.findAllWithUserByIdIn(ancestorIds)) {
-                if (ancestor.getUser() != null) {
-                    ownerIds.add(ancestor.getUser().getId());
+                    // Collect new-ancestor owners in fixed queries instead of one lazy
+                    // parent load plus one delete CTE per level.
+                    List<UUID> ancestorIds = new ArrayList<>();
+                    ancestorIds.add(newParent.getId());
+                    ancestorIds.addAll(documentRepository.findAncestorChainIds(newParent.getId()));
+                    Set<UUID> ownerIds = new HashSet<>();
+                    ownerIds.add(newParent.getUser().getId());
+                    for (Document ancestor : documentRepository.findAllWithUserByIdIn(ancestorIds)) {
+                        if (ancestor.getUser() != null) {
+                            ownerIds.add(ancestor.getUser().getId());
+                        }
+                    }
+                    for (UUID ownerId : ownerIds) {
+                        collaboratorRepository.deleteNoAccessInSubtreeForUser(documentId, ownerId);
+                    }
+                    collaboratorRepository.pruneOrphanedBreakpoints(documentId);
                 }
             }
-            for (UUID ownerId : ownerIds) {
-                collaboratorRepository.deleteNoAccessInSubtreeForUser(documentId, ownerId);
-            }
-            collaboratorRepository.pruneOrphanedBreakpoints(documentId);
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
             boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
@@ -179,7 +204,16 @@ public class DocumentTreeService {
                 // pages under a parent: EDIT is required and the key lives on the row.
                 return moveSpaceRootPage(userId, targetDoc, request, rebuildFirst);
             }
-            if (targetDoc.getUser().getId().equals(userId)) {
+            Space targetSpace = permissionService.resolveSpace(targetDoc);
+            if (targetSpace != null
+                    && targetDoc.getParent() != null
+                    && Boolean.TRUE.equals(request.detachFromParent())) {
+                // Unparenting a page inside a space detaches it from the space container:
+                // only active space administrators may move content out of the space.
+                spaceAccessService.requireActiveAdministration(userId, targetSpace.getId());
+            }
+            boolean isOwner = targetSpace == null && targetDoc.getUser().getId().equals(userId);
+            if (isOwner || (targetSpace != null && targetDoc.getParent() != null)) {
                 permissionService.requireEditAccess(userId, documentId);
             } else {
                 permissionService.requireReadAccess(userId, documentId);
@@ -251,8 +285,23 @@ public class DocumentTreeService {
                 throw new ApiException(ErrorCode.CONFLICT, "The position changed concurrently. Please retry.");
             }
 
+            User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
             if (doc.getParent() != null) {
-                if (doc.getUser().getId().equals(userId)) {
+                if (targetSpace != null) {
+                    if (Boolean.TRUE.equals(request.detachFromParent())) {
+                        // Space content belongs to the container, not to the author row.
+                        // Once the page becomes standalone the administrator performing
+                        // the detach owns it, and descendants follow so access keeps
+                        // flowing from the new root instead of reverting to authors.
+                        adoptHostTreeOwnership(doc, user);
+                        doc.setParent(null);
+                        doc.setSiblingOrderKey(null);
+                        documentRepository.saveAndFlush(doc);
+                        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+                    }
+                    // Otherwise this is only a Shared-section reorder: keep the real parent.
+                } else if (doc.getUser().getId().equals(userId)) {
                     // Owner: this is a private-tree move to the root level, so un-parent.
                     doc.setParent(null);
                     doc.setSiblingOrderKey(null);
@@ -265,8 +314,6 @@ public class DocumentTreeService {
                 // the Shared section is only being reordered in the caller's personal
                 // navigation. The document stays under its real parent.
             }
-
-            User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
             UserDocumentOrder udo = userDocumentOrderRepository
                     .findByUser_IdAndDocument_Id(userId, documentId)
@@ -281,14 +328,32 @@ public class DocumentTreeService {
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
             boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
-            DocumentAccessLevel access = doc.getUser().getId().equals(userId)
-                    ? DocumentAccessLevel.OWNER
-                    : permissionService.resolveAccess(userId, documentId);
+            Space spaceAfter = permissionService.resolveSpace(doc);
+            DocumentAccessLevel access =
+                    (spaceAfter == null && doc.getUser().getId().equals(userId))
+                            ? DocumentAccessLevel.OWNER
+                            : permissionService.resolveAccess(userId, documentId);
 
             UUID resultParentId = doc.getParent() != null ? doc.getParent().getId() : null;
 
             return DocumentResponses.of(
                     doc, resultParentId, newUserOrderKey, hasChildren, hasCollaborators, access, null, null);
+        }
+    }
+
+    /**
+     * Reparenting changes a document's location and access chain. EDIT is enough to
+     * reorder it among its current siblings, but only an OWNER of the document may
+     * graft it into another document.
+     *
+     * <p>A space is a shared root document, not a separate permission axis: the
+     * closest grant wins, so a page-level OWNER overrides a lower space membership
+     * and a page-level EDIT overrides a higher one.
+     */
+    private void validateReparentAuthorization(UUID userId, Document doc) {
+        if (permissionService.resolveAccess(userId, doc.getId()) != DocumentAccessLevel.OWNER) {
+            throw new ApiException(
+                    ErrorCode.FORBIDDEN, "Only document owners may move a document into another document.");
         }
     }
 

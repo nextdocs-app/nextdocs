@@ -29,12 +29,15 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
  * Migration and permission-resolution test against real PostgreSQL.
  *
  * <p>The space grant lives inside {@code resolve_effective_access}/{@code resolve_trash_access},
- * which no H2 test can execute, so the SQL rules that make a space safe are pinned here: the
- * space is the outermost grant (document ownership, collaborator rows, NO_ACCESS breakpoints,
- * and link grants all still win), a PUBLIC grant requires workspace membership, and the V24
- * migration applies on top of a database that already holds V1..V23 data without touching a
- * single existing page. V28's space-page ordering is pinned the same way: the backfill, the
- * not-null invariant, and the per-space uniqueness of active keys.
+ * which no H2 test can execute, so the SQL rules that make a space safe are pinned here:
+ * the space level caps implicit page ownership (so a demoted or removed member cannot keep
+ * writing pages they own), while explicit page collaborator rows stay authoritative (so a
+ * space owner can share one page with somebody outside the space, including above the space
+ * level), a NO_ACCESS breakpoint still revokes, link grants stay independent capabilities, and
+ * a PUBLIC grant requires workspace membership. The V24 migration applies on top of a database
+ * that already holds V1..V23 data without touching a single existing page. V28's space-page
+ * ordering is pinned the same way: the backfill, the not-null invariant, and the per-space
+ * uniqueness of active keys.
  */
 class SpacePermissionMigrationPostgresTest {
 
@@ -367,7 +370,8 @@ class SpacePermissionMigrationPostgresTest {
         UUID page = UUID.randomUUID();
         insertDoc(page, owner, null, spaceId, null, null);
 
-        assertThat(resolveAccess(owner, page)).isEqualTo("OWNER");
+        // Page ownership is an identity grant, so the space's everyone level caps it.
+        assertThat(resolveAccess(owner, page)).isEqualTo("COMMENT");
         // A listed member keeps their own level rather than the everyone-else grant.
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
         // Any other member of the workspace gets the everyone-else level.
@@ -392,7 +396,7 @@ class SpacePermissionMigrationPostgresTest {
     }
 
     @Test
-    void documentGrantsBeatsSpaceGrant_everyTime() throws SQLException {
+    void spaceGrantCapsPageIdentityGrantsButNotLinkCapabilities() throws SQLException {
         UUID owner = insertUser();
         UUID member = insertUser();
         UUID workspaceId = insertWorkspaceAndMember(owner);
@@ -413,18 +417,137 @@ class SpacePermissionMigrationPostgresTest {
         insertCollaborator(downgradedPage, member, "VIEW");
         insertCollaborator(revokedPage, member, "NO_ACCESS");
 
+        // The space level answers when no page grant exists.
         assertThat(resolveAccess(member, plainPage)).isEqualTo("EDIT");
-        // A document-level collaborator row is closer than the space, in both directions.
+        // A document-level collaborator row may lower the space level.
         assertThat(resolveAccess(member, downgradedPage)).isEqualTo("VIEW");
         // A NO_ACCESS breakpoint still revokes what the space would have granted.
         assertThat(resolveAccess(member, revokedPage)).isNull();
-        // A link grant on the page itself also wins over the space grant.
+        // A link grant is a capability, not membership, so the space does not cap it.
         assertThat(resolveAccess(member, linkPage)).isEqualTo("VIEW");
-        // The page's own owner is always OWNER, space or not.
-        assertThat(resolveAccess(owner, plainPage)).isEqualTo("OWNER");
+        // A page owner who is not in a Custom space gets nothing, not OWNER.
+        assertThat(resolveAccess(owner, plainPage)).isNull();
         // The breakpoint on a space's root page has the space grant to shadow, so the
         // sharing API treats it as meaningful instead of deleting it as orphaned.
         assertThat(hasPositiveAncestorGrant(member, revokedPage)).isTrue();
+    }
+
+    @Test
+    void demotedSpaceOwner_losesWriteOnPagesTheyOwn() throws SQLException {
+        UUID owner = insertUser();
+        UUID otherOwner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, otherOwner);
+
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        // The space still has another owner, so self-demotion is a legal move.
+        insertSpaceMember(spaceId, otherOwner, "OWNER");
+        insertSpaceMember(spaceId, owner, "VIEW");
+
+        UUID root = UUID.randomUUID();
+        UUID child = UUID.randomUUID();
+        insertDoc(root, owner, null, spaceId, null, null);
+        insertDoc(child, owner, root, null, null, null);
+
+        // Page ownership cannot outrank the VIEW membership.
+        assertThat(resolveAccess(owner, root)).isEqualTo("VIEW");
+        assertThat(resolveAccess(owner, child)).isEqualTo("VIEW");
+
+        // Leaving the space entirely removes even that read grant.
+        try (PreparedStatement stmt =
+                connection.prepareStatement("DELETE FROM space_members WHERE space_id = ? AND user_id = ?")) {
+            stmt.setObject(1, spaceId);
+            stmt.setObject(2, owner);
+            stmt.executeUpdate();
+        }
+        assertThat(resolveAccess(owner, root)).isNull();
+        assertThat(resolveAccess(owner, child)).isNull();
+    }
+
+    @Test
+    void explicitPageGrantsOverrideSpaceLevelInBothDirections() throws SQLException {
+        UUID owner = insertUser();
+        UUID viewer = insertUser();
+        UUID editor = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, viewer);
+        insertWorkspaceMember(workspaceId, editor);
+
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, viewer, "VIEW");
+        insertSpaceMember(spaceId, editor, "EDIT");
+
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null);
+        insertCollaborator(page, viewer, "EDIT");
+        insertCollaborator(page, editor, "VIEW");
+
+        // A deliberate page share may raise a member above their space role...
+        assertThat(resolveAccess(viewer, page)).isEqualTo("EDIT");
+        // ...and may still restrict an EDIT member below it.
+        assertThat(resolveAccess(editor, page)).isEqualTo("VIEW");
+    }
+
+    @Test
+    void explicitPageGrant_reachesNonMembersButSpaceRemovalStillDropsOwnership() throws SQLException {
+        UUID owner = insertUser();
+        UUID outsider = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, outsider);
+
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null);
+        insertCollaborator(page, outsider, "EDIT");
+
+        // Sharing one page with someone outside a Custom space is an explicit
+        // grant; it must not be erased by the missing space level.
+        assertThat(resolveAccess(outsider, page)).isEqualTo("EDIT");
+
+        // The owner's grant is implicit, so the same page disappears for them
+        // when they are removed from the space.
+        assertThat(resolveAccess(owner, page)).isNull();
+        assertThat(resolveTrashAccess(owner, page)).isNull();
+    }
+
+    @Test
+    void explicitPageGrant_survivesSpaceRemovalAndWorksInTrashScope() throws SQLException {
+        UUID owner = insertUser();
+        UUID collaborator = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        insertWorkspaceMember(workspaceId, collaborator);
+
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null, true);
+        insertCollaborator(page, collaborator, "EDIT");
+
+        // The page is trashed, so only trash scope answers; the explicit grant
+        // still permits a restore or purge.
+        assertThat(resolveAccess(collaborator, page)).isNull();
+        assertThat(resolveTrashAccess(collaborator, page)).isEqualTo("EDIT");
+    }
+
+    @Test
+    void demotedSpaceOwner_trashScopeIsCappedToo() throws SQLException {
+        UUID owner = insertUser();
+        UUID workspaceId = insertWorkspaceAndMember(owner);
+        UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, owner, "VIEW");
+
+        UUID page = UUID.randomUUID();
+        insertDoc(page, owner, null, spaceId, null, null, true);
+
+        // A demoted owner can still see the trashed page but cannot restore or purge it.
+        assertThat(resolveTrashAccess(owner, page)).isEqualTo("VIEW");
+
+        try (PreparedStatement stmt =
+                connection.prepareStatement("DELETE FROM space_members WHERE space_id = ? AND user_id = ?")) {
+            stmt.setObject(1, spaceId);
+            stmt.setObject(2, owner);
+            stmt.executeUpdate();
+        }
+        assertThat(resolveTrashAccess(owner, page)).isNull();
     }
 
     @Test
@@ -621,6 +744,7 @@ class SpacePermissionMigrationPostgresTest {
         insertWorkspaceMember(workspaceId, stranger);
 
         UUID spaceId = insertSpace(workspaceId, "CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, owner, "OWNER");
         insertSpaceMember(spaceId, member, "EDIT");
 
         UUID root = UUID.randomUUID();
@@ -633,7 +757,7 @@ class SpacePermissionMigrationPostgresTest {
 
         archiveSpace(spaceId);
 
-        // Ownership survives as read access, never as a write grant.
+        // The space OWNER's level survives as read access, never as a write grant.
         assertThat(resolveAccess(owner, root)).isEqualTo("VIEW");
         assertThat(resolveAccess(owner, child)).isEqualTo("VIEW");
         assertThat(resolveAccess(member, root)).isEqualTo("VIEW");
