@@ -6,9 +6,9 @@ import {
   createCodeBlockSpec,
   type User as CommentUser,
 } from '@blocknote/core';
-import { CommentsExtension, DefaultThreadStoreAuth } from '@blocknote/core/comments';
+import { CommentsExtension } from '@blocknote/core/comments';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
-import { YjsThreadStore, withCollaboration } from '@blocknote/core/yjs';
+import { withCollaboration } from '@blocknote/core/yjs';
 import { en } from '@blocknote/core/locales';
 import {
   AddCommentButton,
@@ -82,15 +82,10 @@ import type { WebsocketProvider } from 'y-websocket';
 import type { Awareness } from 'y-protocols/awareness';
 import {
   COMMENT_USER_CACHE_TTL_MS,
-  COMMENT_USERS_MAP_KEY,
   createCommentThreadFloatingOptions,
-  mapAccessLevelToCommentRole,
-  ReadOnlyThreadStoreAuth,
-  DynamicThreadStoreAuth,
-  parseSharedCommentUserProfile,
   buildFallbackAvatar,
 } from './comment.utils';
-import type { SharedCommentUserProfile } from './comment.utils';
+import { CommentThreadStore, CommentThreadStoreAuth } from '@/lib/comment-thread.store';
 import { useAttachmentHandlers } from './useAttachmentHandlers';
 import { DocumentPageHeader } from '@/components/page/DocumentPageHeader';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
@@ -428,7 +423,6 @@ export function EditorContent({
     };
   }, [user?.id, user?.displayName, user?.email, user?.avatarUrl]);
 
-  const commentRole = useMemo(() => mapAccessLevelToCommentRole(accessLevel), [accessLevel]);
   const canComment = accessLevel === 'COMMENT' || accessLevel === 'EDIT' || accessLevel === 'OWNER';
   const isViewer = accessLevel === 'VIEW';
 
@@ -446,9 +440,6 @@ export function EditorContent({
   const canCommentRef = useRef(canComment);
   canCommentRef.current = canComment;
 
-  const commentRoleRef = useRef(commentRole);
-  commentRoleRef.current = commentRole;
-
   // File-block uploads and signed-URL resolution live in a dedicated hook so this
   // component stays out of the auth-retry and toast-throttling details.
   const { uploadFile, resolveFileUrl } = useAttachmentHandlers({
@@ -460,28 +451,66 @@ export function EditorContent({
     deletedAt: meta.deletedAt,
   });
 
-  const sharedCommentUsers = useMemo(() => ydoc.getMap<string>(COMMENT_USERS_MAP_KEY), [ydoc]);
+  // Threads and replies live in Spring Boot now. The store is created once per
+  // document; identity and permission are read through refs so a login or an access
+  // change never tears down the CommentsExtension (which would lose selection and
+  // draft state) while its filters still see the current caller.
+  const threadStore = useMemo(
+    () =>
+      new CommentThreadStore(documentId, {
+        auth: new CommentThreadStoreAuth(
+          () => activeCommentUserRef.current.id,
+          () => canCommentRef.current
+        ),
+        getAccessToken: () => accessTokenRef.current,
+        awareness: null,
+        canRead: () => canCommentRef.current,
+        onError: (error) => console.warn('Comment request failed:', error),
+      }),
+    [documentId]
+  );
 
   useEffect(() => {
-    if (!isAuthenticated || !activeCommentUser.id || activeCommentUser.id === 'anonymous') {
+    threadStore.setAwareness(awareness ?? realtimeProvider?.awareness ?? null);
+  }, [threadStore, awareness, realtimeProvider]);
+
+  // Deferred so React StrictMode's mount/cleanup/mount cycle cannot destroy the
+  // store that the remounted effect is about to use again.
+  const storeMountedRef = useRef(false);
+  useEffect(() => {
+    storeMountedRef.current = true;
+    return () => {
+      storeMountedRef.current = false;
+      setTimeout(() => {
+        if (!storeMountedRef.current) {
+          threadStore.destroy();
+        }
+      }, 0);
+    };
+  }, [threadStore]);
+
+  // A visitor gains an account, or the server changes their effective level, on
+  // the same mounted document. Reload so abilities and visibility follow the caller.
+  useEffect(() => {
+    if (!canComment) {
       return;
     }
-
-    const serializedProfile = JSON.stringify({
-      username: activeCommentUser.username,
-      avatarUrl: activeCommentUser.avatarUrl ?? null,
-    } satisfies SharedCommentUserProfile);
-
-    if (sharedCommentUsers.get(activeCommentUser.id) !== serializedProfile) {
-      sharedCommentUsers.set(activeCommentUser.id, serializedProfile);
+    void threadStore.refresh();
+    if (!realtimeProvider || typeof realtimeProvider.on !== 'function') {
+      return;
     }
-  }, [
-    activeCommentUser.id,
-    activeCommentUser.username,
-    activeCommentUser.avatarUrl,
-    isAuthenticated,
-    sharedCommentUsers,
-  ]);
+    const handleStatus = ({ status }: { status: string }) => {
+      if (status === 'connected') {
+        void threadStore.refresh();
+      }
+    };
+    realtimeProvider.on('status', handleStatus);
+    return () => {
+      if (typeof realtimeProvider.off === 'function') {
+        realtimeProvider.off('status', handleStatus);
+      }
+    };
+  }, [threadStore, canComment, accessToken, accessLevel, realtimeProvider]);
 
   const resolveUsers = useCallback(
     async (userIds: string[]): Promise<CommentUser[]> => {
@@ -530,12 +559,12 @@ export function EditorContent({
           return cached;
         }
 
-        const sharedProfile = parseSharedCommentUserProfile(sharedCommentUsers.get(id));
-        if (sharedProfile) {
+        const profile = threadStore.getProfile(id);
+        if (profile) {
           return {
             id,
-            username: sharedProfile.username,
-            avatarUrl: sharedProfile.avatarUrl || buildFallbackAvatar(id, sharedProfile.username),
+            username: profile.displayName,
+            avatarUrl: profile.avatarUrl || buildFallbackAvatar(id, profile.displayName),
           };
         }
 
@@ -547,33 +576,8 @@ export function EditorContent({
         };
       });
     },
-    [documentId, sharedCommentUsers]
+    [documentId, threadStore]
   );
-
-  const threadStore = useMemo(() => {
-    // Use DynamicThreadStoreAuth so permissions and user changes update dynamically
-    // without re-instantiating the threadStore or CommentsExtension.
-    const dynamicAuth = new DynamicThreadStoreAuth(() => {
-      const canCommentNow = canCommentRef.current;
-      const roleNow = commentRoleRef.current;
-      const userNow = activeCommentUserRef.current;
-      return canCommentNow
-        ? new DefaultThreadStoreAuth(userNow.id, roleNow)
-        : new ReadOnlyThreadStoreAuth();
-    });
-
-    return new YjsThreadStore(activeCommentUserRef.current.id, ydoc.getMap('threads'), dynamicAuth);
-  }, [ydoc]);
-
-  // YjsThreadStore captures userId at construction for authorship (createThread,
-  // addComment, resolveBy, reactions) while DynamicThreadStoreAuth only covers
-  // permission checks. Sync authorship when identity resolves (e.g. anonymous
-  // -> logged-in) without recreating the store/editor.
-  useEffect(() => {
-    if (threadStore) {
-      (threadStore as unknown as { userId: string }).userId = activeCommentUser.id;
-    }
-  }, [threadStore, activeCommentUser.id]);
 
   const isTouchInputRef = useRef(isTouchInput);
   isTouchInputRef.current = isTouchInput;
