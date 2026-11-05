@@ -56,9 +56,8 @@ public interface AccessGrantRepository extends JpaRepository<AccessGrant, UUID> 
 
     /**
      * Whether the identity channel has any positive page grant on this document or its
-     * ancestors. This replaces the legacy {@code has_positive_ancestor_grant} gate for
-     * roster visibility: the grant store is authoritative, and group membership counts.
-     * Trash is deliberately ignored, matching the old gate's breakpoint semantics.
+     * ancestors. The grant store is authoritative, and group membership counts. Trash
+     * is deliberately ignored, matching the breakpoint semantics.
      */
     String HAS_POSITIVE_IDENTITY_GRANT_SQL = "SELECT has_positive_identity_grant(:userId, :documentId)";
 

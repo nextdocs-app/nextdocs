@@ -87,7 +87,7 @@ public class DocumentSharingService {
                     null));
         }
 
-        // 2. Direct page grants: the canonical store, not the legacy collaborator table.
+        // 2. Direct page grants from the canonical store.
         List<AccessGrant> directGrants = accessGrantRepository.findUserGrantsByDocumentId(documentId);
         for (AccessGrant grant : directGrants) {
             if (space == null && grant.getUser().getId().equals(doc.getUser().getId())) {

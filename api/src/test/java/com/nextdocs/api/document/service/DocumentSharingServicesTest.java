@@ -32,7 +32,6 @@ import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
@@ -291,10 +290,7 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(trashed);
-        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
-                .thenReturn(List.<DocumentCollaborator>of().stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of());
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, documentId);
 
@@ -435,8 +431,6 @@ class DocumentSharingServicesTest {
 
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
-
-        ArgumentCaptor<DocumentCollaborator> collaboratorCaptor = ArgumentCaptor.forClass(DocumentCollaborator.class);
 
         ArgumentCaptor<UserDocumentOrder> orderCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
         verify(userDocumentOrderRepository).saveAndFlush(orderCaptor.capture());
@@ -771,20 +765,18 @@ class DocumentSharingServicesTest {
                 .email("collab@example.com")
                 .displayName("Collab Owner")
                 .build();
-        DocumentCollaborator collaborator = DocumentCollaborator.builder()
+        AccessGrant collaborator = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(doc)
                 .user(collabUser)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.OWNER)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(doc);
-        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
-                .thenReturn(List.of(collaborator).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of(collaborator));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, documentId);
 
@@ -813,7 +805,7 @@ class DocumentSharingServicesTest {
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
-        DocumentCollaborator demotedOwner = DocumentCollaborator.builder()
+        AccessGrant demotedOwner = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(doc)
                 .user(User.builder()
@@ -821,10 +813,11 @@ class DocumentSharingServicesTest {
                         .email("demoted@example.com")
                         .displayName("Demoted Owner")
                         .build())
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.OWNER)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
-        DocumentCollaborator blocked = DocumentCollaborator.builder()
+        AccessGrant blocked = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(doc)
                 .user(User.builder()
@@ -832,16 +825,14 @@ class DocumentSharingServicesTest {
                         .email("blocked@example.com")
                         .displayName("Blocked")
                         .build())
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(doc);
-        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
-                .thenReturn(List.of(demotedOwner, blocked).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of(demotedOwner, blocked));
         Map<UUID, DocumentAccessLevel> effective = new HashMap<>();
         effective.put(ownerId, DocumentAccessLevel.OWNER);
         effective.put(demotedOwnerId, DocumentAccessLevel.VIEW);
@@ -925,10 +916,11 @@ class DocumentSharingServicesTest {
                 .email("direct@example.com")
                 .displayName("Direct Collab")
                 .build();
-        DocumentCollaborator directCollab = DocumentCollaborator.builder()
+        AccessGrant directCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(child)
                 .user(directCollabUser)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -939,20 +931,18 @@ class DocumentSharingServicesTest {
                 .email("parentcollab@example.com")
                 .displayName("Parent Collab")
                 .build();
-        DocumentCollaborator parentCollab = DocumentCollaborator.builder()
+        AccessGrant parentCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(parent)
                 .user(parentCollabUser)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
-                .thenReturn(List.of(directCollab).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId)).thenReturn(List.of(directCollab));
         stubAncestorChain(child, List.of(parent), List.of(parentCollab));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
@@ -1659,26 +1649,25 @@ class DocumentSharingServicesTest {
         UUID bobId = UUID.randomUUID();
         User bob = User.builder().id(bobId).email("bob@example.com").build();
 
-        DocumentCollaborator directCollab = DocumentCollaborator.builder()
+        AccessGrant directCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(child)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build();
 
-        DocumentCollaborator parentCollab = DocumentCollaborator.builder()
+        AccessGrant parentCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(parent)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
-                .thenReturn(List.of(directCollab).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId)).thenReturn(List.of(directCollab));
         stubAncestorChain(child, List.of(parent), List.of(parentCollab));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
@@ -1722,26 +1711,24 @@ class DocumentSharingServicesTest {
         UUID bobId = UUID.randomUUID();
         User bob = User.builder().id(bobId).email("bob@example.com").build();
 
-        DocumentCollaborator parentNoAccess = DocumentCollaborator.builder()
+        AccessGrant parentNoAccess = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(parent)
                 .user(bob)
-                .accessLevel(DocumentAccessLevel.NO_ACCESS)
+                .effect(AccessGrantEffect.DENY)
                 .build();
 
-        DocumentCollaborator grandparentEdit = DocumentCollaborator.builder()
+        AccessGrant grandparentEdit = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(grandparent)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
-                .thenReturn(List.<DocumentCollaborator>of().stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId)).thenReturn(List.of());
         stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
@@ -1779,35 +1766,33 @@ class DocumentSharingServicesTest {
         UUID bobId = UUID.randomUUID();
         User bob = User.builder().id(bobId).email("bob@example.com").build();
 
-        DocumentCollaborator directView = DocumentCollaborator.builder()
+        AccessGrant directView = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(child)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build();
 
-        DocumentCollaborator parentNoAccess = DocumentCollaborator.builder()
+        AccessGrant parentNoAccess = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(parent)
                 .user(bob)
-                .accessLevel(DocumentAccessLevel.NO_ACCESS)
+                .effect(AccessGrantEffect.DENY)
                 .build();
 
-        DocumentCollaborator grandparentEdit = DocumentCollaborator.builder()
+        AccessGrant grandparentEdit = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(grandparent)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
-                .thenReturn(List.of(directView).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId)).thenReturn(List.of(directView));
         stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
-        // has_positive_ancestor_grant ignores intervening breakpoints, matching production SQL.
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1853,15 +1838,16 @@ class DocumentSharingServicesTest {
         User owner = User.builder().id(ownerId).build();
         User bob = User.builder().id(bobId).build();
         Document document = Document.builder().id(documentId).user(owner).build();
-        DocumentCollaborator existing = DocumentCollaborator.builder()
+        AccessGrant existing = AccessGrant.builder()
                 .document(document)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(asGrant(existing)));
+                .thenReturn(Optional.of(existing));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
@@ -1880,15 +1866,16 @@ class DocumentSharingServicesTest {
         User owner = User.builder().id(ownerId).build();
         User bob = User.builder().id(bobId).build();
         Document document = Document.builder().id(documentId).user(owner).build();
-        DocumentCollaborator existing = DocumentCollaborator.builder()
+        AccessGrant existing = AccessGrant.builder()
                 .document(document)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.OWNER)
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(asGrant(existing)));
+                .thenReturn(Optional.of(existing));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
@@ -2016,16 +2003,17 @@ class DocumentSharingServicesTest {
         User owner = User.builder().id(ownerId).build();
         Document doc = Document.builder().id(documentId).user(owner).build();
         User bob = User.builder().id(bobId).build();
-        DocumentCollaborator existing = DocumentCollaborator.builder()
+        AccessGrant existing = AccessGrant.builder()
                 .document(doc)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
         when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(false);
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(asGrant(existing)));
+                .thenReturn(Optional.of(existing));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
@@ -2051,9 +2039,10 @@ class DocumentSharingServicesTest {
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
         User bob = User.builder().id(bobId).build();
-        DocumentCollaborator existing = DocumentCollaborator.builder()
+        AccessGrant existing = AccessGrant.builder()
                 .document(doc)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build();
 
@@ -2062,7 +2051,7 @@ class DocumentSharingServicesTest {
         // hasPositiveIdentityGrant false and no breakpoint row is stored.
         when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(false);
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(asGrant(existing)));
+                .thenReturn(Optional.of(existing));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
@@ -2241,10 +2230,7 @@ class DocumentSharingServicesTest {
                 .build();
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
-                .thenReturn(List.<DocumentCollaborator>of().stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId)).thenReturn(List.of());
         // The chain reports the trashed parent and the live grandparent, but the trashed
         // ancestor stops resolution before its rows are ever loaded.
         when(documentRepository.findAncestorChainIds(childDocId))
@@ -2263,23 +2249,11 @@ class DocumentSharingServicesTest {
     /**
      * Stubs the batched ancestor load used by the sharing views: the recursive chain query,
      * the batch document fetch (owner included) and - only when the caller supplies any -
-     * the batch collaborator-row fetch, which just the collaborator list needs.
+     * the batch ancestor-grant fetch, which just the collaborator list needs.
      * {@code ancestors} is ordered closest first, as {@code findAncestorChainIds} returns
      * them, and holds only the ancestors reachable from the target document.
      */
-    private static AccessGrant asGrant(DocumentCollaborator collaborator) {
-        DocumentAccessLevel level = collaborator.getAccessLevel();
-        return AccessGrant.builder()
-                .id(collaborator.getId())
-                .document(collaborator.getDocument())
-                .user(collaborator.getUser())
-                .effect(level == DocumentAccessLevel.NO_ACCESS ? AccessGrantEffect.DENY : AccessGrantEffect.ALLOW)
-                .accessLevel(level == DocumentAccessLevel.NO_ACCESS ? null : level)
-                .createdAt(collaborator.getCreatedAt())
-                .build();
-    }
-
-    private void stubAncestorChain(Document target, List<Document> ancestors, List<DocumentCollaborator> rows) {
+    private void stubAncestorChain(Document target, List<Document> ancestors, List<AccessGrant> rows) {
         List<UUID> ancestorIds = ancestors.stream().map(Document::getId).toList();
         when(documentRepository.findAncestorChainIds(target.getId())).thenReturn(ancestorIds);
         if (ancestorIds.isEmpty()) {
@@ -2288,9 +2262,7 @@ class DocumentSharingServicesTest {
         when(documentRepository.findAllWithUserByIdIn(ancestorIds)).thenReturn(ancestors);
         if (!rows.isEmpty()) {
             when(accessGrantRepository.findUserGrantsByDocumentIdIn(ancestorIds))
-                    .thenReturn(rows.stream()
-                            .map(DocumentSharingServicesTest::asGrant)
-                            .toList());
+                    .thenReturn(rows);
         }
     }
 
@@ -2360,10 +2332,7 @@ class DocumentSharingServicesTest {
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
         when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
                 .thenReturn(List.of(sm));
-        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
-                .thenReturn(List.<DocumentCollaborator>of().stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of());
         when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
 
         List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
@@ -2418,10 +2387,11 @@ class DocumentSharingServicesTest {
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
-        DocumentCollaborator directOverride = DocumentCollaborator.builder()
+        AccessGrant directOverride = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(doc)
                 .user(memberUser)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -2433,10 +2403,7 @@ class DocumentSharingServicesTest {
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
         when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
                 .thenReturn(List.of(sm));
-        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
-                .thenReturn(List.of(directOverride).stream()
-                        .map(DocumentSharingServicesTest::asGrant)
-                        .toList());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of(directOverride));
         when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
 
         List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
@@ -2728,17 +2695,18 @@ class DocumentSharingServicesTest {
         User owner = User.builder().id(ownerId).build();
         User bob = User.builder().id(bobId).build();
         Document document = Document.builder().id(documentId).user(owner).build();
-        DocumentCollaborator existing = DocumentCollaborator.builder()
+        AccessGrant existing = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(document)
                 .user(bob)
+                .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(true);
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(asGrant(existing)));
+                .thenReturn(Optional.of(existing));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 

@@ -10,6 +10,8 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.document.repository.SharedDocumentCandidate;
+import com.nextdocs.api.document.repository.SharedRootCandidate;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
@@ -113,10 +115,9 @@ class SpaceRootListingPersistenceTest {
                         .toList();
         assertThat(allRootIds).containsExactly(privatePage.getId());
 
-        List<UUID> sharedIds =
-                documentRepository.findSharedRootDocuments(owner.getId(), PageRequest.of(0, 50)).getContent().stream()
-                        .map(row -> ((Document) row[0]).getId())
-                        .toList();
+        List<UUID> sharedIds = documentRepository.findSharedRootDocuments(owner.getId()).stream()
+                .map(SharedRootCandidate::id)
+                .toList();
         assertThat(sharedIds).isEmpty();
 
         // The space's own listing runs resolve_effective_access, so it is pinned against
@@ -173,14 +174,12 @@ class SpaceRootListingPersistenceTest {
                 .accessLevel(DocumentAccessLevel.VIEW)
                 .build());
 
-        List<UUID> flatSharedIds =
-                documentRepository.findSharedWithUserId(viewer.getId(), PageRequest.of(0, 50)).getContent().stream()
-                        .map(Document::getId)
-                        .toList();
-        List<UUID> sharedRootIds =
-                documentRepository.findSharedRootDocuments(viewer.getId(), PageRequest.of(0, 50)).getContent().stream()
-                        .map(row -> ((Document) row[0]).getId())
-                        .toList();
+        List<UUID> flatSharedIds = documentRepository.findSharedWithUserId(viewer.getId()).stream()
+                .map(SharedDocumentCandidate::id)
+                .toList();
+        List<UUID> sharedRootIds = documentRepository.findSharedRootDocuments(viewer.getId()).stream()
+                .map(SharedRootCandidate::id)
+                .toList();
 
         assertThat(flatSharedIds).containsExactly(directShare.getId());
         assertThat(sharedRootIds).containsExactly(directShare.getId());
@@ -235,6 +234,47 @@ class SpaceRootListingPersistenceTest {
                 .isEmpty();
         assertThat(accessGrantRepository.findByDocument_IdAndUser_Id(otherPage.getId(), member.getId()))
                 .isPresent();
+    }
+
+    @Test
+    void flatSharedCandidates_exposeTheNestedParentId() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("shared-parent-owner-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        User viewer = userRepository.saveAndFlush(User.builder()
+                .email("shared-parent-viewer-" + UUID.randomUUID() + "@example.com")
+                .displayName("Viewer")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        workspaceMemberRepository.saveAndFlush(WorkspaceMember.builder()
+                .workspace(workspace)
+                .user(viewer)
+                .role(WorkspaceRole.MEMBER)
+                .build());
+
+        Document parent = workspacePage(owner, workspace, "Parent");
+        Document child = documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .workspace(workspace)
+                .parent(parent)
+                .title("Child")
+                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
+                .build());
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(child)
+                .user(viewer)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build());
+
+        List<SharedDocumentCandidate> candidates = documentRepository.findSharedWithUserId(viewer.getId());
+
+        assertThat(candidates).extracting(SharedDocumentCandidate::id).containsExactly(child.getId());
+        assertThat(candidates).extracting(SharedDocumentCandidate::parentId).containsExactly(parent.getId());
     }
 
     @Test
