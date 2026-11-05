@@ -1208,6 +1208,7 @@ describe('document.service', () => {
           data: {
             generalAccessMode: 'EVERYONE',
             linkAccessLevel: 'SUPERADMIN',
+            workspaceAccessMode: 'ALL_COMPANY',
             hasActiveLink: true,
           },
           error: null,
@@ -1219,6 +1220,7 @@ describe('document.service', () => {
 
       expect(settings.generalAccessMode).toBe('RESTRICTED');
       expect(settings.linkAccessLevel).toBe('VIEW');
+      expect(settings.workspaceAccessMode).toBe('RESTRICTED');
     });
   });
 

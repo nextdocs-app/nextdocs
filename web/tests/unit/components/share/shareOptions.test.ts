@@ -126,4 +126,28 @@ describe('getGeneralAccessViewModel', () => {
     expect(vm.showInheritOption).toBe(false);
     expect(vm.showProvenanceBadge).toBe(false);
   });
+
+  it('identifies expired own link when hasActiveLink is false', () => {
+    const vm = getGeneralAccessViewModel({
+      ...base,
+      generalAccessMode: 'ANYONE_WITH_LINK',
+      hasActiveLink: false,
+    });
+
+    expect(vm.state).toBe('expired');
+    expect(vm.hasEffectivePublicLink).toBe(false);
+    expect(vm.displayMode).toBe('ANYONE_WITH_LINK');
+  });
+
+  it('identifies expired link from past linkExpiresAt date', () => {
+    const vm = getGeneralAccessViewModel({
+      ...base,
+      generalAccessMode: 'ANYONE_WITH_LINK',
+      hasActiveLink: true,
+      linkExpiresAt: '2020-01-01T00:00:00Z',
+    });
+
+    expect(vm.state).toBe('expired');
+    expect(vm.hasEffectivePublicLink).toBe(false);
+  });
 });

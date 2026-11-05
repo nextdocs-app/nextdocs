@@ -124,12 +124,30 @@ describe('getCollaboratorRowOptions', () => {
     expect(normalizeTitle('  Parent   Wiki ')).toBe('Parent Wiki');
   });
 
-  it('omits the page-level Full access option inside a space', () => {
-    expect(
-      getCollaboratorRowOptions(baseCollab, false).some((option) => option.value === 'OWNER')
-    ).toBe(false);
+  it('offers Full access for a page-level grant', () => {
     expect(getCollaboratorRowOptions(baseCollab).some((option) => option.value === 'OWNER')).toBe(
       true
     );
+  });
+
+  it('offers Remove for direct collaborators without ancestor grant', () => {
+    const options = getCollaboratorRowOptions(baseCollab);
+    const removeOption = options.find((o) => o.value === 'REMOVE');
+    expect(removeOption).toBeDefined();
+    expect(removeOption?.label).toBe('Remove');
+    expect(removeOption?.isDestructive).toBe(true);
+    expect(removeOption?.dividerBefore).toBe(false);
+  });
+
+  it('omits Remove when Inherit is available', () => {
+    const options = getCollaboratorRowOptions({
+      ...baseCollab,
+      inherited: false,
+      inheritedFromId: 'p-1',
+      inheritedFromTitle: 'Parent Wiki',
+      inheritedAccessLevel: 'EDIT',
+    });
+    expect(options.some((o) => o.value === 'INHERIT')).toBe(true);
+    expect(options.some((o) => o.value === 'REMOVE')).toBe(false);
   });
 });
