@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -65,6 +66,9 @@ class DocumentSpaceServiceTest {
     private AttachmentService attachmentService;
 
     @Mock
+    private CommentCleanup commentCleanup;
+
+    @Mock
     private DocumentIconCoverApplier iconCoverApplier;
 
     @Mock
@@ -91,6 +95,7 @@ class DocumentSpaceServiceTest {
                 permissionService,
                 queryHelper,
                 attachmentService,
+                commentCleanup,
                 iconCoverApplier,
                 workspaceService,
                 spaceAccessService);

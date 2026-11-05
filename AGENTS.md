@@ -14,8 +14,9 @@ Ports: web `3000`, API `8080`, realtime `1234`.
 ## Entrypoints
 
 - **web** — App Router under `web/app` (`/` and `/doc/[id]`); shell is `components/AppShell.tsx`, editor is `components/editor` (BlockNote, loaded client-only). Redux Toolkit slices in `stores/`, API/IndexedDB access in `services/`, Yjs + offline glue in `lib/` and `hooks/`. Alias `@/*` → `web/*`.
-- **realtime** — `src/main.ts` → `src/server.ts`. Rooms are document ids. Token comes from `?token=` or the `Authorization` header; access is re-checked against `GET {API_BASE_URL}/api/v1/documents/{id}/access-check`. `GET /health`, `GET /metrics`.
-- **api** — package `com.nextdocs.api` with parallel `auth/`, `document/`, and `attachment/` packages (controller / service / repository / dto / entity), `/api/v1/...`, uniform response envelope `{success, data, error, message, timestamp}` (`common/response/ApiResponse`), nulls omitted from JSON. Attachments are stored on the local filesystem (`app.attachments.storage-path`) and downloaded via short-lived HMAC-signed URLs, because browser media tags cannot send Authorization headers.
+- **realtime** — `src/main.ts` → `src/server.ts`. Rooms are document ids. Token comes from `?token=` or the `Authorization` header; access is re-checked against `GET {API_BASE_URL}/api/v1/documents/{id}/access-check`. `GET /health`, `GET /metrics`. EDIT/OWNER may write the Y.Doc; VIEW/COMMENT are read-only (COMMENT may still send awareness, which carries the comment-refresh ping).
+- **api** — package `com.nextdocs.api` with parallel `auth/`, `document/`, `attachment/`, and `comment/` packages (controller / service / repository / dto / entity), `/api/v1/...`, uniform response envelope `{success, data, error, message, timestamp}` (`common/response/ApiResponse`), nulls omitted from JSON. Attachments are stored on the local filesystem (`app.attachments.storage-path`) and downloaded via short-lived HMAC-signed URLs, because browser media tags cannot send Authorization headers.
+- **Comments** — threads, replies, resolutions, and reactions are owned by the API/Postgres, not the Y.Doc. The editor's BlockNote comment marks store only the thread id as the anchor. `web/lib/comment-thread.store.ts` is the REST `ThreadStore`; cross-tab updates are an awareness `nd-comments-ping` followed by a refetch.
 
 ## Commands
 
@@ -50,7 +51,6 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 - CI is per service and path-filtered (`web/**`, `realtime/**`, `api/**`); each runs format/lint → test → build, and the `api` and `realtime` workflows additionally build a Docker image. Root config files (`turbo.json`, `tsconfig.base.json`, `.prettierrc`, `package-lock.json`) trigger the JS workflows only.
 - Java formatting is **not** checked by `mvn test`: `spotless:check` is bound to the `verify` phase, and CI runs it in a separate lint job. Run `./nd lint api` (or `./nd format api --fix`, Spotless + palantirJavaFormat) before pushing; do not hand-format Java.
 - Flyway migrations in `api/src/main/resources/db/migration` are never applied by tests (test properties disable Flyway; `ddl-auto` is `none` locally / `validate` in Docker). Exercise new SQL against the `./nd` Postgres container. Hibernate must not manage the schema — every schema change needs a migration file.
-- Migration numbering: files exist for `V1, V2, V4…V16`; `V3__add_source_local_id_for_documents.sql` was deleted on purpose and must stay unused (recreating it is out-of-order for databases that already applied later versions). Next file is `V17__name.sql`.
 - API tests run on H2 locally, while CI starts a Postgres service with `SPRING_DATASOURCE_*` overrides for the same suite — avoid H2-only SQL in repositories.
 - Web Jest runs through `next/jest`; if it logs `jest-haste-map: Haste module naming collision: web`, a standalone build left `web/.next/standalone` behind. Tests still pass.
 

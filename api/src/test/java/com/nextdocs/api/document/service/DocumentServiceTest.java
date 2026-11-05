@@ -20,6 +20,7 @@ import static org.mockito.Mockito.when;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -87,6 +88,9 @@ class DocumentServiceTest {
     private AttachmentService attachmentService;
 
     @Mock
+    private CommentCleanup commentCleanup;
+
+    @Mock
     private com.nextdocs.api.document.service.DocumentIconCoverApplier iconCoverApplier;
 
     @Mock
@@ -112,6 +116,7 @@ class DocumentServiceTest {
                 permissionService,
                 queryHelper,
                 attachmentService,
+                commentCleanup,
                 iconCoverApplier,
                 workspaceService,
                 spaceAccessService);
@@ -149,10 +154,12 @@ class DocumentServiceTest {
         assertEquals(1, purged);
         // Keys and per-user sizes must be read before the rows disappear, and the stored
         // bytes only once the transaction that removed their rows has committed.
-        InOrder inOrder = inOrder(attachmentService, documentRepository);
+        InOrder inOrder = inOrder(attachmentService, commentCleanup, documentRepository);
         inOrder.verify(attachmentService).findStorageKeysForDocuments(anyCollection());
         inOrder.verify(attachmentService).releaseQuotaForDocuments(anyCollection());
         inOrder.verify(attachmentService).deleteForDocuments(anyCollection());
+        // Comment rows go before the document row: the test schema has no DB cascade.
+        inOrder.verify(commentCleanup).deleteForDocuments(List.of(rootId));
         inOrder.verify(documentRepository).deleteByIdIn(List.of(rootId));
         inOrder.verify(attachmentService).deleteStoredFilesAfterCommit(List.of("doc/file"));
     }

@@ -39,6 +39,10 @@ import tools.jackson.databind.ObjectMapper;
  *   runs only after the body has been parsed, so the limit has to be enforced here,
  *   on bytes read rather than on the declared Content-Length which chunked
  *   uploads omit).
+ * - {@code comment-write:<ip>} — anonymous comment writes (POST/PATCH/DELETE under
+ *   .../threads). A link commenter has no identity, so the address is the only stable
+ *   bucket. The body ceiling mirrors the API's comment-size guard. Identified
+ *   comment traffic stays unthrottled like the rest of the API.
  * - {@code upload-ip:<ip>} + {@code upload:<userId>} — authenticated attachment uploads
  *   (POST .../attachments: document blocks, the workspace icon, and space icons). Consumes both
  *   buckets so neither one account nor one egress address can queue disk-filling
@@ -91,6 +95,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final int publicWriteMaxRequests;
     private final Duration publicWriteWindow;
     private final long publicWriteMaxBodyBytes;
+    private final int commentWriteMaxRequests;
+    private final Duration commentWriteWindow;
+    private final long commentWriteMaxBodyBytes;
     private final int uploadMaxRequests;
     private final Duration uploadWindow;
     private final long uploadMaxDeclaredBytes;
@@ -108,6 +115,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.public-write-max-requests:20}") int publicWriteMaxRequests,
             @Value("${app.rate-limit.public-write-window-seconds:60}") long publicWriteWindowSeconds,
             @Value("${app.rate-limit.public-write-max-body-bytes:5242880}") long publicWriteMaxBodyBytes,
+            @Value("${app.rate-limit.comment-write-max-requests:60}") int commentWriteMaxRequests,
+            @Value("${app.rate-limit.comment-write-window-seconds:60}") long commentWriteWindowSeconds,
+            @Value("${app.rate-limit.comment-write-max-body-bytes:65536}") long commentWriteMaxBodyBytes,
             @Value("${app.rate-limit.upload-max-requests:20}") int uploadMaxRequests,
             @Value("${app.rate-limit.upload-window-seconds:60}") long uploadWindowSeconds,
             @Value("${app.rate-limit.download-max-requests:600}") int downloadMaxRequests,
@@ -123,6 +133,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.publicWriteMaxRequests = publicWriteMaxRequests;
         this.publicWriteWindow = Duration.ofSeconds(publicWriteWindowSeconds);
         this.publicWriteMaxBodyBytes = publicWriteMaxBodyBytes;
+        this.commentWriteMaxRequests = commentWriteMaxRequests;
+        this.commentWriteWindow = Duration.ofSeconds(commentWriteWindowSeconds);
+        this.commentWriteMaxBodyBytes = commentWriteMaxBodyBytes;
         this.uploadMaxRequests = uploadMaxRequests;
         this.uploadWindow = Duration.ofSeconds(uploadWindowSeconds);
         this.downloadMaxRequests = downloadMaxRequests;
@@ -465,6 +478,22 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 && !parts[0].isBlank()
                 && parts[1].equals("attachments")) {
             return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, uploadMaxDeclaredBytes);
+        }
+
+        // Comment routes are public so link guests can discuss a page. Their writes
+        // are the only anonymous writes besides the snapshot PATCH, so they get the
+        // same address-scoped treatment; identified callers stay unlimited.
+        if (parts.length >= 2 && !parts[0].isBlank() && parts[1].equals("threads")) {
+            if ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)) {
+                return isAuthenticatedCaller()
+                        ? Verdict.unlimited()
+                        : Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
+            }
+            if (isAuthenticatedCaller()) {
+                return Verdict.unlimited();
+            }
+            return Verdict.anonymousWriteBudget(
+                    "comment-write:", commentWriteMaxRequests, commentWriteWindow, commentWriteMaxBodyBytes);
         }
 
         if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {

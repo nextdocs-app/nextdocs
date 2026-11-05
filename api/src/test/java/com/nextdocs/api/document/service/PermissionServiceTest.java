@@ -661,4 +661,75 @@ class PermissionServiceTest {
         assertNull(response.linkLevel());
         verify(documentRepository, never()).resolvePublicAccess(documentId);
     }
+
+    @Test
+    void requireCommentAccess_commentLevel_returnsDocumentAndLevel() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("COMMENT");
+
+        PermissionService.DocumentCommentAccess access = permissionService.requireCommentAccess(userId, documentId);
+
+        assertEquals(doc, access.document());
+        assertEquals(DocumentAccessLevel.COMMENT, access.accessLevel());
+        assertFalse(access.canEdit());
+    }
+
+    @Test
+    void requireCommentAccess_viewOnly_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireCommentAccess(userId, documentId));
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+    }
+
+    @Test
+    void requireCommentAccess_noAccess_throwsNotFound() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireCommentAccess(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requirePublicCommentAccess_commentLink_returnsDocumentAndLevel() {
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolvePublicAccess(documentId)).thenReturn("COMMENT");
+
+        PermissionService.DocumentCommentAccess access = permissionService.requirePublicCommentAccess(documentId);
+
+        assertEquals(doc, access.document());
+        assertEquals(DocumentAccessLevel.COMMENT, access.accessLevel());
+    }
+
+    @Test
+    void requirePublicCommentAccess_viewLink_throwsForbidden() {
+        UUID documentId = UUID.randomUUID();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolvePublicAccess(documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requirePublicCommentAccess(documentId));
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+    }
 }

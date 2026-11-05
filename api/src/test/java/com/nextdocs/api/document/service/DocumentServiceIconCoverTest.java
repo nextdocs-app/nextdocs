@@ -14,6 +14,7 @@ import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -76,6 +77,9 @@ class DocumentServiceIconCoverTest {
     private AttachmentService attachmentService;
 
     @Mock
+    private CommentCleanup commentCleanup;
+
+    @Mock
     private AttachmentRepository attachmentRepository;
 
     @Mock
@@ -106,6 +110,7 @@ class DocumentServiceIconCoverTest {
                 permissionService,
                 queryHelper,
                 attachmentService,
+                commentCleanup,
                 applier,
                 workspaceService,
                 spaceAccessService);

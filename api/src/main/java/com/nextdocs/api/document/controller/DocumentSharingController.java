@@ -1,8 +1,8 @@
 package com.nextdocs.api.document.controller;
 
+import static com.nextdocs.api.auth.security.BearerTokens.rejectInvalidBearer;
+
 import com.nextdocs.api.auth.security.UserPrincipal;
-import com.nextdocs.api.common.exception.ApiException;
-import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
@@ -46,8 +46,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class DocumentSharingController {
-
-    private static final String BEARER_PREFIX = "Bearer ";
 
     private final DocumentSharingService sharingService;
     private final DocumentSharingSettingsService settingsService;
@@ -284,20 +282,5 @@ public class DocumentSharingController {
             return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheckPublic(id)));
         }
         return ResponseEntity.ok(ApiResponse.ok(sharingService.accessCheck(principal.getId(), id)));
-    }
-
-    /**
-     * A caller that presented a Bearer token but was not authenticated has a
-     * stale or revoked session. Falling back to the anonymous share-link level
-     * would silently downgrade a signed-in editor (the realtime server
-     * revalidates with this endpoint), so fail closed and let the client
-     * refresh instead.
-     */
-    private static void rejectInvalidBearer(String authorization) {
-        // RFC 7235 makes the scheme case-insensitive, and a client that spells it
-        // "bearer" must not slip past this guard into the anonymous access level.
-        if (authorization != null && authorization.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
-            throw new ApiException(ErrorCode.TOKEN_INVALID);
-        }
     }
 }
