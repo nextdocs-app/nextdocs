@@ -59,6 +59,7 @@ class PublicAccessMigrationPostgresTest {
                 .defaultSchema(schema)
                 .createSchemas(true)
                 .locations("classpath:db/migration")
+                .target("30")
                 .load()
                 .migrate();
 

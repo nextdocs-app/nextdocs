@@ -79,7 +79,7 @@ export function SpaceAccessFields({
 
       {accessMode === 'PUBLIC' ? (
         <div className="ml-6 flex flex-wrap items-center gap-1.5 border-l border-border pl-3 text-[12.5px] text-muted-foreground">
-          <span>Everyone in this workspace</span>
+          <span>Default access for everyone in this workspace</span>
           <AccessDropdown<SpaceEveryoneAccessLevel>
             value={everyoneAccessLevel}
             options={SPACE_EVERYONE_LEVEL_OPTIONS}

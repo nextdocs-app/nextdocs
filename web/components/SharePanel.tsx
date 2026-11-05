@@ -7,6 +7,7 @@ import {
   DocumentServiceApiError,
   type Collaborator,
   type CollaboratorAccessLevel,
+  type DocumentBreadcrumbItem,
   type DocumentAccessLevel,
   type DocumentGeneralAccessMode,
   type DocumentSpaceSummary,
@@ -15,13 +16,15 @@ import {
 import { useAuth } from '@/hooks/useAuth.hook';
 import { ChainLink, Close, Globe, Lock } from '@/icons';
 import { dispatchOpenSpaceSettings } from '@/lib/space-settings-event.util';
+import { Badge } from '@/components/Badge';
 import { AccessDropdown } from './share/AccessDropdown';
-import { CollaboratorRow } from './share/CollaboratorRow';
+import { PeopleSection } from './share/PeopleSection';
+import { getPeopleGroups } from './share/peopleGroups';
 import {
   ACCESS_ACTION_LABELS,
   getGeneralAccessViewModel,
   getGeneralModeOptions,
-  getInviteAccessOptions,
+  INVITE_ACCESS_OPTIONS,
   LINK_ACCESS_OPTIONS,
   type CollaboratorDropdownValue,
   type GeneralModeDropdownValue,
@@ -63,18 +66,13 @@ export function SharePanel({
   const [isSavingInvite, setIsSavingInvite] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [recentlyAddedUserIds, setRecentlyAddedUserIds] = useState<Set<string>>(new Set());
+  const [breadcrumbs, setBreadcrumbs] = useState<DocumentBreadcrumbItem[]>([]);
   const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
 
   const space = documentSpace;
-  const isSpacePage = space != null;
-
-  // The invite dropdown loses its Full access option inside a space. If that
-  // level was already selected before the space context arrived, fall back to
-  // the highest level a space page owner may grant.
-  const effectiveInviteAccess: DocumentAccessLevel =
-    isSpacePage && inviteAccess === 'OWNER' ? 'EDIT' : inviteAccess;
 
   useEffect(
     () => () => {
@@ -127,12 +125,32 @@ export function SharePanel({
     // document's collaborators briefly render under the new document.
     setCollaborators([]);
     setSettings(null);
+    setBreadcrumbs([]);
     setError(null);
+    // "New" is a session marker, not a property of the grant. A reopen or a
+    // document switch starts a new session.
+    setRecentlyAddedUserIds(new Set());
 
     const load = async () => {
       try {
         setIsLoading(true);
         setError(null);
+
+        if (typeof documentService.getDocumentBreadcrumbs === 'function') {
+          void documentService
+            .getDocumentBreadcrumbs(documentId, accessToken)
+            .then((crumbs) => {
+              if (!cancelled && crumbs) {
+                setBreadcrumbs(crumbs);
+              }
+            })
+            .catch(() => {
+              if (!cancelled) {
+                setBreadcrumbs([]);
+              }
+            });
+        }
+
         if (!canManageSharing) {
           try {
             const cols = await documentService.listCollaborators(documentId, accessToken);
@@ -214,11 +232,16 @@ export function SharePanel({
     try {
       setIsSavingInvite(true);
       setError(null);
+      const knownIds = new Set(collaborators.map((collab) => collab.userId));
       const next = await documentService.upsertCollaborator(
         documentId,
-        { email: inviteEmail.trim(), accessLevel: effectiveInviteAccess },
+        { email: inviteEmail.trim(), accessLevel: inviteAccess },
         accessToken
       );
+      const added = next.find((collab) => !knownIds.has(collab.userId));
+      if (added) {
+        setRecentlyAddedUserIds((current) => new Set(current).add(added.userId));
+      }
       setCollaborators(next);
       setInviteEmail('');
     } catch (e) {
@@ -259,7 +282,7 @@ export function SharePanel({
     collab: Collaborator,
     nextValue: CollaboratorDropdownValue
   ) => {
-    if (nextValue === 'INHERIT') {
+    if (nextValue === 'INHERIT' || nextValue === 'REMOVE') {
       void handleRemove(collab.userId);
     } else {
       void handleAccessChange(collab.userId, nextValue);
@@ -306,7 +329,11 @@ export function SharePanel({
         linkInheritBlocked?: boolean;
       };
       if (mode === 'ANYONE_WITH_LINK') {
-        payload = { generalAccessMode: mode, linkAccessLevel: settings.linkAccessLevel || 'VIEW' };
+        payload = {
+          generalAccessMode: mode,
+          linkAccessLevel: settings.linkAccessLevel || 'VIEW',
+          ...(vm.state === 'expired' ? { clearLinkExpiresAt: true } : {}),
+        };
       } else if (
         vm.state === 'inherited' ||
         vm.state === 'blocked' ||
@@ -342,11 +369,19 @@ export function SharePanel({
         isInheritedPublicLink && !hasOwnPublicLink
           ? 'ANYONE_WITH_LINK'
           : settings.generalAccessMode;
-      const next = await documentService.updateSharingSettings(
-        documentId,
-        { generalAccessMode: modeToSend, linkAccessLevel: level },
-        accessToken
-      );
+      const payload: {
+        generalAccessMode: DocumentGeneralAccessMode;
+        linkAccessLevel: DocumentAccessLevel;
+        clearLinkExpiresAt?: boolean;
+      } = {
+        generalAccessMode: modeToSend,
+        linkAccessLevel: level,
+        ...(generalAccessState === 'expired' ||
+        (generalAccessState === 'inherited' && Boolean(settings.linkExpiresAt))
+          ? { clearLinkExpiresAt: true }
+          : {}),
+      };
+      const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
       setSettings(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update link access');
@@ -382,6 +417,7 @@ export function SharePanel({
   };
 
   const {
+    state: generalAccessState,
     hasOwnPublicLink,
     isInheritedPublicLink,
     hasEffectivePublicLink,
@@ -393,20 +429,23 @@ export function SharePanel({
     displayMode: displayGeneralMode,
   } = getGeneralAccessViewModel(settings);
   const effectiveLinkAction = ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view';
-  const activeCollaboratorsCount = collaborators.filter(
-    (c) => c.accessLevel !== 'NO_ACCESS'
-  ).length;
+  const {
+    pinned: pinnedCollaborator,
+    flat: flatCollaborators,
+    groups: peopleGroups,
+  } = getPeopleGroups(collaborators, {
+    spaceId: space?.id ?? null,
+    pinnedUserId: user?.id ?? null,
+  });
 
-  // Page-level OWNER no longer implies sharing rights inside a space: space
-  // owners administer the page. Do not offer a level whose description promises
-  // something the server will refuse.
-  const inviteAccessOptions = getInviteAccessOptions(!isSpacePage);
+  // A page-level FULL access grant is real inside a space too: it overrides a
+  // lower space grant, and the effective OWNER may administer the page.
   const sharingRestrictionMessage = space
     ? space.archived
       ? `${space.name} is archived. Restore the space to manage who can access this page.`
       : space.canAdminister
         ? 'Sharing is unavailable right now.'
-        : `Only owners of ${space.name} can manage sharing for this page.`
+        : `Only page owners or owners of ${space.name} can manage sharing for this page.`
     : 'You need owner access to manage sharing.';
 
   const openSpaceSettings = (tab: 'general' | 'members' = 'members') => {
@@ -446,15 +485,8 @@ export function SharePanel({
       "
     >
       {/* ── Header ── */}
-      <div className="flex items-center justify-between border-b border-border/70 dark:border-white/10 px-4 pt-2.5 pb-0">
-        <span
-          className="
-            px-3 py-2 text-[15px] transition-colors relative cursor-default
-            text-card-foreground font-semibold after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--nd-brand)]
-          "
-        >
-          Share
-        </span>
+      <div className="flex items-center justify-between border-b border-border/70 dark:border-white/10 px-4 py-2.5">
+        <span className="text-[15px] font-semibold text-card-foreground">Share</span>
 
         <button
           type="button"
@@ -496,33 +528,31 @@ export function SharePanel({
               />
 
               {inviteEmail.trim().length > 0 && (
-                <>
-                  <AccessDropdown
-                    value={effectiveInviteAccess}
-                    options={inviteAccessOptions}
-                    onChange={setInviteAccess}
-                    align="right"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleInvite()}
-                    disabled={isSavingInvite}
-                    aria-label="Add"
-                    className="
-                      flex-shrink-0 rounded-lg
-                      bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
-                      text-neutral-950 font-medium
-                      px-3.5 py-1.5
-                      text-[13px] transition-all cursor-pointer shadow-xs
-                      outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
-                      disabled:opacity-50 disabled:cursor-not-allowed
-                      active:scale-95
-                    "
-                  >
-                    {isSavingInvite ? '…' : 'Add'}
-                  </button>
-                </>
+                <AccessDropdown
+                  value={inviteAccess}
+                  options={INVITE_ACCESS_OPTIONS}
+                  onChange={setInviteAccess}
+                  align="right"
+                />
               )}
+              <button
+                type="button"
+                onClick={() => void handleInvite()}
+                disabled={isSavingInvite || !inviteEmail.trim()}
+                aria-label="Add"
+                className="
+                  flex-shrink-0 rounded-lg
+                  bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
+                  text-neutral-950 font-medium
+                  px-3.5 py-1.5
+                  text-[13px] transition-all cursor-pointer shadow-xs
+                  outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  active:scale-95
+                "
+              >
+                {isSavingInvite ? '…' : 'Add'}
+              </button>
             </div>
 
             {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
@@ -547,54 +577,39 @@ export function SharePanel({
             </div>
           ) : (
             <>
-              {/* ── People with access ── */}
-              {activeCollaboratorsCount > 0 && (
+              {/* ── People ── */}
+              {collaborators.length > 0 && (
                 <section className="pb-3">
-                  <p className="mb-2 text-[13.5px] font-medium text-muted-foreground/80 select-none flex items-center gap-1.5">
-                    <span>People with access</span>
-                    {activeCollaboratorsCount > 0 && (
-                      <span className="text-[12px] text-muted-foreground/60 font-normal">
-                        ({activeCollaboratorsCount})
-                      </span>
-                    )}
-                  </p>
-                  <ul className="space-y-1">
-                    {collaborators.map((collab) => {
-                      const isSelf = collab.userId === user?.id;
-                      const isDirectOwner = Boolean(collab.owner) && !isSpacePage;
-                      // Any inherited grant is overridable here, including an ancestor
-                      // full-access grant; only the document's own owner stays locked.
-                      const canEditRow = canManageSharing && !isSelf && !isDirectOwner;
-
-                      return (
-                        <CollaboratorRow
-                          key={collab.userId}
-                          collab={collab}
-                          isSelf={isSelf}
-                          canEditRow={canEditRow}
-                          allowOwnerLevel={!isSpacePage}
-                          hasEffectivePublicLink={hasEffectivePublicLink}
-                          effectiveLinkAction={effectiveLinkAction}
-                          onAccessSelect={(v) => handleCollaboratorAccessSelect(collab, v)}
-                          onNavigateTo={handleNavigate}
-                        />
-                      );
-                    })}
-                  </ul>
+                  <PeopleSection
+                    pinned={pinnedCollaborator}
+                    flat={flatCollaborators}
+                    groups={peopleGroups}
+                    canManageSharing={canManageSharing}
+                    currentUserId={user?.id}
+                    spaceId={space?.id ?? null}
+                    documentSpace={space}
+                    accessToken={accessToken}
+                    breadcrumbs={breadcrumbs}
+                    hasEffectivePublicLink={hasEffectivePublicLink}
+                    effectiveLinkAction={effectiveLinkAction}
+                    recentlyAddedUserIds={recentlyAddedUserIds}
+                    onAccessSelect={handleCollaboratorAccessSelect}
+                    onNavigate={handleNavigate}
+                  />
                 </section>
               )}
 
-              {/* ── General access ── */}
+              {/* ── Link access ── */}
               {canManageSharing && settings && (
-                <section className="pt-4 border-t border-border/70 dark:border-white/10">
-                  <p className="mb-1 text-[13.5px] font-medium text-muted-foreground/80 select-none">
-                    General
+                <section className="pt-3 border-t border-border/70 dark:border-white/10">
+                  <p className="mb-0.5 text-[12px] font-medium text-muted-foreground/70 select-none">
+                    Link access
                   </p>
 
-                  <div className="flex items-center gap-2 py-1.5 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors">
+                  <div className="flex items-center gap-2.5 py-2 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors">
                     <span
                       className={`
-                        inline-flex h-10 w-10 rounded-full flex-shrink-0 items-center justify-center select-none shadow-xs transition-colors
+                        inline-flex h-8 w-8 rounded-lg flex-shrink-0 items-center justify-center select-none transition-colors
                         ${
                           hasEffectivePublicLink
                             ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400'
@@ -603,13 +618,13 @@ export function SharePanel({
                       `}
                     >
                       {hasEffectivePublicLink ? (
-                        <Globe size={20} strokeWidth={1.75} />
+                        <Globe size={17} strokeWidth={1.75} />
                       ) : (
-                        <Lock size={20} strokeWidth={1.75} />
+                        <Lock size={17} strokeWidth={1.75} />
                       )}
                     </span>
 
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
                       {/* Row 1: state + level */}
                       <div className="flex items-center justify-between gap-1 min-w-0">
                         <div className="-ml-1">
@@ -625,7 +640,7 @@ export function SharePanel({
                           />
                         </div>
 
-                        {hasEffectivePublicLink && (
+                        {(hasEffectivePublicLink || generalAccessState === 'expired') && (
                           <div className="flex-shrink-0">
                             <AccessDropdown
                               value={settings?.linkAccessLevel ?? 'VIEW'}
@@ -638,50 +653,43 @@ export function SharePanel({
                         )}
                       </div>
 
-                      {/* Row 2: provenance (via / Overrides) replaces the description, mirroring People rows */}
+                      {/* Row 2: provenance (From / Overrides) replaces the description, mirroring People rows */}
                       {isInheritedPublicLink || showProvenanceBadge ? (
-                        <div className="pl-1">
-                          {isInheritedPublicLink &&
-                            (settings?.inheritedFromId ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  settings?.inheritedFromId &&
-                                  handleNavigate(settings.inheritedFromId)
-                                }
-                                title={`Inherited via ${inheritedFromTitle}`}
-                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
-                              >
-                                via {inheritedFromTitle}
-                              </button>
-                            ) : (
-                              <span
-                                title={`Inherited via ${inheritedFromTitle}`}
-                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0"
-                              >
-                                via {inheritedFromTitle}
-                              </span>
-                            ))}
-                          {showProvenanceBadge &&
-                            (settings?.inheritedFromId ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  settings?.inheritedFromId &&
-                                  handleNavigate(settings.inheritedFromId)
-                                }
-                                title={provenanceBadgeTooltip}
-                                className="inline-block max-w-[140px] truncate rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-muted text-muted-foreground align-middle flex-shrink-0 hover:bg-muted-foreground/15 hover:text-foreground transition-colors cursor-pointer"
-                              >
-                                {provenanceBadgePrefix} {inheritedFromTitle}
-                              </button>
-                            ) : null)}
+                        <div className="pl-1 pt-0.5 flex items-center gap-1.5">
+                          {isInheritedPublicLink && (
+                            <Badge
+                              onClick={
+                                settings?.inheritedFromId || space?.id
+                                  ? () => handleNavigate(settings?.inheritedFromId || space!.id)
+                                  : undefined
+                              }
+                              title={`From “${inheritedFromTitle}”`}
+                              className="max-w-[140px] truncate flex-shrink-0"
+                            >
+                              From “{inheritedFromTitle}”
+                            </Badge>
+                          )}
+                          {showProvenanceBadge && (
+                            <Badge
+                              onClick={
+                                settings?.inheritedFromId || space?.id
+                                  ? () => handleNavigate(settings?.inheritedFromId || space!.id)
+                                  : undefined
+                              }
+                              title={provenanceBadgeTooltip}
+                              className="max-w-[140px] truncate flex-shrink-0"
+                            >
+                              {provenanceBadgePrefix} {inheritedFromTitle}
+                            </Badge>
+                          )}
                         </div>
                       ) : (
-                        <p className="pl-1 text-[12px] text-muted-foreground/70 leading-snug">
+                        <p className="pl-1 pt-0.5 text-[11.5px] text-muted-foreground/70 leading-snug">
                           {hasEffectivePublicLink
                             ? `Anyone on the internet with the link can ${effectiveLinkAction}`
-                            : 'Only people with access can open with the link'}
+                            : generalAccessState === 'expired'
+                              ? 'Link expired — update link access or re-enable to revive'
+                              : 'Only people with access can open with the link'}
                         </p>
                       )}
                     </div>
@@ -694,7 +702,20 @@ export function SharePanel({
       )}
 
       {/* ── Footer ──────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-3 border-t border-border/70 dark:border-white/10 bg-muted/20 dark:bg-muted/10">
+      <div className="flex items-center justify-between px-4 py-2.5 border-t border-border/70 dark:border-white/10 bg-muted/20 dark:bg-muted/10">
+        {space ? (
+          <button
+            type="button"
+            onClick={() => handleNavigate(space.id)}
+            aria-label={`Space members in ${space.name}`}
+            className="rounded-md px-1 py-1 text-[12px] font-medium text-muted-foreground hover:text-card-foreground transition-colors cursor-pointer"
+          >
+            Space members
+          </button>
+        ) : (
+          <span />
+        )}
+
         <button
           type="button"
           onClick={() => void handleCopyLink()}
@@ -712,22 +733,6 @@ export function SharePanel({
         >
           <ChainLink className="h-4 w-4" />
           <span>{copied ? 'Copied!' : 'Copy link'}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onClose}
-          className="
-            rounded-lg
-            bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
-            text-neutral-950 font-medium
-            px-4 py-1.5
-            text-[13px]
-            outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
-            active:scale-95 transition-all cursor-pointer shadow-xs
-          "
-        >
-          Done
         </button>
       </div>
     </div>

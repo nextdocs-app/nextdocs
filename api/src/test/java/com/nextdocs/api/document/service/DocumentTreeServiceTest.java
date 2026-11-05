@@ -18,16 +18,18 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.workspace.entity.Workspace;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -50,7 +52,7 @@ class DocumentTreeServiceTest {
     private DocumentRepository documentRepository;
 
     @Mock
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
@@ -79,7 +81,7 @@ class DocumentTreeServiceTest {
                 .build();
         documentTreeService = new DocumentTreeService(
                 documentRepository,
-                collaboratorRepository,
+                accessGrantRepository,
                 userDocumentOrderRepository,
                 userRepository,
                 permissionService,
@@ -424,6 +426,56 @@ class DocumentTreeServiceTest {
     }
 
     @Test
+    void move_reparentToNewParentInDifferentWorkspace_updatesWorkspaceOnDocAndDescendants() {
+        UUID docId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+
+        Workspace workspaceA =
+                Workspace.builder().id(UUID.randomUUID()).name("Workspace A").build();
+        Workspace workspaceB =
+                Workspace.builder().id(UUID.randomUUID()).name("Workspace B").build();
+
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .workspace(workspaceA)
+                .title("Doc")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        Document child = Document.builder()
+                .id(childId)
+                .user(user)
+                .parent(doc)
+                .workspace(workspaceA)
+                .title("Child")
+                .build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(user)
+                .workspace(workspaceB)
+                .title("Parent in B")
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of(child));
+        when(documentRepository.findAllByParent_IdIn(List.of(childId))).thenReturn(List.of());
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(true);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
+
+        documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
+
+        assertEquals(workspaceB.getId(), doc.getWorkspace().getId());
+        assertEquals(workspaceB.getId(), child.getWorkspace().getId());
+        verify(documentRepository).saveAll(List.of(child));
+    }
+
+    @Test
     void move_cycleDetected_throwsValidationFailed() {
         UUID docId = UUID.randomUUID();
         UUID childId = UUID.randomUUID();
@@ -616,10 +668,11 @@ class DocumentTreeServiceTest {
                 .build();
 
         User collaboratorUser = User.builder().id(collaboratorId).build();
-        DocumentCollaborator collaborator = DocumentCollaborator.builder()
+        AccessGrant collaborator = AccessGrant.builder()
                 .user(collaboratorUser)
                 .document(doc)
                 .accessLevel(DocumentAccessLevel.VIEW)
+                .effect(AccessGrantEffect.ALLOW)
                 .build();
 
         DocumentMoveRequest request = new DocumentMoveRequest(null, null, null);
@@ -631,7 +684,7 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.of("a5"));
-        when(collaboratorRepository.findAllByDocument_Id(docId)).thenReturn(List.of(collaborator));
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of(collaborator));
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, docId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(collaboratorId, docId))
@@ -654,7 +707,7 @@ class DocumentTreeServiceTest {
                 .allMatch(o -> o.getOrderKey().compareTo("a7") < 0));
 
         // Un-parenting removes the ancestor chain that justified any NO_ACCESS breakpoints.
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(docId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(docId);
     }
 
     @Test
@@ -1212,9 +1265,9 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.empty());
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(collaboratorRepository.findAllByDocument_Id(docId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
 
         DocumentResponse response =
@@ -1267,9 +1320,9 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.of("a0"));
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(collaboratorRepository.findAllByDocument_Id(docId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(true);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse response =
                 documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null, true));
@@ -1306,9 +1359,9 @@ class DocumentTreeServiceTest {
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(collaboratorRepository.findAllByDocument_Id(docId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse response =
                 documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null, true));
@@ -1420,7 +1473,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
 
         DocumentResponse response =
@@ -1493,7 +1546,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
 
         DocumentResponse response =
@@ -1503,7 +1556,7 @@ class DocumentTreeServiceTest {
         // Reordering must not graft the page into the parent author's tree.
         assertEquals(userId, doc.getUser().getId());
         verify(spaceAccessService, never()).load(any(), any());
-        verify(collaboratorRepository, never()).pruneOrphanedBreakpoints(docId);
+        verify(accessGrantRepository, never()).pruneOrphanedBreakpoints(docId);
         verify(userDocumentOrderRepository, never()).deleteByUser_IdAndDocument_Id(any(), eq(docId));
     }
 
@@ -1535,7 +1588,7 @@ class DocumentTreeServiceTest {
         when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
         when(permissionService.resolveSpace(parent)).thenReturn(space);
 
@@ -1548,8 +1601,8 @@ class DocumentTreeServiceTest {
         assertNull(doc.getSpace());
         verify(documentRepository, never()).findAllByParent_IdIn(any());
         verify(documentRepository, never()).findAncestorChainIds(any());
-        verify(collaboratorRepository, never()).deleteNoAccessInSubtreeForUser(any(), any());
-        verify(collaboratorRepository, never()).pruneOrphanedBreakpoints(any());
+        verify(accessGrantRepository, never()).deleteDenyInSubtreeForUser(any(), any());
+        verify(accessGrantRepository, never()).pruneOrphanedBreakpoints(any());
         verify(userDocumentOrderRepository, never()).deleteByUser_IdAndDocument_Id(any(), any());
         verifyNoInteractions(spaceAccessService);
     }

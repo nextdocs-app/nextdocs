@@ -12,7 +12,7 @@ export interface DropdownOption<T extends string = string> {
   isDestructive?: boolean;
 }
 
-export type CollaboratorDropdownValue = CollaboratorAccessLevel | 'INHERIT';
+export type CollaboratorDropdownValue = CollaboratorAccessLevel | 'INHERIT' | 'REMOVE';
 export type GeneralModeDropdownValue = DocumentGeneralAccessMode | 'INHERIT';
 
 export const ACCESS_LABELS: Record<string, string> = {
@@ -37,17 +37,6 @@ export const INVITE_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'COMMENT', label: 'Can comment' },
   { value: 'VIEW', label: 'Can view' },
 ];
-
-/**
- * Levels offered when inviting someone. A page inside a space is shared by the
- * space's owners, so the page-level Full access grant is not on offer there:
- * the description would promise rights the server refuses.
- */
-export function getInviteAccessOptions(allowOwner = true): DropdownOption<DocumentAccessLevel>[] {
-  return allowOwner
-    ? [...INVITE_ACCESS_OPTIONS]
-    : INVITE_ACCESS_OPTIONS.filter((option) => option.value !== 'OWNER');
-}
 
 export const LINK_ACCESS_OPTIONS: DropdownOption<DocumentAccessLevel>[] = [
   { value: 'VIEW', label: 'Can view' },
@@ -77,12 +66,13 @@ export interface GeneralAccessSettings {
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   linkInheritBlocked?: boolean | null;
+  linkExpiresAt?: string | null;
 }
 
-export type GeneralAccessState = 'own' | 'inherited' | 'blocked' | 'private';
+export type GeneralAccessState = 'own' | 'inherited' | 'blocked' | 'expired' | 'private';
 
 export interface GeneralAccessViewModel {
-  /** Own link, inherited link, blocked inheritance, or fully private. */
+  /** Own link, inherited link, blocked inheritance, expired link, or fully private. */
   state: GeneralAccessState;
   hasOwnPublicLink: boolean;
   isInheritedPublicLink: boolean;
@@ -114,18 +104,26 @@ export function getGeneralAccessViewModel(
   const isLinkBlocked = Boolean(settings?.linkInheritBlocked);
   const isOverridingPublicLink = hasOwnPublicLink && Boolean(settings?.inheritedFromId);
   const isBlockedWithAncestor = isLinkBlocked && Boolean(settings?.inheritedFromId);
+  const isOwnLinkExpired =
+    hasOwnPublicLink &&
+    (settings?.hasActiveLink === false ||
+      (Boolean(settings?.linkExpiresAt) &&
+        new Date(settings!.linkExpiresAt!).getTime() <= Date.now()));
   const hasEffectivePublicLink =
-    (Boolean(settings?.hasActiveLink) || hasOwnPublicLink || isInheritedPublicLink) &&
-    !isLinkBlocked;
+    !isLinkBlocked &&
+    (isInheritedPublicLink ||
+      (!isOwnLinkExpired && (Boolean(settings?.hasActiveLink) || hasOwnPublicLink)));
   const inheritedFromTitle = normalizeTitle(settings?.inheritedFromTitle);
 
   const state: GeneralAccessState = isLinkBlocked
     ? 'blocked'
     : isInheritedPublicLink
       ? 'inherited'
-      : hasOwnPublicLink
-        ? 'own'
-        : 'private';
+      : isOwnLinkExpired
+        ? 'expired'
+        : hasOwnPublicLink
+          ? 'own'
+          : 'private';
 
   return {
     state,
@@ -142,9 +140,8 @@ export function getGeneralAccessViewModel(
       ? `Blocks inheritance from ${inheritedFromTitle}`
       : `Overrides ${inheritedFromTitle}`,
     inheritedFromTitle,
-    // Effective links show the effective mode so the dropdown never contradicts
-    // the helper sentence ("Restricted" plus "Anyone ... can edit").
-    displayMode: hasEffectivePublicLink ? 'ANYONE_WITH_LINK' : 'RESTRICTED',
+    // Effective or expired links show Anyone with the link; private and blocked show Restricted.
+    displayMode: hasEffectivePublicLink || state === 'expired' ? 'ANYONE_WITH_LINK' : 'RESTRICTED',
   };
 }
 

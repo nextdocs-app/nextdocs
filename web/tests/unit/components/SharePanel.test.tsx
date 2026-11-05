@@ -198,10 +198,10 @@ describe('SharePanel', () => {
 
       expect(screen.getByText('You need owner access to manage sharing.')).toBeInTheDocument();
       expect(screen.queryByPlaceholderText('Add people by email')).not.toBeInTheDocument();
-      expect(screen.queryByText('General')).not.toBeInTheDocument();
+      expect(screen.queryByText('Link access')).not.toBeInTheDocument();
 
       await waitFor(() => {
-        expect(screen.getByText('People with access')).toBeInTheDocument();
+        expect(screen.getByText('Me CurrentUser')).toBeInTheDocument();
       });
 
       expect(screen.getByText('Alice Owner')).toBeInTheDocument();
@@ -253,17 +253,18 @@ describe('SharePanel', () => {
       );
 
       expect(await screen.findByText('Doc Owner')).toBeInTheDocument();
-      expect(screen.queryByText('Space members')).not.toBeInTheDocument();
-      expect(screen.queryByText('Everyone at this workspace')).not.toBeInTheDocument();
+      // The old inherited "Space members" section is gone; the only space action is the footer.
       // The stored grant is OWNER, but the space caps what it actually does.
       expect(screen.queryByText('Full access')).not.toBeInTheDocument();
       expect(screen.getByText('Can view')).toBeInTheDocument();
       expect(
-        screen.getByText('Only owners of Engineering can manage sharing for this page.')
+        screen.getByText(
+          'Only page owners or owners of Engineering can manage sharing for this page.'
+        )
       ).toBeInTheDocument();
     });
 
-    it('omits Full access from space-page invites', async () => {
+    it('offers Full access from a space-page invite', async () => {
       const user = userEvent.setup();
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([ownerRow]);
       (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
@@ -286,11 +287,49 @@ describe('SharePanel', () => {
       await user.click(screen.getByRole('button', { name: 'Can edit' }));
 
       expect(screen.getByRole('listbox')).toBeInTheDocument();
-      expect(screen.queryByRole('option', { name: 'Full access' })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Full access' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'Can edit' })).toBeInTheDocument();
     });
 
-    it('opens space members settings when clicking via space badge', async () => {
+    it('offers Full access on a space member row', async () => {
+      const user = userEvent.setup();
+      const inheritedMember = {
+        userId: 'user-2',
+        email: 'member@example.com',
+        displayName: 'Space Collab',
+        accessLevel: 'EDIT' as const,
+        effectiveAccessLevel: 'EDIT' as const,
+        inherited: true,
+        inheritedFromTitle: 'Engineering',
+        inheritedFromId: 'space-1',
+        owner: false,
+        createdAt: '2026-01-01T00:00:00Z',
+      };
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([inheritedMember]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+          documentSpace={{ ...space, canAdminister: true, myAccessLevel: 'OWNER' }}
+        />
+      );
+
+      const groupButton = await screen.findByRole('button', { name: /From “Engineering”/ });
+      await user.click(groupButton);
+      await user.click(await screen.findByRole('button', { name: /Can edit/i }));
+
+      expect(screen.getByRole('option', { name: 'Full access' })).toBeInTheDocument();
+    });
+
+    it('opens space members settings from the footer', async () => {
       const user = userEvent.setup();
       const listener = jest.fn();
       window.addEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
@@ -319,9 +358,9 @@ describe('SharePanel', () => {
           />
         );
 
-        const viaBtn = await screen.findByRole('button', { name: 'via Engineering' });
-        expect(viaBtn).toBeInTheDocument();
-        await user.click(viaBtn);
+        await user.click(
+          await screen.findByRole('button', { name: 'Space members in Engineering' })
+        );
 
         expect(mockOnClose).toHaveBeenCalled();
         expect(listener).toHaveBeenCalledTimes(1);
@@ -334,7 +373,7 @@ describe('SharePanel', () => {
       }
     });
 
-    it('opens space members settings when clicking Overrides space badge', async () => {
+    it('opens space members settings when clicking an override of the space', async () => {
       const user = userEvent.setup();
       const listener = jest.fn();
       window.addEventListener(OPEN_SPACE_SETTINGS_EVENT, listener);
@@ -364,7 +403,9 @@ describe('SharePanel', () => {
           />
         );
 
-        const overridesBtn = await screen.findByRole('button', { name: 'Overrides Engineering' });
+        const overridesBtn = await screen.findByRole('button', {
+          name: /Overrides “Engineering”/,
+        });
         expect(overridesBtn).toBeInTheDocument();
         await user.click(overridesBtn);
 
@@ -411,7 +452,7 @@ describe('SharePanel', () => {
       });
     });
 
-    it('fetches both collaborators and sharing settings, and renders invite input and general access', async () => {
+    it('fetches both collaborators and sharing settings, and renders invite input and link access', async () => {
       render(
         <SharePanel
           documentId="doc-1"
@@ -426,10 +467,11 @@ describe('SharePanel', () => {
       expect(documentService.getSharingSettings).toHaveBeenCalledWith('doc-1', 'test-token');
 
       expect(screen.getByPlaceholderText('Add people by email')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled();
 
       await waitFor(() => {
-        expect(screen.getByText('People with access')).toBeInTheDocument();
-        expect(screen.getByText('General')).toBeInTheDocument();
+        expect(screen.getByText('Doc Owner')).toBeInTheDocument();
+        expect(screen.getByText('Link access')).toBeInTheDocument();
       });
 
       expect(screen.getByText('Doc Owner')).toBeInTheDocument();
@@ -508,6 +550,10 @@ describe('SharePanel', () => {
         { email: 'charlie@example.com', accessLevel: 'OWNER' },
         'test-token'
       );
+
+      const newDetail = await screen.findByText('Added just now');
+      const newRow = newDetail.closest('li');
+      expect(newRow).toHaveTextContent('charlie@example.com');
     });
 
     it('allows changing collaborator access level', async () => {
@@ -729,11 +775,11 @@ describe('SharePanel', () => {
         />
       );
 
-      await waitFor(() => {
-        expect(screen.getByText('Ancestor Owner')).toBeInTheDocument();
-      });
+      const groupButton = await screen.findByRole('button', { name: /From “Parent Doc”/ });
+      expect(groupButton).toBeInTheDocument();
+      await user.click(groupButton);
 
-      expect(screen.getByText('via Parent Doc')).toBeInTheDocument();
+      expect(screen.getByText('Ancestor Owner')).toBeInTheDocument();
 
       // Any inherited grant - even full access - is overridable on a child.
       const dropdown = screen.getByRole('button', { name: /Full access/i });
@@ -789,9 +835,9 @@ describe('SharePanel', () => {
         expect(screen.getByText('Ancestor Owner')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('Overrides Parent Doc')).toBeInTheDocument();
+      expect(screen.getByText('Overrides “Parent Doc”')).toBeInTheDocument();
 
-      const dropdown = screen.getByRole('button', { name: /Full access/i });
+      const dropdown = screen.getByRole('button', { name: 'Full access' });
       await user.click(dropdown);
 
       expect(
@@ -862,6 +908,102 @@ describe('SharePanel', () => {
       await waitFor(() => {
         expect(screen.queryByText('Bob Collab')).not.toBeInTheDocument();
       });
+    });
+
+    it('allows removing direct collaborator by selecting "Remove"', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'EDIT',
+          owner: false,
+        },
+      ]);
+      (documentService.removeCollaborator as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+      ]);
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Bob Collab')).toBeInTheDocument();
+      });
+
+      const bobDropdown = screen.getByRole('button', { name: /Can edit/i });
+      await user.click(bobDropdown);
+
+      const removeOption = screen.getByRole('option', { name: 'Remove' });
+      await user.click(removeOption);
+
+      expect(documentService.removeCollaborator).toHaveBeenCalledWith(
+        'doc-1',
+        'user-2',
+        'test-token'
+      );
+    });
+
+    it('shows stored access level in dropdown for direct collaborator with differing effective access', async () => {
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-1',
+          email: 'owner@example.com',
+          displayName: 'Doc Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-2',
+          userId: 'user-2',
+          email: 'bob@example.com',
+          displayName: 'Bob Collab',
+          accessLevel: 'VIEW',
+          effectiveAccessLevel: 'OWNER',
+          owner: false,
+        },
+      ]);
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Bob Collab')).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole('button', { name: 'Can view' })).toBeInTheDocument();
     });
 
     it('disables self-editing for an owner collaborator acting as admin', async () => {
@@ -990,7 +1132,7 @@ describe('SharePanel', () => {
       expect(screen.getByText('Copied!')).toBeInTheDocument();
     });
 
-    it('calls onClose when Done is clicked', async () => {
+    it('calls onClose from the header button', async () => {
       const user = userEvent.setup();
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
 
@@ -1004,8 +1146,7 @@ describe('SharePanel', () => {
         />
       );
 
-      const doneBtn = screen.getByRole('button', { name: 'Done' });
-      await user.click(doneBtn);
+      await user.click(screen.getByRole('button', { name: 'Close' }));
 
       expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
@@ -1052,13 +1193,12 @@ describe('SharePanel', () => {
       // Flush the pending 404 rejection so the roster-hidden state has
       // rendered before asserting absence.
       await act(async () => {});
-      expect(screen.queryByText('People with access')).not.toBeInTheDocument();
       expect(screen.queryByText('Not found')).not.toBeInTheDocument();
     });
   });
 
   describe('Hierarchical access and provenance (Notion-style)', () => {
-    it('displays inherited access badge and origin document for collaborators with inherited access', async () => {
+    it('shows a single inherited source as a flat row with source detail', async () => {
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([
         {
           id: 'collab-owner',
@@ -1112,27 +1252,74 @@ describe('SharePanel', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Bob Inherited')).toBeInTheDocument();
+        expect(screen.getByText('Charlie Direct')).toBeInTheDocument();
       });
 
-      const viaBadge = screen.getByText('via Engineering Wiki');
-      expect(viaBadge).toBeInTheDocument();
-      expect(viaBadge).toHaveAttribute('title', 'Inherited via Engineering Wiki');
-      expect(viaBadge.className).toContain('truncate');
-
-      const nameEl = screen.getByText('Bob Inherited');
-      expect(viaBadge.parentElement).toBe(nameEl.parentElement);
-
-      const emailEl = screen.getByText('bob@example.com');
-      expect(emailEl.parentElement).not.toBe(nameEl.parentElement);
+      const bobRow = screen.getByText('Bob Inherited').closest('li');
+      expect(bobRow).toContainElement(screen.getByText('bob@example.com'));
+      expect(within(bobRow!).getByText('From “Engineering Wiki”')).toBeInTheDocument();
+      expect(screen.queryByText(/Document · 1 person/)).not.toBeInTheDocument();
+      const charlieRow = screen.getByText('Charlie Direct').closest('li');
+      expect(charlieRow).toContainElement(screen.getByText('charlie@example.com'));
 
       expect(screen.getByRole('button', { name: /Can edit/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Can view/i })).toBeInTheDocument();
       expect(screen.queryByLabelText('Remove collaborator')).not.toBeInTheDocument();
     });
 
-    it('does not display inheritance banner container and navigates to ancestor when clicking via badge', async () => {
+    it('navigates to ancestor document when clicking override badge', async () => {
+      const user = userEvent.setup();
       const mockNavigate = jest.fn();
+
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([
+        {
+          id: 'collab-owner',
+          userId: 'user-owner',
+          email: 'owner@example.com',
+          displayName: 'Owner',
+          accessLevel: 'OWNER',
+          owner: true,
+        },
+        {
+          id: 'collab-override',
+          userId: 'user-bob',
+          email: 'bob@example.com',
+          displayName: 'Bob Overridden',
+          accessLevel: 'VIEW',
+          owner: false,
+          inherited: false,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Parent Wiki',
+          inheritedAccessLevel: 'EDIT',
+        },
+      ]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'RESTRICTED',
+        linkAccessLevel: 'VIEW',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+          onNavigate={mockNavigate}
+        />
+      );
+
+      const overrideBadge = await screen.findByRole('button', {
+        name: 'Overrides “Parent Wiki”',
+      });
+      expect(overrideBadge).toBeInTheDocument();
+      await user.click(overrideBadge);
+
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('doc-parent');
+    });
+
+    it('collapses and expands a source group', async () => {
       const user = userEvent.setup();
 
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([
@@ -1142,6 +1329,19 @@ describe('SharePanel', () => {
           email: 'bob@example.com',
           displayName: 'Bob Inherited',
           accessLevel: 'EDIT',
+          owner: false,
+          inherited: true,
+          inheritedFromId: 'doc-parent',
+          inheritedFromTitle: 'Product Docs',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'collab-inherited-2',
+          userId: 'user-inherited-2',
+          email: 'carol@example.com',
+          displayName: 'Carol Inherited',
+          accessLevel: 'VIEW',
           owner: false,
           inherited: true,
           inheritedFromId: 'doc-parent',
@@ -1162,12 +1362,14 @@ describe('SharePanel', () => {
           onClose={mockOnClose}
           anchorRef={anchorRef}
           canManageSharing={true}
-          onNavigate={mockNavigate}
         />
       );
 
-      const viaBtn = await screen.findByRole('button', { name: 'via Product Docs' });
-      expect(viaBtn).toBeInTheDocument();
+      const originGroup = await screen.findByRole('button', {
+        name: /From “Product Docs”/,
+      });
+      expect(originGroup).toBeInTheDocument();
+      expect(originGroup).toHaveTextContent('Document · 2 people');
 
       // Absence checks only mean something after the roster has loaded.
       expect(screen.queryByText(/Permissions inherited from/i)).not.toBeInTheDocument();
@@ -1175,10 +1377,12 @@ describe('SharePanel', () => {
         screen.queryByText(/Collaborators with access to ancestor pages inherit access/i)
       ).not.toBeInTheDocument();
 
-      await user.click(viaBtn);
+      expect(screen.queryByText('Bob Inherited')).not.toBeInTheDocument();
+      await user.click(originGroup);
+      expect(screen.getByText('Bob Inherited')).toBeInTheDocument();
 
-      expect(mockOnClose).toHaveBeenCalledTimes(1);
-      expect(mockNavigate).toHaveBeenCalledWith('doc-parent');
+      await user.click(originGroup);
+      expect(screen.queryByText('Bob Inherited')).not.toBeInTheDocument();
     });
 
     it('allows overriding an inherited collaborator to a direct access level', async () => {
@@ -1223,6 +1427,9 @@ describe('SharePanel', () => {
         />
       );
 
+      const groupButton = await screen.findByRole('button', { name: /From “Parent Wiki”/ });
+      await user.click(groupButton);
+
       await screen.findByText('Bob Inherited');
       const bobDropdown = screen.getByRole('button', { name: /Can edit/i });
       await user.click(bobDropdown);
@@ -1238,11 +1445,12 @@ describe('SharePanel', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Overrides Parent Wiki')).toBeInTheDocument();
+        expect(screen.getByText('Overrides “Parent Wiki”')).toBeInTheDocument();
       });
+      expect(screen.queryByText('From “Parent Wiki”')).not.toBeInTheDocument();
     });
 
-    it('renders Overrides badge and allows restoring parent inheritance via inherit entry', async () => {
+    it('marks an override and moves the row back to its source on inherit', async () => {
       const user = userEvent.setup();
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([
         {
@@ -1285,7 +1493,7 @@ describe('SharePanel', () => {
       );
 
       await screen.findByText('Bob Overridden');
-      expect(screen.getByText('Overrides Design System')).toBeInTheDocument();
+      expect(screen.getByText('Overrides “Design System”')).toBeInTheDocument();
 
       const bobDropdown = screen.getByRole('button', { name: /Can view/i });
       await user.click(bobDropdown);
@@ -1304,11 +1512,17 @@ describe('SharePanel', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('via Design System')).toBeInTheDocument();
+        expect(screen.getByText('From “Design System”')).toBeInTheDocument();
       });
+      expect(screen.queryByText('Overrides “Design System”')).not.toBeInTheDocument();
+
+      const groupButton = screen.getByRole('button', { name: /From “Design System”/ });
+      await user.click(groupButton);
+      expect(screen.getByText('Bob Overridden')).toBeInTheDocument();
     });
 
-    it('excludes NO_ACCESS collaborator from People with access count and displays public link warning', async () => {
+    it('keeps blocked people out of the flat list and in a collapsed group', async () => {
+      const user = userEvent.setup();
       (documentService.listCollaborators as jest.Mock).mockResolvedValue([
         {
           id: 'collab-owner',
@@ -1354,10 +1568,10 @@ describe('SharePanel', () => {
         />
       );
 
-      await screen.findByText('Bob Blocked');
+      await screen.findByText('Alice Active');
 
-      // People with access count must be (2) since Bob Blocked has NO_ACCESS
-      expect(screen.getByText('(2)')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /Blocked/ }));
+      await screen.findByText('Bob Blocked');
 
       // Warning note rendered for NO_ACCESS when public link is active
       expect(
@@ -1411,10 +1625,11 @@ describe('SharePanel', () => {
         />
       );
 
+      await user.click(await screen.findByRole('button', { name: /Blocked/ }));
       await screen.findByText('Bob Blocked');
 
-      // The via badge replaces the description when provenance must be shown.
-      const viaButton = await screen.findByRole('button', { name: 'via Parent Wiki' });
+      // The link provenance control replaces the description when needed.
+      const viaButton = await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       expect(
         screen.queryByText('Anyone on the internet with the link can comment')
       ).not.toBeInTheDocument();
@@ -1454,7 +1669,7 @@ describe('SharePanel', () => {
         />
       );
 
-      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       // The badge replaces the helper sentence, so the description stays hidden.
       expect(
         screen.queryByText('Anyone on the internet with the link can edit')
@@ -1528,7 +1743,7 @@ describe('SharePanel', () => {
         />
       );
 
-      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       expect(
         screen.queryByText('Anyone on the internet with the link can view')
       ).not.toBeInTheDocument();
@@ -1597,7 +1812,7 @@ describe('SharePanel', () => {
         { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
         'test-token'
       );
-      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       expect(
         screen.queryByText('Anyone on the internet with the link can edit')
       ).not.toBeInTheDocument();
@@ -1626,7 +1841,7 @@ describe('SharePanel', () => {
         />
       );
 
-      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       const modeDropdown = screen.getByRole('button', { name: 'Anyone with the link' });
       await user.click(modeDropdown);
 
@@ -1838,7 +2053,7 @@ describe('SharePanel', () => {
         />
       );
 
-      await screen.findByRole('button', { name: 'via Parent Wiki' });
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
       expect(
         screen.queryByText('Anyone on the internet with the link can view')
       ).not.toBeInTheDocument();
@@ -1848,6 +2063,82 @@ describe('SharePanel', () => {
       expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
         'doc-child',
         { generalAccessMode: 'RESTRICTED', linkInheritBlocked: true },
+        'test-token'
+      );
+    });
+
+    it('shows expired public link message and revives link on access level change', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: false,
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-1"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByText('Link expired — update link access or re-enable to revive');
+
+      const levelDropdown = screen.getByRole('button', { name: 'Can view' });
+      await user.click(levelDropdown);
+      await user.click(screen.getByRole('option', { name: 'Can edit' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-1',
+        {
+          generalAccessMode: 'ANYONE_WITH_LINK',
+          linkAccessLevel: 'EDIT',
+          clearLinkExpiresAt: true,
+        },
+        'test-token'
+      );
+    });
+
+    it('clears expired own timestamp when overriding an inherited public link', async () => {
+      const user = userEvent.setup();
+      (documentService.listCollaborators as jest.Mock).mockResolvedValue([]);
+      (documentService.getSharingSettings as jest.Mock).mockResolvedValue({
+        generalAccessMode: 'ANYONE_WITH_LINK',
+        linkAccessLevel: 'VIEW',
+        hasActiveLink: false,
+        inherited: true,
+        inheritedFromId: 'doc-parent',
+        inheritedFromTitle: 'Parent Wiki',
+        linkExpiresAt: '2020-01-01T00:00:00Z',
+      });
+
+      render(
+        <SharePanel
+          documentId="doc-child"
+          isOpen={true}
+          onClose={mockOnClose}
+          anchorRef={anchorRef}
+          canManageSharing={true}
+        />
+      );
+
+      await screen.findByRole('button', { name: 'From “Parent Wiki”' });
+      const levelDropdown = screen.getByRole('button', { name: 'Can view' });
+      await user.click(levelDropdown);
+      await user.click(screen.getByRole('option', { name: 'Can edit' }));
+
+      expect(documentService.updateSharingSettings).toHaveBeenCalledWith(
+        'doc-child',
+        {
+          generalAccessMode: 'ANYONE_WITH_LINK',
+          linkAccessLevel: 'EDIT',
+          clearLinkExpiresAt: true,
+        },
         'test-token'
       );
     });

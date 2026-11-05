@@ -542,8 +542,8 @@ export function SpaceSettingsModal({
                 </div>
                 <p className="border-t border-border py-3.5 text-[12.5px] leading-relaxed text-muted-foreground">
                   {current.accessMode === 'PUBLIC'
-                    ? `Every workspace member can ${everyoneCan} the documents in this space. People listed in Members keep their level.`
-                    : 'Only the people listed in Members can open the documents in this space.'}
+                    ? `Everyone in this workspace can ${everyoneCan} the documents in this space. An individually assigned access level overrides this default only when it grants higher access.`
+                    : 'Only added members can open the documents in this space.'}
                 </p>
               </SettingsSection>
 

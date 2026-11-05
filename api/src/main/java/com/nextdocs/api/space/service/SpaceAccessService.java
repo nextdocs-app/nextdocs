@@ -131,6 +131,16 @@ public class SpaceAccessService {
         throw new ApiException(ErrorCode.FORBIDDEN);
     }
 
+    @Transactional(readOnly = true)
+    public boolean canViewRoster(UUID userId, UUID spaceId) {
+        try {
+            SpaceContext context = requireRead(userId, spaceId);
+            return context.workspaceAdmin() || memberRepository.existsBySpace_IdAndUser_Id(spaceId, userId);
+        } catch (ApiException ex) {
+            return false;
+        }
+    }
+
     /** Content write. Workspace admins are not exempt: adding content is not administration. */
     @Transactional(readOnly = true)
     public SpaceContext requireEdit(UUID userId, UUID spaceId) {
@@ -175,13 +185,24 @@ public class SpaceAccessService {
         return context;
     }
 
-    /** The caller's content level for a loaded space, or null when none. */
+    /**
+     * The caller's content level for a loaded space, or null when none. When both
+     * explicit membership and public space default apply, the highest level wins.
+     */
     @Transactional(readOnly = true)
     public DocumentAccessLevel resolveLevel(UUID userId, Space space) {
-        return memberRepository
+        DocumentAccessLevel everyoneLevel =
+                space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null;
+        DocumentAccessLevel memberLevel = memberRepository
                 .findBySpace_IdAndUser_Id(space.getId(), userId)
                 .map(SpaceMember::getAccessLevel)
-                .orElseGet(
-                        () -> space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null);
+                .orElse(null);
+        if (memberLevel == null) {
+            return everyoneLevel;
+        }
+        if (everyoneLevel == null) {
+            return memberLevel;
+        }
+        return DocumentAccessLevel.broadest(memberLevel, everyoneLevel);
     }
 }

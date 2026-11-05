@@ -28,17 +28,36 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query(
             value = "SELECT d FROM Document d "
                     + "LEFT JOIN FETCH d.parent "
-                    + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                    + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS "
+                    + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
+                    + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
+                    + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+                    + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
+                    + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
+                    + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
+                    + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+                    + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
+                    + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId))) "
                     + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC",
             countQuery =
                     "SELECT count(d) FROM Document d "
-                            + "JOIN DocumentCollaborator c ON c.document.id = d.id "
-                            + "WHERE c.user.id = :userId AND d.deletedAt IS NULL AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS")
+                            + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
+                            + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
+                            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+                            + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
+                            + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
+                            + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
+                            + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+                            + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
+                            + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId)))")
     Page<Document> findSharedWithUserId(@Param("userId") UUID userId, Pageable pageable);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.
     Page<Document> findAllByParent_IdAndDeletedAtIsNull(UUID parentId, Pageable pageable);
+
+    @Query("SELECT d.id FROM Document d WHERE d.parent.id = :parentId AND d.deletedAt IS NULL")
+    List<UUID> findChildIdsByParent_IdAndDeletedAtIsNull(@Param("parentId") UUID parentId);
+
+    Page<Document> findAllByIdInAndParent_IdAndDeletedAtIsNull(Collection<UUID> ids, UUID parentId, Pageable pageable);
 
     // All direct children for a collection of parents, including trashed
     List<Document> findAllByParent_IdIn(Collection<UUID> parentIds);
@@ -50,30 +69,42 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d.id FROM Document d WHERE d.parent.id IN :parentIds")
     List<UUID> findIdsByParent_IdIn(@Param("parentIds") Collection<UUID> parentIds);
 
-    // Private root documents owned by userId without collaborators with personal navigation order.
+    // Private root documents owned by userId without positive page grants or workspace sharing.
     // Space pages are excluded: a page filed into a space is listed under that space, not in
     // the Private section, and the predicate is what keeps existing pages where they are
     // (space_id stays null unless a page was explicitly created in or attached to a space).
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
-            + "AND NOT EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
+            + "AND d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.RESTRICTED "
+            + "AND NOT EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
-    // All owned root documents (private + owner-shared) owned by userId with personal navigation order
+    // All owned root documents (private + owner-shared) with personal navigation order
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findAllRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
-    // Shared root documents (shared with userId OR owned by userId with collaborators)
+    // Shared roots visible through direct identity grants, or owned roots shared by the caller.
+    // Space content has its own listing; a nested shared page is surfaced by the flat query.
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.deletedAt IS NULL AND d.space IS NULL "
-            + "AND (EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.user.id = :userId AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS) "
-            + "     OR (d.user.id = :userId AND d.parent IS NULL AND EXISTS (SELECT 1 FROM DocumentCollaborator c WHERE c.document.id = d.id AND c.accessLevel <> com.nextdocs.api.document.entity.DocumentAccessLevel.NO_ACCESS))) "
+            + "WHERE d.deletedAt IS NULL AND d.space IS NULL AND d.parent IS NULL "
+            + "AND ((d.user.id <> :userId AND ("
+            + "         EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
+            + "             AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "         OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
+            + "             WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
+            + "             AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
+            + "             AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "         OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
+            + "             AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId)))) "
+            + "     OR (d.user.id = :userId AND d.parent IS NULL AND ("
+            + "         EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "         OR d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS))) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
@@ -168,18 +199,30 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Object[]> countNonTrashedChildrenByParentIds(@Param("parentIds") Collection<UUID> parentIds);
 
     // Effective access level per document, for batch tree listing
-    @Query(
-            value = "SELECT u.id::uuid AS document_id, resolve_effective_access(:userId, u.id::uuid) AS access_level "
-                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
-            nativeQuery = true)
+    String EFFECTIVE_ACCESS_BATCH_SQL =
+            "SELECT u.id::uuid AS document_id, resolve_effective_access(:userId, u.id::uuid) AS access_level "
+                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)";
+
+    @Query(value = EFFECTIVE_ACCESS_BATCH_SQL, nativeQuery = true)
     List<Object[]> resolveEffectiveAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
 
-    // One document's effective level for several users, for the sharing roster.
+    // Identity-only batch for shared-section reconciliation, which must not treat
+    // public-link access as a personal shared-document membership.
+    String IDENTITY_ACCESS_BATCH_SQL = "SELECT u.id::uuid AS document_id, "
+            + "resolve_identity_access(:userId, u.id::uuid, 'ACTIVE') AS access_level "
+            + "FROM unnest(string_to_array(:ids, ',')) AS u(id)";
+
+    @Query(value = IDENTITY_ACCESS_BATCH_SQL, nativeQuery = true)
+    List<Object[]> resolveIdentityAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
+
+    // One document's identity level for several users, for the sharing roster.
+    // Public link access is an independent channel that must not inflate individual collaborator rows.
     @Query(
-            value = "SELECT u.id::uuid AS user_id, resolve_effective_access(u.id::uuid, :documentId) AS access_level "
-                    + "FROM unnest(string_to_array(:userIds, ',')) AS u(id)",
+            value =
+                    "SELECT u.id::uuid AS user_id, resolve_identity_access(u.id::uuid, :documentId, 'ACTIVE') AS access_level "
+                            + "FROM unnest(string_to_array(:userIds, ',')) AS u(id)",
             nativeQuery = true)
-    List<Object[]> resolveEffectiveAccessForUsers(
+    List<Object[]> resolveIdentityAccessForUsers(
             @Param("documentId") UUID documentId, @Param("userIds") String userIds);
 
     /**
@@ -199,6 +242,10 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     @Query(value = "SELECT resolve_effective_access(:userId, :documentId)", nativeQuery = true)
     String resolveEffectiveAccess(@Param("userId") UUID userId, @Param("documentId") UUID documentId);
+
+    @Query(value = "SELECT resolve_identity_access(:userId, :documentId, :scope)", nativeQuery = true)
+    String resolveIdentityAccess(
+            @Param("userId") UUID userId, @Param("documentId") UUID documentId, @Param("scope") String scope);
 
     @Query(value = "SELECT resolve_public_access(:documentId)", nativeQuery = true)
     String resolvePublicAccess(@Param("documentId") UUID documentId);

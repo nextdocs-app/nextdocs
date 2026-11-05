@@ -3,6 +3,7 @@ package com.nextdocs.api.document.entity;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.workspace.entity.Workspace;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -89,6 +90,29 @@ public class Document {
     @Builder.Default
     private boolean linkInheritBlocked = false;
 
+    /** When the own share link stops being a grant; null means no expiry. */
+    @Column(name = "link_expires_at")
+    private OffsetDateTime linkExpiresAt;
+
+    /**
+     * General access for signed-in workspace members. This is deliberately a separate
+     * channel from the anonymous link: workspace membership must not be inferred from a
+     * link grant, and a link block must not silently change signed-in access.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "workspace_access_mode", nullable = false, length = 32)
+    @Builder.Default
+    private DocumentWorkspaceAccessMode workspaceAccessMode = DocumentWorkspaceAccessMode.RESTRICTED;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "workspace_access_level", nullable = false, length = 16)
+    @Builder.Default
+    private DocumentAccessLevel workspaceAccessLevel = DocumentAccessLevel.VIEW;
+
+    @Column(name = "workspace_inherit_blocked", nullable = false)
+    @Builder.Default
+    private boolean workspaceInheritBlocked = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_id")
     private Document parent;
@@ -101,6 +125,14 @@ public class Document {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "space_id")
     private Space space;
+
+    /**
+     * The workspace that owns this document. Nullable in H2 fixtures that predate
+     * V31; production V31 backfills it and makes the column non-null.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workspace_id")
+    private Workspace workspace;
 
     @Column(name = "sibling_order_key")
     private String siblingOrderKey;

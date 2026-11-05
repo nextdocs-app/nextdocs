@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { Badge } from '@/components/Badge';
 import { PageIcon } from '@/components/page/PageIcon';
 import { useAnchoredPanel } from '@/hooks/useAnchoredPanel.hook';
 import { ChevronDown, Layers } from '@/icons';
@@ -14,13 +15,6 @@ const ACCESS_LEVEL_LABELS: Record<SpaceAccessLevel, string> = {
   COMMENT: 'Can comment',
   VIEW: 'Can view',
 };
-
-/** Ownership is the one level worth calling out; the rest share the muted chip. */
-function accessBadgeClassName(level: SpaceAccessLevel): string {
-  return level === 'OWNER'
-    ? 'bg-primary/10 text-primary border-primary/20'
-    : 'bg-muted text-muted-foreground border-border';
-}
 
 export function MemberSpacesBadge({
   spaces,
@@ -97,11 +91,9 @@ export function MemberSpacesBadge({
                   </span>
                   <span className="truncate font-medium">{space.name}</span>
                 </div>
-                <span
-                  className={`inline-flex flex-shrink-0 items-center rounded border px-1.5 py-0.5 text-[10.5px] font-medium leading-none ${accessBadgeClassName(space.accessLevel)}`}
-                >
+                <Badge variant={space.accessLevel === 'OWNER' ? 'primary' : 'muted'}>
                   {ACCESS_LEVEL_LABELS[space.accessLevel]}
-                </span>
+                </Badge>
               </div>
             ))}
           </div>

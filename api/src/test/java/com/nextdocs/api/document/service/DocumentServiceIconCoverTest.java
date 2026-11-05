@@ -26,7 +26,7 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCoverType;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
@@ -61,7 +61,7 @@ class DocumentServiceIconCoverTest {
     private UserRepository userRepository;
 
     @Mock
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
@@ -99,7 +99,7 @@ class DocumentServiceIconCoverTest {
                 new PageIconValidator(iconService, attachmentRepository, attachmentStorage));
         documentService = new DocumentService(
                 documentRepository,
-                collaboratorRepository,
+                accessGrantRepository,
                 userDocumentOrderRepository,
                 userRepository,
                 documentProperties,

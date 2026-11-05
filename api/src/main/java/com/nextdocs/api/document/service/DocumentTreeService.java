@@ -9,16 +9,18 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponses;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.workspace.entity.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -42,7 +44,7 @@ public class DocumentTreeService {
     private static final int REINDEX_GAP = 8;
 
     private final DocumentRepository documentRepository;
-    private final DocumentCollaboratorRepository collaboratorRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
@@ -152,12 +154,22 @@ public class DocumentTreeService {
                     adoptHostTreeOwnership(doc, newParent.getUser());
                 }
 
+                // A page that leaves its space must not carry page audience rules into a
+                // different container: those rules replaced this space's baseline.
+                Space previousSpace = permissionService.resolveSpace(doc);
+                Space destinationSpace = permissionService.resolveSpace(newParent);
+                if (previousSpace != null
+                        && (destinationSpace == null || !previousSpace.getId().equals(destinationSpace.getId()))) {
+                    permissionService.removeSpaceAudienceRules(documentId);
+                }
+
                 doc.setParent(newParent);
                 doc.setSiblingOrderKey(newSiblingOrderKey);
                 // A space anchors at a root page only (V24's chk_documents_space_root), so a
                 // page moved under another page drops its own anchor. If the destination is in
                 // the same space, that space still anchors the page through the new ancestor.
                 doc.setSpace(null);
+                adoptHostTreeWorkspace(doc, newParent.getWorkspace());
                 saved = documentRepository.saveAndFlush(doc);
 
                 if (!joinsSpace) {
@@ -183,14 +195,14 @@ public class DocumentTreeService {
                         }
                     }
                     for (UUID ownerId : ownerIds) {
-                        collaboratorRepository.deleteNoAccessInSubtreeForUser(documentId, ownerId);
+                        accessGrantRepository.deleteDenyInSubtreeForUser(documentId, ownerId);
                     }
-                    collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+                    accessGrantRepository.pruneOrphanedBreakpoints(documentId);
                 }
             }
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
-            boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
+            boolean hasCollaborators = accessGrantRepository.existsPositiveGrantByDocumentId(documentId);
             DocumentAccessLevel access = permissionService.resolveAccess(userId, documentId);
             return DocumentResponses.of(
                     saved, newParent.getId(), newSiblingOrderKey, hasChildren, hasCollaborators, access, null, null);
@@ -295,10 +307,11 @@ public class DocumentTreeService {
                         // the detach owns it, and descendants follow so access keeps
                         // flowing from the new root instead of reverting to authors.
                         adoptHostTreeOwnership(doc, user);
+                        permissionService.removeSpaceAudienceRules(documentId);
                         doc.setParent(null);
                         doc.setSiblingOrderKey(null);
                         documentRepository.saveAndFlush(doc);
-                        collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+                        accessGrantRepository.pruneOrphanedBreakpoints(documentId);
                     }
                     // Otherwise this is only a Shared-section reorder: keep the real parent.
                 } else if (doc.getUser().getId().equals(userId)) {
@@ -308,7 +321,7 @@ public class DocumentTreeService {
                     documentRepository.saveAndFlush(doc);
                     // A root document has no ancestors, so any NO_ACCESS breakpoint in this
                     // subtree just lost the positive ancestor grant that justified it.
-                    collaboratorRepository.pruneOrphanedBreakpoints(documentId);
+                    accessGrantRepository.pruneOrphanedBreakpoints(documentId);
                 }
                 // Collaborator: a nested shared document that appears at the root of
                 // the Shared section is only being reordered in the caller's personal
@@ -322,12 +335,12 @@ public class DocumentTreeService {
             udo.setOrderKey(newUserOrderKey);
             userDocumentOrderRepository.saveAndFlush(udo);
 
-            for (DocumentCollaborator collaborator : collaboratorRepository.findAllByDocument_Id(documentId)) {
-                ensureCollaboratorRootOrder(doc, collaborator);
+            for (AccessGrant grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId)) {
+                ensureCollaboratorRootOrder(doc, grant);
             }
 
             boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
-            boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(documentId);
+            boolean hasCollaborators = accessGrantRepository.existsPositiveGrantByDocumentId(documentId);
             Space spaceAfter = permissionService.resolveSpace(doc);
             DocumentAccessLevel access =
                     (spaceAfter == null && doc.getUser().getId().equals(userId))
@@ -346,9 +359,8 @@ public class DocumentTreeService {
      * reorder it among its current siblings, but only an OWNER of the document may
      * graft it into another document.
      *
-     * <p>A space is a shared root document, not a separate permission axis: the
-     * closest grant wins, so a page-level OWNER overrides a lower space membership
-     * and a page-level EDIT overrides a higher one.
+     * <p>The resolver applies page overrides to inherited space access, including
+     * inherited OWNER membership.
      */
     private void validateReparentAuthorization(UUID userId, Document doc) {
         if (permissionService.resolveAccess(userId, doc.getId()) != DocumentAccessLevel.OWNER) {
@@ -377,6 +389,33 @@ public class DocumentTreeService {
             }
             for (Document child : children) {
                 child.setUser(hostOwner);
+            }
+            documentRepository.saveAll(children);
+            frontier = children.stream().map(Document::getId).toList();
+            depth++;
+        }
+    }
+
+    private void adoptHostTreeWorkspace(Document doc, Workspace targetWorkspace) {
+        if (targetWorkspace == null
+                || (doc.getWorkspace() != null
+                        && doc.getWorkspace().getId() != null
+                        && doc.getWorkspace().getId().equals(targetWorkspace.getId()))) {
+            return;
+        }
+        doc.setWorkspace(targetWorkspace);
+        List<UUID> frontier = List.of(doc.getId());
+        int depth = 0;
+        while (!frontier.isEmpty()) {
+            if (depth >= MAX_TREE_DEPTH) {
+                throw new ApiException(ErrorCode.VALIDATION_FAILED, "Document tree is too deep or contains a cycle.");
+            }
+            List<Document> children = documentRepository.findAllByParent_IdIn(frontier);
+            if (children.isEmpty()) {
+                break;
+            }
+            for (Document child : children) {
+                child.setWorkspace(targetWorkspace);
             }
             documentRepository.saveAll(children);
             frontier = children.stream().map(Document::getId).toList();
@@ -446,7 +485,7 @@ public class DocumentTreeService {
         Document saved = documentRepository.saveAndFlush(doc);
 
         boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(doc.getId());
-        boolean hasCollaborators = collaboratorRepository.existsByDocument_Id(doc.getId());
+        boolean hasCollaborators = accessGrantRepository.existsPositiveGrantByDocumentId(doc.getId());
         DocumentAccessLevel access = permissionService.resolveAccess(userId, doc.getId());
         return DocumentResponses.of(saved, null, newSiblingOrderKey, hasChildren, hasCollaborators, access, null, null);
     }
@@ -487,11 +526,11 @@ public class DocumentTreeService {
         return candidate;
     }
 
-    private void ensureCollaboratorRootOrder(Document doc, DocumentCollaborator collaborator) {
-        if (collaborator.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+    private void ensureCollaboratorRootOrder(Document doc, AccessGrant grant) {
+        if (grant.getEffect() != AccessGrantEffect.ALLOW) {
             return;
         }
-        UUID collaboratorId = collaborator.getUser().getId();
+        UUID collaboratorId = grant.getUser().getId();
         if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, doc.getId())) {
             return;
         }
@@ -500,7 +539,7 @@ public class DocumentTreeService {
                 .filter(FractionalIndex::isValidOrderKey)
                 .orElse(null);
         UserDocumentOrder cudo = UserDocumentOrder.builder()
-                .user(collaborator.getUser())
+                .user(grant.getUser())
                 .document(doc)
                 .orderKey(nextFreeOrderKey(collaboratorId, minKey))
                 .build();

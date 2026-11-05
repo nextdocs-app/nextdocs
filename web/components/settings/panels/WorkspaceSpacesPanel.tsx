@@ -11,6 +11,7 @@ import {
   WorkspaceIconTile,
   workspaceIconTileStyle,
 } from '@/components/workspace/WorkspaceIconTile';
+import { Badge } from '@/components/Badge';
 import { CreateSpaceModal } from '../workspace/CreateSpaceModal';
 import { SpaceSettingsModal } from '../workspace/SpaceSettingsModal';
 import {
@@ -38,9 +39,6 @@ function tabClassName(isActive: boolean): string {
       : 'text-muted-foreground/70 font-medium hover:text-foreground'
   }`;
 }
-
-const ACCESS_CHIP_CLASS_NAME =
-  'inline-flex max-w-[12rem] flex-shrink-0 items-center truncate rounded border border-border bg-muted px-1.5 py-0.5 text-[10.5px] font-medium leading-none text-muted-foreground';
 
 function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -89,9 +87,9 @@ function SpaceRow({
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="truncate text-[13.5px] font-medium leading-snug">{space.name}</span>
-            <span className={ACCESS_CHIP_CLASS_NAME}>
+            <Badge className="max-w-[12rem] truncate">
               {SPACE_ACCESS_MODE_LABELS[space.accessMode]}
-            </span>
+            </Badge>
           </span>
           <span className="mt-0.5 block truncate text-[12px] leading-snug text-muted-foreground/70">
             {meta}

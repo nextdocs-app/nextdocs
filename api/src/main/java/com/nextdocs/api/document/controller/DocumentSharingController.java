@@ -7,10 +7,13 @@ import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
+import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.document.service.DocumentSharingSettingsService;
+import com.nextdocs.api.document.service.PermissionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,6 +50,8 @@ public class DocumentSharingController {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final DocumentSharingService sharingService;
+    private final DocumentSharingSettingsService settingsService;
+    private final PermissionService permissionService;
 
     @Operation(
             summary = "List document collaborators",
@@ -188,7 +193,7 @@ public class DocumentSharingController {
     @GetMapping("/{id}/sharing")
     public ResponseEntity<ApiResponse<SharingSettingsResponse>> getSharingSettings(
             @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
-        return ResponseEntity.ok(ApiResponse.ok(sharingService.getSharingSettings(principal.getId(), id)));
+        return ResponseEntity.ok(ApiResponse.ok(settingsService.getSharingSettings(principal.getId(), id)));
     }
 
     @Operation(
@@ -213,7 +218,29 @@ public class DocumentSharingController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @Valid @RequestBody SharingSettingsUpdateRequest request) {
-        return ResponseEntity.ok(ApiResponse.ok(sharingService.updateSharingSettings(principal.getId(), id, request)));
+        return ResponseEntity.ok(ApiResponse.ok(settingsService.updateSharingSettings(principal.getId(), id, request)));
+    }
+
+    @Operation(
+            summary = "Explain access",
+            description = "Returns the raw identity and link levels, the winning channel, and whether "
+                    + "the page is denied or only its identity channel is denied. Sharing administrators only.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Access explanation returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found")
+            })
+    @GetMapping("/{id}/access/explain")
+    public ResponseEntity<ApiResponse<AccessExplainResponse>> explainAccess(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        permissionService.requireSharingAdminAccess(principal.getId(), id);
+        return ResponseEntity.ok(ApiResponse.ok(permissionService.explainAccess(principal.getId(), id)));
     }
 
     @Operation(

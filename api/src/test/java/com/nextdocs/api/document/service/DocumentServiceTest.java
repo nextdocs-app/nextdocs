@@ -27,12 +27,13 @@ import com.nextdocs.api.document.dto.request.DocumentCreateRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
@@ -71,7 +72,7 @@ class DocumentServiceTest {
     private UserRepository userRepository;
 
     @Mock
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
@@ -104,7 +105,7 @@ class DocumentServiceTest {
         documentProperties.setTrashRetentionDays(30);
         documentService = new DocumentService(
                 documentRepository,
-                collaboratorRepository,
+                accessGrantRepository,
                 userDocumentOrderRepository,
                 userRepository,
                 documentProperties,
@@ -1145,11 +1146,11 @@ class DocumentServiceTest {
 
         documentService.delete(ownerId, parentDocId, true);
 
-        verify(collaboratorRepository).deleteByDocument_IdIn(List.of(childDocId));
+        verify(accessGrantRepository).deleteGrantsByDocumentIdIn(List.of(childDocId));
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(childDocId));
         verify(documentRepository).deleteByIdIn(List.of(childDocId));
 
-        verify(collaboratorRepository).deleteByDocument_IdIn(List.of(parentDocId));
+        verify(accessGrantRepository).deleteGrantsByDocumentIdIn(List.of(parentDocId));
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(parentDocId));
         verify(documentRepository).deleteByIdIn(List.of(parentDocId));
     }
@@ -1319,7 +1320,8 @@ class DocumentServiceTest {
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, parentDocId))
                 .thenReturn(Optional.of("a0"));
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(parentDocId))
+                .thenReturn(List.of());
         when(documentRepository.saveAndFlush(parentDoc)).thenReturn(parentDoc);
         when(documentRepository.findAllByParent_IdIn(List.of(parentDocId))).thenReturn(List.of(childDoc));
         when(documentRepository.findAllByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
@@ -1380,7 +1382,8 @@ class DocumentServiceTest {
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, documentId))
                 .thenReturn(Optional.empty());
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         DocumentResponse response = documentService.restoreAndPersist(editorId, documentId, false);
@@ -1405,10 +1408,11 @@ class DocumentServiceTest {
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
-        DocumentCollaborator collaborator = DocumentCollaborator.builder()
+        AccessGrant collaborator = AccessGrant.builder()
                 .document(trashed)
                 .user(editor)
                 .accessLevel(DocumentAccessLevel.EDIT)
+                .effect(AccessGrantEffect.ALLOW)
                 .build();
 
         when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
@@ -1416,7 +1420,8 @@ class DocumentServiceTest {
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, documentId))
                 .thenReturn(Optional.of("a0"));
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(collaborator));
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(collaborator));
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(editorId, documentId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(editorId, documentId))
@@ -1505,9 +1510,10 @@ class DocumentServiceTest {
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
-        DocumentCollaborator collaborator = DocumentCollaborator.builder()
+        AccessGrant collaborator = AccessGrant.builder()
                 .document(childDoc)
                 .user(User.builder().id(collaboratorId).build())
+                .effect(AccessGrantEffect.ALLOW)
                 .build();
 
         when(permissionService.requireTrashEditAccess(ownerId, parentDocId)).thenReturn(parentDoc);
@@ -1515,11 +1521,13 @@ class DocumentServiceTest {
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, parentDocId))
                 .thenReturn(Optional.of("a0"));
-        when(collaboratorRepository.findAllByDocument_Id(parentDocId)).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(parentDocId))
+                .thenReturn(List.of());
         when(documentRepository.saveAndFlush(parentDoc)).thenReturn(parentDoc);
         when(documentRepository.findAllByParent_IdIn(List.of(parentDocId))).thenReturn(List.of(childDoc));
         when(documentRepository.findAllByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(collaborator));
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.of(collaborator));
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, childDocId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(collaboratorId, childDocId))
@@ -2372,7 +2380,7 @@ class DocumentServiceTest {
         // A share-link reader holds no roster: reporting that the document has named
         // collaborators would leak the sharing state listPublicChildren keeps at false.
         assertFalse(response.hasCollaborators());
-        verify(collaboratorRepository, never()).existsByDocument_Id(docId);
+        verify(accessGrantRepository, never()).existsPositiveGrantByDocumentId(docId);
     }
 
     @Test
@@ -2401,7 +2409,7 @@ class DocumentServiceTest {
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(collaboratorRepository.existsByDocument_Id(documentId)).thenReturn(true);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(documentId)).thenReturn(true);
 
         DocumentResponse response = documentService.update(
                 requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null));

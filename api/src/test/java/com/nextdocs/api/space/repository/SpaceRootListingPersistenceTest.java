@@ -4,14 +4,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.entity.UserSpaceOrder;
 import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -22,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Guards the crux of the spaces design against the real JPQL: a page filed into a space
@@ -48,6 +55,12 @@ class SpaceRootListingPersistenceTest {
     private SpaceMemberRepository spaceMemberRepository;
 
     @Autowired
+    private WorkspaceMemberRepository workspaceMemberRepository;
+
+    @Autowired
+    private AccessGrantRepository accessGrantRepository;
+
+    @Autowired
     private UserSpaceOrderRepository userSpaceOrderRepository;
 
     private Document page(User owner, Space space, String title) {
@@ -55,6 +68,17 @@ class SpaceRootListingPersistenceTest {
                 .id(UUID.randomUUID())
                 .user(owner)
                 .space(space)
+                .workspace(space == null ? null : space.getWorkspace())
+                .title(title)
+                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
+                .build());
+    }
+
+    private Document workspacePage(User owner, Workspace workspace, String title) {
+        return documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .workspace(workspace)
                 .title(title)
                 .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
@@ -98,6 +122,119 @@ class SpaceRootListingPersistenceTest {
         // The space's own listing runs resolve_effective_access, so it is pinned against
         // PostgreSQL in SpacePermissionMigrationPostgresTest; the count is plain SQL.
         assertThat(documentRepository.countBySpace_Id(space.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void sharedListings_keepSpacePagesAndChildrenOutButReturnDirectShares() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("space-shared-owner-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        User viewer = userRepository.saveAndFlush(User.builder()
+                .email("space-shared-viewer-" + UUID.randomUUID() + "@example.com")
+                .displayName("Viewer")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        workspaceMemberRepository.saveAndFlush(WorkspaceMember.builder()
+                .workspace(workspace)
+                .user(viewer)
+                .role(WorkspaceRole.MEMBER)
+                .build());
+        Space space = spaceRepository.saveAndFlush(Space.builder()
+                .workspace(workspace)
+                .name("Engineering")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build());
+        spaceMemberRepository.saveAndFlush(SpaceMember.builder()
+                .space(space)
+                .user(viewer)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build());
+
+        Document spaceRoot = page(owner, space, "Space Root");
+        Document spaceChild = documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .workspace(workspace)
+                .parent(spaceRoot)
+                .title("Space Child")
+                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
+                .build());
+        Document directShare = page(owner, null, "Direct Share");
+        directShare.setWorkspace(workspace);
+        directShare = documentRepository.saveAndFlush(directShare);
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(directShare)
+                .user(viewer)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build());
+
+        List<UUID> flatSharedIds =
+                documentRepository.findSharedWithUserId(viewer.getId(), PageRequest.of(0, 50)).getContent().stream()
+                        .map(Document::getId)
+                        .toList();
+        List<UUID> sharedRootIds =
+                documentRepository.findSharedRootDocuments(viewer.getId(), PageRequest.of(0, 50)).getContent().stream()
+                        .map(row -> ((Document) row[0]).getId())
+                        .toList();
+
+        assertThat(flatSharedIds).containsExactly(directShare.getId());
+        assertThat(sharedRootIds).containsExactly(directShare.getId());
+        assertThat(flatSharedIds).doesNotContain(spaceRoot.getId(), spaceChild.getId());
+    }
+
+    @Test
+    @Transactional
+    void workspaceMemberOffboarding_removesAllowAndDenyGrantsOnlyFromThatWorkspace() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("offboard-owner-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        User member = userRepository.saveAndFlush(User.builder()
+                .email("offboard-member-" + UUID.randomUUID() + "@example.com")
+                .displayName("Member")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        Workspace otherWorkspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("Other").build());
+        Document allowedPage = workspacePage(owner, workspace, "Allowed");
+        Document deniedPage = workspacePage(owner, workspace, "Denied");
+        Document otherPage = workspacePage(owner, otherWorkspace, "Other workspace");
+
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(allowedPage)
+                .user(member)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build());
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(deniedPage)
+                .user(member)
+                .effect(AccessGrantEffect.DENY)
+                .build());
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(otherWorkspace)
+                .document(otherPage)
+                .user(member)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build());
+
+        assertThat(accessGrantRepository.deleteUserGrantsByWorkspace(workspace.getId(), member.getId()))
+                .isEqualTo(2);
+        assertThat(accessGrantRepository.findByDocument_IdAndUser_Id(allowedPage.getId(), member.getId()))
+                .isEmpty();
+        assertThat(accessGrantRepository.findByDocument_IdAndUser_Id(deniedPage.getId(), member.getId()))
+                .isEmpty();
+        assertThat(accessGrantRepository.findByDocument_IdAndUser_Id(otherPage.getId(), member.getId()))
+                .isPresent();
     }
 
     @Test

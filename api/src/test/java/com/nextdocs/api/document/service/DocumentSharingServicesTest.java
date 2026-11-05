@@ -2,16 +2,22 @@ package com.nextdocs.api.document.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.nextdocs.api.audit.entity.AccessAuditAction;
+import com.nextdocs.api.audit.service.AccessAuditService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
@@ -22,12 +28,15 @@ import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
+import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.space.entity.Space;
@@ -54,13 +63,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
-class DocumentSharingServiceTest {
+class DocumentSharingServicesTest {
 
     @Mock
     private DocumentRepository documentRepository;
 
     @Mock
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
@@ -77,18 +86,47 @@ class DocumentSharingServiceTest {
     @Mock
     private SpaceMemberRepository spaceMemberRepository;
 
+    @Mock
+    private AccessGrantSyncService accessGrantSyncService;
+
+    @Mock
+    private AccessAuditService auditService;
+
     private DocumentSharingService sharingService;
+    private DocumentSharingSettingsService settingsService;
 
     @BeforeEach
     void setUp() {
         sharingService = new DocumentSharingService(
                 documentRepository,
-                collaboratorRepository,
+                accessGrantRepository,
                 userDocumentOrderRepository,
                 userRepository,
                 permissionService,
                 spaceAccessService,
-                spaceMemberRepository);
+                spaceMemberRepository,
+                accessGrantSyncService,
+                auditService);
+        settingsService = new DocumentSharingSettingsService(documentRepository, permissionService, auditService);
+
+        org.mockito.Mockito.lenient()
+                .when(accessGrantSyncService.upsertUserGrant(any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Document document = invocation.getArgument(0);
+                    User user = invocation.getArgument(1);
+                    DocumentAccessLevel level = invocation.getArgument(2);
+                    return AccessGrant.builder()
+                            .id(UUID.randomUUID())
+                            .document(document)
+                            .user(user)
+                            .effect(
+                                    level == DocumentAccessLevel.NO_ACCESS
+                                            ? AccessGrantEffect.DENY
+                                            : AccessGrantEffect.ALLOW)
+                            .accessLevel(level == DocumentAccessLevel.NO_ACCESS ? null : level)
+                            .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                            .build();
+                });
     }
 
     @Test
@@ -213,7 +251,7 @@ class DocumentSharingServiceTest {
         ApiException ex =
                 assertThrows(ApiException.class, () -> sharingService.leaveSharedDocument(userId, documentId));
         assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
-        verify(collaboratorRepository, never()).deleteByDocument_IdAndUser_Id(any(), any());
+        verify(accessGrantRepository, never()).deleteByDocument_IdAndUser_Id(any(), any());
     }
 
     @Test
@@ -228,12 +266,12 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(trashed);
-        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId))
+        when(accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId))
                 .thenReturn(true);
 
         sharingService.removeCollaborator(ownerId, documentId, collaboratorUserId);
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
     }
 
@@ -253,7 +291,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(trashed);
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
+                .thenReturn(List.<DocumentCollaborator>of().stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, documentId);
 
@@ -277,12 +318,84 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(linkOnlyId, documentId))
                 .thenReturn(doc);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, linkOnlyId))
-                .thenReturn(Optional.empty());
-        when(collaboratorRepository.hasPositiveAncestorGrant(linkOnlyId, documentId))
+        when(accessGrantRepository.hasPositiveIdentityGrant(linkOnlyId, documentId))
                 .thenReturn(false);
 
         assertThrows(ApiException.class, () -> sharingService.listCollaborators(linkOnlyId, documentId));
+    }
+
+    @Test
+    void listCollaborators_inheritedGrantAndPageDenyWithLiveLinkKeepsBroadestAccessRoster() {
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(User.builder()
+                        .id(ownerId)
+                        .email("owner@example.com")
+                        .displayName("Owner")
+                        .build())
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(memberId, documentId))
+                .thenReturn(doc);
+        // The SQL regression test covers ancestor ALLOW + page DENY. The gate receives
+        // its positive identity result while the independent live link grants page read.
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
+                .thenReturn(true);
+
+        User memberUser = User.builder()
+                .id(memberId)
+                .email("member@example.com")
+                .displayName("Member")
+                .build();
+        AccessGrant pageDeny = AccessGrant.builder()
+                .user(memberUser)
+                .effect(AccessGrantEffect.DENY)
+                .build();
+
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of(pageDeny));
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+        when(permissionService.resolveAccessForUsers(documentId, List.of(ownerId, memberId), false))
+                .thenReturn(Map.of(ownerId, DocumentAccessLevel.OWNER, memberId, DocumentAccessLevel.VIEW));
+
+        List<CollaboratorResponse> roster = sharingService.listCollaborators(memberId, documentId);
+
+        assertEquals(2, roster.size());
+        assertEquals(ownerId, roster.get(0).userId());
+        assertEquals(memberId, roster.get(1).userId());
+        assertEquals(DocumentAccessLevel.NO_ACCESS, roster.get(1).accessLevel());
+        assertEquals(DocumentAccessLevel.VIEW, roster.get(1).effectiveAccessLevel());
+    }
+
+    @Test
+    void listCollaborators_workspaceAudienceReaderPassesIdentityRosterGate() {
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
+                .workspaceAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(memberId, documentId))
+                .thenReturn(doc);
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
+                .thenReturn(true);
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of());
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+        when(permissionService.resolveAccessForUsers(documentId, List.of(ownerId), false))
+                .thenReturn(Map.of());
+
+        List<CollaboratorResponse> roster = sharingService.listCollaborators(memberId, documentId);
+
+        assertEquals(1, roster.size());
+        assertEquals(ownerId, roster.get(0).userId());
     }
 
     @Test
@@ -315,40 +428,22 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, targetUser.getId()))
-                .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
                 .thenReturn(Optional.of("a5"));
 
-        OffsetDateTime persistedCreatedAt = OffsetDateTime.of(2026, 3, 1, 10, 0, 0, 0, ZoneOffset.UTC);
-        when(collaboratorRepository.save(any(DocumentCollaborator.class))).thenAnswer(invocation -> {
-            DocumentCollaborator input = invocation.getArgument(0);
-            return DocumentCollaborator.builder()
-                    .id(UUID.randomUUID())
-                    .document(input.getDocument())
-                    .user(input.getUser())
-                    .accessLevel(input.getAccessLevel())
-                    .grantedBy(input.getGrantedBy())
-                    .createdAt(persistedCreatedAt)
-                    .updatedAt(persistedCreatedAt)
-                    .build();
-        });
-
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
 
         ArgumentCaptor<DocumentCollaborator> collaboratorCaptor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(collaboratorCaptor.capture());
 
         ArgumentCaptor<UserDocumentOrder> orderCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
         verify(userDocumentOrderRepository).saveAndFlush(orderCaptor.capture());
         assertTrue(orderCaptor.getValue().getOrderKey().compareTo("a5") < 0);
 
         assertEquals(targetUser.getId(), response.userId());
-        assertNull(collaboratorCaptor.getValue().getCreatedAt());
-        assertEquals(persistedCreatedAt, response.addedAt());
+        assertNotNull(response.addedAt());
     }
 
     @Test
@@ -379,14 +474,11 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, targetUser.getId()))
-                .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
                 .thenReturn(Optional.of("a5"));
-        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -408,12 +500,12 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
-        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorId))
+        when(accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorId))
                 .thenReturn(true);
 
         sharingService.removeCollaborator(ownerId, documentId, collaboratorId);
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorId, documentId);
     }
 
@@ -450,14 +542,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, targetUser.getId()))
-                .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
                 .thenReturn(false);
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
                 .thenReturn(Optional.of("a5"));
-        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         sharingService.upsertCollaborator(
                 ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
@@ -480,12 +568,8 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("fullaccess@example.com")).thenReturn(Optional.of(targetUser));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, targetUser.getId()))
-                .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
                 .thenReturn(true);
-        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 ownerId,
@@ -509,20 +593,14 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("newbie@example.com")).thenReturn(Optional.of(targetUser));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, targetUser.getId()))
-                .thenReturn(Optional.empty());
         when(userRepository.findById(actorId)).thenReturn(Optional.of(actor));
         when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
                 .thenReturn(true);
-        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 actorId, documentId, new CollaboratorUpsertRequest("newbie@example.com", DocumentAccessLevel.VIEW));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(actorId, captor.getValue().getGrantedBy().getId());
+        verify(accessGrantSyncService).upsertUserGrant(document, targetUser, DocumentAccessLevel.VIEW, actor);
         assertEquals(targetUser.getId(), response.userId());
         assertFalse(response.owner());
     }
@@ -588,19 +666,13 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("ancestor@example.com")).thenReturn(Optional.of(ancestorOwner));
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwner.getId()))
-                .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwner.getId(), documentId))
                 .thenReturn(Optional.empty());
-        when(collaboratorRepository.save(any(DocumentCollaborator.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         sharingService.upsertCollaborator(
                 actorId, documentId, new CollaboratorUpsertRequest("ancestor@example.com", DocumentAccessLevel.VIEW));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(DocumentAccessLevel.VIEW, captor.getValue().getAccessLevel());
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.VIEW), any());
     }
 
     @Test
@@ -709,7 +781,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(doc);
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(collaborator));
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(collaborator).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, documentId);
 
@@ -763,7 +838,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, documentId))
                 .thenReturn(doc);
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(demotedOwner, blocked));
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(demotedOwner, blocked).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         Map<UUID, DocumentAccessLevel> effective = new HashMap<>();
         effective.put(ownerId, DocumentAccessLevel.OWNER);
         effective.put(demotedOwnerId, DocumentAccessLevel.VIEW);
@@ -797,13 +875,13 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
 
-        SharingSettingsResponse getResponse = sharingService.getSharingSettings(actorId, documentId);
+        SharingSettingsResponse getResponse = settingsService.getSharingSettings(actorId, documentId);
         assertEquals(DocumentGeneralAccessMode.RESTRICTED, getResponse.generalAccessMode());
         assertFalse(getResponse.hasActiveLink());
 
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        SharingSettingsResponse updateResponse = sharingService.updateSharingSettings(
+        SharingSettingsResponse updateResponse = settingsService.updateSharingSettings(
                 actorId,
                 documentId,
                 new SharingSettingsUpdateRequest(
@@ -871,7 +949,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.of(directCollab).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         stubAncestorChain(child, List.of(parent), List.of(parentCollab));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
@@ -927,7 +1008,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         stubAncestorChain(child, List.of(parent), List.of());
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertEquals(DocumentGeneralAccessMode.RESTRICTED, response.generalAccessMode());
         assertEquals(DocumentAccessLevel.VIEW, response.linkAccessLevel());
@@ -965,7 +1046,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         stubAncestorChain(child, List.of(parent), List.of());
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertEquals(DocumentAccessLevel.VIEW, response.linkAccessLevel());
         assertTrue(response.inherited());
@@ -1015,7 +1096,7 @@ class DocumentSharingServiceTest {
         when(documentRepository.findAllWithUserByIdIn(List.of(trashedParentDocId, grandparentDocId)))
                 .thenReturn(List.of(trashedParent, grandparent));
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertFalse(response.inherited());
         assertNull(response.inheritedFromId());
@@ -1050,7 +1131,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         stubAncestorChain(child, List.of(parent), List.of());
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertTrue(response.hasActiveLink());
         assertFalse(response.inherited());
@@ -1144,7 +1225,7 @@ class DocumentSharingServiceTest {
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true);
         stubAncestorChain(child, List.of(parent, grandparent), List.of());
 
-        SharingSettingsResponse response = sharingService.updateSharingSettings(actorId, childDocId, request);
+        SharingSettingsResponse response = settingsService.updateSharingSettings(actorId, childDocId, request);
 
         // Child must normalize linkInheritBlocked away to false because parent is already blocked
         assertFalse(child.isLinkInheritBlocked());
@@ -1179,7 +1260,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         stubAncestorChain(child, List.of(parent), List.of());
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertTrue(response.linkInheritBlocked());
         assertFalse(response.inherited());
@@ -1226,7 +1307,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         stubAncestorChain(child, List.of(blockedParent, grandparent), List.of());
 
-        SharingSettingsResponse response = sharingService.getSharingSettings(actorId, childDocId);
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
 
         assertFalse(response.linkInheritBlocked());
         assertFalse(response.inherited());
@@ -1261,7 +1342,7 @@ class DocumentSharingServiceTest {
         when(documentRepository.save(child)).thenReturn(child);
         stubAncestorChain(child, List.of(parent), List.of());
 
-        SharingSettingsResponse blocked = sharingService.updateSharingSettings(
+        SharingSettingsResponse blocked = settingsService.updateSharingSettings(
                 actorId,
                 childDocId,
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true));
@@ -1269,7 +1350,7 @@ class DocumentSharingServiceTest {
         assertTrue(blocked.linkInheritBlocked());
         assertFalse(blocked.inherited());
 
-        SharingSettingsResponse reinherited = sharingService.updateSharingSettings(
+        SharingSettingsResponse reinherited = settingsService.updateSharingSettings(
                 actorId,
                 childDocId,
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, false));
@@ -1296,7 +1377,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
         when(documentRepository.save(doc)).thenReturn(doc);
 
-        SharingSettingsResponse response = sharingService.updateSharingSettings(
+        SharingSettingsResponse response = settingsService.updateSharingSettings(
                 actorId,
                 documentId,
                 new SharingSettingsUpdateRequest(
@@ -1305,6 +1386,117 @@ class DocumentSharingServiceTest {
         assertTrue(response.hasActiveLink());
         assertFalse(response.linkInheritBlocked());
         assertEquals(DocumentAccessLevel.EDIT, response.linkAccessLevel());
+        verify(auditService)
+                .recordDocument(
+                        eq(doc),
+                        eq(actorId),
+                        eq(AccessAuditAction.SHARING_SETTINGS_UPDATE),
+                        isNull(),
+                        isNull(),
+                        anyString());
+    }
+
+    @Test
+    void updateSharingSettings_omittedExpiryPreservesItAndClearFlagRemovesIt() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        OffsetDateTime expiry = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
+        User owner = User.builder().id(actorId).build();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .linkExpiresAt(expiry)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
+        when(documentRepository.save(doc)).thenReturn(doc);
+
+        settingsService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(
+                        DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, null));
+
+        assertEquals(expiry, doc.getLinkExpiresAt());
+
+        settingsService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(
+                        DocumentGeneralAccessMode.ANYONE_WITH_LINK,
+                        DocumentAccessLevel.EDIT,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        true));
+
+        assertNull(doc.getLinkExpiresAt());
+    }
+
+    @Test
+    void updateSharingSettings_workspacePatchPreservesLinkModeLevelAndExpiry() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        OffsetDateTime expiry = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
+        User owner = User.builder().id(actorId).build();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .linkExpiresAt(expiry)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
+        when(documentRepository.save(doc)).thenReturn(doc);
+
+        settingsService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(
+                        null,
+                        null,
+                        null,
+                        DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS,
+                        DocumentAccessLevel.VIEW,
+                        null,
+                        null,
+                        null));
+
+        assertEquals(DocumentGeneralAccessMode.ANYONE_WITH_LINK, doc.getGeneralAccessMode());
+        assertEquals(DocumentAccessLevel.EDIT, doc.getLinkAccessLevel());
+        assertEquals(expiry, doc.getLinkExpiresAt());
+        assertEquals(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS, doc.getWorkspaceAccessMode());
+        assertEquals(DocumentAccessLevel.VIEW, doc.getWorkspaceAccessLevel());
+    }
+
+    @Test
+    void updateSharingSettings_workspaceLevelAndBlockPatchAppliesBothFields() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(actorId).build();
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
+                .workspaceAccessLevel(DocumentAccessLevel.VIEW)
+                .workspaceInheritBlocked(true)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
+        when(documentRepository.save(doc)).thenReturn(doc);
+
+        settingsService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(null, null, null, null, DocumentAccessLevel.EDIT, false, null, null));
+
+        assertEquals(DocumentAccessLevel.EDIT, doc.getWorkspaceAccessLevel());
+        assertFalse(doc.isWorkspaceInheritBlocked());
     }
 
     @Test
@@ -1332,7 +1524,7 @@ class DocumentSharingServiceTest {
         when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
         when(documentRepository.save(child)).thenReturn(child);
 
-        SharingSettingsResponse response = sharingService.updateSharingSettings(
+        SharingSettingsResponse response = settingsService.updateSharingSettings(
                 actorId,
                 childDocId,
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, true));
@@ -1342,6 +1534,107 @@ class DocumentSharingServiceTest {
         assertFalse(response.linkInheritBlocked());
         assertFalse(response.inherited());
         assertNull(response.inheritedFromId());
+    }
+
+    @Test
+    void getSharingSettings_withAncestorWorkspaceAccess_returnsInheritedWorkspaceSettings() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
+                .workspaceAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.RESTRICTED)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
+
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
+
+        assertTrue(response.workspaceInherited());
+        assertEquals(DocumentAccessLevel.EDIT, response.workspaceAccessLevel());
+        assertEquals(parentDocId, response.workspaceInheritedFromId());
+        assertEquals("Parent Wiki", response.workspaceInheritedFromTitle());
+        assertFalse(response.workspaceInheritBlocked());
+    }
+
+    @Test
+    void updateSharingSettings_enablesWorkspaceAccessAndClearsBlock() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+
+        Document doc = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(actorId).build())
+                .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.RESTRICTED)
+                .workspaceInheritBlocked(true)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(doc);
+        when(documentRepository.save(doc)).thenReturn(doc);
+
+        SharingSettingsResponse response = settingsService.updateSharingSettings(
+                actorId,
+                documentId,
+                new SharingSettingsUpdateRequest(
+                        DocumentGeneralAccessMode.RESTRICTED,
+                        null,
+                        null,
+                        DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS,
+                        DocumentAccessLevel.COMMENT,
+                        null,
+                        null));
+
+        assertEquals(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS, response.workspaceAccessMode());
+        assertEquals(DocumentAccessLevel.COMMENT, response.workspaceAccessLevel());
+        assertFalse(response.workspaceInheritBlocked());
+        assertFalse(doc.isWorkspaceInheritBlocked());
+    }
+
+    @Test
+    void getSharingSettings_withExpiredOwnLink_ignoresItAndInheritsAncestor() {
+        UUID actorId = UUID.randomUUID();
+        UUID childDocId = UUID.randomUUID();
+        UUID parentDocId = UUID.randomUUID();
+
+        User owner = User.builder().id(actorId).build();
+        Document parent = Document.builder()
+                .id(parentDocId)
+                .user(owner)
+                .title("Parent Wiki")
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        Document child = Document.builder()
+                .id(childDocId)
+                .user(owner)
+                .parent(parent)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .linkExpiresAt(OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1))
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, childDocId)).thenReturn(child);
+        stubAncestorChain(child, List.of(parent), List.of());
+
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, childDocId);
+
+        assertFalse(response.hasActiveLink());
+        assertTrue(response.inherited());
+        assertEquals(parentDocId, response.inheritedFromId());
+        assertEquals(DocumentAccessLevel.VIEW, response.linkAccessLevel());
     }
 
     @Test
@@ -1382,10 +1675,11 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directCollab));
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.of(directCollab).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         stubAncestorChain(child, List.of(parent), List.of(parentCollab));
-        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(childDocId))
-                .thenReturn(List.of(bobId));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1444,7 +1738,10 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.<DocumentCollaborator>of().stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
@@ -1505,11 +1802,12 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of(directView));
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.of(directView).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         stubAncestorChain(child, List.of(parent, grandparent), List.of(parentNoAccess, grandparentEdit));
         // has_positive_ancestor_grant ignores intervening breakpoints, matching production SQL.
-        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(childDocId))
-                .thenReturn(List.of(bobId));
 
         List<CollaboratorResponse> result = sharingService.listCollaborators(ownerId, childDocId);
 
@@ -1562,17 +1860,15 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(existing));
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(asGrant(existing)));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.updateCollaboratorAccess(
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.OWNER));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(DocumentAccessLevel.OWNER, captor.getValue().getAccessLevel());
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.OWNER), any());
     }
 
     @Test
@@ -1591,17 +1887,15 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(existing));
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(asGrant(existing)));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.updateCollaboratorAccess(
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.EDIT));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(DocumentAccessLevel.EDIT, captor.getValue().getAccessLevel());
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.EDIT), any());
     }
 
     @Test
@@ -1615,14 +1909,14 @@ class DocumentSharingServiceTest {
         Document document = Document.builder().id(documentId).user(owner).build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
-        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, bobId))
+        when(accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, bobId))
                 .thenReturn(true);
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.removeCollaborator(ownerId, documentId, bobId);
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
     }
 
@@ -1642,9 +1936,9 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(child);
-        when(collaboratorRepository.hasPositiveAncestorGrant(ancestorOwnerId, documentId))
+        when(accessGrantRepository.hasPositiveIdentityGrant(ancestorOwnerId, documentId))
                 .thenReturn(true);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
                 .thenReturn(Optional.empty());
         when(userRepository.findById(ancestorOwnerId)).thenReturn(Optional.of(ancestorOwner));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwnerId, documentId))
@@ -1654,9 +1948,38 @@ class DocumentSharingServiceTest {
         sharingService.updateCollaboratorAccess(
                 actorId, documentId, ancestorOwnerId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.VIEW));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(DocumentAccessLevel.VIEW, captor.getValue().getAccessLevel());
+        ArgumentCaptor<User> actor = ArgumentCaptor.forClass(User.class);
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.VIEW), actor.capture());
+        assertEquals(actorId, actor.getValue().getId());
+    }
+
+    @Test
+    void updateCollaboratorAccess_workspaceAudienceReaderCanBeDenied() {
+        UUID actorId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(actorId).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
+                .workspaceAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        User member = User.builder().id(memberId).build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
+                .thenReturn(true);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, memberId))
+                .thenReturn(Optional.empty());
+        when(userRepository.findById(memberId)).thenReturn(Optional.of(member));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                actorId, documentId, memberId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
+
+        verify(accessGrantSyncService)
+                .upsertUserGrant(eq(document), eq(member), eq(DocumentAccessLevel.NO_ACCESS), eq(owner));
     }
 
     @Test
@@ -1670,8 +1993,8 @@ class DocumentSharingServiceTest {
         User bob = User.builder().id(bobId).build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
-        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(true);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+        when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(true);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
                 .thenReturn(Optional.empty());
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
@@ -1679,11 +2002,9 @@ class DocumentSharingServiceTest {
         sharingService.updateCollaboratorAccess(
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
-        ArgumentCaptor<DocumentCollaborator> captor = ArgumentCaptor.forClass(DocumentCollaborator.class);
-        verify(collaboratorRepository).save(captor.capture());
-        assertEquals(DocumentAccessLevel.NO_ACCESS, captor.getValue().getAccessLevel());
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.NO_ACCESS), any());
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
     @Test
@@ -1702,18 +2023,18 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
-        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(false);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(existing));
+        when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(false);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(asGrant(existing)));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.updateCollaboratorAccess(
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
     @Test
@@ -1738,19 +2059,20 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
         // Link grants never count as ancestor grants, so even a live link leaves
-        // hasPositiveAncestorGrant false and no breakpoint row is stored.
-        when(collaboratorRepository.hasPositiveAncestorGrant(bobId, documentId)).thenReturn(false);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, bobId))
-                .thenReturn(Optional.of(existing));
+        // hasPositiveIdentityGrant false and no breakpoint row is stored.
+        when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(false);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(asGrant(existing)));
         when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.updateCollaboratorAccess(
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
-        verify(collaboratorRepository, never()).save(any(DocumentCollaborator.class));
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
+        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
     @Test
@@ -1791,16 +2113,16 @@ class DocumentSharingServiceTest {
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(child);
-        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
+        when(accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
                 .thenReturn(true);
         when(userRepository.findById(ancestorOwnerId)).thenReturn(Optional.of(ancestorOwner));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.removeCollaborator(actorId, documentId, ancestorOwnerId);
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, ancestorOwnerId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, ancestorOwnerId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(ancestorOwnerId, documentId);
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
     @Test
@@ -1817,16 +2139,78 @@ class DocumentSharingServiceTest {
 
         when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
                 .thenReturn(document);
-        when(collaboratorRepository.existsByDocument_IdAndUser_Id(documentId, userId))
-                .thenReturn(true);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, userId))
+                .thenReturn(Optional.of(
+                        AccessGrant.builder().effect(AccessGrantEffect.ALLOW).build()));
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.leaveSharedDocument(userId, documentId);
 
-        verify(collaboratorRepository).deleteByDocument_IdAndUser_Id(documentId, userId);
+        verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, userId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(userId, documentId);
-        verify(collaboratorRepository).pruneOrphanedBreakpoints(documentId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
+    }
+
+    @Test
+    void leaveSharedDocument_denyWithLiveLinkCannotRemoveAdminRevocation() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        AccessGrant deny = AccessGrant.builder().effect(AccessGrantEffect.DENY).build();
+
+        when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
+                .thenReturn(document);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, userId))
+                .thenReturn(Optional.of(deny));
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> sharingService.leaveSharedDocument(userId, documentId));
+
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        verify(accessGrantRepository, never()).deleteByDocument_IdAndUser_Id(documentId, userId);
+    }
+
+    @Test
+    void leaveSharedDocument_linkOnlyAccessDoesNotKeepSharedOrderRow() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        User user = User.builder().id(userId).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        AccessGrant directGrant =
+                AccessGrant.builder().effect(AccessGrantEffect.ALLOW).build();
+        Map<UUID, DocumentAccessLevel> identityAccess = new HashMap<>();
+        identityAccess.put(documentId, null);
+
+        when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
+                .thenReturn(document);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, userId))
+                .thenReturn(Optional.of(directGrant));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of(documentId));
+        when(documentRepository.findParentIdsByIdIn(any()))
+                .thenReturn(List.<Object[]>of(new Object[] {documentId, null}));
+        when(documentRepository.findAllWithUserByIdIn(any())).thenReturn(List.of(document));
+        when(permissionService.resolveIdentityAccessBatch(eq(userId), any())).thenReturn(identityAccess);
+
+        sharingService.leaveSharedDocument(userId, documentId);
+
+        verify(permissionService).resolveIdentityAccessBatch(eq(userId), any());
+        verify(permissionService, never()).resolveAccessBatch(eq(userId), any());
+        verify(userDocumentOrderRepository, times(2)).deleteByUser_IdAndDocument_Id(userId, documentId);
+        verify(userDocumentOrderRepository, never()).findMinOrderKeyByUserId(userId, documentId);
     }
 
     @Test
@@ -1857,7 +2241,10 @@ class DocumentSharingServiceTest {
                 .build();
         when(permissionService.requireReadAccessIncludingTrash(ownerId, childDocId))
                 .thenReturn(child);
-        when(collaboratorRepository.findAllByDocument_Id(childDocId)).thenReturn(List.of());
+        when(accessGrantRepository.findUserGrantsByDocumentId(childDocId))
+                .thenReturn(List.<DocumentCollaborator>of().stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         // The chain reports the trashed parent and the live grandparent, but the trashed
         // ancestor stops resolution before its rows are ever loaded.
         when(documentRepository.findAncestorChainIds(childDocId))
@@ -1870,7 +2257,7 @@ class DocumentSharingServiceTest {
         assertEquals(1, result.size());
         assertEquals(ownerId, result.get(0).userId());
         // The walk must stop at the trashed parent instead of surfacing live grandparent grants.
-        verify(collaboratorRepository, never()).findAllByDocument_IdIn(any());
+        verify(accessGrantRepository, never()).findUserGrantsByDocumentIdIn(any());
     }
 
     /**
@@ -1880,6 +2267,18 @@ class DocumentSharingServiceTest {
      * {@code ancestors} is ordered closest first, as {@code findAncestorChainIds} returns
      * them, and holds only the ancestors reachable from the target document.
      */
+    private static AccessGrant asGrant(DocumentCollaborator collaborator) {
+        DocumentAccessLevel level = collaborator.getAccessLevel();
+        return AccessGrant.builder()
+                .id(collaborator.getId())
+                .document(collaborator.getDocument())
+                .user(collaborator.getUser())
+                .effect(level == DocumentAccessLevel.NO_ACCESS ? AccessGrantEffect.DENY : AccessGrantEffect.ALLOW)
+                .accessLevel(level == DocumentAccessLevel.NO_ACCESS ? null : level)
+                .createdAt(collaborator.getCreatedAt())
+                .build();
+    }
+
     private void stubAncestorChain(Document target, List<Document> ancestors, List<DocumentCollaborator> rows) {
         List<UUID> ancestorIds = ancestors.stream().map(Document::getId).toList();
         when(documentRepository.findAncestorChainIds(target.getId())).thenReturn(ancestorIds);
@@ -1888,7 +2287,10 @@ class DocumentSharingServiceTest {
         }
         when(documentRepository.findAllWithUserByIdIn(ancestorIds)).thenReturn(ancestors);
         if (!rows.isEmpty()) {
-            when(collaboratorRepository.findAllByDocument_IdIn(ancestorIds)).thenReturn(rows);
+            when(accessGrantRepository.findUserGrantsByDocumentIdIn(ancestorIds))
+                    .thenReturn(rows.stream()
+                            .map(DocumentSharingServicesTest::asGrant)
+                            .toList());
         }
     }
 
@@ -1958,7 +2360,10 @@ class DocumentSharingServiceTest {
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
         when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
                 .thenReturn(List.of(sm));
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of());
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
+                .thenReturn(List.<DocumentCollaborator>of().stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
 
         List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
@@ -2028,9 +2433,10 @@ class DocumentSharingServiceTest {
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
         when(spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(spaceId))
                 .thenReturn(List.of(sm));
-        when(collaboratorRepository.findAllByDocument_Id(documentId)).thenReturn(List.of(directOverride));
-        when(collaboratorRepository.findCollaboratorUserIdsWithAncestorGrant(documentId))
-                .thenReturn(List.of(memberId));
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(directOverride).stream()
+                        .map(DocumentSharingServicesTest::asGrant)
+                        .toList());
         when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
 
         List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
@@ -2068,6 +2474,59 @@ class DocumentSharingServiceTest {
     }
 
     @Test
+    void getMyAccess_spacePageOwner_reportsSharingRightsEvenWithoutSpaceAdministration() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder()
+                .id(spaceId)
+                .name("Engineering")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build();
+        Document document =
+                Document.builder().id(documentId).title("Roadmap").space(space).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(userId, documentId)).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveSpace(document)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.EDIT));
+
+        DocumentAccessResponse response = sharingService.getMyAccess(userId, documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.OWNER, response.accessLevel());
+        assertFalse(response.owner());
+        assertTrue(response.canManageSharing());
+        assertNotNull(response.space());
+        assertEquals(DocumentAccessLevel.EDIT, response.space().myAccessLevel());
+        assertFalse(response.space().canAdminister());
+    }
+
+    @Test
+    void getMyAccess_externalPageOwnerOnASpacePage_canManageSharingWithoutSpaceSummary() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document document =
+                Document.builder().id(documentId).title("Roadmap").space(space).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(userId, documentId)).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveSpace(document)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessResponse response = sharingService.getMyAccess(userId, documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.OWNER, response.accessLevel());
+        assertFalse(response.owner());
+        assertTrue(response.canManageSharing());
+        assertNull(response.space());
+    }
+
+    @Test
     void getCollaborators_creatorRemovedFromSpaceWithPublicLink_deniesRosterAccess() {
         UUID creatorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
@@ -2084,12 +2543,209 @@ class DocumentSharingServiceTest {
         when(permissionService.requireReadAccessIncludingTrash(creatorId, documentId))
                 .thenReturn(document);
         when(permissionService.resolveSpace(document)).thenReturn(space);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(documentId, creatorId))
-                .thenReturn(Optional.empty());
-        when(collaboratorRepository.hasPositiveAncestorGrant(creatorId, documentId))
+        when(accessGrantRepository.hasPositiveIdentityGrant(creatorId, documentId))
                 .thenReturn(false);
         when(spaceAccessService.load(creatorId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
 
         assertThrows(ApiException.class, () -> sharingService.listCollaborators(creatorId, documentId));
+    }
+
+    @Test
+    void getMyAccess_externalPageOwnerInArchivedSpace_cannotManageSharing() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder()
+                .id(spaceId)
+                .name("Engineering")
+                .archivedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        Document document =
+                Document.builder().id(documentId).title("Roadmap").space(space).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(userId, documentId)).thenReturn(DocumentAccessLevel.OWNER);
+        when(permissionService.resolveSpace(document)).thenReturn(space);
+        when(spaceAccessService.load(userId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessResponse response = sharingService.getMyAccess(userId, documentId);
+
+        assertTrue(response.allowed());
+        assertEquals(DocumentAccessLevel.OWNER, response.accessLevel());
+        assertFalse(response.owner());
+        assertFalse(response.canManageSharing());
+        assertNull(response.space());
+    }
+
+    @Test
+    void listCollaborators_publicSpace_workspaceMemberNotListedInSpaceDoesNotGetSpaceRoster() {
+        UUID requesterId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+
+        Space space = Space.builder()
+                .id(spaceId)
+                .name("Public Company Docs")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        User memberUser = User.builder()
+                .id(memberId)
+                .email("space-member@example.com")
+                .displayName("Space Member")
+                .build();
+
+        Document doc = Document.builder()
+                .id(documentId)
+                .title("Handbook")
+                .space(space)
+                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireReadAccessIncludingTrash(requesterId, documentId))
+                .thenReturn(doc);
+        when(permissionService.resolveSpace(doc)).thenReturn(space);
+        when(accessGrantRepository.hasPositiveIdentityGrant(requesterId, documentId))
+                .thenReturn(true);
+        when(spaceMemberRepository.existsBySpace_IdAndUser_Id(spaceId, requesterId))
+                .thenReturn(false);
+        when(spaceAccessService.load(requesterId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+        when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of());
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+
+        List<CollaboratorResponse> roster = sharingService.listCollaborators(requesterId, documentId);
+
+        assertTrue(roster.isEmpty());
+    }
+
+    @Test
+    void getSharingSettings_ownLiveLinkWinsOverOwnLinkInheritBlocked() {
+        UUID actorId = UUID.randomUUID();
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(docId)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.EDIT)
+                .linkInheritBlocked(true)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, docId)).thenReturn(doc);
+        when(documentRepository.findAncestorChainIds(docId)).thenReturn(List.of());
+
+        SharingSettingsResponse response = settingsService.getSharingSettings(actorId, docId);
+
+        assertTrue(response.hasActiveLink());
+        assertFalse(response.linkInheritBlocked());
+        assertEquals(DocumentAccessLevel.EDIT, response.linkAccessLevel());
+    }
+
+    @Test
+    void updateSharingSettings_pastLinkExpiresAt_throwsValidationFailed() {
+        UUID actorId = UUID.randomUUID();
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(docId)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .linkAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, docId)).thenReturn(doc);
+
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK,
+                DocumentAccessLevel.VIEW,
+                null,
+                null,
+                null,
+                null,
+                OffsetDateTime.now(ZoneOffset.UTC).minusDays(1),
+                null);
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> settingsService.updateSharingSettings(actorId, docId, request));
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+    }
+
+    @Test
+    void updateSharingSettings_linkExpiresAtAndClearExpiryTogether_throwsValidationFailed() {
+        UUID actorId = UUID.randomUUID();
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(docId)
+                .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, docId)).thenReturn(doc);
+
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK,
+                DocumentAccessLevel.VIEW,
+                false,
+                null,
+                null,
+                false,
+                OffsetDateTime.now(ZoneOffset.UTC).plusDays(7),
+                true);
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> settingsService.updateSharingSettings(actorId, docId, request));
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertEquals("linkExpiresAt and clearLinkExpiresAt cannot be used together.", ex.getMessage());
+    }
+
+    @Test
+    void updateSharingSettings_workspaceMembersWithInheritBlocked_throwsValidationFailed() {
+        UUID actorId = UUID.randomUUID();
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder().id(docId).build();
+
+        when(permissionService.requireSharingAdminAccess(actorId, docId)).thenReturn(doc);
+
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                null,
+                null,
+                null,
+                DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS,
+                DocumentAccessLevel.VIEW,
+                true,
+                null,
+                null);
+
+        ApiException ex =
+                assertThrows(ApiException.class, () -> settingsService.updateSharingSettings(actorId, docId, request));
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+    }
+
+    @Test
+    void updateCollaboratorAccess_positiveLevel_doesNotPruneBreakpoints() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID bobId = UUID.randomUUID();
+
+        User owner = User.builder().id(ownerId).build();
+        User bob = User.builder().id(bobId).build();
+        Document document = Document.builder().id(documentId).user(owner).build();
+        DocumentCollaborator existing = DocumentCollaborator.builder()
+                .id(UUID.randomUUID())
+                .document(document)
+                .user(bob)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+        when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(true);
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, bobId))
+                .thenReturn(Optional.of(asGrant(existing)));
+        when(userRepository.findById(bobId)).thenReturn(Optional.of(bob));
+        when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
+
+        sharingService.updateCollaboratorAccess(
+                ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.EDIT));
+
+        verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.EDIT), any());
+        verify(accessGrantRepository, never()).pruneOrphanedBreakpoints(any());
     }
 }

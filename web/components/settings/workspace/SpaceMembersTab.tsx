@@ -378,7 +378,7 @@ export function SpaceMembersTab({
                               Everyone in this workspace
                             </p>
                             <p className="truncate text-[12px] leading-snug text-muted-foreground/70">
-                              Access is set in General.
+                              Default access unless overridden. Set in General.
                             </p>
                           </div>
                         </div>

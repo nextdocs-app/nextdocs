@@ -89,7 +89,7 @@ interface ApiDocument {
 export type DocumentAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
 export type CollaboratorAccessLevel = DocumentAccessLevel | 'NO_ACCESS';
 export type DocumentGeneralAccessMode = 'RESTRICTED' | 'ANYONE_WITH_LINK';
-
+export type DocumentWorkspaceAccessMode = 'RESTRICTED' | 'WORKSPACE_MEMBERS';
 const DOCUMENT_ACCESS_LEVELS: readonly string[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
 const COLLABORATOR_ACCESS_LEVELS: readonly string[] = [
   'VIEW',
@@ -99,6 +99,7 @@ const COLLABORATOR_ACCESS_LEVELS: readonly string[] = [
   'NO_ACCESS',
 ];
 const GENERAL_ACCESS_MODES: readonly string[] = ['RESTRICTED', 'ANYONE_WITH_LINK'];
+const WORKSPACE_ACCESS_MODES: readonly string[] = ['RESTRICTED', 'WORKSPACE_MEMBERS'];
 
 /** True for the four levels the API may report on the document channel. */
 export function isValidDocumentAccessLevel(value: unknown): value is DocumentAccessLevel {
@@ -111,6 +112,10 @@ function isValidCollaboratorAccessLevel(value: unknown): value is CollaboratorAc
 
 function isValidGeneralAccessMode(value: unknown): value is DocumentGeneralAccessMode {
   return typeof value === 'string' && GENERAL_ACCESS_MODES.includes(value);
+}
+
+function isValidWorkspaceAccessMode(value: unknown): value is DocumentWorkspaceAccessMode {
+  return typeof value === 'string' && WORKSPACE_ACCESS_MODES.includes(value);
 }
 
 /**
@@ -144,6 +149,13 @@ function sanitizeGeneralAccessMode(
   fallback: DocumentGeneralAccessMode = 'RESTRICTED'
 ): DocumentGeneralAccessMode {
   return isValidGeneralAccessMode(value) ? value : fallback;
+}
+
+function sanitizeWorkspaceAccessMode(
+  value: unknown,
+  fallback: DocumentWorkspaceAccessMode = 'RESTRICTED'
+): DocumentWorkspaceAccessMode {
+  return isValidWorkspaceAccessMode(value) ? value : fallback;
 }
 
 function sanitizeDocumentSpace(
@@ -216,6 +228,13 @@ interface ApiSharingSettings {
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   linkInheritBlocked?: boolean;
+  linkExpiresAt?: string | null;
+  workspaceAccessMode?: DocumentWorkspaceAccessMode;
+  workspaceAccessLevel?: DocumentAccessLevel;
+  workspaceInheritBlocked?: boolean;
+  workspaceInherited?: boolean;
+  workspaceInheritedFromId?: string | null;
+  workspaceInheritedFromTitle?: string | null;
 }
 
 export interface CloudDocumentsPage {
@@ -282,6 +301,16 @@ export interface SharingSettings {
   inheritedFromTitle?: string | null;
   /** Own block on link inheritance (general-access NO_ACCESS analogue). */
   linkInheritBlocked?: boolean;
+  /** When the own share link lapses; null when it does not. */
+  linkExpiresAt?: string | null;
+  /** General access for signed-in workspace members. */
+  workspaceAccessMode?: DocumentWorkspaceAccessMode;
+  workspaceAccessLevel?: DocumentAccessLevel;
+  /** Own block on inherited workspace-member access. */
+  workspaceInheritBlocked?: boolean;
+  workspaceInherited?: boolean;
+  workspaceInheritedFromId?: string | null;
+  workspaceInheritedFromTitle?: string | null;
 }
 
 export interface DocumentBreadcrumbSpace {
@@ -1025,15 +1054,27 @@ class DocumentService {
       inheritedFromId: body.inheritedFromId ?? null,
       inheritedFromTitle: body.inheritedFromTitle ?? null,
       linkInheritBlocked: body.linkInheritBlocked ?? false,
+      linkExpiresAt: body.linkExpiresAt ?? null,
+      workspaceAccessMode: sanitizeWorkspaceAccessMode(body.workspaceAccessMode),
+      workspaceAccessLevel: sanitizeDocumentAccessLevel(body.workspaceAccessLevel),
+      workspaceInheritBlocked: body.workspaceInheritBlocked ?? false,
+      workspaceInherited: body.workspaceInherited ?? false,
+      workspaceInheritedFromId: body.workspaceInheritedFromId ?? null,
+      workspaceInheritedFromTitle: body.workspaceInheritedFromTitle ?? null,
     };
   }
 
   public async updateSharingSettings(
     documentId: string,
     payload: {
-      generalAccessMode: DocumentGeneralAccessMode;
+      generalAccessMode?: DocumentGeneralAccessMode;
       linkAccessLevel?: DocumentAccessLevel;
       linkInheritBlocked?: boolean;
+      linkExpiresAt?: string | null;
+      clearLinkExpiresAt?: boolean;
+      workspaceAccessMode?: DocumentWorkspaceAccessMode;
+      workspaceAccessLevel?: DocumentAccessLevel;
+      workspaceInheritBlocked?: boolean;
     },
     accessToken: string
   ): Promise<SharingSettings> {
@@ -1054,6 +1095,13 @@ class DocumentService {
       inheritedFromId: body.inheritedFromId ?? null,
       inheritedFromTitle: body.inheritedFromTitle ?? null,
       linkInheritBlocked: body.linkInheritBlocked ?? false,
+      linkExpiresAt: body.linkExpiresAt ?? null,
+      workspaceAccessMode: sanitizeWorkspaceAccessMode(body.workspaceAccessMode),
+      workspaceAccessLevel: sanitizeDocumentAccessLevel(body.workspaceAccessLevel),
+      workspaceInheritBlocked: body.workspaceInheritBlocked ?? false,
+      workspaceInherited: body.workspaceInherited ?? false,
+      workspaceInheritedFromId: body.workspaceInheritedFromId ?? null,
+      workspaceInheritedFromTitle: body.workspaceInheritedFromTitle ?? null,
     };
   }
 

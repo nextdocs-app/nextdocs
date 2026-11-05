@@ -10,6 +10,7 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
@@ -28,6 +29,7 @@ import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.InstanceLockRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceGroupMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
@@ -67,6 +69,7 @@ public class WorkspaceService {
 
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository memberRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final WorkspaceAccessService accessService;
@@ -75,6 +78,7 @@ public class WorkspaceService {
     private final InstanceLockRepository instanceLockRepository;
     private final SpaceMemberRepository spaceMemberRepository;
     private final SpaceRepository spaceRepository;
+    private final WorkspaceGroupMemberRepository groupMemberRepository;
 
     /**
      * How long an uploaded icon may sit unapplied before the nightly sweep deletes it.
@@ -143,6 +147,12 @@ public class WorkspaceService {
                 .user(user)
                 .role(role)
                 .build());
+    }
+
+    /** The current workspace for a document write. */
+    @Transactional(readOnly = true)
+    public Workspace requireWorkspace(UUID userId) {
+        return accessService.requireMember(userId).workspace();
     }
 
     @Transactional(readOnly = true)
@@ -306,7 +316,7 @@ public class WorkspaceService {
      * tokens: access checks read membership on every request, so the removed user is
      * locked out immediately. A later invite for the same email reactivates the account.
      *
-     * <p>Space memberships go with it. A space left without an owner stays administrable
+     * <p>Space and group memberships go with it. A space left without an owner stays administrable
      * through the workspace owner/admin override, so off-boarding never needs to be
      * refused for the sake of a space.
      */
@@ -336,8 +346,10 @@ public class WorkspaceService {
         }
 
         User targetUser = target.getUser();
+        accessGrantRepository.deleteUserGrantsByWorkspace(workspaceId, targetUserId);
         memberRepository.delete(target);
         spaceMemberRepository.deleteByUser_Id(targetUserId);
+        groupMemberRepository.deleteById_UserId(targetUserId);
         targetUser.setActive(false);
         userRepository.save(targetUser);
         refreshTokenRepository.revokeAllForUser(targetUserId);
@@ -463,9 +475,8 @@ public class WorkspaceService {
     }
 
     /**
-     * The spaces a member belongs to, oldest first. An explicit membership wins over a
-     * public space's everyone-else grant: promotion above the default is the whole point
-     * of listing somebody on a public space.
+     * The spaces a member belongs to, oldest first. When both explicit membership
+     * and public space default apply, highest level wins.
      */
     private static List<WorkspaceMemberSpaceSummaryResponse> spacesFor(
             WorkspaceMember member, List<Space> spaces, Map<UUID, Map<UUID, DocumentAccessLevel>> userSpaceAccess) {
@@ -475,9 +486,13 @@ public class WorkspaceService {
 
         for (Space space : spaces) {
             DocumentAccessLevel explicitLevel = explicitLevels.get(space.getId());
-            DocumentAccessLevel level = explicitLevel != null
-                    ? explicitLevel
-                    : space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null;
+            DocumentAccessLevel everyoneLevel =
+                    space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null;
+            DocumentAccessLevel level = explicitLevel == null
+                    ? everyoneLevel
+                    : everyoneLevel == null
+                            ? explicitLevel
+                            : DocumentAccessLevel.broadest(explicitLevel, everyoneLevel);
             if (level != null) {
                 memberSpaces.add(new WorkspaceMemberSpaceSummaryResponse(
                         space.getId(),

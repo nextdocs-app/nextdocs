@@ -12,9 +12,11 @@ import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -48,6 +50,9 @@ class DocumentSharingReconcilePersistenceTest {
     private UserDocumentOrderRepository userDocumentOrderRepository;
 
     @Autowired
+    private WorkspaceRepository workspaceRepository;
+
+    @Autowired
     private EntityManager entityManager;
 
     @MockitoSpyBean
@@ -57,7 +62,7 @@ class DocumentSharingReconcilePersistenceTest {
     private PermissionService permissionService;
 
     @MockitoBean
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Test
     void updateCollaboratorAccess_resolvesLazyAssociationsBeforeOrderRowDeletes() {
@@ -69,16 +74,20 @@ class DocumentSharingReconcilePersistenceTest {
                 .email("bob-reconcile@example.com")
                 .displayName("Bob")
                 .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("Reconcile workspace").build());
 
         Document grandparent = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(owner)
+                .workspace(workspace)
                 .title("Grandparent")
                 .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         Document root = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(owner)
+                .workspace(workspace)
                 .parent(grandparent)
                 .title("Root")
                 .yjsState("seed".getBytes(StandardCharsets.UTF_8))
@@ -86,6 +95,7 @@ class DocumentSharingReconcilePersistenceTest {
         Document child = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(owner)
+                .workspace(workspace)
                 .parent(root)
                 .title("Child")
                 .yjsState("seed".getBytes(StandardCharsets.UTF_8))
@@ -106,12 +116,15 @@ class DocumentSharingReconcilePersistenceTest {
                         bob.getId(), java.util.Set.of(child.getId(), root.getId(), grandparent.getId())))
                 .thenReturn(java.util.Map.of(
                         child.getId(), DocumentAccessLevel.VIEW, root.getId(), DocumentAccessLevel.VIEW));
+        when(permissionService.resolveIdentityAccessBatch(
+                        bob.getId(), java.util.Set.of(child.getId(), root.getId(), grandparent.getId())))
+                .thenReturn(java.util.Map.of(
+                        child.getId(), DocumentAccessLevel.VIEW, root.getId(), DocumentAccessLevel.VIEW));
 
-        when(collaboratorRepository.hasPositiveAncestorGrant(bob.getId(), root.getId()))
+        when(accessGrantRepository.hasPositiveIdentityGrant(bob.getId(), root.getId()))
                 .thenReturn(true);
-        when(collaboratorRepository.findByDocument_IdAndUser_Id(root.getId(), bob.getId()))
+        when(accessGrantRepository.findByDocument_IdAndUser_Id(root.getId(), bob.getId()))
                 .thenReturn(Optional.empty());
-        when(collaboratorRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // Process the child first so its order row delete clears the persistence context before
         // the root's detached parent proxy is resolved. Batch loads delegate to the
