@@ -137,16 +137,18 @@ export function SharePanel({
         setError(null);
 
         if (typeof documentService.getDocumentBreadcrumbs === 'function') {
-          try {
-            const crumbs = await documentService.getDocumentBreadcrumbs(documentId, accessToken);
-            if (!cancelled && crumbs) {
-              setBreadcrumbs(crumbs);
-            }
-          } catch {
-            if (!cancelled) {
-              setBreadcrumbs([]);
-            }
-          }
+          void documentService
+            .getDocumentBreadcrumbs(documentId, accessToken)
+            .then((crumbs) => {
+              if (!cancelled && crumbs) {
+                setBreadcrumbs(crumbs);
+              }
+            })
+            .catch(() => {
+              if (!cancelled) {
+                setBreadcrumbs([]);
+              }
+            });
         }
 
         if (!canManageSharing) {

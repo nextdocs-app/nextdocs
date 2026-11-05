@@ -49,12 +49,9 @@ export function getCollaboratorRowOptions(
   // an explicit Inherit option. We append it rather than mutating the
   // matching access level option in place, which would break the selected
   // state when the override matches that level.
-  // Whitespace-only titles normalize to '' (see below), so gate on the
-  // normalized value to avoid rendering `Inherit from ` with an empty title.
-  const hasInheritOption =
-    !collab.inherited && normalizeTitle(collab.inheritedFromTitle, '').length > 0;
+  const hasInheritOption = !collab.inherited && Boolean(collab.inheritedFromId);
   if (hasInheritOption) {
-    const parentTitle = normalizeTitle(collab.inheritedFromTitle, '');
+    const parentTitle = normalizeTitle(collab.inheritedFromTitle, '') || 'parent page';
     const inheritableLabel = collab.inheritedAccessLevel
       ? ACCESS_LABELS[collab.inheritedAccessLevel]
       : undefined;
