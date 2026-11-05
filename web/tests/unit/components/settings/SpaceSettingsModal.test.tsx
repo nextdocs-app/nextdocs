@@ -208,7 +208,7 @@ describe('SpaceSettingsModal', () => {
     });
     expect(
       await screen.findByText(
-        'Every workspace member can read the documents in this space. People listed in Members keep their level.'
+        'Everyone in this workspace can read the documents in this space. An individually assigned access level overrides this default only when it grants higher access.'
       )
     ).toBeInTheDocument();
 
@@ -360,7 +360,9 @@ describe('SpaceSettingsModal', () => {
 
     const panel = screen.getByRole('tabpanel', { name: 'Members' });
     expect(await within(panel).findByText('Everyone in this workspace')).toBeInTheDocument();
-    expect(within(panel).getByText('Access is set in General.')).toBeInTheDocument();
+    expect(
+      within(panel).getByText('Default access unless overridden. Set in General.')
+    ).toBeInTheDocument();
     expect(within(panel).getByText('Can comment')).toBeInTheDocument();
     expect(
       within(panel).queryByRole('button', { name: /Access level for Everyone/ })

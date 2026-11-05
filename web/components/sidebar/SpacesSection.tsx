@@ -319,9 +319,9 @@ export function SpacesSection({
     };
   }, []);
 
-  // The share panel's Space members / Everyone rows ask for the same modal the
-  // sidebar menus open. The requested space may be absent from the rail (a
-  // workspace admin who is not a member), so fall back to a direct fetch.
+  // The share panel's Space members action asks for the same modal the sidebar
+  // menus open. The requested space may be absent from the rail (a workspace
+  // admin who is not a member), so fall back to a direct fetch.
   useEffect(() => {
     const handleOpenSpaceSettings = async (event: Event) => {
       const detail = parseOpenSpaceSettingsEvent(event);

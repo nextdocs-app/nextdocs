@@ -38,7 +38,11 @@ jest.mock('../../../../services/document.service', () => ({
 
 const mockedDocumentService = documentService as jest.Mocked<typeof documentService>;
 
-function node(id: string, parentId: string | null = null): SidebarTreeNode {
+function node(
+  id: string,
+  parentId: string | null = null,
+  overrides: Partial<SidebarTreeNode> = {}
+): SidebarTreeNode {
   return {
     id,
     title: id,
@@ -53,6 +57,7 @@ function node(id: string, parentId: string | null = null): SidebarTreeNode {
     childrenLoaded: false,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
   };
 }
 
