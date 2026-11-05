@@ -25,31 +25,25 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     Optional<Document> findByIdAndDeletedAtIsNull(UUID id);
 
-    @Query(
-            value = "SELECT d FROM Document d "
-                    + "LEFT JOIN FETCH d.parent "
-                    + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
-                    + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
-                    + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-                    + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
-                    + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
-                    + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
-                    + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-                    + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
-                    + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId))) "
-                    + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC",
-            countQuery =
-                    "SELECT count(d) FROM Document d "
-                            + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
-                            + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
-                            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-                            + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
-                            + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
-                            + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
-                            + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-                            + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
-                            + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId)))")
-    Page<Document> findSharedWithUserId(@Param("userId") UUID userId, Pageable pageable);
+    // Lean candidates for the flat Shared listing. Effective access, parent inheritance
+    // and the caller's personal order have to resolve for every candidate before the
+    // listing can paginate, so this cannot be a paged entity query: loading Document
+    // here would pull each candidate's yjs_state into heap. The page's full rows are
+    // loaded by id after filtering and pagination in DocumentListQueryHelper.
+    @Query("SELECT new com.nextdocs.api.document.repository.SharedDocumentCandidate("
+            + "d.id, d.parent.id, d.siblingOrderKey, d.title, d.createdAt, d.updatedAt) "
+            + "FROM Document d "
+            + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
+            + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
+            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
+            + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
+            + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
+            + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
+            + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId))) "
+            + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC")
+    List<SharedDocumentCandidate> findSharedWithUserId(@Param("userId") UUID userId);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.
     Page<Document> findAllByParent_IdAndDeletedAtIsNull(UUID parentId, Pageable pageable);
@@ -90,7 +84,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     // Shared roots visible through direct identity grants, or owned roots shared by the caller.
     // Space content has its own listing; a nested shared page is surfaced by the flat query.
-    @Query("SELECT d, udo.orderKey FROM Document d "
+    // Lean candidates for the Shared-root listing: the same unpaged-then-filter rule as
+    // the flat query, so only the columns the response needs after the page is chosen are
+    // fetched here. The caller's navigation key joins from user_document_orders.
+    @Query("SELECT new com.nextdocs.api.document.repository.SharedRootCandidate("
+            + "d.id, d.user.id, d.title, d.createdAt, d.updatedAt, udo.orderKey) "
+            + "FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
             + "WHERE d.deletedAt IS NULL AND d.space IS NULL AND d.parent IS NULL "
             + "AND ((d.user.id <> :userId AND ("
@@ -106,7 +105,7 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "         EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
             + "         OR d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS))) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
-    Page<Object[]> findSharedRootDocuments(@Param("userId") UUID userId, Pageable pageable);
+    List<SharedRootCandidate> findSharedRootDocuments(@Param("userId") UUID userId);
 
     // Root pages filed into one space, in the space's shared order.
     //
