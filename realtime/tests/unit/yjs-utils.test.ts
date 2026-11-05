@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import * as syncing from 'y-protocols/sync';
+import * as awarenessProtocol from 'y-protocols/awareness';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import * as Y from 'yjs';
@@ -251,7 +252,70 @@ describe('Yjs Utils', () => {
       expect(blockedWarnings.length).toBeGreaterThan(0);
     });
 
-    it('should allow sync step 2 for comment connections', () => {
+    it('should allow awareness pings from comment connections', () => {
+      const commentConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+      const peerConn: any = {
+        send: jest.fn(),
+        on: jest.fn(),
+        close: jest.fn(),
+        readyState: WebSocket.OPEN,
+      };
+
+      setupWSConnection(commentConn, docName, 'COMMENT');
+      setupWSConnection(peerConn, docName, 'EDIT');
+      commentConn.send.mockClear();
+      peerConn.send.mockClear();
+
+      // The web client broadcasts "comments changed" over awareness so other tabs
+      // refetch; that is the one signal a COMMENT connection still sends.
+      const sourceDoc = new Y.Doc();
+      const sourceAwareness = new awarenessProtocol.Awareness(sourceDoc);
+      sourceAwareness.setLocalStateField('nd-comments-ping', { at: 1, documentId: docName });
+
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 1); // MESSAGE_AWARENESS
+      encoding.writeVarUint8Array(
+        encoder,
+        awarenessProtocol.encodeAwarenessUpdate(sourceAwareness, [sourceAwareness.clientID])
+      );
+
+      const commentMessageHandlerCall = commentConn.on.mock.calls.find(
+        (call: any) => call[0] === 'message'
+      );
+      if (!commentMessageHandlerCall) {
+        throw new Error('message handler not found for comment connection');
+      }
+      commentMessageHandlerCall[1](Buffer.from(encoding.toUint8Array(encoder)));
+
+      expect(peerConn.send).toHaveBeenCalled();
+      const sentBuffer = peerConn.send.mock.calls[0][0];
+      const decoder = decoding.createDecoder(sentBuffer);
+      const messageType = decoding.readVarUint(decoder);
+      expect(messageType).toBe(1); // MESSAGE_AWARENESS
+      const targetDoc = new Y.Doc();
+      const targetAwareness = new awarenessProtocol.Awareness(targetDoc);
+      awarenessProtocol.applyAwarenessUpdate(
+        targetAwareness,
+        decoding.readVarUint8Array(decoder),
+        peerConn
+      );
+      const state = (targetAwareness.getStates().get(sourceAwareness.clientID) as any)?.[
+        'nd-comments-ping'
+      ];
+      expect(state).toEqual({ at: 1, documentId: docName });
+
+      targetAwareness.destroy();
+      targetDoc.destroy();
+      sourceAwareness.destroy();
+      sourceDoc.destroy();
+    });
+
+    it('should block sync step 2 writes for comment connections', () => {
       const commentConn: any = {
         send: jest.fn(),
         on: jest.fn(),
@@ -286,10 +350,10 @@ describe('Yjs Utils', () => {
         ([warningMessage]) =>
           warningMessage === 'Blocked sync write message from read-only connection'
       );
-      expect(blockedWarnings).toHaveLength(0);
+      expect(blockedWarnings.length).toBeGreaterThan(0);
     });
 
-    it('should allow sync update writes for comment connections if they only modify comment threads or comment users', () => {
+    it('should block comment-root writes because comments are API-owned now', () => {
       const commentConn: any = {
         send: jest.fn(),
         on: jest.fn(),
@@ -332,13 +396,13 @@ describe('Yjs Utils', () => {
 
       commentMessageHandler(Buffer.from(message));
 
-      expect(writableConn.send).toHaveBeenCalled();
+      expect(writableConn.send).not.toHaveBeenCalled();
 
       const blockedWarnings = (logger.warn as jest.Mock).mock.calls.filter(
         ([warningMessage]) =>
           warningMessage === 'Blocked sync write message from read-only connection'
       );
-      expect(blockedWarnings).toHaveLength(0);
+      expect(blockedWarnings.length).toBeGreaterThan(0);
     });
 
     it('should block sync step 2 writes for comment connections if they modify other fields', () => {
@@ -665,32 +729,10 @@ describe('Yjs Utils', () => {
       // Sync step 1 is allowed (read-only state request)
       expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep1)).toBe(false);
 
-      // Step 2 without decoder is rejected
+      // Step 2 and updates carry writes; a COMMENT connection has no Y.Doc
+      // writes left now that threads live in the API.
       expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2)).toBe(true);
-
-      // Step 2 modifying comment threads is allowed
-      const commentDoc = new Y.Doc();
-      commentDoc.getArray('threads').insert(0, ['comment-1']);
-      const commentUpdate = Y.encodeStateAsUpdate(commentDoc);
-      const commentEncoder = encoding.createEncoder();
-      encoding.writeVarUint8Array(commentEncoder, commentUpdate);
-      const commentDecoder = decoding.createDecoder(encoding.toUint8Array(commentEncoder));
-
-      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsSyncStep2, commentDecoder)).toBe(
-        false
-      );
-
-      // Update modifying document content is rejected
-      const docContentDoc = new Y.Doc();
-      docContentDoc.getText('content').insert(0, 'blocked edit');
-      const docContentUpdate = Y.encodeStateAsUpdate(docContentDoc);
-      const contentEncoder = encoding.createEncoder();
-      encoding.writeVarUint8Array(contentEncoder, docContentUpdate);
-      const contentDecoder = decoding.createDecoder(encoding.toUint8Array(contentEncoder));
-
-      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate, contentDecoder)).toBe(
-        true
-      );
+      expect(shouldRejectSyncMessage(doc, conn, syncing.messageYjsUpdate)).toBe(true);
     });
 
     it('shouldRejectSyncMessage denies unknown sync types for COMMENT connections', () => {

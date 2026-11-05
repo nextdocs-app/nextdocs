@@ -60,6 +60,9 @@ class RateLimitFilterTest {
                 MAX_TEST_BODY_BYTES,
                 20,
                 60,
+                MAX_TEST_BODY_BYTES,
+                20,
+                60,
                 600,
                 60,
                 60,
@@ -1005,6 +1008,63 @@ class RateLimitFilterTest {
         assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.7.5");
     }
 
+    @Test
+    void anonymousCommentWrite_usesTheCommentBucketAndBodyCeiling() throws Exception {
+        mockMvc.perform(post("/api/v1/documents/{id}/threads", DOCUMENT_ID)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"body\":[]}")
+                        .remoteAddress("10.0.8.1"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isEqualTo(1);
+        assertThat(rateLimiter.lastKey).isEqualTo("comment-write:10.0.8.1");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(20);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void anonymousCommentWrite_withOversizedBody_isRejectedBeforeTheChain() throws Exception {
+        String tooLarge = "{\"body\":\"" + "x".repeat((int) MAX_TEST_BODY_BYTES) + "\"}";
+
+        mockMvc.perform(post("/api/v1/documents/{id}/threads", DOCUMENT_ID)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(tooLarge)
+                        .remoteAddress("10.0.8.2"))
+                .andExpect(status().isPayloadTooLarge());
+    }
+
+    @Test
+    void identifiedCommentWrite_isNotRateLimited() throws Exception {
+        authenticate();
+
+        mockMvc.perform(post("/api/v1/documents/{id}/threads", DOCUMENT_ID)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"body\":[]}")
+                        .remoteAddress("10.0.8.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
+    void anonymousCommentRead_usesThePublicReadBucket() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}/threads", DOCUMENT_ID).remoteAddress("10.0.8.4"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.8.4");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(120);
+    }
+
+    @Test
+    void identifiedCommentRead_isNotRateLimited() throws Exception {
+        authenticate();
+
+        mockMvc.perform(get("/api/v1/documents/{id}/threads", DOCUMENT_ID).remoteAddress("10.0.8.5"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
     private static final class StubRateLimiter implements RateLimiter {
         private boolean allowed = true;
         private Duration retryAfter = Duration.ofSeconds(3);
@@ -1134,6 +1194,16 @@ class RateLimitFilterTest {
 
         @GetMapping("/api/v1/icons/{name}")
         ResponseEntity<String> iconGlyph(@PathVariable String name) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/documents/{id}/threads")
+        ResponseEntity<String> listThreads(@PathVariable String id) {
+            return ResponseEntity.ok("ok");
+        }
+
+        @PostMapping("/api/v1/documents/{id}/threads")
+        ResponseEntity<String> createThread(@PathVariable String id) {
             return ResponseEntity.ok("ok");
         }
     }

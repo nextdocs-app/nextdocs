@@ -208,6 +208,9 @@ jest.mock('@blocknote/core', () => {
 
 jest.mock('@blocknote/core/comments', () => ({
   CommentsExtension: jest.fn(() => ({})),
+  ThreadStore: class ThreadStore {
+    constructor(public auth: unknown) {}
+  },
   ThreadStoreAuth: class ThreadStoreAuth {},
   DefaultThreadStoreAuth: jest.fn(),
 }));
@@ -246,6 +249,24 @@ jest.mock('../../../services/document.service', () => ({
   documentService: {
     listCollaborators: jest.fn().mockResolvedValue([]),
     getDocumentBreadcrumbs: jest.fn().mockResolvedValue([]),
+  },
+}));
+
+// The editor mounts the REST-backed thread store for every document, so keep its
+// initial list off the network in these component tests.
+jest.mock('../../../services/comment.service', () => ({
+  commentService: {
+    list: jest.fn().mockResolvedValue([]),
+    get: jest.fn(),
+    createThread: jest.fn(),
+    addComment: jest.fn(),
+    updateComment: jest.fn(),
+    deleteComment: jest.fn(),
+    deleteThread: jest.fn(),
+    resolveThread: jest.fn(),
+    unresolveThread: jest.fn(),
+    addReaction: jest.fn(),
+    removeReaction: jest.fn(),
   },
 }));
 
@@ -713,6 +734,48 @@ describe('Editor Component', () => {
     expect(commentsButton).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('should offer comments to a guest holding a comment share link', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      accessLevel: 'COMMENT',
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    expect(screen.getByRole('button', { name: /open comments sidebar/i })).toBeInTheDocument();
+  });
+
+  it('should hide comments from a view-only guest', () => {
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      accessLevel: 'VIEW',
+      isReadOnly: true,
+      isRealtimeConnected: false,
+      realtimeProvider: null,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    expect(
+      screen.queryByRole('button', { name: /open comments sidebar/i })
+    ).not.toBeInTheDocument();
+  });
+
   it('should render shared guest toolbar notice and send the CTA to sign-in', () => {
     (useSearchParams as jest.Mock).mockReturnValue({
       get: (key: string) => {
@@ -953,6 +1016,78 @@ describe('Editor Component', () => {
       useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
     expect(lastConfig.extensions).toHaveLength(3);
     expect(CommentsExtension).toHaveBeenCalled();
+  });
+
+  it('refreshes threadStore on realtimeProvider connected status and accessLevel update', async () => {
+    let statusListener: ((event: { status: string }) => void) | undefined;
+    const mockAwareness = {
+      on: jest.fn(),
+      off: jest.fn(),
+      getStates: jest.fn().mockReturnValue(new Map()),
+      setLocalStateField: jest.fn(),
+    };
+    const mockProvider = {
+      awareness: mockAwareness,
+      on: jest.fn((event: string, cb: (event: { status: string }) => void) => {
+        if (event === 'status') {
+          statusListener = cb;
+        }
+      }),
+      off: jest.fn(),
+    };
+
+    const mockUseDocument = useDocument as unknown as jest.Mock;
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-comment-refresh',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      provider: mockProvider,
+      accessLevel: 'COMMENT',
+      isReadOnly: true,
+      realtimeProvider: mockProvider as unknown as WebsocketProvider,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    const { rerender } = render(<Editor />);
+
+    const commentsCall = (CommentsExtension as jest.Mock).mock.calls.find(
+      (call) => call[0]?.threadStore
+    );
+    expect(commentsCall).toBeDefined();
+    const threadStore = commentsCall[0].threadStore;
+    expect(threadStore.auth.canCreateThread()).toBe(true);
+    expect(threadStore.auth.canAddComment()).toBe(true);
+    const refreshSpy = jest.spyOn(threadStore, 'refresh');
+
+    expect(mockProvider.on).toHaveBeenCalledWith('status', expect.any(Function));
+
+    act(() => {
+      statusListener?.({ status: 'connected' });
+    });
+    expect(refreshSpy).toHaveBeenCalled();
+
+    refreshSpy.mockClear();
+
+    mockUseDocument.mockReturnValue({
+      documentId: 'doc-comment-refresh',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      provider: mockProvider,
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      realtimeProvider: mockProvider as unknown as WebsocketProvider,
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    rerender(<Editor />);
+
+    expect(refreshSpy).toHaveBeenCalled();
   });
 
   it('should initialize BlockNote with custom codeBlock schema', () => {
@@ -1197,7 +1332,11 @@ describe('Editor Component', () => {
     mockUseDocument.mockReturnValue({
       documentId: 'doc-stable-1',
       ydoc: mockYdoc,
-      awareness: { setLocalStateField: jest.fn() } as unknown as Awareness,
+      awareness: {
+        on: jest.fn(),
+        off: jest.fn(),
+        setLocalStateField: jest.fn(),
+      } as unknown as Awareness,
       meta: { id: 'doc-stable-1', title: 'Stable Document', updatedAt: new Date().toISOString() },
       accessLevel: 'EDIT',
       isReadOnly: false,

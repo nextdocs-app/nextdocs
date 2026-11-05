@@ -5,6 +5,7 @@ import static com.nextdocs.api.document.config.DocumentProperties.MAX_TREE_DEPTH
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -94,6 +95,7 @@ public class DocumentService {
     private final PermissionService permissionService;
     private final DocumentListQueryHelper queryHelper;
     private final AttachmentService attachmentService;
+    private final CommentCleanup commentCleanup;
     private final DocumentIconCoverApplier iconCoverApplier;
     private final WorkspaceService workspaceService;
     private final SpaceAccessService spaceAccessService;
@@ -961,6 +963,10 @@ public class DocumentService {
             return;
         }
         accessGrantRepository.deleteGrantsByDocumentIdIn(documentIds);
+        // Comments have no soft-delete lifecycle: they go with the page. The comment
+        // rows must be removed before the document row on engines without the
+        // migration's cascade (H2 in tests).
+        commentCleanup.deleteForDocuments(documentIds);
         userDocumentOrderRepository.deleteByDocument_IdIn(documentIds);
         documentRepository.deleteByIdIn(documentIds);
     }

@@ -135,7 +135,10 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
     return () => clearTimeout(timer);
   }, [effectiveDocumentId, isLoading]);
 
-  const showCommentsButton = !!user?.id && accessLevel !== 'VIEW';
+  // Guests holding a COMMENT (or EDIT) share link can discuss too; the API
+  // authorizes them against the link, so the button must not require an account.
+  const showCommentsButton =
+    accessLevel === 'COMMENT' || accessLevel === 'EDIT' || accessLevel === 'OWNER';
   const isCommentsSidebarOpen = showCommentsButton ? showCommentsSidebar : false;
   const activeCommentStats = commentStatsByDocument[documentId] ?? EMPTY_COMMENT_STATS;
 

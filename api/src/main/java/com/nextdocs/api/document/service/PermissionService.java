@@ -34,6 +34,18 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PermissionService {
 
+    /**
+     * A document plus the comment-capable level that granted access to it. Comment
+     * callers need the level for per-thread/per-comment abilities, so resolving it
+     * twice (once to gate, once to answer) would only add a second recursive CTE.
+     */
+    public record DocumentCommentAccess(Document document, DocumentAccessLevel accessLevel) {
+
+        public boolean canEdit() {
+            return accessLevel.allowsEdit();
+        }
+    }
+
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final SpaceAccessService spaceAccessService;
@@ -264,6 +276,50 @@ public class PermissionService {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
         return doc;
+    }
+
+    /**
+     * Enforces that the user holds COMMENT or higher on a live document. A caller
+     * without read access is masked as not-found (existence privacy); a reader below
+     * COMMENT (VIEW) is refused outright so comment payloads never reach them.
+     *
+     * @return the Document and the level that granted comment access
+     */
+    @Transactional(readOnly = true)
+    public DocumentCommentAccess requireCommentAccess(UUID userId, UUID documentId) {
+        Document doc = documentRepository
+                .findByIdAndDeletedAtIsNull(documentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessLevel access = resolveAccess(userId, documentId);
+        if (access == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        if (!access.allowsComment()) {
+            throw new ApiException(ErrorCode.FORBIDDEN);
+        }
+        return new DocumentCommentAccess(doc, access);
+    }
+
+    /**
+     * Anonymous counterpart of {@link #requireCommentAccess}: the share-link level
+     * must reach COMMENT. Used by comments so a COMMENT link can discuss a page
+     * without granting any Yjs write access to the document body.
+     */
+    @Transactional(readOnly = true)
+    public DocumentCommentAccess requirePublicCommentAccess(UUID documentId) {
+        Document doc = documentRepository
+                .findByIdAndDeletedAtIsNull(documentId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+
+        DocumentAccessLevel access = resolvePublicAccess(documentId);
+        if (access == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND);
+        }
+        if (!access.allowsComment()) {
+            throw new ApiException(ErrorCode.FORBIDDEN);
+        }
+        return new DocumentCommentAccess(doc, access);
     }
 
     /**

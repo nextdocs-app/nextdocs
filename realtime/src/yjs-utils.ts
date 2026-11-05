@@ -13,8 +13,6 @@ const MESSAGE_AWARENESS = 1;
 const MESSAGE_ACCESS_LEVEL = 2;
 
 const SYNC_MESSAGE_STEP_1 = syncProtocol.messageYjsSyncStep1;
-const SYNC_MESSAGE_STEP_2 = syncProtocol.messageYjsSyncStep2;
-const SYNC_MESSAGE_UPDATE = syncProtocol.messageYjsUpdate;
 
 const docs = new Map<string, WSSharedDoc>();
 
@@ -26,12 +24,10 @@ const DOCUMENT_WRITE_ALLOWED = new Set<RealtimeAccessLevel>(['EDIT', 'OWNER']);
 // Sync step 1 only asks for the document state; denying it to VIEW connections
 // deadlocks standard y-protocols clients, which never receive the document.
 const DOCUMENT_READ_ALLOWED = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT', 'EDIT', 'OWNER']);
-// Levels that cannot send awareness (cursor presence)
+// Levels that cannot send awareness (cursor presence). COMMENT connections keep
+// awareness so they can broadcast the "comments changed" ping that refreshes the
+// REST-backed thread list; they still write nothing to the Y.Doc.
 const NO_AWARENESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW']);
-// Yjs root keys a COMMENT connection may write. The shared `meta` map
-// (live document title) is intentionally absent: only EDIT/OWNER may write
-// titles, while COMMENT/VIEW receive them read-only over sync.
-const COMMENT_WRITABLE_KEYS = new Set(['threads', 'comment-users']);
 
 interface ConnectionState {
   clientIds: Set<number>;
@@ -144,8 +140,7 @@ function getYDoc(docName: string): WSSharedDoc {
 export function shouldRejectSyncMessage(
   doc: WSSharedDoc,
   conn: WebSocket,
-  syncMessageType: number,
-  decoder?: decoding.Decoder
+  syncMessageType: number
 ): boolean {
   const state = doc.conns.get(conn);
   if (!state) {
@@ -158,43 +153,9 @@ export function shouldRejectSyncMessage(
     return !DOCUMENT_READ_ALLOWED.has(state.accessLevel);
   }
 
-  // Only EDIT/OWNER can write document content
-  if (!canWriteDocument(state.accessLevel)) {
-    if (state.accessLevel === 'COMMENT') {
-      if (syncMessageType === SYNC_MESSAGE_STEP_2 || syncMessageType === SYNC_MESSAGE_UPDATE) {
-        if (!decoder) {
-          return true;
-        }
-
-        try {
-          const update = decoding.readVarUint8Array(decoder);
-          const tempDoc = new Y.Doc();
-          Y.applyUpdate(tempDoc, update);
-
-          for (const key of tempDoc.share.keys()) {
-            if (!COMMENT_WRITABLE_KEYS.has(key)) {
-              return true; // Block edits modifying anything else (incl. `meta` title)
-            }
-          }
-          return false; // Allowed! Only modified threads or comment-users
-        } catch (err) {
-          logger.error('Failed to parse sync update for COMMENT connection', {
-            error: (err as Error).message,
-          });
-          return true; // Reject if update is malformed/cannot be parsed
-        }
-      }
-
-      // Fail closed for any other sync message type: only step 2 and updates
-      // carrying comment-thread changes are allowed through.
-      return true;
-    }
-
-    // Default deny for all other non-writing access levels (VIEW, unknown, undefined)
-    return true;
-  }
-
-  return false;
+  // Step 2 and updates carry writes. Comments live in the API now, so a COMMENT
+  // connection has no Y.Doc writes left to make; only EDIT/OWNER pass.
+  return !canWriteDocument(state.accessLevel);
 }
 
 function handleMessage(conn: WebSocket, doc: WSSharedDoc, message: Uint8Array): void {
@@ -204,7 +165,7 @@ function handleMessage(conn: WebSocket, doc: WSSharedDoc, message: Uint8Array): 
 
     if (inspectionMessageType === MESSAGE_SYNC) {
       const syncMessageType = decoding.readVarUint(inspectionDecoder);
-      if (shouldRejectSyncMessage(doc, conn, syncMessageType, inspectionDecoder)) {
+      if (shouldRejectSyncMessage(doc, conn, syncMessageType)) {
         const state = doc.conns.get(conn);
         logger.warn('Blocked sync write message from read-only connection', {
           docName: doc.name,

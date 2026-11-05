@@ -54,6 +54,11 @@ public class SecurityConfig {
         "/api/v1/documents/*/public/children",
         "/api/v1/documents/*/access-check",
         "/api/v1/documents/*/my-access",
+        // Comment routes are public at the filter level so one URL shape serves
+        // members and share-link guests; CommentService resolves access per caller
+        // and fails closed for a presented-but-invalid Bearer token.
+        "/api/v1/documents/*/threads",
+        "/api/v1/documents/*/threads/**",
         // OpenAPI / Swagger UI
         "/v3/api-docs/**",
         "/swagger-ui/**",

@@ -46,6 +46,11 @@ ws://localhost:1234/{roomId}?token=<access-token>
 Connections are authenticated. The realtime server validates that the JWT is valid
 and that the user can access `/{roomId}` by calling the API.
 
+Access level decides what a connection may send: OWNER and EDIT write the Y.Doc,
+COMMENT reads it and may send awareness (used for the comment-refresh ping), and
+VIEW is read-only for both. Comments themselves are served by the API, not this
+server; a COMMENT connection has no Y.Doc writes left.
+
 ### Health Check
 
 ```bash
