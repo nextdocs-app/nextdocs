@@ -2,11 +2,14 @@ package com.nextdocs.api.workspace.repository;
 
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -33,4 +36,9 @@ public interface WorkspaceMemberRepository extends JpaRepository<WorkspaceMember
     long countByWorkspaceIdAndRole(UUID workspaceId, WorkspaceRole role);
 
     boolean existsByWorkspaceIdAndUserId(UUID workspaceId, UUID userId);
+
+    @Query("SELECT wm.user.id FROM WorkspaceMember wm "
+            + "WHERE wm.workspace.id = :workspaceId AND wm.user.id IN :userIds")
+    List<UUID> findUserIdsByWorkspaceIdAndUserIdIn(
+            @Param("workspaceId") UUID workspaceId, @Param("userIds") Collection<UUID> userIds);
 }
