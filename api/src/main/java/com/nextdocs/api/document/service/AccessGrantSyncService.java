@@ -18,10 +18,7 @@ public class AccessGrantSyncService {
 
     private final AccessGrantRepository repository;
 
-    /**
-     * Creates or updates the canonical user grant. The legacy table remains read-only
-     * migration history and is not written by this service.
-     */
+    /** Creates or updates the canonical user grant. */
     @Transactional
     public AccessGrant upsertUserGrant(Document document, User user, DocumentAccessLevel level, User actor) {
         if (document.getWorkspace() == null) {
