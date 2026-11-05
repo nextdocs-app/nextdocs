@@ -21,7 +21,7 @@ import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.space.entity.Space;
@@ -47,7 +47,7 @@ class DocumentSpaceServiceTest {
     private DocumentRepository documentRepository;
 
     @Mock
-    private DocumentCollaboratorRepository collaboratorRepository;
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
@@ -84,7 +84,7 @@ class DocumentSpaceServiceTest {
         DocumentProperties properties = new DocumentProperties();
         documentService = new DocumentService(
                 documentRepository,
-                collaboratorRepository,
+                accessGrantRepository,
                 userDocumentOrderRepository,
                 userRepository,
                 properties,
@@ -227,6 +227,8 @@ class DocumentSpaceServiceTest {
         assertThat(response.orderKey()).isEqualTo(page.getSiblingOrderKey());
         assertThat(response.spaceId()).isEqualTo(space.getId());
         verify(documentRepository).save(page);
+        // Audience rules from the previous container must not survive the move.
+        verify(permissionService).removeSpaceAudienceRules(page.getId());
     }
 
     @Test
@@ -304,6 +306,7 @@ class DocumentSpaceServiceTest {
         // Root-page order outside a space is personal, so the shared key is meaningless.
         assertThat(page.getSiblingOrderKey()).isNull();
         verify(documentRepository).save(page);
+        verify(permissionService).removeSpaceAudienceRules(page.getId());
 
         // The page returns to the owner's Private section, which needs a personal row;
         // detaching puts it before every existing root page.
@@ -370,10 +373,12 @@ class DocumentSpaceServiceTest {
     private void stubRestoreTail(Document page) {
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.findAllByParent_IdIn(any())).thenReturn(List.of());
-        when(collaboratorRepository.findAllByDocument_Id(page.getId())).thenReturn(List.of());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(page.getId()))
+                .thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(page.getId()))
                 .thenReturn(false);
-        when(collaboratorRepository.existsByDocument_Id(page.getId())).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(page.getId()))
+                .thenReturn(false);
         when(permissionService.resolveAccess(userId, page.getId())).thenReturn(DocumentAccessLevel.EDIT);
     }
 

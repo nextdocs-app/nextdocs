@@ -51,6 +51,7 @@ class DocumentIconCoverMigrationPostgresTest {
             stmt.execute("SET search_path TO " + schema);
         }
         userId = insertUser();
+        insertWorkspace();
     }
 
     @AfterEach
@@ -167,12 +168,20 @@ class DocumentIconCoverMigrationPostgresTest {
         return id;
     }
 
+    private void insertWorkspace() throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO workspaces (name, created_at, updated_at) VALUES ('Test', now(), now())")) {
+            stmt.executeUpdate();
+        }
+    }
+
     private UUID insertDocument() throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, title, yjs_state, general_access_mode, link_access_level, "
-                        + "link_inherit_blocked, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
+                "INSERT INTO documents (id, user_id, workspace_id, title, yjs_state, general_access_mode, "
+                        + "link_access_level, link_inherit_blocked, created_at, updated_at) "
+                        + "VALUES (?, ?, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), "
+                        + "?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
             stmt.setObject(1, id);
             stmt.setObject(2, userId);
             stmt.setString(3, "Icon doc " + id);

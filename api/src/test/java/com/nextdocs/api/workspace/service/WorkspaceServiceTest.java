@@ -22,6 +22,7 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
@@ -41,6 +42,7 @@ import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.InstanceLockRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceGroupMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
@@ -65,6 +67,9 @@ class WorkspaceServiceTest {
 
     @Mock
     private WorkspaceMemberRepository memberRepository;
+
+    @Mock
+    private AccessGrantRepository accessGrantRepository;
 
     @Mock
     private UserRepository userRepository;
@@ -96,6 +101,9 @@ class WorkspaceServiceTest {
     @Mock
     private SpaceRepository spaceRepository;
 
+    @Mock
+    private WorkspaceGroupMemberRepository groupMemberRepository;
+
     private WorkspaceService workspaceService;
     private Workspace workspace;
     private UUID workspaceId;
@@ -108,6 +116,7 @@ class WorkspaceServiceTest {
         workspaceService = new WorkspaceService(
                 workspaceRepository,
                 memberRepository,
+                accessGrantRepository,
                 userRepository,
                 refreshTokenRepository,
                 accessService,
@@ -115,7 +124,8 @@ class WorkspaceServiceTest {
                 attachmentService,
                 instanceLockRepository,
                 spaceMemberRepository,
-                spaceRepository);
+                spaceRepository,
+                groupMemberRepository);
         workspaceId = UUID.randomUUID();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
         owner = user("owner@example.com", "Owner");
@@ -672,7 +682,7 @@ class WorkspaceServiceTest {
     }
 
     @Test
-    void listMembers_prefersAnExplicitSpaceMembershipOverThePublicGrant() {
+    void listMembers_resolvesBroadestAccessBetweenExplicitMembershipAndPublicDefault() {
         when(accessService.requireMember(actorId))
                 .thenReturn(new Membership(workspace, member(owner, WorkspaceRole.OWNER)));
         when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
@@ -701,6 +711,13 @@ class WorkspaceServiceTest {
             assertThat(space.name()).isEqualTo("General");
             assertThat(space.accessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
         });
+
+        // Highest level wins: stronger public-space default upgrades explicit level.
+        publicSpace.setEveryoneAccessLevel(DocumentAccessLevel.OWNER);
+
+        assertThat(workspaceService.listMembers(actorId).get(0).spaces())
+                .singleElement()
+                .satisfies(space -> assertThat(space.accessLevel()).isEqualTo(DocumentAccessLevel.OWNER));
     }
 
     @Test
@@ -917,6 +934,13 @@ class WorkspaceServiceTest {
         // Space memberships go with the workspace membership, so no stale space grant
         // keeps resolving for the removed account.
         verify(spaceMemberRepository).deleteByUser_Id(target.getId());
+        verify(groupMemberRepository).deleteById_UserId(target.getId());
+        verify(accessGrantRepository).deleteUserGrantsByWorkspace(workspaceId, target.getId());
+
+        // Re-inviting the same account creates only workspace membership; stale group
+        // access cannot return unless an admin adds the user to a group again.
+        workspaceService.addMember(workspace, target, WorkspaceRole.MEMBER);
+        verify(groupMemberRepository, never()).save(any());
     }
 
     @Test

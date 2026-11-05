@@ -53,7 +53,7 @@ class SpacePermissionMigrationPostgresTest {
         username = PostgresTestSupport.resolveUsername();
         password = PostgresTestSupport.resolvePassword();
         connection = PostgresTestSupport.connect(url, username, password);
-        migrateTo(null);
+        migrateTo("30");
     }
 
     @AfterEach
@@ -99,6 +99,7 @@ class SpacePermissionMigrationPostgresTest {
                 .defaultSchema(schema)
                 .createSchemas(false)
                 .locations("classpath:db/migration")
+                .target("30")
                 .load()
                 .migrate();
     }

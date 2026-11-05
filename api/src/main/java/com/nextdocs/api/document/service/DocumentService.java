@@ -15,11 +15,12 @@ import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentIconCoverMapper;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponses;
+import com.nextdocs.api.document.entity.AccessGrant;
+import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.DocumentCollaborator;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import com.nextdocs.api.document.repository.DocumentCollaboratorRepository;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
@@ -27,6 +28,7 @@ import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
+import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -85,7 +87,7 @@ public class DocumentService {
     static final int MAX_PUBLIC_STATE_ENCODED_LENGTH = ((MAX_PUBLIC_STATE_BYTES + 2) / 3) * 4 + 4;
 
     private final DocumentRepository documentRepository;
-    private final DocumentCollaboratorRepository collaboratorRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserRepository userRepository;
     private final DocumentProperties documentProperties;
@@ -190,6 +192,11 @@ public class DocumentService {
         }
 
         Space targetSpace = space != null ? space : (parent != null ? permissionService.resolveSpace(parent) : null);
+        Workspace workspace = targetSpace != null
+                ? targetSpace.getWorkspace()
+                : (parent != null && parent.getWorkspace() != null
+                        ? parent.getWorkspace()
+                        : workspaceService.requireWorkspace(userId));
 
         Document document = Document.builder()
                 .id(documentId)
@@ -201,6 +208,7 @@ public class DocumentService {
                 .createdBy(request.createdBy())
                 .parent(parent)
                 .space(space)
+                .workspace(workspace)
                 .siblingOrderKey(siblingOrderKey)
                 .build();
 
@@ -700,7 +708,13 @@ public class DocumentService {
                 .findMaxSpaceSiblingOrderKey(spaceId, documentId)
                 .filter(FractionalIndex::isValidOrderKey)
                 .orElse(null);
+        // A standalone page may still carry rules from a space it was detached from;
+        // clear them before the new space can make them meaningful again.
+        permissionService.removeSpaceAudienceRules(documentId);
+        // Workspaces are single-tenant per instance (V19), so the document and space
+        // share the same workspace; subtree workspace IDs are already consistent.
         document.setSpace(space);
+        document.setWorkspace(space.getWorkspace());
         document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
         return toResponse(documentRepository.save(document), true, userId);
     }
@@ -719,6 +733,8 @@ public class DocumentService {
         if (document.getSpace() == null || !document.getSpace().getId().equals(spaceId)) {
             throw new ApiException(ErrorCode.NOT_FOUND, "The page is not in this space.");
         }
+        // Audience rules replace a space baseline, so they cannot outlive the space.
+        permissionService.removeSpaceAudienceRules(documentId);
         document.setSpace(null);
         // Root-page ordering outside a space is the caller's personal navigation row,
         // so the shared key has no meaning once the page is detached.
@@ -805,8 +821,8 @@ public class DocumentService {
                 }
             }
 
-            for (DocumentCollaborator collaborator : collaboratorRepository.findAllByDocument_Id(documentId)) {
-                ensureCollaboratorOrderRow(document, collaborator);
+            for (AccessGrant grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId)) {
+                ensureCollaboratorOrderRow(document, grant);
             }
         }
 
@@ -828,9 +844,8 @@ public class DocumentService {
 
                 // Soft delete wiped every user's ordering rows; give collaborators of
                 // restored descendants back a row so their Shared-section placement survives.
-                for (DocumentCollaborator collaborator :
-                        collaboratorRepository.findAllByDocument_Id(descendant.getId())) {
-                    ensureCollaboratorOrderRow(descendant, collaborator);
+                for (AccessGrant grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(descendant.getId())) {
+                    ensureCollaboratorOrderRow(descendant, grant);
                 }
             }
         }
@@ -945,7 +960,7 @@ public class DocumentService {
         if (documentIds.isEmpty()) {
             return;
         }
-        collaboratorRepository.deleteByDocument_IdIn(documentIds);
+        accessGrantRepository.deleteGrantsByDocumentIdIn(documentIds);
         userDocumentOrderRepository.deleteByDocument_IdIn(documentIds);
         documentRepository.deleteByIdIn(documentIds);
     }
@@ -1091,7 +1106,8 @@ public class DocumentService {
         // Anonymous readers (share-link guests) must not learn whether a document has
         // collaborators: listPublicChildren answers false for the same reason, and only a
         // signed-in caller has a roster to compare the flag against.
-        boolean hasCollaborators = callerUserId != null && collaboratorRepository.existsByDocument_Id(document.getId());
+        boolean hasCollaborators =
+                callerUserId != null && accessGrantRepository.existsPositiveGrantByDocumentId(document.getId());
         DocumentAccessLevel accessLevel;
         if (callerUserId == null) {
             accessLevel = publicAccessHint != null
@@ -1151,11 +1167,11 @@ public class DocumentService {
         return allDescendants;
     }
 
-    private void ensureCollaboratorOrderRow(Document document, DocumentCollaborator collaborator) {
-        if (collaborator.getAccessLevel() == DocumentAccessLevel.NO_ACCESS) {
+    private void ensureCollaboratorOrderRow(Document document, AccessGrant grant) {
+        if (grant.getEffect() != AccessGrantEffect.ALLOW) {
             return;
         }
-        ensurePersonalOrderRow(collaborator.getUser(), document);
+        ensurePersonalOrderRow(grant.getUser(), document);
     }
 
     /** Gives a user without a personal navigation row a fresh position at the top. */

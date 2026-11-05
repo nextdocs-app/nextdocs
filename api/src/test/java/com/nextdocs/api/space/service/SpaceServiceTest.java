@@ -17,11 +17,14 @@ import static org.mockito.Mockito.when;
 import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.service.AttachmentService;
+import com.nextdocs.api.audit.entity.AccessAuditAction;
+import com.nextdocs.api.audit.service.AccessAuditService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.util.FractionalIndex;
@@ -81,6 +84,9 @@ class SpaceServiceTest {
     private DocumentRepository documentRepository;
 
     @Mock
+    private AccessGrantRepository accessGrantRepository;
+
+    @Mock
     private WorkspaceAccessService workspaceAccessService;
 
     @Mock
@@ -104,6 +110,9 @@ class SpaceServiceTest {
     @Mock
     private AttachmentService attachmentService;
 
+    @Mock
+    private AccessAuditService auditService;
+
     private SpaceService spaceService;
 
     private Workspace workspace;
@@ -118,6 +127,7 @@ class SpaceServiceTest {
                 memberRepository,
                 userSpaceOrderRepository,
                 documentRepository,
+                accessGrantRepository,
                 workspaceAccessService,
                 workspaceRepository,
                 workspaceMemberRepository,
@@ -125,7 +135,8 @@ class SpaceServiceTest {
                 spaceAccessService,
                 documentService,
                 pageIconValidator,
-                attachmentService);
+                attachmentService,
+                auditService);
 
         workspace = Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
         actor = User.builder().email("owner@example.com").displayName("Owner").build();
@@ -563,6 +574,7 @@ class SpaceServiceTest {
 
         spaceService.removeMember(actorId, space.getId(), actorId);
 
+        verify(accessGrantRepository).deleteUserGrantsInSpace(space.getId(), actorId);
         verify(memberRepository).delete(ownRow);
     }
 
@@ -575,6 +587,8 @@ class SpaceServiceTest {
 
         verify(spaceRepository).findByIdForUpdate(space.getId());
         verify(documentService).assignSpace(actorId, documentId, space.getId());
+        verify(auditService)
+                .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_ATTACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
     }
 
@@ -587,6 +601,8 @@ class SpaceServiceTest {
 
         verify(spaceRepository).findByIdForUpdate(space.getId());
         verify(documentService).clearSpace(actorId, documentId, space.getId());
+        verify(auditService)
+                .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
     }
 

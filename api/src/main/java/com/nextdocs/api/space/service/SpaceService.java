@@ -3,12 +3,15 @@ package com.nextdocs.api.space.service;
 import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.service.AttachmentService;
+import com.nextdocs.api.audit.entity.AccessAuditAction;
+import com.nextdocs.api.audit.service.AccessAuditService;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.util.FractionalIndex;
@@ -86,6 +89,7 @@ public class SpaceService {
     private final SpaceMemberRepository memberRepository;
     private final UserSpaceOrderRepository userSpaceOrderRepository;
     private final DocumentRepository documentRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final WorkspaceAccessService workspaceAccessService;
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
@@ -94,6 +98,7 @@ public class SpaceService {
     private final DocumentService documentService;
     private final PageIconValidator pageIconValidator;
     private final AttachmentService attachmentService;
+    private final AccessAuditService auditService;
 
     @Autowired
     @Lazy
@@ -294,6 +299,7 @@ public class SpaceService {
                     .findById(userId)
                     .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found.")));
             spaceRepository.save(space);
+            auditService.recordSpace(space, userId, AccessAuditAction.SPACE_ARCHIVE, "SPACE", space.getId(), null);
             log.info("Archived space {} by {}", spaceId, userId);
         }
         return toResponse(
@@ -316,6 +322,7 @@ public class SpaceService {
             space.setArchivedAt(null);
             space.setArchivedBy(null);
             spaceRepository.save(space);
+            auditService.recordSpace(space, userId, AccessAuditAction.SPACE_RESTORE, "SPACE", space.getId(), null);
             log.info("Restored space {} by {}", spaceId, userId);
         }
         return toResponse(
@@ -542,6 +549,8 @@ public class SpaceService {
                 .accessLevel(level)
                 .grantedBy(actor)
                 .build());
+        auditService.recordSpace(
+                space, userId, AccessAuditAction.SPACE_MEMBER_ADD, "USER", target.getId(), "level=" + level);
         return roster(spaceId);
     }
 
@@ -566,6 +575,8 @@ public class SpaceService {
         }
         target.setAccessLevel(newLevel);
         memberRepository.save(target);
+        auditService.recordSpace(
+                space, userId, AccessAuditAction.SPACE_MEMBER_UPDATE, "USER", targetUserId, "level=" + newLevel);
         return roster(spaceId);
     }
 
@@ -594,7 +605,9 @@ public class SpaceService {
         if (target.getAccessLevel() == DocumentAccessLevel.OWNER && ownerCount(spaceId) <= 1) {
             throw new ApiException(ErrorCode.CONFLICT, self ? LAST_OWNER_LEAVE_MESSAGE : LAST_OWNER_MESSAGE);
         }
+        accessGrantRepository.deleteUserGrantsInSpace(spaceId, targetUserId);
         memberRepository.delete(target);
+        auditService.recordSpace(space, userId, AccessAuditAction.SPACE_MEMBER_REMOVE, "USER", targetUserId, null);
         return roster(spaceId);
     }
 
@@ -605,8 +618,10 @@ public class SpaceService {
      */
     @Transactional
     public DocumentResponse attachPage(UUID userId, UUID spaceId, UUID documentId) {
-        lockSpace(spaceId);
-        return documentService.assignSpace(userId, documentId, spaceId);
+        Space space = lockSpace(spaceId);
+        DocumentResponse response = documentService.assignSpace(userId, documentId, spaceId);
+        auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_ATTACH, "DOCUMENT", documentId, null);
+        return response;
     }
 
     /**
@@ -615,8 +630,9 @@ public class SpaceService {
      */
     @Transactional
     public void detachPage(UUID userId, UUID spaceId, UUID documentId) {
-        lockSpace(spaceId);
+        Space space = lockSpace(spaceId);
         documentService.clearSpace(userId, documentId, spaceId);
+        auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
     }
 
     /**

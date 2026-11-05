@@ -56,6 +56,7 @@ class AttachmentMigrationPostgresTest {
             stmt.execute("SET search_path TO " + schema);
         }
         userId = insertUser();
+        insertWorkspace();
     }
 
     @AfterEach
@@ -199,6 +200,7 @@ class AttachmentMigrationPostgresTest {
             }
 
             userId = insertUser();
+            insertWorkspace();
             UUID documentId = insertDocument();
             UUID attachmentId = UUID.randomUUID();
             // Pre-V20 shape: only document_id exists, so insert without workspace_id.
@@ -377,10 +379,14 @@ class AttachmentMigrationPostgresTest {
 
     private UUID insertDocument() throws SQLException {
         UUID id = UUID.randomUUID();
-        try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, title, yjs_state, general_access_mode, link_access_level, "
-                        + "link_inherit_blocked, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
+        boolean hasWorkspace = hasWorkspaceColumn();
+        String sql = "INSERT INTO documents (id, user_id"
+                + (hasWorkspace ? ", workspace_id" : "")
+                + ", title, yjs_state, general_access_mode, link_access_level, link_inherit_blocked, "
+                + "created_at, updated_at) VALUES (?, ?"
+                + (hasWorkspace ? ", (SELECT id FROM workspaces ORDER BY created_at LIMIT 1)" : "")
+                + ", ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())";
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setObject(1, id);
             stmt.setObject(2, userId);
             stmt.setString(3, "Attachment doc " + id);
@@ -388,6 +394,16 @@ class AttachmentMigrationPostgresTest {
             stmt.executeUpdate();
         }
         return id;
+    }
+
+    private boolean hasWorkspaceColumn() throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                        + "AND table_name = 'documents' AND column_name = 'workspace_id'")) {
+            try (java.sql.ResultSet rs = stmt.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     private UUID insertWorkspace() throws SQLException {
