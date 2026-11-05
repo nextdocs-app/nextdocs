@@ -63,6 +63,37 @@ class SharingSettingsValidatorTest {
     }
 
     @Test
+    void validate_allowsExplicitExpiryClearOnlyOnLinkUpdates() {
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK,
+                DocumentAccessLevel.EDIT,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true);
+
+        assertTrue(validator.validate(request).isEmpty());
+    }
+
+    @Test
+    void validate_rejectsExpiryAndClearFlagTogether() {
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                DocumentGeneralAccessMode.ANYONE_WITH_LINK,
+                DocumentAccessLevel.EDIT,
+                null,
+                null,
+                null,
+                null,
+                java.time.OffsetDateTime.now().plusDays(1),
+                true);
+
+        assertTrue(validator.validate(request).stream()
+                .anyMatch(v -> "clearLinkExpiresAt".equals(v.getPropertyPath().toString())));
+    }
+
+    @Test
     void validate_passes_whenRestrictedWithoutLinkAccessLevel() {
         SharingSettingsUpdateRequest request =
                 new SharingSettingsUpdateRequest(DocumentGeneralAccessMode.RESTRICTED, null, null);
@@ -70,6 +101,21 @@ class SharingSettingsValidatorTest {
         Set<ConstraintViolation<SharingSettingsUpdateRequest>> violations = validator.validate(request);
 
         assertTrue(violations.isEmpty());
+    }
+
+    @Test
+    void validate_passes_whenPatchOnlyUpdatesWorkspaceAccess() {
+        SharingSettingsUpdateRequest request = new SharingSettingsUpdateRequest(
+                null,
+                null,
+                null,
+                com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS,
+                DocumentAccessLevel.VIEW,
+                null,
+                null,
+                null);
+
+        assertTrue(validator.validate(request).isEmpty());
     }
 
     @Test

@@ -2,8 +2,10 @@ package com.nextdocs.api.document.service;
 
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
@@ -22,17 +24,24 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Authoritative service to resolve effective permissions and enforce access control.
  * It replaces direct ownership/collaborator lookups with ancestor-walk resolution.
+ *
+ * <p>The SQL resolver is the identity contract: nearest-page overrides, page No access
+ * barriers, page audience overrides, and identity-only trash
+ * resolution. Public links are a separate positive channel. The golden matrix pins the SQL
+ * contract.
  */
 @Service
 @RequiredArgsConstructor
 public class PermissionService {
 
     private final DocumentRepository documentRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final SpaceAccessService spaceAccessService;
 
     /**
      * Resolves the effective access level of a user for a document.
-     * Walks up the ancestor chain (closest-ancestor-wins).
+     * Resolves identity overrides along the ancestor chain, then takes the higher
+     * of that identity level and the independent public-link level.
      *
      * @return the resolved access level, or null if no access is granted
      */
@@ -63,6 +72,45 @@ public class PermissionService {
     }
 
     /**
+     * Raw versus effective access, without re-implementing precedence in Java. The two
+     * channels are resolved by the same SQL functions the gates use; this method only
+     * compares their positive levels and names the winner.
+     */
+    @Transactional(readOnly = true)
+    public AccessExplainResponse explainAccess(UUID userId, UUID documentId) {
+        Document document =
+                documentRepository.findById(documentId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+        boolean trashed = document.getDeletedAt() != null;
+        String identity = documentRepository.resolveIdentityAccess(userId, documentId, trashed ? "TRASH" : "ACTIVE");
+        String link = trashed ? null : documentRepository.resolvePublicAccess(documentId);
+        int identityRank = accessRank(identity);
+        int linkRank = accessRank(link);
+        String effective = linkRank > identityRank ? link : identity;
+        String channel = linkRank > identityRank ? "LINK" : effective != null ? "IDENTITY" : null;
+        return new AccessExplainResponse(
+                documentId,
+                effective,
+                identity,
+                link,
+                channel,
+                effective == null || "NO_ACCESS".equals(effective),
+                "NO_ACCESS".equals(identity));
+    }
+
+    private static int accessRank(String level) {
+        if (level == null) {
+            return 0;
+        }
+        return switch (level) {
+            case "OWNER" -> 4;
+            case "EDIT" -> 3;
+            case "COMMENT" -> 2;
+            case "VIEW" -> 1;
+            default -> 0;
+        };
+    }
+
+    /**
      * Resolves the effective access level of a user for a batch of documents.
      * One native query replaces one recursive CTE per document for callers that
      * already hold the id set (ancestor walks, subtree reconciles).
@@ -72,6 +120,19 @@ public class PermissionService {
         return resolveBatch(documentIds, () -> {
             String joined = joinIds(documentIds);
             return joined == null ? List.of() : documentRepository.resolveEffectiveAccessBatch(userId, joined);
+        });
+    }
+
+    /**
+     * Resolves the identity channel for a batch of active documents, without public-link
+     * access. Shared-root reconciliation uses this to keep link-only readers out of the
+     * signed-in Shared section.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, DocumentAccessLevel> resolveIdentityAccessBatch(UUID userId, Collection<UUID> documentIds) {
+        return resolveBatch(documentIds, () -> {
+            String joined = joinIds(documentIds);
+            return joined == null ? List.of() : documentRepository.resolveIdentityAccessBatch(userId, joined);
         });
     }
 
@@ -87,9 +148,9 @@ public class PermissionService {
     }
 
     /**
-     * Resolves one document's effective level for several users at once. The
+     * Resolves one document's identity level for several users at once. The
      * collaborator roster needs this: each row reports what that person can
-     * actually do here, so a page owner demoted by their space membership no
+     * actually do via identity channels here, so a page owner demoted by their space membership no
      * longer displays as full access. Keys are present even when the level is
      * null, so a caller can tell "blocked" from "not queried".
      */
@@ -102,7 +163,7 @@ public class PermissionService {
         }
         List<Object[]> rows = trashed
                 ? documentRepository.resolveTrashAccessForUsers(documentId, joined)
-                : documentRepository.resolveEffectiveAccessForUsers(documentId, joined);
+                : documentRepository.resolveIdentityAccessForUsers(documentId, joined);
         Map<UUID, DocumentAccessLevel> result = new HashMap<>();
         for (Object[] row : rows) {
             if (row[0] == null) {
@@ -220,11 +281,12 @@ public class PermissionService {
 
     /**
      * Enforces that the user may administer sharing for the document. A page inside
-     * a space is shared through the space: its administrator (space OWNER or a
-     * workspace admin) is the authority, even when the caller's effective page
-     * level is lower than OWNER. A standalone page keeps the effective-OWNER gate,
-     * including trashed-page breakpoints and the existence mask for callers with
-     * no access. An archived space is rejected with 409 before any mutation.
+     * a space follows the same closest-ancestor rule as content: an effective page
+     * OWNER (usually an explicit collaborator row) is the authority, and space
+     * administration remains the fallback so a space OWNER or workspace admin can
+     * still manage every page. A standalone page keeps the effective-OWNER gate,
+     * including trashed-page breakpoints and the existence mask for callers with no
+     * access. An archived space is rejected with 409 before any mutation.
      *
      * @return the Document when the caller may administer sharing
      */
@@ -238,9 +300,24 @@ public class PermissionService {
 
         Space space = resolveSpace(doc);
         if (space != null) {
-            // Space administration is the sharing gate for space content. The
-            // caller may be a workspace admin without a content grant, which is
-            // why this deliberately does not start from the page access level.
+            if (space.getArchivedAt() != null) {
+                // The archive freezes sharing even for a page OWNER. Route through
+                // administration so the caller gets the same 409/403/404 as before.
+                spaceAccessService.requireActiveAdministration(userId, space.getId());
+                return doc;
+            }
+
+            // A page-level OWNER overrides a lower space grant, so it must also
+            // carry the sharing rights that make "Full access" truthful.
+            DocumentAccessLevel pageAccess =
+                    active != null ? resolveAccess(userId, documentId) : resolveTrashAccess(userId, documentId);
+            if (pageAccess == DocumentAccessLevel.OWNER) {
+                return doc;
+            }
+
+            // Space administration remains the fallback: the caller may be a
+            // workspace admin without a content grant, which is why this does not
+            // require a page grant before checking space ownership.
             spaceAccessService.requireActiveAdministration(userId, space.getId());
             return doc;
         }
@@ -281,6 +358,16 @@ public class PermissionService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         return trashed;
+    }
+
+    /**
+     * Drops page audience rules for a subtree that is leaving its space. This is a
+     * maintenance write, not an authorization gate: callers have already checked that
+     * the actor may move or detach the page. Identity, group, and user grants stay.
+     */
+    @Transactional
+    public void removeSpaceAudienceRules(UUID subtreeRootId) {
+        accessGrantRepository.deleteSpaceAudienceGrantsInSubtree(subtreeRootId);
     }
 
     /**

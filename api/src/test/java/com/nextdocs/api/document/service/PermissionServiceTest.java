@@ -6,11 +6,14 @@ import static org.mockito.Mockito.*;
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,13 +30,25 @@ class PermissionServiceTest {
     private DocumentRepository documentRepository;
 
     @Mock
+    private AccessGrantRepository accessGrantRepository;
+
+    @Mock
     private SpaceAccessService spaceAccessService;
 
     private PermissionService permissionService;
 
     @BeforeEach
     void setUp() {
-        permissionService = new PermissionService(documentRepository, spaceAccessService);
+        permissionService = new PermissionService(documentRepository, accessGrantRepository, spaceAccessService);
+    }
+
+    @Test
+    void removeSpaceAudienceRules_delegatesToTheSubtreeDelete() {
+        UUID rootId = UUID.randomUUID();
+
+        permissionService.removeSpaceAudienceRules(rootId);
+
+        verify(accessGrantRepository).deleteSpaceAudienceGrantsInSubtree(rootId);
     }
 
     @Test
@@ -458,7 +473,7 @@ class PermissionServiceTest {
     }
 
     @Test
-    void requireSharingAdminAccess_spacePage_delegatesToSpaceAdministration() {
+    void requireSharingAdminAccess_spacePageWithPageOwner_returnsDocumentWithoutSpaceAdministration() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Space space = Space.builder().id(UUID.randomUUID()).name("Team").build();
@@ -466,14 +481,29 @@ class PermissionServiceTest {
         Document doc = Document.builder().id(documentId).parent(root).build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("OWNER");
+
+        Document result = permissionService.requireSharingAdminAccess(userId, documentId);
+
+        assertEquals(doc, result);
+        verify(spaceAccessService, never()).requireActiveAdministration(userId, space.getId());
+    }
+
+    @Test
+    void requireSharingAdminAccess_spacePageWithoutPageOwner_fallsBackToSpaceAdministration() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Team").build();
+        Document root = Document.builder().id(UUID.randomUUID()).space(space).build();
+        Document doc = Document.builder().id(documentId).parent(root).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("EDIT");
 
         Document result = permissionService.requireSharingAdminAccess(userId, documentId);
 
         assertEquals(doc, result);
         verify(spaceAccessService).requireActiveAdministration(userId, space.getId());
-        // The caller's page level is irrelevant: space ownership decides.
-        verify(documentRepository, never()).resolveEffectiveAccess(any(), any());
-        verify(documentRepository, never()).resolveTrashAccess(any(), any());
     }
 
     @Test
@@ -551,5 +581,84 @@ class PermissionServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class, () -> permissionService.requireReadAccessIncludingTrash(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void explainAccess_linkRaisesADeniedIdentity() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        when(documentRepository.findById(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolveIdentityAccess(userId, documentId, "ACTIVE"))
+                .thenReturn("NO_ACCESS");
+        when(documentRepository.resolvePublicAccess(documentId)).thenReturn("VIEW");
+
+        AccessExplainResponse response = permissionService.explainAccess(userId, documentId);
+
+        assertEquals("VIEW", response.effectiveLevel());
+        assertEquals("NO_ACCESS", response.identityLevel());
+        assertEquals("VIEW", response.linkLevel());
+        assertEquals("LINK", response.channel());
+        assertFalse(response.denied());
+        assertTrue(response.identityDenied());
+        verify(documentRepository).resolveIdentityAccess(userId, documentId, "ACTIVE");
+        verify(documentRepository, never()).resolveEffectiveAccess(userId, documentId);
+    }
+
+    @Test
+    void explainAccess_identityOutranksTheLink() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        when(documentRepository.findById(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolveIdentityAccess(userId, documentId, "ACTIVE"))
+                .thenReturn("EDIT");
+        when(documentRepository.resolvePublicAccess(documentId)).thenReturn("VIEW");
+
+        AccessExplainResponse response = permissionService.explainAccess(userId, documentId);
+
+        assertEquals("EDIT", response.effectiveLevel());
+        assertEquals("IDENTITY", response.channel());
+        assertFalse(response.denied());
+        assertFalse(response.identityDenied());
+    }
+
+    @Test
+    void explainAccess_noChannelMeansDenied() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        when(documentRepository.findById(documentId))
+                .thenReturn(Optional.of(Document.builder().id(documentId).build()));
+        when(documentRepository.resolveIdentityAccess(userId, documentId, "ACTIVE"))
+                .thenReturn(null);
+        when(documentRepository.resolvePublicAccess(documentId)).thenReturn(null);
+
+        AccessExplainResponse response = permissionService.explainAccess(userId, documentId);
+
+        assertNull(response.effectiveLevel());
+        assertNull(response.channel());
+        assertTrue(response.denied());
+        assertFalse(response.identityDenied());
+    }
+
+    @Test
+    void explainAccess_usesTrashIdentityScopeAndDoesNotCountLinkAccess() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .deletedAt(OffsetDateTime.now())
+                .build();
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(documentRepository.resolveIdentityAccess(userId, documentId, "TRASH"))
+                .thenReturn("OWNER");
+
+        AccessExplainResponse response = permissionService.explainAccess(userId, documentId);
+
+        assertEquals("OWNER", response.identityLevel());
+        assertEquals("OWNER", response.effectiveLevel());
+        assertEquals("IDENTITY", response.channel());
+        assertNull(response.linkLevel());
+        verify(documentRepository, never()).resolvePublicAccess(documentId);
     }
 }

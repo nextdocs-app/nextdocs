@@ -3,6 +3,7 @@ package com.nextdocs.api.document.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -17,12 +18,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
+import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.document.service.DocumentSharingSettingsService;
+import com.nextdocs.api.document.service.PermissionService;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -50,6 +54,12 @@ class DocumentSharingControllerTest {
 
     @MockitoBean
     private DocumentSharingService sharingService;
+
+    @MockitoBean
+    private DocumentSharingSettingsService settingsService;
+
+    @MockitoBean
+    private PermissionService permissionService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
@@ -88,6 +98,18 @@ class DocumentSharingControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
                 .andExpect(jsonPath("$.data[0].owner").value(true));
+    }
+
+    @Test
+    void explainAccess_success_returnsRawLevelsAndWinningChannel() throws Exception {
+        when(permissionService.explainAccess(userId, documentId))
+                .thenReturn(new AccessExplainResponse(documentId, "EDIT", "NO_ACCESS", "EDIT", "LINK", false, true));
+
+        mockMvc.perform(get("/api/v1/documents/{id}/access/explain", documentId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.effectiveLevel").value("EDIT"));
+
+        verify(permissionService).requireSharingAdminAccess(userId, documentId);
     }
 
     @Test
@@ -224,7 +246,7 @@ class DocumentSharingControllerTest {
         SharingSettingsResponse response =
                 new SharingSettingsResponse(DocumentGeneralAccessMode.RESTRICTED, DocumentAccessLevel.VIEW, false);
 
-        when(sharingService.getSharingSettings(userId, documentId)).thenReturn(response);
+        when(settingsService.getSharingSettings(userId, documentId)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/documents/{id}/sharing", documentId).with(user(principal)))
                 .andExpect(status().isOk())
@@ -237,7 +259,7 @@ class DocumentSharingControllerTest {
         SharingSettingsResponse response =
                 new SharingSettingsResponse(DocumentGeneralAccessMode.ANYONE_WITH_LINK, DocumentAccessLevel.EDIT, true);
 
-        when(sharingService.updateSharingSettings(eq(userId), eq(documentId), any()))
+        when(settingsService.updateSharingSettings(eq(userId), eq(documentId), any()))
                 .thenReturn(response);
 
         mockMvc.perform(patch("/api/v1/documents/{id}/sharing", documentId)
@@ -252,6 +274,24 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.linkAccessLevel").value("EDIT"));
+    }
+
+    @Test
+    void updateSharingSettings_workspaceOnlyPatchDoesNotRequireGeneralAccessFields() throws Exception {
+        when(settingsService.updateSharingSettings(eq(userId), eq(documentId), any()))
+                .thenReturn(new SharingSettingsResponse(
+                        DocumentGeneralAccessMode.RESTRICTED, DocumentAccessLevel.VIEW, false));
+
+        mockMvc.perform(patch("/api/v1/documents/{id}/sharing", documentId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                          "workspaceAccessMode": "WORKSPACE_MEMBERS",
+                          "workspaceAccessLevel": "VIEW"
+                        }
+                        """))
+                .andExpect(status().isOk());
     }
 
     @Test

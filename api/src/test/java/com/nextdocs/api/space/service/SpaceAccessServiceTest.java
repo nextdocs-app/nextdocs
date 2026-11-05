@@ -120,6 +120,26 @@ class SpaceAccessServiceTest {
     }
 
     @Test
+    void load_publicSpaceNeverLowersAListedMember() {
+        authorize(WorkspaceRole.MEMBER);
+        space.setAccessMode(SpaceAccessMode.PUBLIC);
+        space.setEveryoneAccessLevel(DocumentAccessLevel.VIEW);
+        memberWithLevel(DocumentAccessLevel.EDIT);
+
+        assertThat(accessService.load(userId, space.getId()).accessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+    }
+
+    @Test
+    void load_publicSpaceDefaultWinsWhenHigherThanExplicitMembership() {
+        authorize(WorkspaceRole.MEMBER);
+        space.setAccessMode(SpaceAccessMode.PUBLIC);
+        space.setEveryoneAccessLevel(DocumentAccessLevel.EDIT);
+        memberWithLevel(DocumentAccessLevel.VIEW);
+
+        assertThat(accessService.load(userId, space.getId()).accessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+    }
+
+    @Test
     void load_workspaceAdminAdministersAnySpaceWithoutContentAccess() {
         authorize(WorkspaceRole.ADMIN);
 
