@@ -43,11 +43,13 @@ AS $$
     ) OR EXISTS (
         SELECT 1
           FROM chain c
-          JOIN space_members sm ON sm.space_id = c.space_id
-          JOIN spaces s ON s.id = sm.space_id
+          JOIN spaces s ON s.id = c.space_id
           JOIN workspace_members wm ON wm.workspace_id = s.workspace_id
-         WHERE sm.user_id = p_user_id
-           AND wm.user_id = p_user_id
+         WHERE wm.user_id = p_user_id
+           AND (
+                EXISTS (SELECT 1 FROM space_members sm WHERE sm.space_id = s.id AND sm.user_id = p_user_id)
+                OR (s.access_mode = 'PUBLIC' AND s.everyone_access_level IS NOT NULL)
+           )
     ) OR EXISTS (
         SELECT 1
           FROM chain c

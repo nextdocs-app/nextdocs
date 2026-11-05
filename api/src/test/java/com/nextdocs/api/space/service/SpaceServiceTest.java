@@ -757,6 +757,33 @@ class SpaceServiceTest {
     }
 
     @Test
+    void listSpaces_mergesExplicitMemberLevelWithBroadestPublicEveryoneLevel() {
+        callerIsWorkspaceMember(WorkspaceRole.MEMBER);
+        Space publicSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Public Space")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.EDIT)
+                .build();
+        when(spaceRepository.findAllVisibleToUser(workspace.getId(), actorId)).thenReturn(List.of(publicSpace));
+        // Explicit member level is VIEW, but everyoneAccessLevel is EDIT: broadest should be EDIT
+        when(memberRepository.findAllByUser_Id(actorId))
+                .thenReturn(List.of(SpaceMember.builder()
+                        .space(publicSpace)
+                        .user(actor)
+                        .accessLevel(DocumentAccessLevel.VIEW)
+                        .build()));
+        when(memberRepository.countMembersBySpaceIds(any())).thenReturn(List.<Object[]>of());
+        when(documentRepository.countBySpaceIds(any())).thenReturn(List.<Object[]>of());
+
+        List<SpaceResponse> spaces = spaceService.listSpaces(actorId, false);
+
+        assertThat(spaces).hasSize(1);
+        assertThat(spaces.get(0).myAccessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+    }
+
+    @Test
     void createSpace_placesTheNewSpaceAtTheTopOfTheCallersOrder() {
         callerIsWorkspaceMember(WorkspaceRole.MEMBER);
         when(spaceRepository.saveAndFlush(any(Space.class))).thenAnswer(invocation -> {

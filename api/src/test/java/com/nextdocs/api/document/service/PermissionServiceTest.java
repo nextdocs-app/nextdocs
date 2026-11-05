@@ -635,7 +635,7 @@ class PermissionServiceTest {
 
         AccessExplainResponse response = permissionService.explainAccess(userId, documentId);
 
-        assertNull(response.effectiveLevel());
+        assertEquals("NO_ACCESS", response.effectiveLevel());
         assertNull(response.channel());
         assertTrue(response.denied());
         assertFalse(response.identityDenied());

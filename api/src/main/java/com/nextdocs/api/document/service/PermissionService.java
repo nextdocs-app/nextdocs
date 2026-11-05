@@ -86,14 +86,15 @@ public class PermissionService {
         int identityRank = accessRank(identity);
         int linkRank = accessRank(link);
         String effective = linkRank > identityRank ? link : identity;
+        String effectiveLevel = effective != null ? effective : "NO_ACCESS";
         String channel = linkRank > identityRank ? "LINK" : effective != null ? "IDENTITY" : null;
         return new AccessExplainResponse(
                 documentId,
-                effective,
+                effectiveLevel,
                 identity,
                 link,
                 channel,
-                effective == null || "NO_ACCESS".equals(effective),
+                "NO_ACCESS".equals(effectiveLevel),
                 "NO_ACCESS".equals(identity));
     }
 

@@ -199,10 +199,11 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Object[]> countNonTrashedChildrenByParentIds(@Param("parentIds") Collection<UUID> parentIds);
 
     // Effective access level per document, for batch tree listing
-    @Query(
-            value = "SELECT u.id::uuid AS document_id, resolve_effective_access(:userId, u.id::uuid) AS access_level "
-                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)",
-            nativeQuery = true)
+    String EFFECTIVE_ACCESS_BATCH_SQL =
+            "SELECT u.id::uuid AS document_id, resolve_effective_access(:userId, u.id::uuid) AS access_level "
+                    + "FROM unnest(string_to_array(:ids, ',')) AS u(id)";
+
+    @Query(value = EFFECTIVE_ACCESS_BATCH_SQL, nativeQuery = true)
     List<Object[]> resolveEffectiveAccessBatch(@Param("userId") UUID userId, @Param("ids") String ids);
 
     // Identity-only batch for shared-section reconciliation, which must not treat

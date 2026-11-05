@@ -466,6 +466,46 @@ class PermissionGoldenMatrixPostgresTest {
     }
 
     @Test
+    void userDenyAtTheSamePage_doesNotBeatAGroupAllow() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID groupId = insertGroup("Page group");
+        insertGroupMember(groupId, member);
+        UUID page = insertDoc(ownerId, null, null, null, null, false, false);
+
+        // Group EDIT + Direct user NO_ACCESS at same page -> EDIT
+        insertAccessGrant(page, null, groupId, null, "ALLOW", "EDIT");
+        insertAccessGrant(page, member, null, null, "DENY", null);
+        assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
+
+        // Group VIEW + Direct user NO_ACCESS at same page -> VIEW
+        UUID page2 = insertDoc(ownerId, null, null, null, null, false, false);
+        insertAccessGrant(page2, null, groupId, null, "ALLOW", "VIEW");
+        insertAccessGrant(page2, member, null, null, "DENY", null);
+        assertThat(resolveAccess(member, page2)).isEqualTo("VIEW");
+
+        // Group NO_ACCESS + Direct user NO_ACCESS at same page -> NO_ACCESS
+        UUID page3 = insertDoc(ownerId, null, null, null, null, false, false);
+        insertAccessGrant(page3, null, groupId, null, "DENY", null);
+        insertAccessGrant(page3, member, null, null, "DENY", null);
+        assertThat(resolveAccess(member, page3)).isEqualTo("NO_ACCESS");
+    }
+
+    @Test
+    void userDenyAtChild_blocksAncestorGroupAllow() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID groupId = insertGroup("Parent group");
+        insertGroupMember(groupId, member);
+        UUID parent = insertDoc(ownerId, null, null, null, null, false, false);
+        UUID child = insertDoc(ownerId, parent, null, null, null, false, false);
+
+        insertAccessGrant(parent, null, groupId, null, "ALLOW", "EDIT");
+        insertAccessGrant(child, member, null, null, "DENY", null);
+
+        assertThat(resolveAccess(member, parent)).isEqualTo("EDIT");
+        assertThat(resolveAccess(member, child)).isEqualTo("NO_ACCESS");
+    }
+
+    @Test
     void linkNeverLowersIdentityAndNeverEntersTrash() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
@@ -1083,13 +1123,11 @@ class PermissionGoldenMatrixPostgresTest {
 
     private Map<UUID, String> resolveAccessBatch(UUID userId, List<UUID> documentIds) {
         String joined = documentIds.stream().map(UUID::toString).collect(Collectors.joining(","));
-        String sql = "SELECT u.id::uuid AS document_id, resolve_effective_access(:userId, u.id::uuid) AS access_level "
-                + "FROM unnest(string_to_array(:ids, ',')) AS u(id)";
         MapSqlParameterSource params =
                 new MapSqlParameterSource().addValue("userId", userId).addValue("ids", joined);
 
         Map<UUID, String> result = new LinkedHashMap<>();
-        for (Map<String, Object> row : jdbc().queryForList(sql, params)) {
+        for (Map<String, Object> row : jdbc().queryForList(DocumentRepository.EFFECTIVE_ACCESS_BATCH_SQL, params)) {
             result.put((UUID) row.get("document_id"), (String) row.get("access_level"));
         }
         return result;

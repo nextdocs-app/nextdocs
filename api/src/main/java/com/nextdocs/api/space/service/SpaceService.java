@@ -145,8 +145,10 @@ public class SpaceService {
         List<SpaceResponse> responses = new ArrayList<>(spaces.size());
         for (Space space : spaces) {
             DocumentAccessLevel level = levels.get(space.getId());
-            if (level == null && space.getAccessMode() == SpaceAccessMode.PUBLIC) {
-                level = space.getEveryoneAccessLevel();
+            if (space.getAccessMode() == SpaceAccessMode.PUBLIC && space.getEveryoneAccessLevel() != null) {
+                level = level == null
+                        ? space.getEveryoneAccessLevel()
+                        : DocumentAccessLevel.broadest(level, space.getEveryoneAccessLevel());
             }
             responses.add(toResponse(
                     space,

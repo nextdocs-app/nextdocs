@@ -109,6 +109,10 @@ class WorkspaceGroupServiceTest {
             assertThat(row.userId()).isEqualTo(memberId);
             assertThat(row.email()).isEqualTo("member@example.com");
         });
+        ArgumentCaptor<WorkspaceGroupMember> memberCaptor = ArgumentCaptor.forClass(WorkspaceGroupMember.class);
+        verify(memberRepository).save(memberCaptor.capture());
+        assertThat(memberCaptor.getValue().getId().getGroupId()).isEqualTo(groupId);
+        assertThat(memberCaptor.getValue().getId().getUserId()).isEqualTo(memberId);
         verify(workspaceMemberRepository).findUserIdsByWorkspaceIdAndUserIdIn(eq(workspaceId), anyCollection());
         verify(auditService)
                 .record(

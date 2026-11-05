@@ -280,9 +280,7 @@ BEGIN
                                              FROM workspace_group_members gm
                                             WHERE gm.user_id = p_user_id)))
                AND (v_deny_depth IS NULL
-                    OR c.ord - 1 < v_deny_depth
-                    OR (c.ord - 1 = v_deny_depth
-                        AND (v_deny_kind = 'AUDIENCE' OR ag.user_id = p_user_id)))
+                    OR c.ord - 1 <= v_deny_depth)
 
 
             UNION ALL
@@ -293,8 +291,7 @@ BEGIN
              WHERE v_space_id IS NULL
                AND d.user_id = p_user_id
                AND (v_deny_depth IS NULL
-                    OR c.ord - 1 < v_deny_depth
-                    OR (c.ord - 1 = v_deny_depth AND v_deny_kind = 'AUDIENCE'))
+                    OR c.ord - 1 <= v_deny_depth)
            ) a
      ORDER BY a.depth, access_level_rank(a.access_level) DESC, a.specificity
      LIMIT 1;

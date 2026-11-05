@@ -1,5 +1,6 @@
 package com.nextdocs.api.document.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
@@ -18,12 +19,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.auth.security.UserPrincipal;
+import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
+import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.document.service.DocumentSharingSettingsService;
 import com.nextdocs.api.document.service.PermissionService;
@@ -33,6 +36,7 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -107,7 +111,12 @@ class DocumentSharingControllerTest {
 
         mockMvc.perform(get("/api/v1/documents/{id}/access/explain", documentId).with(user(principal)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.effectiveLevel").value("EDIT"));
+                .andExpect(jsonPath("$.data.effectiveLevel").value("EDIT"))
+                .andExpect(jsonPath("$.data.identityLevel").value("NO_ACCESS"))
+                .andExpect(jsonPath("$.data.linkLevel").value("EDIT"))
+                .andExpect(jsonPath("$.data.channel").value("LINK"))
+                .andExpect(jsonPath("$.data.denied").value(false))
+                .andExpect(jsonPath("$.data.identityDenied").value(true));
 
         verify(permissionService).requireSharingAdminAccess(userId, documentId);
     }
@@ -292,6 +301,12 @@ class DocumentSharingControllerTest {
                         }
                         """))
                 .andExpect(status().isOk());
+
+        ArgumentCaptor<SharingSettingsUpdateRequest> captor =
+                ArgumentCaptor.forClass(SharingSettingsUpdateRequest.class);
+        verify(settingsService).updateSharingSettings(eq(userId), eq(documentId), captor.capture());
+        assertThat(captor.getValue().workspaceAccessMode()).isEqualTo(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS);
+        assertThat(captor.getValue().workspaceAccessLevel()).isEqualTo(DocumentAccessLevel.VIEW);
     }
 
     @Test
@@ -310,7 +325,7 @@ class DocumentSharingControllerTest {
                         .value(org.hamcrest.Matchers.containsString(
                                 "linkAccessLevel is required when generalAccessMode is ANYONE_WITH_LINK.")));
 
-        verifyNoInteractions(sharingService);
+        verifyNoInteractions(sharingService, settingsService);
     }
 
     @Test
@@ -330,7 +345,7 @@ class DocumentSharingControllerTest {
                         .value(org.hamcrest.Matchers.containsString(
                                 "linkAccessLevel must be omitted unless generalAccessMode is ANYONE_WITH_LINK.")));
 
-        verifyNoInteractions(sharingService);
+        verifyNoInteractions(sharingService, settingsService);
     }
 
     @Test
@@ -353,7 +368,7 @@ class DocumentSharingControllerTest {
                                         org.hamcrest.Matchers.containsString(
                                                 "linkInheritBlocked must be omitted or false when generalAccessMode is ANYONE_WITH_LINK.")));
 
-        verifyNoInteractions(sharingService);
+        verifyNoInteractions(sharingService, settingsService);
     }
 
     @Test
