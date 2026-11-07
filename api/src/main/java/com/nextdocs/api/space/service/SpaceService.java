@@ -18,6 +18,8 @@ import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.event.SpaceAccessChangedEvent;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
@@ -49,6 +51,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -99,6 +102,7 @@ public class SpaceService {
     private final PageIconValidator pageIconValidator;
     private final AttachmentService attachmentService;
     private final AccessAuditService auditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -302,6 +306,9 @@ public class SpaceService {
                     .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Acting user not found.")));
             spaceRepository.save(space);
             auditService.recordSpace(space, userId, AccessAuditAction.SPACE_ARCHIVE, "SPACE", space.getId(), null);
+            // Archived spaces are read-only, but their pages stay readable; re-authorize
+            // the open sockets so a write that started before the archive stops.
+            eventPublisher.publishEvent(new SpaceAccessChangedEvent(spaceId));
             log.info("Archived space {} by {}", spaceId, userId);
         }
         return toResponse(
@@ -325,6 +332,7 @@ public class SpaceService {
             space.setArchivedBy(null);
             spaceRepository.save(space);
             auditService.recordSpace(space, userId, AccessAuditAction.SPACE_RESTORE, "SPACE", space.getId(), null);
+            eventPublisher.publishEvent(new SpaceAccessChangedEvent(spaceId));
             log.info("Restored space {} by {}", spaceId, userId);
         }
         return toResponse(
@@ -553,6 +561,7 @@ public class SpaceService {
                 .build());
         auditService.recordSpace(
                 space, userId, AccessAuditAction.SPACE_MEMBER_ADD, "USER", target.getId(), "level=" + level);
+        eventPublisher.publishEvent(new SpaceAccessChangedEvent(spaceId));
         return roster(spaceId);
     }
 
@@ -579,6 +588,7 @@ public class SpaceService {
         memberRepository.save(target);
         auditService.recordSpace(
                 space, userId, AccessAuditAction.SPACE_MEMBER_UPDATE, "USER", targetUserId, "level=" + newLevel);
+        eventPublisher.publishEvent(new SpaceAccessChangedEvent(spaceId));
         return roster(spaceId);
     }
 
@@ -610,6 +620,7 @@ public class SpaceService {
         accessGrantRepository.deleteUserGrantsInSpace(spaceId, targetUserId);
         memberRepository.delete(target);
         auditService.recordSpace(space, userId, AccessAuditAction.SPACE_MEMBER_REMOVE, "USER", targetUserId, null);
+        eventPublisher.publishEvent(new SpaceAccessChangedEvent(spaceId));
         return roster(spaceId);
     }
 
@@ -623,6 +634,7 @@ public class SpaceService {
         Space space = lockSpace(spaceId);
         DocumentResponse response = documentService.assignSpace(userId, documentId, spaceId);
         auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_ATTACH, "DOCUMENT", documentId, null);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
         return response;
     }
 
@@ -635,6 +647,7 @@ public class SpaceService {
         Space space = lockSpace(spaceId);
         documentService.clearSpace(userId, documentId, spaceId);
         auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
     }
 
     /**

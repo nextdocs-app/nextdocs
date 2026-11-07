@@ -85,7 +85,8 @@ class DocumentTreeServiceTest {
                 userDocumentOrderRepository,
                 userRepository,
                 permissionService,
-                spaceAccessService);
+                spaceAccessService,
+                event -> {});
     }
 
     @Test

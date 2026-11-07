@@ -137,6 +137,16 @@ public class Document {
     @Column(name = "sibling_order_key")
     private String siblingOrderKey;
 
+    @Column(name = "yhub_seeded_at")
+    private OffsetDateTime yhubSeededAt;
+
+    @Column(name = "yjs_state_yhub_clock")
+    @Builder.Default
+    private Long yjsStateYhubClock = 0L;
+
+    @Column(name = "yhub_deleted_at")
+    private OffsetDateTime yhubDeletedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

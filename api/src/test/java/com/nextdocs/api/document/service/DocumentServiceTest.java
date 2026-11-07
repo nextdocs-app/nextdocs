@@ -39,6 +39,7 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -103,6 +104,9 @@ class DocumentServiceTest {
 
     private DocumentService documentService;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
     @BeforeEach
     void setUp() {
         documentProperties = new DocumentProperties();
@@ -119,7 +123,8 @@ class DocumentServiceTest {
                 commentCleanup,
                 iconCoverApplier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository);
     }
 
     @Test
@@ -2465,24 +2470,27 @@ class DocumentServiceTest {
     }
 
     @Test
-    void update_oversizedState_throwsValidationFailed() {
+    void update_ignoresSnapshotStateBecauseYhubOwnsContent() {
         UUID requesterId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
 
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(document)).thenReturn(document);
 
-        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
+        // Legal base64, absurd size: the field is accepted and ignored, so a client that
+        // still sends a snapshot gets its metadata saved instead of a validation error it
+        // can do nothing about. Yhub is the only writer of content.
+        byte[] oversized = new byte[6 * 1024 * 1024];
         String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
 
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest(null, encodedState, null, null, null)));
+        DocumentResponse response = documentService.update(
+                requesterId, documentId, new DocumentUpdateRequest("New title", encodedState, null, null, null));
 
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        verify(documentRepository, never()).save(any(Document.class));
+        assertEquals("New title", response.title());
+        // The seeded snapshot is still the one create stored: nothing overwrote it.
+        assertEquals("seed", new String(document.getYjsState(), StandardCharsets.UTF_8));
     }
 
     @Test
@@ -2504,7 +2512,7 @@ class DocumentServiceTest {
     }
 
     @Test
-    void updatePublic_editLink_updatesTitleAndState() {
+    void updatePublic_editLink_updatesTitleButNotContent() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
 
@@ -2518,32 +2526,14 @@ class DocumentServiceTest {
                 docId, new DocumentUpdateRequest("Guest edit", encodedState, "Guest", null, null));
 
         assertEquals("Guest edit", response.title());
+        // A REST snapshot would race the socket the guest is editing through.
+        assertEquals("seed", new String(doc.getYjsState(), StandardCharsets.UTF_8));
         // Guest creator labels are not adopted for public saves.
         assertNull(doc.getCreatedBy());
     }
 
     @Test
-    void updatePublic_oversizedState_throwsValidationFailed() {
-        UUID docId = UUID.randomUUID();
-        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
-
-        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
-        String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.updatePublic(
-                        docId, new DocumentUpdateRequest("Too big", encodedState, null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        verify(documentRepository, never()).save(any());
-    }
-
-    @Test
-    void updatePublic_stateAtTheExactByteLimit_isAccepted() {
+    void updatePublic_malformedState_doesNotFailTheMetadataSave() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
 
@@ -2552,37 +2542,13 @@ class DocumentServiceTest {
         when(documentRepository.save(doc)).thenReturn(doc);
         when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
-        // Exactly at the cap, not one byte over: the bound is inclusive, so a snapshot
-        // the realtime layer accepts can always be persisted through the API.
-        byte[] atLimit = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES];
-        String encodedState = java.util.Base64.getEncoder().encodeToString(atLimit);
+        // The field is ignored, not decoded: a guest renaming a page must not fail because
+        // an old client sent a snapshot the API no longer reads.
+        DocumentResponse response = documentService.updatePublic(
+                docId, new DocumentUpdateRequest("Renamed", "!!! not base64 !!!", null, null, null));
 
-        documentService.updatePublic(docId, new DocumentUpdateRequest(null, encodedState, null, null, null));
-
-        assertEquals(DocumentService.MAX_PUBLIC_STATE_BYTES, doc.getYjsState().length);
-    }
-
-    @Test
-    void updatePublic_malformedOversizedState_rejectsOnSizeBeforeDecoding() {
-        UUID docId = UUID.randomUUID();
-        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
-
-        // Not valid base64, so a decode-first implementation would report "must be valid
-        // base64" instead of the size violation. The size message proves the oversized
-        // payload was rejected without ever being decoded.
-        String oversizedGarbage = "!".repeat(DocumentService.MAX_PUBLIC_STATE_ENCODED_LENGTH + 1);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.updatePublic(
-                        docId, new DocumentUpdateRequest("Too big", oversizedGarbage, null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        assertTrue(ex.getMessage().contains("exceeds the maximum size"));
-        verify(documentRepository, never()).save(any());
+        assertEquals("Renamed", response.title());
+        assertEquals("seed", new String(doc.getYjsState(), StandardCharsets.UTF_8));
     }
 
     @Test

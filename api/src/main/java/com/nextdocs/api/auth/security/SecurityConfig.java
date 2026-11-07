@@ -54,6 +54,8 @@ public class SecurityConfig {
         "/api/v1/documents/*/public/children",
         "/api/v1/documents/*/access-check",
         "/api/v1/documents/*/my-access",
+        "/api/v1/documents/*/realtime-session",
+        "/api/v1/internal/realtime/**",
         // Comment routes are public at the filter level so one URL shape serves
         // members and share-link guests; CommentService resolves access per caller
         // and fails closed for a presented-but-invalid Bearer token.

@@ -136,7 +136,8 @@ class SpaceServiceTest {
                 documentService,
                 pageIconValidator,
                 attachmentService,
-                auditService);
+                auditService,
+                event -> {});
 
         workspace = Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
         actor = User.builder().email("owner@example.com").displayName("Owner").build();

@@ -33,6 +33,7 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
@@ -93,6 +94,9 @@ class DocumentServiceIconCoverTest {
 
     private DocumentService documentService;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
     @BeforeEach
     void setUp() {
         DocumentProperties documentProperties = new DocumentProperties();
@@ -113,7 +117,8 @@ class DocumentServiceIconCoverTest {
                 commentCleanup,
                 applier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository);
     }
 
     @Test
