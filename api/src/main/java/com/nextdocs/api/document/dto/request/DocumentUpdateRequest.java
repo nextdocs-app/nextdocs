@@ -9,7 +9,12 @@ public record DocumentUpdateRequest(
         @Schema(description = "Document title") @Size(max = 255, message = "Title must be at most 255 characters")
         String title,
 
-        @Schema(description = "Base64-encoded Yjs state") String yjsState,
+        @Deprecated(forRemoval = true)
+        @Schema(
+                description = "Ignored. Yhub owns document content; this field is accepted only so an "
+                        + "older client does not fail validation.",
+                deprecated = true)
+        String yjsState,
 
         @Schema(description = "Optional creator label")
         @Size(max = 255, message = "createdBy must be at most 255 characters")

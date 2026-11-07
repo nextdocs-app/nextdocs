@@ -16,7 +16,6 @@ jest.mock('../../../services/document.service', () => {
       loadDocument: jest.fn(),
       listCloudDocuments: jest.fn(),
       createCloudDocument: jest.fn(),
-      saveCloudDocument: jest.fn(),
       deleteCloudDocumentPermanently: jest.fn(),
       saveDocument: jest.fn(),
       deleteDocument: jest.fn(),

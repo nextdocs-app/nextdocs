@@ -277,6 +277,14 @@ export interface DocumentAccess {
   space?: DocumentSpaceSummary | null;
 }
 
+export interface RealtimeSessionResponse {
+  /** Absolute websocket URL issued by the API; the browser never guesses a host. */
+  wsUrl: string;
+  /** The Yhub room, which is the document id. */
+  documentId: string;
+  accessLevel: DocumentAccessLevel;
+}
+
 export interface Collaborator {
   userId: string;
   email: string;
@@ -862,6 +870,25 @@ class DocumentService {
     });
   }
 
+  public async createRealtimeSession(
+    id: string,
+    accessToken?: string | null
+  ): Promise<RealtimeSessionResponse> {
+    const body = await this.fetchApi<RealtimeSessionResponse>(
+      `/api/v1/documents/${encodeURIComponent(id)}/realtime-session`,
+      {
+        method: 'POST',
+        ...(accessToken ? { accessToken } : {}),
+      }
+    );
+
+    return {
+      wsUrl: body.wsUrl,
+      documentId: body.documentId,
+      accessLevel: sanitizeDocumentAccessLevel(body.accessLevel),
+    };
+  }
+
   public async listPublicChildren(parentId: string, page = 0, size = 50): Promise<TreeNodePage> {
     const params = new URLSearchParams({
       page: String(page),
@@ -1149,37 +1176,6 @@ class DocumentService {
       ydoc: documentYDoc,
       meta: this.toDocumentMeta(body),
     };
-  }
-
-  public async saveCloudDocument(
-    id: string,
-    ydoc: Y.Doc,
-    meta: DocumentMeta,
-    accessToken: string
-  ): Promise<void> {
-    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      accessToken,
-      body: JSON.stringify({
-        title: meta.title,
-        // Omitted (undefined) when the page has none: the API treats an absent
-        // icon/cover as "leave unchanged", which is what a content save means.
-        icon: meta.icon,
-        cover: meta.cover,
-        yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
-        createdBy: meta.createdBy,
-      }),
-    });
-  }
-
-  public async savePublicDocument(id: string, ydoc: Y.Doc, meta: DocumentMeta): Promise<void> {
-    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        title: meta.title,
-        yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
-      }),
-    });
   }
 
   public async updateCloudMetadata(

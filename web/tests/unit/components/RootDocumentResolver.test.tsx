@@ -39,7 +39,6 @@ jest.mock('../../../services/document.service', () => {
       loadDocument: jest.fn(),
       listCloudDocuments: jest.fn(),
       createCloudDocument: jest.fn(),
-      saveCloudDocument: jest.fn(),
       deleteCloudDocumentPermanently: jest.fn(),
       saveDocument: jest.fn(),
       deleteDocument: jest.fn(),
@@ -97,7 +96,6 @@ describe('RootDocumentResolver', () => {
       ydoc: new Y.Doc(),
       meta: defaultMeta,
     });
-    (documentService.saveCloudDocument as jest.Mock).mockResolvedValue(undefined);
     (documentService.deleteCloudDocumentPermanently as jest.Mock).mockResolvedValue(undefined);
     (documentService.saveDocument as jest.Mock).mockResolvedValue(undefined);
     (documentService.deleteDocument as jest.Mock).mockResolvedValue(undefined);

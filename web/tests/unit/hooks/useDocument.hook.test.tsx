@@ -73,7 +73,6 @@ describe('useDocument', () => {
   let getMyAccessSpy: jest.SpyInstance;
   let loadDocumentSpy: jest.SpyInstance;
   let createCloudDocumentSpy: jest.SpyInstance;
-  let saveCloudDocumentSpy: jest.SpyInstance;
   let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
@@ -83,10 +82,18 @@ describe('useDocument', () => {
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
   let checkAccessSpy: jest.SpyInstance;
+  let createRealtimeSessionSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
+    createRealtimeSessionSpy = jest
+      .spyOn(documentService, 'createRealtimeSession')
+      .mockImplementation(async (documentId: string) => ({
+        wsUrl: 'ws://localhost:1234',
+        documentId,
+        accessLevel: 'EDIT',
+      }));
     getCloudDocumentSpy = jest
       .spyOn(documentService, 'getCloudDocument')
       .mockImplementation(jest.fn());
@@ -104,9 +111,6 @@ describe('useDocument', () => {
     loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
     createCloudDocumentSpy = jest
       .spyOn(documentService, 'createCloudDocument')
-      .mockImplementation(jest.fn());
-    saveCloudDocumentSpy = jest
-      .spyOn(documentService, 'saveCloudDocument')
       .mockImplementation(jest.fn());
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     updateMetadataSpy = jest.spyOn(documentService, 'updateMetadata').mockImplementation(jest.fn());
@@ -149,7 +153,6 @@ describe('useDocument', () => {
     getMyAccessSpy.mockRestore();
     loadDocumentSpy.mockRestore();
     createCloudDocumentSpy.mockRestore();
-    saveCloudDocumentSpy.mockRestore();
     saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
@@ -159,6 +162,7 @@ describe('useDocument', () => {
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
     checkAccessSpy.mockRestore();
+    createRealtimeSessionSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -2283,7 +2287,6 @@ describe('useDocument', () => {
     });
     expect(loadDocumentSpy).not.toHaveBeenCalled();
     expect(createCloudDocumentSpy).not.toHaveBeenCalled();
-    expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
   });

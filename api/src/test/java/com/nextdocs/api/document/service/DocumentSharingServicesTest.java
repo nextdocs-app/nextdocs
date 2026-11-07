@@ -105,8 +105,10 @@ class DocumentSharingServicesTest {
                 spaceAccessService,
                 spaceMemberRepository,
                 accessGrantSyncService,
-                auditService);
-        settingsService = new DocumentSharingSettingsService(documentRepository, permissionService, auditService);
+                auditService,
+                event -> {});
+        settingsService =
+                new DocumentSharingSettingsService(documentRepository, permissionService, auditService, event -> {});
 
         org.mockito.Mockito.lenient()
                 .when(accessGrantSyncService.upsertUserGrant(any(), any(), any(), any()))

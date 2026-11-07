@@ -25,6 +25,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
@@ -83,6 +84,9 @@ class DocumentSpaceServiceTest {
     private User user;
     private Space space;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
     @BeforeEach
     void setUp() {
         DocumentProperties properties = new DocumentProperties();
@@ -98,7 +102,8 @@ class DocumentSpaceServiceTest {
                 commentCleanup,
                 iconCoverApplier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository);
 
         userId = UUID.randomUUID();
         user = User.builder().email("alice@example.com").displayName("Alice").build();

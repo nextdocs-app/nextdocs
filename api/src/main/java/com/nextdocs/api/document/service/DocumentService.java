@@ -26,6 +26,10 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.event.DocumentPurgedEvent;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -46,6 +50,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -72,20 +77,8 @@ public class DocumentService {
     // an unauthenticated caller must not be able to ask for thousands of rows per request.
     static final int MAX_PUBLIC_CHILDREN_PAGE_SIZE = 50;
 
-    // Anonymous saves share a per-IP budget of 20 requests/min, and the realtime
-    // layer refuses payloads above 5 MB, so an unbounded snapshot write can only
-    // burn bandwidth and storage on data that could never sync.
-    static final int MAX_PUBLIC_STATE_BYTES = 5 * 1024 * 1024;
-
     // Mirrors documents.title VARCHAR(255) in V2 and the DTOs' @Size bound.
     static final int MAX_TITLE_LENGTH = 255;
-
-    // Base64 turns 3 bytes into 4 characters, so this bounds what a caller can make the
-    // decoder allocate. Deliberately a little generous (the 3-byte encoding quantum
-    // hides up to two extra bytes) and only a pre-filter: MAX_PUBLIC_STATE_BYTES stays
-    // the exact rule. Rejecting on length first means an unauthenticated caller cannot
-    // make the API materialise an arbitrarily large snapshot before the size check.
-    static final int MAX_PUBLIC_STATE_ENCODED_LENGTH = ((MAX_PUBLIC_STATE_BYTES + 2) / 3) * 4 + 4;
 
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
@@ -99,6 +92,10 @@ public class DocumentService {
     private final DocumentIconCoverApplier iconCoverApplier;
     private final WorkspaceService workspaceService;
     private final SpaceAccessService spaceAccessService;
+    private final YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
+    @Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -376,12 +373,16 @@ public class DocumentService {
     }
 
     /**
-     * Anonymous snapshot save for share links. Anyone holding a link whose effective
-     * (possibly inherited) access allows editing may persist title/content without
-     * signing in — the link UUID itself is the capability, like polished
-     * self-hostable docs (Docmost/Outline public edit links). Comment-only and
-     * view-only links cannot save snapshots here; comments still sync live over
-     * the realtime channel where per-key write guards apply.
+     * Anonymous metadata save for share links. Anyone holding a link whose effective
+     * (possibly inherited) access allows editing may persist the title without signing
+     * in — the link UUID itself is the capability, like polished self-hostable docs
+     * (Docmost/Outline public edit links). Comment-only and view-only links cannot save
+     * here; comments still sync live over the realtime channel where per-key write
+     * guards apply.
+     *
+     * <p>Content is not written here: Yhub owns the document body, and a REST snapshot
+     * write would race the websocket the guest is editing through, silently replacing
+     * live edits with a stale base64 blob.
      */
     @Transactional
     public DocumentResponse updatePublic(UUID documentId, DocumentUpdateRequest request) {
@@ -399,17 +400,6 @@ public class DocumentService {
 
         if (request.title() != null) {
             document.setTitle(normalizeTitle(request.title()));
-        }
-
-        if (request.yjsState() != null) {
-            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
-                throw publicStateTooLarge();
-            }
-            byte[] state = decodeBase64State(request.yjsState());
-            if (state.length > MAX_PUBLIC_STATE_BYTES) {
-                throw publicStateTooLarge();
-            }
-            document.setYjsState(state);
         }
 
         iconCoverApplier.applyIcon(document, request.icon());
@@ -613,17 +603,6 @@ public class DocumentService {
             document.setTitle(normalizeTitle(request.title()));
         }
 
-        if (request.yjsState() != null) {
-            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
-                throw publicStateTooLarge();
-            }
-            byte[] state = decodeBase64State(request.yjsState());
-            if (state.length > MAX_PUBLIC_STATE_BYTES) {
-                throw publicStateTooLarge();
-            }
-            document.setYjsState(state);
-        }
-
         if (request.createdBy() != null) {
             document.setCreatedBy(request.createdBy());
         }
@@ -676,6 +655,10 @@ public class DocumentService {
                 userDocumentOrderRepository.deleteByDocument_Id(descendant.getId());
                 documentRepository.save(descendant);
             }
+        }
+        if (eventPublisher != null) {
+            // The whole subtree changed state: every descendant socket has to re-authorize.
+            eventPublisher.publishEvent(new DocumentAccessChangedEvent(document.getId()));
         }
     }
 
@@ -852,6 +835,10 @@ public class DocumentService {
             }
         }
 
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
+        }
+
         return toResponse(savedRoot, true, userId);
     }
 
@@ -954,7 +941,24 @@ public class DocumentService {
         }
         deleteDocumentLevel(roots);
 
+        // Yhub content is deleted by the outbox drain, not inline: a purge must not be
+        // able to leave orphaned content behind when Yhub is unreachable at commit time.
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        List<YhubPurgeOutbox> outbox = allIds.stream()
+                .map(id -> YhubPurgeOutbox.builder()
+                        .id(UUID.randomUUID())
+                        .documentId(id)
+                        .nextAttemptAt(now)
+                        .createdAt(now)
+                        .build())
+                .toList();
+        yhubPurgeOutboxRepository.saveAll(outbox);
+
         attachmentService.deleteStoredFilesAfterCommit(attachmentStorageKeys);
+
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new DocumentPurgedEvent(List.copyOf(allIds)));
+        }
         return allIds.size();
     }
 
@@ -1003,12 +1007,6 @@ public class DocumentService {
             }
         }
         return null;
-    }
-
-    private static ApiException publicStateTooLarge() {
-        return new ApiException(
-                ErrorCode.VALIDATION_FAILED,
-                "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
     }
 
     private static ApiException tooDeep() {

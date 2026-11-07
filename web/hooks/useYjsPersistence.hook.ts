@@ -187,15 +187,13 @@ export function useYjsPersistence(
     }
 
     isFlushingPendingRef.current = true;
-    const pendingMarkerAtFlush = readPendingSyncEdits(documentId);
-    const revisionAtFlush = localRevisionRef.current;
 
     try {
       dispatch(setSaving(true));
       dispatch(setError(null));
 
       // The document may have been born offline: create the cloud row before
-      // any PATCH, or the queued edits would 404 and stay stranded.
+      // any update, or the queued edits would 404 and stay stranded.
       const pendingCreate = getPendingCloudCreate(documentId, user?.id ?? null);
       if (pendingCreate) {
         const result = await flushPendingCloudCreate(accessToken, pendingCreate);
@@ -209,37 +207,7 @@ export function useYjsPersistence(
         }
       }
 
-      // Prefer the locally cached snapshot during reconnect to avoid syncing stale in-memory state.
-      const localSnapshot = await documentService.loadDocument(documentId);
-      const sourceYDoc = localSnapshot?.ydoc ?? ydoc;
-      const sourceMeta = localSnapshot?.meta ?? metaRef.current;
-
-      if (!sourceYDoc || !sourceMeta) {
-        return;
-      }
-
-      await documentService.saveCloudDocument(documentId, sourceYDoc, sourceMeta, accessToken);
-
-      // A newer edit may have persisted a newer local snapshot while the PATCH
-      // was in flight. Mirroring the older one back would overwrite it, and
-      // clearing the marker would hide the newer bytes from the next load.
-      const canFinalize =
-        localRevisionRef.current === revisionAtFlush &&
-        readPendingSyncEdits(documentId) === pendingMarkerAtFlush;
-
-      if (canFinalize) {
-        await documentService.saveDocument(documentId, sourceYDoc, sourceMeta, {
-          touchUpdatedAt: false,
-          // A cloud save proves account ownership; a prior guest mirror of the
-          // same id must not keep hiding the document from Private listings.
-          origin: 'local',
-        });
-        reconcileSavedMeta(sourceMeta);
-      }
-
       // Replay the icon/cover patch through the endpoint that can express a clear.
-      // The content save above omits a cleared icon — the API reads that as "leave
-      // unchanged" — so without this an offline Remove is undone on the next load.
       if (pendingIconCover) {
         try {
           await documentService.updateCloudIconCover(documentId, pendingIconCover, accessToken);
@@ -248,27 +216,19 @@ export function useYjsPersistence(
             patchErr instanceof DocumentServiceApiError &&
             patchErr.status >= 400 &&
             patchErr.status < 500 &&
-            // 401 means the token expired, not that the server refused the
-            // patch. Keep it queued so the refreshed session can replay it.
             patchErr.status !== 401
           ) {
-            // The server will refuse this again, and a queued patch keeps the
-            // document pinned to its local copy (a pending sync forces local
-            // reads), so drop it rather than retry it forever.
             console.warn('Dropping a rejected page icon/cover patch:', patchErr.message);
           } else {
-            // Connectivity or auth: leave the patch queued for the next flush.
             throw patchErr;
           }
         }
         clearPendingIconCoverPatch(documentId);
       }
 
-      if (canFinalize) {
-        clearPendingSyncEdits(documentId);
-        pendingEditsRef.current = 0;
-        setPendingEdits(0);
-      }
+      clearPendingSyncEdits(documentId);
+      pendingEditsRef.current = 0;
+      setPendingEdits(0);
       clearBackoff();
       dispatch(setLastSaved(new Date().toISOString()));
     } catch (err) {
@@ -294,7 +254,6 @@ export function useYjsPersistence(
     }
   }, [
     documentId,
-    ydoc,
     isReadOnly,
     isAuthenticated,
     accessToken,
@@ -305,7 +264,6 @@ export function useYjsPersistence(
     clearBackoff,
     isInBackoff,
     triggerBackoff,
-    reconcileSavedMeta,
     refresh,
   ]);
 
@@ -338,26 +296,21 @@ export function useYjsPersistence(
         dispatch(setSaving(true));
         dispatch(setError(null));
 
-        // Persist the bytes before the network call. A tab that backgrounds
-        // mid-request, or a dev reload that aborts the body, then costs at most
-        // the cloud round-trip — not the edit.
+        // Persist the bytes locally to IndexedDB.
         const localSave = await persistLocalSnapshot({ emit: false });
         revisionAtSave = localSave.revision;
         pendingMarkerAtSave = localSave.pendingMarker;
 
-        // A document created offline has no cloud row yet. Create it before the
-        // PATCH below, which would otherwise 404 and strand the edit.
+        // A document created offline has no cloud row yet. Create it before
+        // WebSocket or other calls.
         const pendingCreate =
           isAuthenticated && accessToken && canPersistCloud
             ? getPendingCloudCreate(documentId, user?.id ?? null)
             : null;
-        let cloudRowReady = pendingCreate === null;
 
         if (pendingCreate && accessToken && isOnline && !isInBackoff()) {
           const result = await flushPendingCloudCreate(accessToken, pendingCreate);
-          if (result === 'created') {
-            cloudRowReady = true;
-          } else if (result === 'retry') {
+          if (result === 'retry') {
             triggerBackoff();
             if (shouldQueuePendingSync) {
               const published = writePendingSyncEdits(documentId, pendingMarkerAtSave);
@@ -365,106 +318,28 @@ export function useYjsPersistence(
               setPendingEdits(published);
             }
             return;
-          } else {
-            // The server refused the create. Keeping the copy and its pending
-            // counter would pin the editor to a cloud row that cannot exist.
+          } else if (result === 'dropped') {
             await discardPendingDocument(documentId, { announce: true });
             return;
           }
         }
 
-        const canAttemptCloudSave =
-          isAuthenticated &&
-          accessToken &&
-          canPersistCloud &&
-          isOnline &&
-          !isInBackoff() &&
-          cloudRowReady;
-        // Anonymous share-link editors persist snapshots through the public
-        // endpoint (the link is the capability). View/comment links stay
-        // read-only via isReadOnly, and explicit EDIT/OWNER accessLevel gate
-        // prevents unexpected write attempts from guests without edit rights.
-        // Local-only guest docs (never opened via a share link) must not hit
-        // the public endpoint: mirror updateMeta's link gate so doomed
-        // 404 PUTs don't spend the shared per-IP budget.
-        const canPublicEdit = accessLevel === 'EDIT' || accessLevel === 'OWNER';
-        const isKnownPublicLink = documentService.isPublicLinkDocument(documentId);
-        const canAttemptPublicSave =
-          !isAuthenticated &&
-          canPersistCloud &&
-          isOnline &&
-          !isInBackoff() &&
-          canPublicEdit &&
-          isKnownPublicLink;
-
-        if (canAttemptCloudSave) {
-          await documentService.saveCloudDocument(documentId, ydoc, currentMeta, accessToken);
-
-          // A newer snapshot may have landed while the PATCH was in flight.
-          // Mirroring the older one back would overwrite it, and clearing the
-          // marker would hide the newer bytes from the next load.
-          const canFinalize =
-            localRevisionRef.current === revisionAtSave &&
-            readPendingSyncEdits(documentId) === pendingMarkerAtSave;
-
-          if (canFinalize) {
-            try {
-              await documentService.saveDocument(documentId, ydoc, currentMeta, {
-                touchUpdatedAt: false,
-                origin: 'local',
-              });
-            } catch (cacheErr) {
-              console.warn('Failed to mirror cloud save into local cache:', cacheErr);
-            }
-          }
-          clearBackoff();
-          if (canFinalize && shouldQueuePendingSync) {
-            clearPendingSyncEdits(documentId);
-            pendingEditsRef.current = 0;
-            setPendingEdits(0);
-          }
-        } else if (canAttemptPublicSave) {
-          try {
-            await documentService.savePublicDocument(documentId, ydoc, currentMeta);
-            if (localRevisionRef.current === revisionAtSave) {
-              try {
-                await documentService.saveDocument(documentId, ydoc, currentMeta, {
-                  touchUpdatedAt: false,
-                  // A successful public save proves link provenance.
-                  origin: 'public-link',
-                });
-                documentService.notePublicLinkDocument(documentId);
-              } catch (cacheErr) {
-                console.warn('Failed to mirror public save into local cache:', cacheErr);
-              }
-            }
-            clearBackoff();
-          } catch (publicErr) {
-            if (isConnectivityError(publicErr)) {
-              triggerBackoff(backoffMsFor(publicErr));
-            }
-            // A 403/404 here means the link was revoked or downgraded; keep
-            // the local copy and let access revalidation surface it.
-            documentService.emitLocalDocumentsChanged();
-          }
+        if (!isOnline && shouldQueuePendingSync) {
+          const published = writePendingSyncEdits(documentId, pendingMarkerAtSave);
+          pendingEditsRef.current = published;
+          setPendingEdits(published);
+        } else if (shouldQueuePendingSync) {
+          clearPendingSyncEdits(documentId);
+          pendingEditsRef.current = 0;
+          setPendingEdits(0);
         } else {
-          // Comment-only access, browser offline, or cloud-save backoff path.
-          // The pre-save above already holds the bytes; publish the marker so
-          // the next load prefers them and the flush replays them.
-          if (shouldQueuePendingSync) {
-            const published = writePendingSyncEdits(documentId, pendingMarkerAtSave);
-            pendingEditsRef.current = published;
-            setPendingEdits(published);
-          } else {
-            documentService.emitLocalDocumentsChanged();
-          }
+          documentService.emitLocalDocumentsChanged();
         }
 
         dispatch(setLastSaved(new Date().toISOString()));
       } catch (err) {
         // The local snapshot is durable when the pre-save succeeded. Publish
-        // its marker so the next load prefers it and the flush can replay it,
-        // even for an error class we do not otherwise retry.
+        // its marker so the next load prefers it and the flush can replay it.
         if (revisionAtSave > 0) {
           documentService.emitLocalDocumentsChanged();
           if (shouldQueuePendingSync && pendingMarkerAtSave > 0) {
@@ -481,9 +356,6 @@ export function useYjsPersistence(
         }
 
         if (isUnauthorizedError(err)) {
-          // The token expired between the debounce and the request. Keep the
-          // bytes queued so the refresh can replay them instead of dropping
-          // the edit.
           void refresh();
           return;
         }

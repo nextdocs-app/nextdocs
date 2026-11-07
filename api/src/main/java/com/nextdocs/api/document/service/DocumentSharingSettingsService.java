@@ -11,10 +11,12 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,7 @@ public class DocumentSharingSettingsService {
     private final DocumentRepository documentRepository;
     private final PermissionService permissionService;
     private final AccessAuditService auditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public SharingSettingsResponse getSharingSettings(UUID actorId, UUID documentId) {
@@ -274,6 +277,9 @@ public class DocumentSharingSettingsService {
         applyWorkspaceSettings(doc, request);
 
         documentRepository.save(doc);
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
+        }
         auditService.recordDocument(
                 doc,
                 actorId,

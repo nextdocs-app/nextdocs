@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
@@ -137,6 +138,10 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
      * report this same count, so the settings delete gate matches the delete endpoint.
      */
     long countBySpace_Id(UUID spaceId);
+
+    /** Root pages filed into a space; descendants follow through the parent chain. */
+    @Query("SELECT d.id FROM Document d WHERE d.space.id = :spaceId")
+    List<UUID> findIdsBySpace_Id(@Param("spaceId") UUID spaceId);
 
     @Query("SELECT d.space.id, COUNT(d) FROM Document d WHERE d.space.id IN :spaceIds GROUP BY d.space.id")
     List<Object[]> countBySpaceIds(@Param("spaceIds") Collection<UUID> spaceIds);
@@ -314,6 +319,56 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
                     + ") SELECT id FROM sub",
             nativeQuery = true)
     List<UUID> findSubtreeDocumentIds(@Param("subtreeRootId") UUID subtreeRootId);
+
+    /**
+     * Subtree ids regardless of trash state, for revocation. After a trash the sockets
+     * that must close sit on rows that are now trashed; an {@code IS NULL} filter would
+     * return none of them.
+     */
+    @Query(
+            value = "WITH RECURSIVE sub AS ("
+                    + "  SELECT id, 1 AS depth FROM documents WHERE id = :subtreeRootId "
+                    + "  UNION ALL "
+                    + "  SELECT d.id, s.depth + 1 FROM documents d JOIN sub s ON d.parent_id = s.id "
+                    + "  WHERE s.depth < :maxDepth"
+                    + ") SELECT id FROM sub",
+            nativeQuery = true)
+    List<UUID> findSubtreeIdsIncludingTrashed(
+            @Param("subtreeRootId") UUID subtreeRootId, @Param("maxDepth") int maxDepth);
+
+    @Query("SELECT COALESCE(d.yjsStateYhubClock, 0) FROM Document d WHERE d.id = :id")
+    Optional<Long> findYhubClockById(@Param("id") UUID id);
+
+    /**
+     * Writes a projected snapshot without loading the entity (its yjsState can be
+     * megabytes) and without touching updated_at, which is the user-visible sort key.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Document d SET d.yjsState = :state, d.yjsStateYhubClock = :clock, d.yhubDeletedAt = NULL "
+            + "WHERE d.id = :id")
+    int applyYhubProjection(@Param("id") UUID id, @Param("state") byte[] state, @Param("clock") long clock);
+
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Document d SET d.yhubDeletedAt = :now, d.yjsStateYhubClock = :clock WHERE d.id = :id")
+    int markYhubDeleted(@Param("id") UUID id, @Param("clock") long clock, @Param("now") OffsetDateTime now);
+
+    /** Stamps seeding without the entity save, so updated_at does not move. */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Document d SET d.yhubSeededAt = :now WHERE d.id = :id AND d.yhubSeededAt IS NULL")
+    int markYhubSeeded(@Param("id") UUID id, @Param("now") OffsetDateTime now);
+
+    /**
+     * Moves the sidebar sort key after Yhub persisted new content. Only the column
+     * the user can see is touched: the projection owns yjs_state, and it must never
+     * write updated_at, or every projection tick would reorder the sidebar.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Document d SET d.updatedAt = :now WHERE d.id = :id AND d.deletedAt IS NULL")
+    int markContentUpdated(@Param("id") UUID id, @Param("now") OffsetDateTime now);
 
     /**
      * Ancestor ids of a document, closest first, bounded like resolve_effective_access
