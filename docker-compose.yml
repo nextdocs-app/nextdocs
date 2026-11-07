@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       target: dev
     ports:
-      - "8080:8080"
+      - '8080:8080'
     environment:
       - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL:-jdbc:postgresql://postgres:5432/nextdocs}
       - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-nextdocs}
@@ -38,6 +38,12 @@ services:
       - ATTACHMENT_PUBLIC_BASE_URL=${ATTACHMENT_PUBLIC_BASE_URL:-}
       # Invitations & Email
       - APP_WEB_BASE_URL=${APP_WEB_BASE_URL:-http://localhost:3000}
+      # Yhub Realtime service coordination. The browser opens YHUB_WS_URL, so it is a
+      # host-published URL; the API talks to the container over YHUB_BASE_URL.
+      - YHUB_BASE_URL=${YHUB_BASE_URL:-http://nextdocs-realtime:1234}
+      - YHUB_WS_URL=${YHUB_WS_URL:-ws://localhost:1234/api/ws/v1/nextdocs}
+      # Required: the API refuses to start with the published development value.
+      - YHUB_SERVICE_TOKEN=${YHUB_SERVICE_TOKEN:-}
       # Bare name on purpose: Compose omits the variable when it is unset, while
       # `${SPRING_MAIL_HOST:-}` would hand the API an empty host it must ignore.
       - SPRING_MAIL_HOST
@@ -64,7 +70,7 @@ services:
       dockerfile: web/Dockerfile
       target: builder
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8080
       - NEXT_PUBLIC_REALTIME_URL=ws://localhost:1234
@@ -84,10 +90,15 @@ services:
       dockerfile: realtime/Dockerfile
       target: builder
     ports:
-      - "1234:1234"
+      - '1234:1234'
     environment:
       - PORT=1234
-      - MAX_GLOBAL_CONNS=1000
+      - REDIS=${REDIS:-redis://redis:6379}
+      - POSTGRES=${POSTGRES:-postgres://nextdocs:nextdocs@postgres:5432/nextdocs_yhub}
+      - API_BASE_URL=${API_BASE_URL:-http://nextdocs-api:8080}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - YHUB_SERVICE_TOKEN=${YHUB_SERVICE_TOKEN:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
     volumes:
       - ./realtime:/app/realtime
       - ./tsconfig.base.json:/app/tsconfig.base.json
@@ -95,6 +106,39 @@ services:
       - /app/realtime/node_modules
       - /app/realtime/dist
     command: npm run dev
+    # Readiness, not liveness: a container that cannot reach Redis or Postgres has
+    # no business being marked healthy, but it must not be restarted for it —
+    # restarting drops every websocket it is serving. Liveness is GET /api/ping/v1.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:1234/api/health/v1').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nextdocs-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks:
       - nextdocs-network
 
@@ -106,6 +150,14 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nextdocs}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the separate Yhub database on a fresh volume. An existing volume
+      # needs `CREATE DATABASE nextdocs_yhub;` once.
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/02-yhub.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-nextdocs} -d ${POSTGRES_DB:-nextdocs}']
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks:
       - nextdocs-network
 
@@ -117,3 +169,4 @@ volumes:
   postgres_data:
   maven_data:
   attachments_data:
+  redis_data:
