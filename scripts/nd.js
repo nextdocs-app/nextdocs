@@ -272,7 +272,7 @@ function waitForPostgresReady(timeoutMs = 30_000) {
   }
 }
 
-function ensureYhubDatabase() {
+function ensureYhubDatabase(withSchema = true) {
   if (!waitForPostgresReady()) {
     console.error(
       `\x1b[31m✗ Postgres did not become ready in ${POSTGRES_CONTAINER}; cannot provision ${YHUB_DB}.\x1b[0m`
@@ -303,19 +303,26 @@ function ensureYhubDatabase() {
     }
   }
 
-  if (!ensureYhubSchema()) {
+  if (withSchema && !ensureYhubSchema()) {
     process.exit(1);
   }
+}
+
+/** The database the realtime service will actually use. */
+function yhubPostgresUrl() {
+  return isKeyEmptyOrPlaceholder(process.env.POSTGRES)
+    ? `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`
+    : process.env.POSTGRES;
 }
 
 // Yhub never runs DDL on boot; init-db.js is the only supported path and is
 // idempotent, so running it here is what makes `./nd dev` work on a fresh volume.
 function ensureYhubSchema() {
-  // npm workspaces normally hoist @y/hub to the root, but a version split keeps it
-  // under the realtime workspace that actually declares and uses it.
+  // Prefer the initializer from the workspace that declares @y/hub: when npm could
+  // not hoist it (a version split), the root copy is the stale one.
   const initScript = [
-    path.join(ROOT, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
     path.join(ROOT, 'realtime', 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
+    path.join(ROOT, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
   ].find((candidate) => fs.existsSync(candidate));
   if (!initScript) {
     // Realtime cannot boot without the schema, so skipping it here would only move
@@ -331,7 +338,7 @@ function ensureYhubSchema() {
     stdio: 'pipe',
     env: {
       ...process.env,
-      POSTGRES: `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`,
+      POSTGRES: yhubPostgresUrl(),
     },
   });
   if (result.status !== 0) {
@@ -342,12 +349,12 @@ function ensureYhubSchema() {
   return true;
 }
 
-function ensurePostgres() {
+function ensurePostgres({ yhubSchema = true } = {}) {
   // Check if container is already running
   const check = runSilent(`docker inspect -f "{{.State.Running}}" ${POSTGRES_CONTAINER}`);
   if (check.status === 0 && check.stdout.toString().trim() === 'true') {
     console.log(`\x1b[32m✓ Postgres already running\x1b[0m`);
-    ensureYhubDatabase();
+    ensureYhubDatabase(yhubSchema);
     return;
   }
 
@@ -356,7 +363,7 @@ function ensurePostgres() {
   if (exists.status === 0) {
     console.log(`\x1b[34m> Starting existing postgres container...\x1b[0m`);
     run(`docker start ${POSTGRES_CONTAINER}`);
-    ensureYhubDatabase();
+    ensureYhubDatabase(yhubSchema);
     return;
   }
 
@@ -374,7 +381,7 @@ function ensurePostgres() {
       POSTGRES_IMAGE,
     ].join(' ')
   );
-  ensureYhubDatabase();
+  ensureYhubDatabase(yhubSchema);
 }
 
 function ensureRedis() {
@@ -566,7 +573,9 @@ if (!command) usage();
 
 switch (command) {
   case 'dev':
-    ensurePostgres();
+    // Only a realtime run needs the Yhub schema; API/web-only sessions should not
+    // fail just because @y/hub is missing.
+    ensurePostgres({ yhubSchema: !service || service === 'realtime' });
     ensureRedis();
     if (devUsesLocalMailpit(service)) {
       ensureMailpit();
@@ -708,7 +717,7 @@ switch (command) {
     break;
 
   case 'db':
-    ensurePostgres();
+    ensurePostgres({ yhubSchema: false });
     run(`docker exec -it ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB}`);
     break;
 
