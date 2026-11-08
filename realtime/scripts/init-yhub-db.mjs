@@ -29,8 +29,9 @@ if (!database) {
 // Connect to the maintenance database: CREATE DATABASE cannot run from inside the
 // database it creates.
 const maintenance = new URL(url);
+// Only the path changes: query options such as sslmode still apply to the
+// maintenance connection.
 maintenance.pathname = '/postgres';
-maintenance.search = '';
 
 const sql = postgres(maintenance.toString(), { max: 1, onnotice: () => {} });
 // A session advisory lock serializes concurrent initializers on the same volume: both
