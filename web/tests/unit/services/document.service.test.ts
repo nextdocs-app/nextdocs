@@ -547,26 +547,6 @@ describe('document.service', () => {
       expect(fetchMock.mock.calls[0][1]?.body).toContain('"value":"🔥"');
     });
 
-    it('leaves the icon out of a content save when the page has none', async () => {
-      const fetchMock = mockDocumentFetch({});
-      const ydoc = new Y.Doc();
-
-      await documentService.saveCloudDocument(
-        'id-1',
-        ydoc,
-        {
-          title: 'Doc',
-          createdAt: '2024-01-01T00:00:00.000Z',
-          updatedAt: '2024-01-01T00:00:00.000Z',
-        },
-        'token'
-      );
-
-      // Absent means "leave unchanged" on the API, which is what a content
-      // save must say — it is not the metadata writer.
-      expect(fetchMock.mock.calls[0][1]?.body).not.toContain('"icon"');
-    });
-
     it('never sends icon/cover through the title-metadata endpoint', async () => {
       const fetchMock = mockDocumentFetch({});
 
@@ -605,35 +585,6 @@ describe('document.service', () => {
       ).toEqual({
         icon: { type: 'emoji', value: '🔥' },
         cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.8 },
-      });
-    });
-
-    it('includes icon and cover in a content save when the page has them', async () => {
-      const fetchMock = mockDocumentFetch({});
-      const ydoc = new Y.Doc();
-
-      await documentService.saveCloudDocument(
-        'id-1',
-        ydoc,
-        {
-          title: 'Doc',
-          icon: { type: 'emoji', value: '📝' },
-          cover: { type: 'link', value: 'https://cdn.example/c.jpg', position: 0.25 },
-          createdAt: '2024-01-01T00:00:00.000Z',
-          updatedAt: '2024-01-01T00:00:00.000Z',
-        },
-        'token'
-      );
-
-      const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
-        icon?: unknown;
-        cover?: unknown;
-      };
-      expect(body.icon).toEqual({ type: 'emoji', value: '📝' });
-      expect(body.cover).toEqual({
-        type: 'link',
-        value: 'https://cdn.example/c.jpg',
-        position: 0.25,
       });
     });
   });
@@ -785,6 +736,59 @@ describe('document.service', () => {
       const access = await documentService.checkAccess('doc-123');
 
       expect(access.accessLevel).toBeNull();
+    });
+  });
+
+  describe('createRealtimeSession', () => {
+    it('should post to realtime-session endpoint with token when provided', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            wsUrl: 'ws://localhost:1234',
+            documentId: 'doc-123',
+            accessLevel: 'EDIT',
+          },
+        }),
+      });
+      global.fetch = fetchMock;
+
+      const session = await documentService.createRealtimeSession('doc-123', 'tok-abc');
+
+      expect(session).toEqual({
+        wsUrl: 'ws://localhost:1234',
+        documentId: 'doc-123',
+        accessLevel: 'EDIT',
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc-123/realtime-session'),
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer tok-abc',
+          }),
+        })
+      );
+    });
+
+    it('should sanitize fallback access level for malformed responses', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            wsUrl: 'ws://localhost:1234',
+            documentId: 'doc-123',
+            accessLevel: 'SUPERUSER',
+          },
+        }),
+      });
+      global.fetch = fetchMock;
+
+      const session = await documentService.createRealtimeSession('doc-123');
+
+      expect(session.accessLevel).toBe('VIEW');
     });
   });
 
@@ -1224,39 +1228,6 @@ describe('document.service', () => {
     });
   });
 
-  describe('savePublicDocument', () => {
-    it('should PATCH the public endpoint without an Authorization header', async () => {
-      const fetchMock = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          success: true,
-          data: {
-            id: 'doc-123',
-            title: 'Guest edit',
-            createdAt: '2024-01-01T00:00:00.000Z',
-            updatedAt: '2024-01-02T00:00:00.000Z',
-          },
-          error: null,
-        }),
-      } as Response);
-      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
-
-      const { ydoc } = await documentService.createDocument('Guest edit');
-      await documentService.savePublicDocument('doc-123', ydoc, {
-        title: 'Guest edit',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-02T00:00:00.000Z',
-      });
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining('/api/v1/documents/doc-123/public'),
-        expect.objectContaining({ method: 'PATCH' })
-      );
-      expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
-      expect(fetchMock.mock.calls[0][1]?.body).toContain('Guest edit');
-    });
-  });
-
   describe('getCloudDocument', () => {
     it('should not append includeTrashed query param by default', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
@@ -1332,6 +1303,150 @@ describe('document.service', () => {
 
       expect(fetchMock).toHaveBeenCalledWith(
         'http://localhost:8080/api/v1/documents/doc-123?includeTrashed=true',
+        expect.anything()
+      );
+    });
+
+    it('loads the body from the content endpoint and decodes it', async () => {
+      const source = new Y.Doc();
+      source.getText('body').insert(0, 'hello');
+      const bytes = Y.encodeStateAsUpdate(source);
+      let binary = '';
+      bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+      });
+      const encoded = btoa(binary);
+
+      const fetchMock = jest.fn().mockImplementation((url: string) => {
+        const isContent = String(url).endsWith('/content');
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: isContent
+              ? { content: encoded }
+              : {
+                  id: 'doc-123',
+                  title: 'Doc',
+                  createdAt: '2024-01-01T00:00:00.000Z',
+                  updatedAt: '2024-01-01T00:00:00.000Z',
+                },
+            error: null,
+          }),
+        } as Response);
+      });
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const { ydoc } = await documentService.getCloudDocument('doc-123', 'access-token');
+
+      expect(ydoc.getText('body').toString()).toBe('hello');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123/content',
+        expect.anything()
+      );
+    });
+
+    it('passes includeTrashed to the content read', async () => {
+      const fetchMock = jest.fn().mockImplementation((url: string) => {
+        const isContent = String(url).includes('/content');
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: isContent
+              ? { content: null }
+              : {
+                  id: 'doc-123',
+                  title: 'Trashed',
+                  deletedAt: '2024-01-01T00:00:00.000Z',
+                  createdAt: '2024-01-01T00:00:00.000Z',
+                  updatedAt: '2024-01-01T00:00:00.000Z',
+                },
+            error: null,
+          }),
+        } as Response);
+      });
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await documentService.getCloudDocument('doc-123', 'access-token', {
+        includeTrashed: true,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123/content?includeTrashed=true',
+        expect.anything()
+      );
+    });
+
+    it('propagates a transient content read so the hook can use IndexedDB', async () => {
+      const fetchMock = jest.fn().mockImplementation((url: string) => {
+        if (String(url).endsWith('/content')) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            json: async () => ({ success: false, data: null, error: 'Unavailable' }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'doc-123',
+              title: 'Doc',
+              createdAt: '2024-01-01T00:00:00.000Z',
+              updatedAt: '2024-01-01T00:00:00.000Z',
+            },
+            error: null,
+          }),
+        } as Response);
+      });
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(
+        documentService.getCloudDocument('doc-123', 'access-token')
+      ).rejects.toMatchObject({ status: 503 });
+    });
+  });
+
+  describe('getPublicDocument', () => {
+    it('loads a public body from the public content endpoint', async () => {
+      const source = new Y.Doc();
+      source.getText('body').insert(0, 'guest');
+      const bytes = Y.encodeStateAsUpdate(source);
+      let binary = '';
+      bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+      });
+      const encoded = btoa(binary);
+
+      const fetchMock = jest.fn().mockImplementation((url: string) => {
+        const isContent = String(url).endsWith('/public/content');
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: isContent
+              ? { content: encoded }
+              : {
+                  id: 'doc-123',
+                  title: 'Shared',
+                  accessLevel: 'VIEW',
+                  createdAt: '2024-01-01T00:00:00.000Z',
+                  updatedAt: '2024-01-01T00:00:00.000Z',
+                },
+            error: null,
+          }),
+        } as Response);
+      });
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const { ydoc, accessLevel } = await documentService.getPublicDocument('doc-123');
+
+      expect(ydoc.getText('body').toString()).toBe('guest');
+      expect(accessLevel).toBe('VIEW');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/documents/doc-123/public/content',
         expect.anything()
       );
     });

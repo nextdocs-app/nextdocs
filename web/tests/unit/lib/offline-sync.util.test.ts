@@ -7,6 +7,9 @@ import {
   readPendingIconCoverPatch,
   mergePendingIconCoverPatch,
   clearPendingIconCoverPatch,
+  readPendingMetaPatch,
+  writePendingMetaPatch,
+  clearPendingMetaPatch,
   PENDING_SYNC_EVENT,
 } from '../../../lib/offline-sync.util';
 
@@ -172,6 +175,56 @@ describe('offline-sync.util', () => {
 
       expect(readPendingIconCoverPatch(documentId)).toBeNull();
       expect(window.localStorage.getItem(patchKey)).toBeNull();
+    });
+
+    it('removes only the keys a rejected replay carried', () => {
+      mergePendingIconCoverPatch(documentId, { icon: clearIcon });
+      mergePendingIconCoverPatch(documentId, { cover });
+
+      // The icon replay is refused, but a cover edit queued while it was in flight
+      // is a newer, unsubmitted change and must stay eligible for REST.
+      expect(clearPendingIconCoverPatch(documentId, { icon: clearIcon })).toBe(false);
+      expect(readPendingIconCoverPatch(documentId)).toEqual({ cover });
+    });
+
+    it('removes a replayed value only while it is still the queued one', () => {
+      mergePendingIconCoverPatch(documentId, { icon: { type: 'emoji', value: '📝' } });
+      const replayed = { icon: { type: 'emoji', value: '📝' } };
+      mergePendingIconCoverPatch(documentId, { icon: { type: 'emoji', value: '❌' } });
+
+      expect(clearPendingIconCoverPatch(documentId, replayed)).toBe(false);
+      expect(readPendingIconCoverPatch(documentId)).toEqual({
+        icon: { type: 'emoji', value: '❌' },
+      });
+    });
+  });
+
+  describe('pending metadata patch', () => {
+    const legacyKey = `nextdocs:pending-meta:${documentId}`;
+
+    it('scopes a queued title to the account that wrote it', () => {
+      writePendingMetaPatch('user-a', documentId, { title: 'Mine' });
+
+      expect(readPendingMetaPatch('user-a', documentId)).toEqual({ title: 'Mine' });
+      expect(readPendingMetaPatch('user-b', documentId)).toBeNull();
+    });
+
+    it('ignores a legacy unscoped title instead of replaying it', () => {
+      window.localStorage.setItem(legacyKey, JSON.stringify({ title: 'Legacy' }));
+
+      expect(readPendingMetaPatch('user-a', documentId)).toBeNull();
+      expect(readPendingMetaPatch('public', documentId)).toBeNull();
+    });
+
+    it('keeps a newer queued title when an older replay is acknowledged', () => {
+      writePendingMetaPatch('user-a', documentId, { title: 'First' });
+      writePendingMetaPatch('user-a', documentId, { title: 'Second' });
+
+      clearPendingMetaPatch('user-a', documentId, 'First');
+      expect(readPendingMetaPatch('user-a', documentId)).toEqual({ title: 'Second' });
+
+      clearPendingMetaPatch('user-a', documentId, 'Second');
+      expect(readPendingMetaPatch('user-a', documentId)).toBeNull();
     });
   });
 });

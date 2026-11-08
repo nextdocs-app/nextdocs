@@ -1,5 +1,10 @@
 import { clearLocalDocumentParent } from '@/lib/local-tree.util';
-import { clearPendingIconCoverPatch, clearPendingSyncEdits } from '@/lib/offline-sync.util';
+import {
+  clearPendingIconCoverPatch,
+  clearPendingMetaPatch,
+  clearPendingSyncEdits,
+  PENDING_META_GUEST_OWNER,
+} from '@/lib/offline-sync.util';
 import { DocumentServiceApiError, documentService } from '@/services/document.service';
 
 // One key per entry: two tabs creating documents offline must not overwrite
@@ -178,9 +183,14 @@ export async function discardPendingDocument(
   id: string,
   options?: { announce?: boolean }
 ): Promise<void> {
+  // Read the owner before the queue entry disappears: the title patch belongs to
+  // the account that queued the create, and replaying it after the discard would
+  // resurrect a title for a document the server refused.
+  const owner = getPendingCloudCreate(id)?.userId ?? PENDING_META_GUEST_OWNER;
   removePendingCloudCreate(id);
   clearPendingSyncEdits(id);
   clearPendingIconCoverPatch(id);
+  clearPendingMetaPatch(owner, id);
   clearLocalDocumentParent(id);
 
   try {
