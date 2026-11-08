@@ -1,1065 +1,317 @@
-import { createHash } from 'crypto';
-import http from 'http';
-import net from 'net';
-import { WebSocketServer, WebSocket } from 'ws';
+import { createYHub, createAuthPlugin, createAuthorize, createApiEndpoint, apiError } from '@y/hub';
 import {
-  setupWSConnection,
-  updateConnectionAccessLevel,
-  type RealtimeAccessLevel,
-} from './yjs-utils.js';
-import config from './config.js';
-import logger from './logger.js';
+  ORG,
+  PORT,
+  REDIS_URL,
+  POSTGRES_URL,
+  JWT_SECRET,
+  CORS_ORIGINS,
+  UUID_REGEX,
+  MAX_DOC_SIZE_BYTES,
+  MAX_RECHECK_DOCS,
+  SWEEP_INTERVAL_MS,
+  API_BASE_URL,
+  YHUB_SERVICE_TOKEN,
+} from './config.js';
+import {
+  verifyAccessToken,
+  isServiceAuthorization,
+  checkApiAccess,
+  type UserAuthInfo,
+} from './auth.js';
+import {
+  documentPermissions,
+  adminDocumentPermissions,
+  serviceOrgPermissions,
+} from './permissions.js';
+import { ActiveRoomTracker, startRoomSweep } from './sweep.js';
+import { checkStore, jsonResponse } from './health.js';
 
-interface RoomData {
-  lastActivity: number;
-  connections: number;
-}
+/** Rooms this instance currently serves, refreshed by every authorize call. */
+const activeRooms = new ActiveRoomTracker();
 
-// Revalidation tunables: kept as named constants next to their use so ops can
-// spot them; promote to config.ts only if runtime tuning is needed.
-const MAX_CONSECUTIVE_REVALIDATION_FAILURES = 5;
-const FETCH_FALLBACK_RETRY_AFTER_MS = 30000;
-const RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC = 60;
-const RATE_LIMIT_MAX_RETRY_AFTER_SEC = 300;
-const MAX_XFF_HOPS_SCANNED = 16;
-// Anonymous cooldown is shared by every guest behind one NAT IP for the same
-// room, so a single denied probe must not block other guests. Only enforce
-// the no-API-check fast path after repeated denials; every denial below the
-// threshold still closes its own connection with 1008.
-const ANONYMOUS_COOLDOWN_DENIAL_THRESHOLD = 3;
-
-const rooms = new Map<string, RoomData>();
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-}
-
-const patternRegexCache = new Map<string, RegExp>();
-
-function getPatternRegex(pattern: string): RegExp {
-  let cached = patternRegexCache.get(pattern);
-  if (!cached) {
-    const isIpPattern =
-      /^https?:\/\/(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)(?::\d+)?$/.test(
-        pattern
-      );
-
-    if (isIpPattern) {
-      const octetRegex = '(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])';
-      const regexStr = pattern.split('*').map(escapeRegExp).join(octetRegex);
-      cached = new RegExp(`^${regexStr}$`);
-    } else {
-      const regexStr = pattern.split('*').map(escapeRegExp).join('[^.:/]+');
-      cached = new RegExp(`^${regexStr}$`);
-    }
-    patternRegexCache.set(pattern, cached);
-  }
-  return cached;
-}
-
-export function isOriginAllowed(origin: string, patterns: readonly string[]): boolean {
-  if (!origin) return false;
-  return patterns.some((pattern) => {
-    if (pattern === origin) return true;
-    if (!pattern.includes('*') || pattern === '*') return false;
-
-    return getPatternRegex(pattern).test(origin);
-  });
-}
-
-function getCorsHeaders(req: http.IncomingMessage): Record<string, string> {
-  const origin = req.headers.origin;
-  const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Max-Age': '86400', // 24 hours
+type RecheckRequest = {
+  org: string;
+  yhub: {
+    recheckAuth(
+      docRef: { org: string; docid: string; branch: string },
+      opts: { users?: string[] | null }
+    ): Promise<void>;
   };
+  bytes(): Promise<Uint8Array>;
+};
 
-  if (origin && isOriginAllowed(origin, config.corsOrigins)) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  } else if (config.corsOrigins.includes('*')) {
-    // Wildcard configured - allow any origin (but no credentials)
-    headers['Access-Control-Allow-Origin'] = '*';
-  }
-
-  return headers;
-}
-
-export const server = http.createServer((req, res) => {
-  const corsHeaders = getCorsHeaders(req);
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, corsHeaders);
-    res.end();
-    return;
-  }
-
-  if (req.url === '/health' && req.method === 'GET') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-    });
-    res.end(
-      JSON.stringify({
-        status: 'healthy',
-        uptime: process.uptime(),
-        rooms: rooms.size,
-        timestamp: new Date().toISOString(),
-      })
-    );
-    return;
-  }
-
-  if (req.url === '/metrics' && req.method === 'GET') {
-    const roomsData = Array.from(rooms.entries()).map(([id, data]) => ({
-      id,
-      connections: data.connections,
-      lastActivity: data.lastActivity,
-    }));
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-    });
-    res.end(
-      JSON.stringify({
-        rooms: roomsData,
-        totalRooms: rooms.size,
-        totalConnections: roomsData.reduce((sum, r) => sum + r.connections, 0),
-      })
-    );
-    return;
-  }
-
-  res.writeHead(404, corsHeaders);
-  res.end('Not Found');
-});
-
-export const wss = new WebSocketServer({
-  server,
-  // We set a hard limit here, but we also check in application logic for logging/metrics
-  maxPayload: config.limits.maxPayload,
-});
-
-const ipConnections = new Map<string, number>();
-const ipConnectionTimestamps = new Map<string, number[]>();
-const unauthorizedAccessCooldown = new Map<string, UnauthorizedCooldownState>();
-const unauthorizedCooldownExpirations: UnauthorizedCooldownExpiryEntry[] = [];
-const MAX_UNAUTHORIZED_COOLDOWN_EXPIRATIONS_PER_CLEANUP = 512;
-const UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_MIN_SIZE = 1024;
-const UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_RATIO = 4;
-const ROOM_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-interface UnauthorizedCooldownState {
-  denyUntil: number;
-  lastWarnAt: number;
-  suppressedAttempts: number;
-  consecutiveDenials: number;
-}
-
-interface UnauthorizedCooldownExpiryEntry {
-  key: string;
-  denyUntil: number;
-}
-
-interface AccessCheckData {
-  allowed: boolean;
-  accessLevel: RealtimeAccessLevel | null;
-  owner: boolean;
-}
-
-interface ApiEnvelope<T> {
-  success: boolean;
-  data: T | null;
-  error: string | null;
-}
-
-export function normalizeIp(ip: string): string {
-  const lower = ip.toLowerCase();
-  if (lower.startsWith('::ffff:')) {
-    return lower.slice(7);
-  }
-  return lower;
-}
-
-function ipToLong(ip: string): number | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return null;
-  let acc = 0;
-  for (const octet of parts) {
-    if (!/^\d{1,3}$/.test(octet)) return null;
-    const n = parseInt(octet, 10);
-    if (n < 0 || n > 255) return null;
-    acc = acc * 256 + n;
-  }
-  return acc >>> 0;
-}
-
-export function isTrustedProxy(rawRemoteAddr: string): boolean {
-  if (!config.trustedProxies || config.trustedProxies.length === 0) {
-    return false;
-  }
-  const remoteAddr = normalizeIp(rawRemoteAddr);
-
-  for (const proxy of config.trustedProxies) {
-    const trimmed = proxy.trim();
-    if (!trimmed) continue;
-
-    if (trimmed.includes('/')) {
-      const parts = trimmed.split('/');
-      if (parts.length !== 2 || !/^\d+$/.test(parts[1])) {
-        continue;
-      }
-      const [subnet, prefixStr] = parts;
-      const prefix = parseInt(prefixStr, 10);
-      const normSubnet = normalizeIp(subnet);
-
-      if (!normSubnet.includes(':') && !remoteAddr.includes(':')) {
-        const remoteLong = ipToLong(remoteAddr);
-        const subnetLong = ipToLong(normSubnet);
-        if (remoteLong === null || subnetLong === null) {
-          continue;
-        }
-        if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) {
-          continue;
-        }
-        const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
-        if ((remoteLong & mask) === (subnetLong & mask)) {
-          return true;
-        }
-      }
-    } else {
-      const normProxy = normalizeIp(trimmed);
-      if (remoteAddr === normProxy) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-export function getClientIp(req: http.IncomingMessage): string {
-  // Normalize once here: this value keys per-IP connection limits, cooldown
-  // maps, fetchAccess X-Forwarded-For propagation, and log lines, so a raw
-  // ::ffff: form would split one client across two buckets.
-  const remoteAddr = normalizeIp(req.socket?.remoteAddress || 'unknown');
-  const xForwardedFor = req.headers['x-forwarded-for'];
-  if (typeof xForwardedFor === 'string' && isTrustedProxy(remoteAddr)) {
-    // The list is client-supplied until a trusted hop appends the peer address,
-    // so the leftmost entry is spoofable (rotate it for a fresh per-IP budget).
-    // Read it right to left, skipping the hops our own infrastructure appended,
-    // and stop at the first address that is not a trusted proxy.
-    const hops = xForwardedFor.split(',');
-    // Bound CPU on an attacker-controlled header: only the closest hops can
-    // affect the rightmost-untrusted decision, so scan at most 16.
-    const recentHops =
-      hops.length > MAX_XFF_HOPS_SCANNED ? hops.slice(-MAX_XFF_HOPS_SCANNED) : hops;
-    for (let i = recentHops.length - 1; i >= 0; i--) {
-      const candidate = normalizeIp(recentHops[i].trim());
-      if (candidate.length === 0 || net.isIP(candidate) === 0) {
-        continue;
-      }
-      if (!isTrustedProxy(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return remoteAddr;
-}
-
-// Prefer Authorization headers to reduce token leakage in logs/proxies.
-// Query-string fallback exists because browser WebSocket upgrades cannot set custom auth headers,
-// and query tokens may be logged by intermediaries.
-function extractToken(req: http.IncomingMessage, url: URL): string | null {
-  const authHeader = req.headers.authorization;
-  if (typeof authHeader === 'string') {
-    const match = authHeader.match(/^Bearer\s+(.+)$/i);
-    if (match && match[1].trim().length > 0) {
-      return match[1].trim();
-    }
-  }
-
-  const queryToken = url.searchParams.get('token');
-  if (queryToken && queryToken.trim().length > 0) {
-    return queryToken.trim();
-  }
-
-  return null;
-}
-
-function isValidRoomId(roomId: string): boolean {
-  return ROOM_ID_PATTERN.test(roomId);
-}
-
-// Never log raw request URLs: ?token= carries a live credential and
-// intermediaries already log query strings. Log pathname only.
-function redactUrlForLog(rawUrl: string | undefined | null): string {
-  if (!rawUrl) {
-    return '/';
-  }
-  const queryIndex = rawUrl.indexOf('?');
-  const pathname = queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : rawUrl;
-  return pathname.length > 0 ? pathname : '/';
-}
-
-function getTokenFingerprint(token: string): string {
-  return createHash('sha256').update(token).digest('hex').slice(0, 12);
-}
-
-function buildUnauthorizedCooldownKey(
-  roomId: string,
-  clientIp: string,
-  token: string | null
-): string {
-  if (!token) {
-    return `${roomId}:${clientIp}:anonymous`;
-  }
-  return `${roomId}:${clientIp}:${getTokenFingerprint(token)}`;
-}
-
-function swapUnauthorizedCooldownHeapEntries(a: number, b: number): void {
-  const tmp = unauthorizedCooldownExpirations[a];
-  unauthorizedCooldownExpirations[a] = unauthorizedCooldownExpirations[b];
-  unauthorizedCooldownExpirations[b] = tmp;
-}
-
-function siftUnauthorizedCooldownExpirationUp(index: number): void {
-  let current = index;
-
-  while (current > 0) {
-    const parent = Math.floor((current - 1) / 2);
-    if (
-      unauthorizedCooldownExpirations[parent].denyUntil <=
-      unauthorizedCooldownExpirations[current].denyUntil
-    ) {
-      break;
-    }
-
-    swapUnauthorizedCooldownHeapEntries(parent, current);
-    current = parent;
-  }
-}
-
-function siftUnauthorizedCooldownExpirationDown(index: number): void {
-  let current = index;
-  const size = unauthorizedCooldownExpirations.length;
-
-  while (true) {
-    const left = current * 2 + 1;
-    const right = left + 1;
-    let smallest = current;
-
-    if (
-      left < size &&
-      unauthorizedCooldownExpirations[left].denyUntil <
-        unauthorizedCooldownExpirations[smallest].denyUntil
-    ) {
-      smallest = left;
-    }
-
-    if (
-      right < size &&
-      unauthorizedCooldownExpirations[right].denyUntil <
-        unauthorizedCooldownExpirations[smallest].denyUntil
-    ) {
-      smallest = right;
-    }
-
-    if (smallest === current) {
-      break;
-    }
-
-    swapUnauthorizedCooldownHeapEntries(current, smallest);
-    current = smallest;
-  }
-}
-
-function pushUnauthorizedCooldownExpiration(entry: UnauthorizedCooldownExpiryEntry): void {
-  unauthorizedCooldownExpirations.push(entry);
-  siftUnauthorizedCooldownExpirationUp(unauthorizedCooldownExpirations.length - 1);
-}
-
-function peekUnauthorizedCooldownExpiration(): UnauthorizedCooldownExpiryEntry | null {
-  return unauthorizedCooldownExpirations[0] ?? null;
-}
-
-function popUnauthorizedCooldownExpiration(): UnauthorizedCooldownExpiryEntry | null {
-  if (unauthorizedCooldownExpirations.length === 0) {
-    return null;
-  }
-
-  const root = unauthorizedCooldownExpirations[0];
-  const last = unauthorizedCooldownExpirations.pop();
-  if (unauthorizedCooldownExpirations.length > 0 && last) {
-    unauthorizedCooldownExpirations[0] = last;
-    siftUnauthorizedCooldownExpirationDown(0);
-  }
-
-  return root;
-}
-
-function rebuildUnauthorizedCooldownExpirationHeap(): void {
-  unauthorizedCooldownExpirations.length = 0;
-
-  for (const [key, state] of unauthorizedAccessCooldown.entries()) {
-    unauthorizedCooldownExpirations.push({
-      key,
-      denyUntil: state.denyUntil,
-    });
-  }
-
-  for (let i = Math.floor(unauthorizedCooldownExpirations.length / 2) - 1; i >= 0; i -= 1) {
-    siftUnauthorizedCooldownExpirationDown(i);
-  }
-}
-
-function maybeRebuildUnauthorizedCooldownExpirationHeap(): void {
-  if (unauthorizedCooldownExpirations.length < UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_MIN_SIZE) {
-    return;
-  }
-
-  if (unauthorizedAccessCooldown.size === 0) {
-    unauthorizedCooldownExpirations.length = 0;
-    return;
-  }
-
-  if (
-    unauthorizedCooldownExpirations.length <=
-    unauthorizedAccessCooldown.size * UNAUTHORIZED_COOLDOWN_HEAP_REBUILD_RATIO
-  ) {
-    return;
-  }
-
-  rebuildUnauthorizedCooldownExpirationHeap();
-}
-
-function getUnauthorizedCooldownState(key: string, now: number): UnauthorizedCooldownState | null {
-  const existingState = unauthorizedAccessCooldown.get(key);
-  if (!existingState) {
-    return null;
-  }
-
-  if (existingState.denyUntil <= now) {
-    unauthorizedAccessCooldown.delete(key);
-    return null;
-  }
-
-  // Anonymous keys are shared across a NAT IP: don't fast-reject other
-  // guests on the same IP until repeated probes prove abuse.
-  if (
-    key.endsWith(':anonymous') &&
-    existingState.consecutiveDenials < ANONYMOUS_COOLDOWN_DENIAL_THRESHOLD
-  ) {
-    return null;
-  }
-
-  return existingState;
-}
-
-function trackUnauthorizedAccess(key: string, now: number): UnauthorizedCooldownState {
-  // Count denials even while below the anonymous threshold: look the raw
-  // entry up directly instead of the filtered cooldown-state lookup.
-  const rawExisting = unauthorizedAccessCooldown.get(key);
-  if (rawExisting && rawExisting.denyUntil > now) {
-    rawExisting.consecutiveDenials += 1;
-    rawExisting.denyUntil = now + config.unauthorizedAccessCooldownMs;
-    pushUnauthorizedCooldownExpiration({ key, denyUntil: rawExisting.denyUntil });
-    return rawExisting;
-  }
-
-  const nextState: UnauthorizedCooldownState = {
-    denyUntil: now + config.unauthorizedAccessCooldownMs,
-    lastWarnAt: 0,
-    suppressedAttempts: 0,
-    consecutiveDenials: 1,
+type HealthRequest = {
+  yhub: {
+    stream: { redis: { ping(): Promise<string> } };
+    persistence: { sql: (strings: TemplateStringsArray) => Promise<unknown> };
   };
+};
 
-  unauthorizedAccessCooldown.set(key, nextState);
-  pushUnauthorizedCooldownExpiration({ key, denyUntil: nextState.denyUntil });
-  return nextState;
-}
+const authPlugin = createAuthPlugin<UserAuthInfo>({
+  async authenticate(req) {
+    const authHeader = req.getHeader('authorization');
+    const queryToken = req.getQuery('token')?.trim();
 
-function logUnauthorizedRejection(
-  state: UnauthorizedCooldownState,
-  context: {
-    roomId: string;
-    clientIp: string;
-    now: number;
-    source: 'cooldown' | 'access-check';
-  }
-): void {
-  const cooldownMsRemaining = Math.max(0, state.denyUntil - context.now);
-  const shouldWarn = context.now - state.lastWarnAt >= config.unauthorizedAccessWarnIntervalMs;
-
-  if (!shouldWarn) {
-    state.suppressedAttempts += 1;
-    logger.debug('Connection rejected: unauthorized document access (suppressed)', {
-      roomId: context.roomId,
-      ip: context.clientIp,
-      source: context.source,
-      cooldownMsRemaining,
-    });
-    return;
-  }
-
-  logger.warn('Connection rejected: unauthorized document access', {
-    roomId: context.roomId,
-    ip: context.clientIp,
-    source: context.source,
-    cooldownMsRemaining,
-    suppressedAttempts: state.suppressedAttempts,
-  });
-
-  state.lastWarnAt = context.now;
-  state.suppressedAttempts = 0;
-}
-
-function cleanupExpiredUnauthorizedCooldown(now = Date.now()): void {
-  let processedEntries = 0;
-
-  while (processedEntries < MAX_UNAUTHORIZED_COOLDOWN_EXPIRATIONS_PER_CLEANUP) {
-    const nextExpiration = peekUnauthorizedCooldownExpiration();
-    if (!nextExpiration || nextExpiration.denyUntil > now) {
-      break;
+    // The service identity is server-to-server only. A query token is a URL a
+    // browser can be tricked into opening, so it is never accepted as the service
+    // credential — even if it holds the right value.
+    if (isServiceAuthorization(authHeader)) {
+      return { userid: 'service', isService: true };
     }
 
-    const expiredEntry = popUnauthorizedCooldownExpiration();
-    if (!expiredEntry) {
-      break;
+    const headerToken = authHeader
+      ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader).trim()
+      : '';
+    const token = headerToken || queryToken || '';
+
+    if (!token) {
+      return { userid: 'anonymous' };
     }
 
-    processedEntries += 1;
-
-    const existingState = unauthorizedAccessCooldown.get(expiredEntry.key);
-    if (!existingState) {
-      continue;
+    const payload = verifyAccessToken(token, JWT_SECRET);
+    if (!payload) {
+      throw apiError(401, 'Invalid or expired token');
     }
 
-    // The key may have been renewed after this heap entry was pushed.
-    if (existingState.denyUntil !== expiredEntry.denyUntil) {
-      continue;
-    }
+    return { userid: payload.sub, token };
+  },
 
-    unauthorizedAccessCooldown.delete(expiredEntry.key);
-  }
-
-  if (unauthorizedAccessCooldown.size === 0) {
-    unauthorizedCooldownExpirations.length = 0;
-    return;
-  }
-
-  maybeRebuildUnauthorizedCooldownExpirationHeap();
-}
-
-const VALID_ACCESS_LEVELS = new Set<RealtimeAccessLevel>(['VIEW', 'COMMENT', 'EDIT', 'OWNER']);
-
-export type FetchAccessStatus = 'allowed' | 'denied' | 'rate_limited' | 'error';
-
-export interface FetchAccessOutcome {
-  status: FetchAccessStatus;
-  data?: AccessCheckData;
-  retryAfterMs?: number;
-}
-
-export async function fetchAccess(
-  token: string | null,
-  roomId: string,
-  clientIp?: string
-): Promise<FetchAccessOutcome> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, config.fetchTimeoutMs);
-
-  try {
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    // Forward client IP to API so rate-limiting is keyed on caller IP,
-    // not the realtime server IP.
-    if (clientIp && clientIp !== 'unknown') {
-      headers['X-Forwarded-For'] = clientIp;
-    }
-
-    const res = await fetch(
-      `${config.apiBaseUrl}/api/v1/documents/${encodeURIComponent(roomId)}/access-check`,
-      {
-        method: 'GET',
-        headers,
-        signal: controller.signal,
+  authorize: createAuthorize<UserAuthInfo>({
+    async document({ org, docid, branch }, user) {
+      if (user?.isService) {
+        return adminDocumentPermissions;
       }
-    );
 
-    if (res.status === 429) {
-      const retryAfterHeader = res.headers.get('retry-after');
-      const parsed = retryAfterHeader
-        ? parseInt(retryAfterHeader, 10)
-        : RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC;
-      const retryAfterSec =
-        !Number.isNaN(parsed) && parsed > 0
-          ? Math.min(parsed, RATE_LIMIT_MAX_RETRY_AFTER_SEC)
-          : RATE_LIMIT_DEFAULT_RETRY_AFTER_SEC;
+      if (org !== ORG || branch !== 'main' || !UUID_REGEX.test(docid)) {
+        return null;
+      }
+
+      const access = await checkApiAccess(docid, user?.token);
+      // An allowed verdict without a level cannot grant anything; the API always
+      // sends one for an admitted document, so this only rejects a malformed reply.
+      if (!access || !access.allowed || access.trashed || !access.accessLevel) {
+        return null;
+      }
+
+      activeRooms.touch(docid);
+      return documentPermissions(access.accessLevel);
+    },
+
+    async org({ org }, user) {
+      if (!user?.isService || org !== ORG) {
+        return null;
+      }
+      return serviceOrgPermissions;
+    },
+
+    async global() {
       return {
-        status: 'rate_limited',
-        retryAfterMs: retryAfterSec * 1000,
+        type: 'permissions:global:v1',
+        endpoint: { health: '-r--', ping: '-r--' },
       };
-    }
+    },
+  }),
+});
 
-    // Every remaining 4xx is a definitive answer (401/403/404 access, 400/422
-    // malformed or unknown document): retrying cannot succeed, so deny instead
-    // of reporting a transient error the revalidation loop would tolerate.
-    // 408 Request Timeout is the exception: the API never sends it today, but
-    // if it ever does it is transient, so treat it as an error to retry.
-    if (res.status === 408) {
-      return { status: 'error' };
-    }
-    if (res.status >= 400 && res.status < 500) {
-      return { status: 'denied' };
-    }
+const customEndpoints = [
+  /**
+   * Batched recheck. Access changes inherit (a grant on an ancestor applies to
+   * every descendant), so one edit can affect a whole subtree; one request per
+   * document would turn that into a fan-out of HTTP calls from the API.
+   */
+  createApiEndpoint('recheck', {
+    scope: 'org',
+    post: {
+      handler: async (req) => {
+        const request = req as unknown as RecheckRequest;
+        const body = await readJsonBody(request);
+        const docids = Array.isArray(body?.docids) ? body.docids : [];
+        // Yhub treats `users: []` as "match no connection" and null as "match all".
+        // An empty list must not turn a recheck into a silent no-op.
+        const users = Array.isArray(body?.users) && body.users.length > 0 ? body.users : null;
 
-    if (!res.ok) {
-      return { status: 'error' };
-    }
+        if (docids.length === 0 || docids.length > MAX_RECHECK_DOCS) {
+          throw apiError(400, `docids must contain between 1 and ${MAX_RECHECK_DOCS} entries`);
+        }
 
-    const body = (await res.json()) as ApiEnvelope<AccessCheckData>;
-    if (!body.success || !body.data || !body.data.allowed || !body.data.accessLevel) {
-      return { status: 'denied' };
-    }
+        for (const docid of docids) {
+          if (typeof docid !== 'string' || !UUID_REGEX.test(docid)) {
+            throw apiError(400, 'docids must be document UUIDs');
+          }
+        }
 
-    if (!VALID_ACCESS_LEVELS.has(body.data.accessLevel)) {
-      logger.warn('Unknown access level received from API', {
-        roomId,
-        accessLevel: body.data.accessLevel,
-      });
-      return { status: 'denied' };
-    }
+        // The user list narrows a recheck, so a malformed entry would silently make
+        // the whole request re-check nobody. Reject it instead.
+        for (const userid of users ?? []) {
+          if (typeof userid !== 'string' || !UUID_REGEX.test(userid)) {
+            throw apiError(400, 'users must be user UUIDs');
+          }
+        }
 
-    return { status: 'allowed', data: body.data };
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      logger.debug('Document access check timed out', {
-        roomId,
-        error: error.message,
-      });
-      return { status: 'error' };
-    }
+        for (const docid of docids) {
+          await request.yhub.recheckAuth({ org: request.org, docid, branch: 'main' }, { users });
+        }
 
-    logger.debug('Document access check failed', {
-      roomId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { status: 'error' };
-  } finally {
-    clearTimeout(timeout);
+        return {
+          status: 'ok',
+          rechecked: docids.length,
+        };
+      },
+    },
+  }),
+  /**
+   * Liveness. It answers, therefore the http channel and the event loop are
+   * alive — which is all a liveness probe should ever conclude. Touching Redis
+   * or Postgres here would restart a server that holds perfectly good
+   * websocket connections every time a store blinks.
+   */
+  createApiEndpoint('ping', {
+    scope: 'global',
+    get: {
+      handler: () => jsonResponse(200, { status: 'pong' }),
+    },
+  }),
+  /**
+   * Readiness. The two stores this service cannot serve a document without,
+   * asked in parallel so a probe never pays one store's latency on top of the
+   * other's. A 503 takes this pod out of the endpoints and leaves its siblings
+   * serving; it must not be used as a liveness probe.
+   */
+  createApiEndpoint('health', {
+    scope: 'global',
+    get: {
+      handler: async (req) => {
+        const internals = (req as unknown as HealthRequest).yhub;
+        const checks = Object.fromEntries(
+          await Promise.all([
+            checkStore('postgres', () => internals.persistence.sql`SELECT 1`),
+            checkStore('redis', async () => {
+              const reply = await internals.stream.redis.ping();
+              if (reply !== 'PONG') {
+                throw new Error('unexpected ping reply');
+              }
+            }),
+          ])
+        );
+        const ready = Object.values(checks).every((state) => state === 'ok');
+        return jsonResponse(ready ? 200 : 503, {
+          status: ready ? 'ready' : 'unready',
+          checks,
+        });
+      },
+    },
+  }),
+];
+
+async function readJsonBody(req: RecheckRequest): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await req.bytes();
+    if (!raw || raw.length === 0) {
+      return null;
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(raw));
+    return parsed != null && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
-wss.on('connection', async (conn: WebSocket, req: http.IncomingMessage) => {
-  const clientIp = getClientIp(req);
-  let revalidateAccessInterval: NodeJS.Timeout | undefined;
+/** Notification attempts before the sort key is left stale until the next edit. */
+const CONTENT_UPDATED_ATTEMPTS = 3;
 
-  try {
-    const currentGlobalConns = wss.clients.size;
-    if (currentGlobalConns > config.limits.maxGlobalConns) {
-      logger.warn('Connection rejected: Global connection limit reached', {
-        ip: clientIp,
-        current: currentGlobalConns,
-        max: config.limits.maxGlobalConns,
-      });
-      conn.close(1008, 'Server busy');
-      return;
-    }
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    const memoryUsage = process.memoryUsage();
-    const heapUsedRatio = memoryUsage.heapUsed / memoryUsage.heapTotal;
-    if (heapUsedRatio > config.limits.memoryThreshold) {
-      const payload = {
-        ip: clientIp,
-        heapUsedRatio,
-        threshold: config.limits.memoryThreshold,
-        heapUsed: memoryUsage.heapUsed,
-        heapTotal: memoryUsage.heapTotal,
-        enforce: config.enforceMemoryThreshold,
-      };
-
-      if (config.enforceMemoryThreshold) {
-        logger.warn('Connection rejected: Memory threshold exceeded', payload);
-        conn.close(1008, 'Server busy');
-        return;
-      }
-
-      logger.warn('Memory threshold exceeded, continuing in warn-only mode', payload);
-    }
-
-    const currentIpConns = ipConnections.get(clientIp) || 0;
-    if (currentIpConns >= config.limits.maxConnsPerIp) {
-      logger.warn('Connection rejected: IP connection limit reached', {
-        ip: clientIp,
-        current: currentIpConns,
-        max: config.limits.maxConnsPerIp,
-      });
-      conn.close(1008, 'Too many connections');
-      return;
-    }
-
-    const now = Date.now();
-    const timestamps = ipConnectionTimestamps.get(clientIp) || [];
-
-    const windowStart = now - 60000;
-    while (timestamps.length > 0 && timestamps[0] < windowStart) {
-      timestamps.shift();
-    }
-
-    // Clean up empty IP entries to prevent memory leak
-    if (timestamps.length === 0) {
-      ipConnectionTimestamps.delete(clientIp);
-    }
-
-    if (timestamps.length >= config.limits.maxConnRatePerMin) {
-      logger.warn('Connection rejected: IP connection rate limit exceeded', {
-        ip: clientIp,
-        rate: timestamps.length,
-        max: config.limits.maxConnRatePerMin,
-      });
-      conn.close(1008, 'Rate limit exceeded');
-      return;
-    }
-
-    timestamps.push(now);
-    if (!ipConnectionTimestamps.has(clientIp)) {
-      ipConnectionTimestamps.set(clientIp, timestamps);
-    }
-
-    let roomId: string;
-    let parsedUrl: URL;
+/**
+ * Tell the API that Yhub persisted new content for a document.
+ *
+ * Fires once per compaction that found new content, and the worker already
+ * debounces compaction, so the rate is naturally bounded per document. The
+ * route moves `updated_at` only: the content already lives in Yhub and is never
+ * copied into Postgres, but the timestamp is the sidebar sort key and the API
+ * owns it.
+ *
+ * Deliberately not awaited by the worker event: a slow API must never hold a
+ * compaction. Transient failures are retried with backoff rather than logged
+ * and forgotten; a notification that still fails leaves only a stale sort
+ * position - the next edit re-sends it - never lost content.
+ */
+async function touchContentUpdated(docid: string): Promise<void> {
+  for (let attempt = 1; attempt <= CONTENT_UPDATED_ATTEMPTS; attempt++) {
     try {
-      const rawUrl = req.url ?? '/';
-      const baseUrl = `http://${req.headers.host ?? 'localhost'}`;
-      parsedUrl = new URL(rawUrl, baseUrl);
-      roomId = parsedUrl.pathname.slice(1);
-    } catch (err) {
-      logger.warn('Connection rejected: failed to parse URL', {
-        ip: clientIp,
-        url: redactUrlForLog(req.url),
-        error: (err as Error).message,
-      });
-      conn.close(1008, 'Invalid request URL');
-
-      return;
-    }
-
-    if (!roomId) {
-      logger.warn('Connection rejected: missing room ID', {
-        ip: clientIp,
-        url: redactUrlForLog(req.url),
-      });
-      conn.close(1008, 'Room ID required');
-
-      return;
-    }
-
-    if (!isValidRoomId(roomId)) {
-      logger.info('Connection rejected: invalid room ID format', {
-        roomId,
-        ip: clientIp,
-      });
-      conn.close(1008, 'Invalid room ID');
-      return;
-    }
-
-    const token = extractToken(req, parsedUrl);
-    // No token means an anonymous guest following a share link. The API
-    // evaluates access-check without credentials against ANYONE_WITH_LINK
-    // grants (including inherited ancestor links), so guests with a link
-    // level of VIEW/COMMENT/EDIT can sync without signing in.
-
-    const authCheckNow = Date.now();
-    const unauthorizedCooldownKey = buildUnauthorizedCooldownKey(roomId, clientIp, token);
-    const activeUnauthorizedCooldownState = getUnauthorizedCooldownState(
-      unauthorizedCooldownKey,
-      authCheckNow
-    );
-
-    if (activeUnauthorizedCooldownState) {
-      logUnauthorizedRejection(activeUnauthorizedCooldownState, {
-        roomId,
-        clientIp,
-        now: authCheckNow,
-        source: 'cooldown',
-      });
-      conn.close(1008, 'Access denied');
-      return;
-    }
-
-    const access = await fetchAccess(token, roomId, clientIp);
-    if (access.status !== 'allowed' || !access.data?.accessLevel) {
-      if (access.status === 'denied') {
-        const unauthorizedState = trackUnauthorizedAccess(unauthorizedCooldownKey, authCheckNow);
-        logUnauthorizedRejection(unauthorizedState, {
-          roomId,
-          clientIp,
-          now: authCheckNow,
-          source: 'access-check',
-        });
-        conn.close(1008, 'Access denied');
-      } else if (access.status === 'rate_limited') {
-        logger.warn('Access check rate limited on connection', { roomId, clientIp });
-        conn.close(1008, 'Rate limit exceeded');
-      } else {
-        conn.close(1011, 'Internal server error');
-      }
-      return;
-    }
-
-    unauthorizedAccessCooldown.delete(unauthorizedCooldownKey);
-
-    ipConnections.set(clientIp, currentIpConns + 1);
-
-    logger.info('Client connected', { roomId, ip: clientIp });
-
-    if (!rooms.has(roomId)) {
-      rooms.set(roomId, {
-        lastActivity: Date.now(),
-        connections: 0,
-      });
-      logger.info('Room created', { roomId });
-    }
-
-    const room = rooms.get(roomId)!;
-    room.connections += 1;
-    room.lastActivity = Date.now();
-
-    try {
-      setupWSConnection(conn, roomId, access.data.accessLevel);
-    } catch (error) {
-      logger.error('Error setting up Yjs connection', {
-        roomId,
-        error: (error as Error).message,
-      });
-      room.connections -= 1;
-      if (room.connections <= 0) {
-        logger.info('Room empty after setup failure, marking for cleanup', {
-          roomId,
-        });
-        room.lastActivity = Date.now();
-      }
-      conn.close(1011, 'Internal server error'); // 1011: Internal Error
-      return;
-    }
-
-    let isRevalidating = false;
-    let nextBackoffUntil = 0;
-    // Anonymous rooms share one API rate-limit budget per egress IP with page
-    // loads, so they revalidate lazily; revocation still closes live rooms.
-    const revalidationIntervalMs = token
-      ? config.accessRevalidationIntervalMs
-      : config.anonymousAccessRevalidationIntervalMs;
-    let consecutiveRevalidationFailures = 0;
-
-    revalidateAccessInterval = setInterval(() => {
-      if (conn.readyState !== WebSocket.OPEN || isRevalidating) {
-        return;
-      }
-
-      const now = Date.now();
-      if (now < nextBackoffUntil) {
-        return;
-      }
-
-      isRevalidating = true;
-      fetchAccess(token, roomId, clientIp)
-        .then((latestAccess) => {
-          if (latestAccess.status === 'denied') {
-            logger.info('Connection closed after access revalidation denial', {
-              roomId,
-              ip: clientIp,
-            });
-            conn.close(1008, 'Access revoked');
-            return;
-          }
-
-          if (latestAccess.status === 'rate_limited') {
-            consecutiveRevalidationFailures++;
-            logger.warn('Access check rate limited during revalidation; backing off', {
-              roomId,
-              ip: clientIp,
-              consecutiveRevalidationFailures,
-            });
-            if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
-              logger.warn('Connection closed after consecutive revalidation rate limits', {
-                roomId,
-                ip: clientIp,
-                consecutiveRevalidationFailures,
-              });
-              conn.close(1008, 'Rate limit exceeded');
-              return;
-            }
-            nextBackoffUntil =
-              Date.now() + (latestAccess.retryAfterMs ?? FETCH_FALLBACK_RETRY_AFTER_MS);
-            return;
-          }
-
-          if (latestAccess.status === 'error') {
-            consecutiveRevalidationFailures++;
-            logger.debug('Transient failure during revalidation; retrying next cycle', {
-              roomId,
-              ip: clientIp,
-              consecutiveRevalidationFailures,
-            });
-            if (consecutiveRevalidationFailures >= MAX_CONSECUTIVE_REVALIDATION_FAILURES) {
-              logger.error('Connection closed after consecutive revalidation errors', {
-                roomId,
-                ip: clientIp,
-                consecutiveRevalidationFailures,
-              });
-              conn.close(1011, 'Access check failed');
-              return;
-            }
-            return;
-          }
-
-          if (latestAccess.status === 'allowed') {
-            consecutiveRevalidationFailures = 0;
-            if (latestAccess.data?.accessLevel) {
-              updateConnectionAccessLevel(conn, roomId, latestAccess.data.accessLevel);
-            }
-          }
-        })
-        .catch((error) => {
-          logger.error('Unexpected revalidation failure', {
-            roomId,
-            ip: clientIp,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        })
-        .finally(() => {
-          isRevalidating = false;
-        });
-    }, revalidationIntervalMs);
-    revalidateAccessInterval.unref();
-
-    let messageCount = 0;
-    let lastMessageReset = Date.now();
-
-    conn.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
-      const now = Date.now();
-
-      if (now - lastMessageReset > 1000) {
-        messageCount = 0;
-        lastMessageReset = now;
-      }
-
-      messageCount++;
-      if (messageCount > config.limits.maxMsgRatePerSec) {
-        logger.warn('Client disconnected: Message rate limit exceeded', {
-          ip: clientIp,
-          roomId,
-          rate: messageCount,
-        });
-        conn.close(1008, 'Message rate limit exceeded');
-        return;
-      }
-
-      // We rely on ws configuration for the hard payload limit (maxPayload),
-      // but double-check here to allow for potentially finer application control in the future
-      // and better logging context.
-      let size = 0;
-      if (Buffer.isBuffer(data)) {
-        size = data.length;
-      } else if (data instanceof ArrayBuffer) {
-        size = data.byteLength;
-      } else if (Array.isArray(data)) {
-        size = data.reduce((acc, buf) => acc + buf.length, 0);
-      }
-
-      if (size > config.limits.maxPayload) {
-        logger.warn('Client disconnected: Max payload size exceeded', {
-          ip: clientIp,
-          size,
-          max: config.limits.maxPayload,
-        });
-        conn.close(1009, 'Payload too large');
-        return;
-      }
-    });
-
-    conn.on('close', () => {
-      if (revalidateAccessInterval) {
-        clearInterval(revalidateAccessInterval);
-        revalidateAccessInterval = undefined;
-      }
-
-      logger.info('Client disconnected', { roomId, ip: clientIp });
-
-      const current = ipConnections.get(clientIp);
-      if (current && current > 0) {
-        ipConnections.set(clientIp, current - 1);
-      }
-      // We don't clear timestamps immediately to enforce rate limit even after disconnection
-
-      if (rooms.has(roomId)) {
-        room.connections -= 1;
-
-        if (room.connections <= 0) {
-          logger.info('Room empty, marking for cleanup', { roomId });
-          room.lastActivity = Date.now();
+      const res = await fetch(
+        `${API_BASE_URL}/api/v1/internal/realtime/content-updated?documentId=${encodeURIComponent(docid)}`,
+        {
+          method: 'POST',
+          headers: { 'X-Yhub-Service': YHUB_SERVICE_TOKEN },
+          signal: AbortSignal.timeout(3000),
         }
+      );
+      if (res.ok) {
+        return;
       }
-    });
-
-    conn.on('error', (error: Error) => {
-      if (revalidateAccessInterval) {
-        clearInterval(revalidateAccessInterval);
-        revalidateAccessInterval = undefined;
+      // 4xx other than 429 is a contract error (a malformed id, a rejected
+      // credential): retrying cannot succeed.
+      if (res.status < 500 && res.status !== 429) {
+        console.warn(`Realtime content-updated rejected for ${docid}: status ${res.status}`);
+        return;
       }
-      logger.error('WebSocket error', { roomId, error: error.message });
-    });
-  } catch (err) {
-    if (revalidateAccessInterval) {
-      clearInterval(revalidateAccessInterval);
-      revalidateAccessInterval = undefined;
+      console.warn(
+        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid}: status ${res.status}`
+      );
+    } catch (err) {
+      console.warn(
+        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid}:`,
+        err instanceof Error ? err.message : err
+      );
     }
 
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    logger.error('Unexpected error in connection handler', {
-      ip: clientIp,
-      error: errorMessage,
-    });
-
-    if (conn.readyState === WebSocket.OPEN || conn.readyState === WebSocket.CONNECTING) {
-      conn.close(1011, 'Internal server error');
-    } else {
-      conn.terminate();
+    if (attempt < CONTENT_UPDATED_ATTEMPTS) {
+      await sleep(250 * 3 ** (attempt - 1));
     }
   }
-});
+}
 
-export function cleanupInactiveRooms(): void {
-  const now = Date.now();
-  let cleaned = 0;
+// The return type is explicit: declaration emit cannot name the config generic that
+// createYHub infers, and the entrypoint does not need the handle.
+export async function createServer(): Promise<void> {
+  const yhub = await createYHub({
+    redis: {
+      url: REDIS_URL,
+      prefix: 'yhub',
+      taskDebounce: 10000,
+    },
+    postgres: POSTGRES_URL,
+    persistence: [],
+    server: {
+      port: PORT,
+      apiPrefix: 'api',
+      auth: authPlugin,
+      api: customEndpoints,
+      cors: { origin: CORS_ORIGINS },
+      maxDocSize: MAX_DOC_SIZE_BYTES,
+    },
+    worker: {
+      taskConcurrency: 5,
+      events: {
+        docUpdate: ({ docRef }: { docRef: { org: string; docid: string; branch: string } }) => {
+          if (docRef.org !== ORG || docRef.branch !== 'main' || !UUID_REGEX.test(docRef.docid)) {
+            return;
+          }
+          void touchContentUpdated(docRef.docid);
+        },
+      },
+    },
+  });
 
-  cleanupExpiredUnauthorizedCooldown(now);
-
-  for (const [roomId, room] of rooms.entries()) {
-    const inactive = now - room.lastActivity > config.roomInactiveTimeout;
-
-    if (room.connections === 0 && inactive) {
-      rooms.delete(roomId);
-      cleaned++;
-      logger.info('Room cleaned up', {
-        roomId,
-        inactiveMs: now - room.lastActivity,
-      });
-    }
-  }
-
-  if (cleaned > 0) {
-    logger.info('Cleanup completed', {
-      roomsCleaned: cleaned,
-      activeRooms: rooms.size,
-    });
-  }
+  startRoomSweep(yhub, activeRooms, {
+    org: ORG,
+    intervalMs: SWEEP_INTERVAL_MS,
+    onError: (err, docid) => {
+      console.warn(
+        `Realtime access sweep failed for ${docid}:`,
+        err instanceof Error ? err.message : err
+      );
+    },
+  });
 }

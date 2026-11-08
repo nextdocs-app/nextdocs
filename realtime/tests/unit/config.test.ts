@@ -1,176 +1,119 @@
-import { jest } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
+
+const ORIGINAL_ENV = { ...process.env };
 
 describe('Config', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
     jest.resetModules();
-    process.env = { ...originalEnv };
-  });
-
-  afterAll(() => {
-    process.env = originalEnv;
-  });
-
-  it('should use default values when environment variables are missing', async () => {
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.NODE_ENV;
     delete process.env.PORT;
-    delete process.env.HOST;
+    delete process.env.REDIS;
+    delete process.env.POSTGRES;
+    delete process.env.API_BASE_URL;
+    delete process.env.JWT_SECRET;
+    delete process.env.YHUB_SERVICE_TOKEN;
+    delete process.env.MAX_DOC_SIZE_BYTES;
+    delete process.env.SWEEP_INTERVAL_MS;
+    delete process.env.CORS_ORIGIN;
+    delete process.env.CORS_ALLOWED_ORIGINS;
     delete process.env.CORS_ORIGINS;
-    delete process.env.LOG_LEVEL;
-    delete process.env.ROOM_CLEANUP_INTERVAL;
-    delete process.env.ROOM_INACTIVE_TIMEOUT;
-    delete process.env.ACCESS_REVALIDATION_INTERVAL_MS;
-    delete process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS;
-
-    const config = (await import('../../src/config.js')).default;
-
-    expect(config.port).toBe(1234);
-    expect(config.host).toBe('0.0.0.0');
-    expect(config.corsOrigins).toEqual([
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://192.168.*.*:3000',
-      'http://10.*.*.*:3000',
-      ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
-    ]);
-    expect(config.logLevel).toBe('info');
-    expect(config.roomCleanupInterval).toBe(300000);
-    expect(config.roomInactiveTimeout).toBe(3600000);
-    expect(config.accessRevalidationIntervalMs).toBe(5000);
-    expect(config.anonymousAccessRevalidationIntervalMs).toBe(30000);
   });
 
-  it('should restrict default CORS origins to localhost:3000 in production', async () => {
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    jest.resetModules();
+  });
+
+  it('provides sensible development defaults', async () => {
+    const config = await import('../../src/config.js');
+    expect(config.ORG).toBe('nextdocs');
+    expect(config.PORT).toBe(1234);
+    expect(config.REDIS_URL).toBe('redis://localhost:6379');
+    expect(config.POSTGRES_URL).toBe('postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub');
+    expect(config.API_BASE_URL).toBe('http://localhost:8080');
+    expect(config.CORS_ORIGINS).toContain('http://localhost:3000');
+    expect(config.JWT_SECRET).toBe('dev-jwt-secret');
+    expect(config.YHUB_SERVICE_TOKEN).toBe('dev-yhub-service-token');
+    expect(config.MAX_DOC_SIZE_BYTES).toBe(16 * 1024 * 1024);
+    expect(config.SWEEP_INTERVAL_MS).toBe(30_000);
+  });
+
+  it('falls back to the legacy CORS_ORIGINS name', async () => {
+    process.env.CORS_ORIGINS = 'http://legacy.example, http://second.example';
+
+    const config = await import('../../src/config.js');
+
+    expect(config.CORS_ORIGINS).toEqual(['http://legacy.example', 'http://second.example']);
+  });
+
+  it('prefers the split CORS names over the legacy one', async () => {
+    process.env.CORS_ORIGIN = 'http://current.example';
+    process.env.CORS_ORIGINS = 'http://legacy.example';
+
+    const config = await import('../../src/config.js');
+
+    expect(config.CORS_ORIGINS).toEqual(['http://current.example']);
+  });
+
+  it('verifies tokens with the JWT secret exactly as configured', async () => {
+    // The API signs with the configured bytes; trimming would reject every token
+    // whenever the deployment value carries surrounding whitespace.
+    process.env.JWT_SECRET = '  spaced-secret-value-of-enough-length  ';
+
+    const config = await import('../../src/config.js');
+
+    expect(config.JWT_SECRET).toBe('  spaced-secret-value-of-enough-length  ');
+  });
+
+  it('still trims the service token comparison value', async () => {
+    process.env.YHUB_SERVICE_TOKEN = '  a-service-token-value  ';
+
+    const config = await import('../../src/config.js');
+
+    expect(config.YHUB_SERVICE_TOKEN).toBe('a-service-token-value');
+  });
+
+  it('validates UUID regex', async () => {
+    const { UUID_REGEX } = await import('../../src/config.js');
+    expect(UUID_REGEX.test('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
+    expect(UUID_REGEX.test('not-a-uuid')).toBe(false);
+  });
+
+  it('refuses to start in production without secrets', async () => {
     process.env.NODE_ENV = 'production';
-    delete process.env.CORS_ORIGINS;
-
-    const config = (await import('../../src/config.js')).default;
-    expect(config.corsOrigins).toEqual(['http://localhost:3000']);
+    await expect(import('../../src/config.js')).rejects.toThrow(/JWT_SECRET is required/);
   });
 
-  it('should parse environment variables correctly', async () => {
-    process.env.PORT = '8080';
-    process.env.HOST = '127.0.0.1';
-    process.env.CORS_ORIGINS = 'http://example.com,http://test.com';
-    process.env.LOG_LEVEL = 'debug';
-    process.env.ROOM_CLEANUP_INTERVAL = '60000';
-    process.env.ROOM_INACTIVE_TIMEOUT = '120000';
-    process.env.ACCESS_REVALIDATION_INTERVAL_MS = '15000';
-    process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS = '45000';
-
-    const config = (await import('../../src/config.js')).default;
-
-    expect(config.port).toBe(8080);
-    expect(config.host).toBe('127.0.0.1');
-    expect(config.corsOrigins).toEqual(['http://example.com', 'http://test.com']);
-    expect(config.logLevel).toBe('debug');
-    expect(config.roomCleanupInterval).toBe(60000);
-    expect(config.roomInactiveTimeout).toBe(120000);
-    expect(config.accessRevalidationIntervalMs).toBe(15000);
-    expect(config.anonymousAccessRevalidationIntervalMs).toBe(45000);
-  });
-
-  it('should trim CORS origins', async () => {
-    process.env.CORS_ORIGINS = ' http://example.com , http://test.com ';
-    const config = (await import('../../src/config.js')).default;
-    expect(config.corsOrigins).toEqual(['http://example.com', 'http://test.com']);
-  });
-
-  it('should filter out empty CORS origins', async () => {
-    process.env.CORS_ORIGINS = 'http://example.com,, ,http://test.com';
-    const config = (await import('../../src/config.js')).default;
-    expect(config.corsOrigins).toEqual(['http://example.com', 'http://test.com']);
-  });
-
-  it('should fallback to default log level for invalid value', async () => {
-    process.env.LOG_LEVEL = 'invalid_level';
-    const config = (await import('../../src/config.js')).default;
-    expect(config.logLevel).toBe('info');
-  });
-
-  it('should throw error for invalid PORT', async () => {
-    process.env.PORT = '-1';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
-
-    resetEnv();
-    process.env.PORT = '70000';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
-
-    resetEnv();
-    process.env.PORT = 'abc';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid PORT');
-  });
-
-  it('should throw error for invalid ROOM_CLEANUP_INTERVAL', async () => {
-    process.env.ROOM_CLEANUP_INTERVAL = '-5';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid ROOM_CLEANUP_INTERVAL');
-  });
-
-  it('should throw error for invalid ROOM_INACTIVE_TIMEOUT', async () => {
-    process.env.ROOM_INACTIVE_TIMEOUT = '0';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid ROOM_INACTIVE_TIMEOUT');
-  });
-
-  it('should throw error for invalid ACCESS_REVALIDATION_INTERVAL_MS', async () => {
-    process.env.ACCESS_REVALIDATION_INTERVAL_MS = '0';
+  it('refuses to start in production with a published default secret', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'a'.repeat(40);
+    process.env.YHUB_SERVICE_TOKEN = 'dev-yhub-service-token';
     await expect(import('../../src/config.js')).rejects.toThrow(
-      'Invalid ACCESS_REVALIDATION_INTERVAL_MS'
+      /YHUB_SERVICE_TOKEN still has a development default/
     );
   });
 
-  it('should throw error for invalid MAX_PAYLOAD', async () => {
-    process.env.MAX_PAYLOAD = '-1';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_PAYLOAD');
+  it('refuses a short production secret', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'too-short';
+    process.env.YHUB_SERVICE_TOKEN = 'b'.repeat(40);
+    await expect(import('../../src/config.js')).rejects.toThrow(
+      /JWT_SECRET must be at least 32 bytes/
+    );
   });
 
-  it('should throw error for invalid MAX_CONNS_PER_IP', async () => {
-    process.env.MAX_CONNS_PER_IP = '0';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_CONNS_PER_IP');
+  it('starts in production with strong secrets', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'a'.repeat(40);
+    process.env.YHUB_SERVICE_TOKEN = 'b'.repeat(40);
+    const config = await import('../../src/config.js');
+    expect(config.JWT_SECRET).toBe('a'.repeat(40));
+    expect(config.YHUB_SERVICE_TOKEN).toBe('b'.repeat(40));
   });
 
-  it('should throw error for invalid MAX_GLOBAL_CONNS', async () => {
-    process.env.MAX_GLOBAL_CONNS = '-100';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_GLOBAL_CONNS');
+  it('rejects a non-positive numeric setting', async () => {
+    process.env.PORT = 'not-a-port';
+    await expect(import('../../src/config.js')).rejects.toThrow(/PORT must be an integer >= 0/);
   });
-
-  it('should throw error for invalid MAX_CONN_RATE_PER_MIN', async () => {
-    process.env.MAX_CONN_RATE_PER_MIN = '0';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_CONN_RATE_PER_MIN');
-  });
-
-  it('should throw error for invalid MAX_MSG_RATE_PER_SEC', async () => {
-    process.env.MAX_MSG_RATE_PER_SEC = '-10';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MAX_MSG_RATE_PER_SEC');
-  });
-
-  it('should throw error for invalid MEMORY_THRESHOLD', async () => {
-    process.env.MEMORY_THRESHOLD = 'invalid';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid MEMORY_THRESHOLD');
-  });
-
-  it('should parse valid trusted proxies', async () => {
-    process.env.TRUSTED_PROXIES = '127.0.0.1, 10.0.0.0/8, ::1';
-    const config = (await import('../../src/config.js')).default;
-    expect(config.trustedProxies).toEqual(['127.0.0.1', '10.0.0.0/8', '::1']);
-  });
-
-  it('should throw error for invalid TRUSTED_PROXIES', async () => {
-    process.env.TRUSTED_PROXIES = 'not-an-ip';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid TRUSTED_PROXIES');
-
-    resetEnv();
-    process.env.TRUSTED_PROXIES = '10.0.0.0/99';
-    await expect(import('../../src/config.js')).rejects.toThrow('Invalid TRUSTED_PROXIES');
-  });
-
-  it('should reject IPv6 CIDR entries because matching is IPv4-only', async () => {
-    process.env.TRUSTED_PROXIES = '2001:db8::/32';
-
-    await expect(import('../../src/config.js')).rejects.toThrow('IPv6 CIDR is not supported');
-  });
-
-  function resetEnv() {
-    jest.resetModules();
-    process.env = { ...originalEnv };
-  }
 });
