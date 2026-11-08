@@ -28,7 +28,7 @@ public class RealtimeAccessScopeResolver {
 
     @Transactional(readOnly = true)
     public List<UUID> forDocument(UUID documentId) {
-        return documentRepository.findSubtreeIdsIncludingTrashed(documentId, MAX_TREE_DEPTH);
+        return documentRepository.findSubtreeIdsIncludingTrashed(documentId, MAX_TREE_DEPTH + 1);
     }
 
     /**
