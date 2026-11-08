@@ -73,7 +73,6 @@ interface ApiDocument {
   title: string;
   icon?: ApiDocumentIcon | null;
   cover?: ApiDocumentCover | null;
-  yjsState?: string | null;
   parentId?: string | null;
   orderKey?: string | null;
   hasChildren?: boolean;
@@ -173,6 +172,10 @@ function sanitizeDocumentSpace(
     canAdminister: space.canAdminister ?? false,
     archived: space.archived ?? false,
   };
+}
+
+interface ApiDocumentContent {
+  content?: string | null;
 }
 
 interface ApiDocumentAccess {
@@ -275,6 +278,14 @@ export interface DocumentAccess {
   canManageSharing?: boolean;
   /** Space context when the page lives in a space. */
   space?: DocumentSpaceSummary | null;
+}
+
+export interface RealtimeSessionResponse {
+  /** Absolute websocket URL issued by the API; the browser never guesses a host. */
+  wsUrl: string;
+  /** The Yhub room, which is the document id. */
+  documentId: string;
+  accessLevel: DocumentAccessLevel;
 }
 
 export interface Collaborator {
@@ -737,16 +748,25 @@ class DocumentService {
   ): Promise<DocumentLoadResult> {
     const includeTrashed =
       typeof options === 'boolean' ? options : (options?.includeTrashed ?? false);
-    const body = await this.fetchApi<ApiDocument>(
-      `/api/v1/documents/${encodeURIComponent(id)}${includeTrashed ? '?includeTrashed=true' : ''}`,
-      {
+    const query = includeTrashed ? '?includeTrashed=true' : '';
+    // Metadata and body are independent reads; running them together keeps
+    // first paint at one network round trip while Yhub owns the bytes.
+    const [body, content] = await Promise.all([
+      this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}${query}`, {
         method: 'GET',
         accessToken,
-      }
-    );
+      }),
+      this.fetchApi<ApiDocumentContent>(
+        `/api/v1/documents/${encodeURIComponent(id)}/content${query}`,
+        {
+          method: 'GET',
+          accessToken,
+        }
+      ),
+    ]);
 
-    const ydoc = body.yjsState
-      ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
+    const ydoc = content.content
+      ? decodeYjsState(this.base64ToUint8Array(content.content))
       : createYjsDoc();
     this.cacheParentLinks([{ id: body.id, parentId: body.parentId ?? null }]);
 
@@ -758,15 +778,20 @@ class DocumentService {
 
   public async getPublicDocument(id: string): Promise<DocumentLoadResult> {
     return this.dedupedGet(`public-doc:${id}`, async () => {
-      const body = await this.fetchApi<ApiDocument>(
-        `/api/v1/documents/${encodeURIComponent(id)}/public`,
-        {
+      const [body, content] = await Promise.all([
+        this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
           method: 'GET',
-        }
-      );
+        }),
+        this.fetchApi<ApiDocumentContent>(
+          `/api/v1/documents/${encodeURIComponent(id)}/public/content`,
+          {
+            method: 'GET',
+          }
+        ),
+      ]);
 
-      const ydoc = body.yjsState
-        ? decodeYjsState(this.base64ToUint8Array(body.yjsState))
+      const ydoc = content.content
+        ? decodeYjsState(this.base64ToUint8Array(content.content))
         : createYjsDoc();
 
       return {
@@ -860,6 +885,25 @@ class DocumentService {
         space: sanitizeDocumentSpace(body.space),
       };
     });
+  }
+
+  public async createRealtimeSession(
+    id: string,
+    accessToken?: string | null
+  ): Promise<RealtimeSessionResponse> {
+    const body = await this.fetchApi<RealtimeSessionResponse>(
+      `/api/v1/documents/${encodeURIComponent(id)}/realtime-session`,
+      {
+        method: 'POST',
+        ...(accessToken ? { accessToken } : {}),
+      }
+    );
+
+    return {
+      wsUrl: body.wsUrl,
+      documentId: body.documentId,
+      accessLevel: sanitizeDocumentAccessLevel(body.accessLevel),
+    };
   }
 
   public async listPublicChildren(parentId: string, page = 0, size = 50): Promise<TreeNodePage> {
@@ -1149,37 +1193,6 @@ class DocumentService {
       ydoc: documentYDoc,
       meta: this.toDocumentMeta(body),
     };
-  }
-
-  public async saveCloudDocument(
-    id: string,
-    ydoc: Y.Doc,
-    meta: DocumentMeta,
-    accessToken: string
-  ): Promise<void> {
-    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      accessToken,
-      body: JSON.stringify({
-        title: meta.title,
-        // Omitted (undefined) when the page has none: the API treats an absent
-        // icon/cover as "leave unchanged", which is what a content save means.
-        icon: meta.icon,
-        cover: meta.cover,
-        yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
-        createdBy: meta.createdBy,
-      }),
-    });
-  }
-
-  public async savePublicDocument(id: string, ydoc: Y.Doc, meta: DocumentMeta): Promise<void> {
-    await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}/public`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        title: meta.title,
-        yjsState: this.uint8ArrayToBase64(encodeYjsState(ydoc)),
-      }),
-    });
   }
 
   public async updateCloudMetadata(

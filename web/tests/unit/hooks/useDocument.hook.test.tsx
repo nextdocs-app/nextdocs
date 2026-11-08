@@ -9,7 +9,11 @@ import {
   readCachedDocumentAccessLevel,
   writeCachedDocumentAccessLevel,
 } from '@/lib/document-access.util';
-import { readPendingIconCoverPatch, readPendingSyncEdits } from '@/lib/offline-sync.util';
+import {
+  readPendingIconCoverPatch,
+  readPendingMetaPatch,
+  readPendingSyncEdits,
+} from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { WebsocketProvider } from 'y-websocket';
@@ -43,12 +47,15 @@ type ProviderEventHandler = (event: { status: string } | { code: number }) => vo
 
 let registeredStatusHandler: ProviderEventHandler | null = null;
 let registeredCloseHandler: ProviderEventHandler | null = null;
+let registeredSyncHandler: ((isSynced: boolean) => void) | null = null;
 
 mockOn.mockImplementation((event: string, handler: ProviderEventHandler) => {
   if (event === 'status') {
     registeredStatusHandler = handler;
   } else if (event === 'connection-close') {
     registeredCloseHandler = handler;
+  } else if (event === 'sync') {
+    registeredSyncHandler = handler as unknown as (isSynced: boolean) => void;
   }
 });
 
@@ -73,7 +80,6 @@ describe('useDocument', () => {
   let getMyAccessSpy: jest.SpyInstance;
   let loadDocumentSpy: jest.SpyInstance;
   let createCloudDocumentSpy: jest.SpyInstance;
-  let saveCloudDocumentSpy: jest.SpyInstance;
   let saveDocumentSpy: jest.SpyInstance;
   let updateMetadataSpy: jest.SpyInstance;
   let updateCloudMetadataSpy: jest.SpyInstance;
@@ -83,10 +89,18 @@ describe('useDocument', () => {
   let restoreCloudDocumentFromTrashSpy: jest.SpyInstance;
   let dispatchEventSpy: jest.SpyInstance;
   let checkAccessSpy: jest.SpyInstance;
+  let createRealtimeSessionSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
+    createRealtimeSessionSpy = jest
+      .spyOn(documentService, 'createRealtimeSession')
+      .mockImplementation(async (documentId: string) => ({
+        wsUrl: 'ws://localhost:1234',
+        documentId,
+        accessLevel: 'EDIT',
+      }));
     getCloudDocumentSpy = jest
       .spyOn(documentService, 'getCloudDocument')
       .mockImplementation(jest.fn());
@@ -104,9 +118,6 @@ describe('useDocument', () => {
     loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
     createCloudDocumentSpy = jest
       .spyOn(documentService, 'createCloudDocument')
-      .mockImplementation(jest.fn());
-    saveCloudDocumentSpy = jest
-      .spyOn(documentService, 'saveCloudDocument')
       .mockImplementation(jest.fn());
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
     updateMetadataSpy = jest.spyOn(documentService, 'updateMetadata').mockImplementation(jest.fn());
@@ -149,7 +160,6 @@ describe('useDocument', () => {
     getMyAccessSpy.mockRestore();
     loadDocumentSpy.mockRestore();
     createCloudDocumentSpy.mockRestore();
-    saveCloudDocumentSpy.mockRestore();
     saveDocumentSpy.mockRestore();
     updateMetadataSpy.mockRestore();
     updateCloudMetadataSpy.mockRestore();
@@ -159,6 +169,7 @@ describe('useDocument', () => {
     restoreCloudDocumentFromTrashSpy.mockRestore();
     dispatchEventSpy.mockRestore();
     checkAccessSpy.mockRestore();
+    createRealtimeSessionSpy.mockRestore();
   });
 
   function createTestStore() {
@@ -1566,6 +1577,38 @@ describe('useDocument', () => {
     });
   });
 
+  it('should merge a local snapshot with no pending marker into the cloud read', async () => {
+    const localYdoc = new Y.Doc();
+    localYdoc.getText('body').insert(0, 'edit that never reached the socket');
+    const cloudYdoc = new Y.Doc();
+    cloudYdoc.getText('body').insert(0, 'server copy');
+    const meta = {
+      title: 'Merged Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValue({ ydoc: localYdoc, meta });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc: cloudYdoc, meta });
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // The socket still reported "connected" while the edit was made, so nothing
+    // blocked the cloud read; without the merge it would overwrite the local copy.
+    expect(readPendingSyncEdits('cloud-id')).toBe(0);
+    const text = result.current.ydoc?.getText('body').toString() ?? '';
+    expect(text).toContain('server copy');
+    expect(text).toContain('edit that never reached the socket');
+    expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', cloudYdoc, meta, {
+      touchUpdatedAt: false,
+      origin: 'local',
+    });
+  });
+
   it('should fallback to local document when authenticated cloud fetch fails due to connectivity', async () => {
     const localYdoc = new Y.Doc();
     const localMeta = {
@@ -1899,6 +1942,101 @@ describe('useDocument', () => {
     expect(updateCloudMetadataSpy).not.toHaveBeenCalled();
   });
 
+  it('should keep one pending marker when the same offline title is queued again', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline-title',
+      isInitializing: false,
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Renamed Offline' });
+    });
+
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'cloud-id')).toEqual({ title: 'Renamed Offline' });
+      expect(readPendingSyncEdits('cloud-id')).toBe(1);
+    });
+
+    const writesAfterFirstQueue = updateMetadataSpy.mock.calls.length;
+    await act(async () => {
+      result.current.updateMeta({ title: 'Renamed Offline' });
+    });
+
+    await waitFor(() => {
+      expect(updateMetadataSpy.mock.calls.length).toBeGreaterThan(writesAfterFirstQueue);
+    });
+    expect(readPendingSyncEdits('cloud-id')).toBe(1);
+  });
+
+  it('should queue a replacement offline title and bump the pending marker for replay', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline-title',
+      isInitializing: false,
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'First Offline Title' });
+    });
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'cloud-id')).toEqual({ title: 'First Offline Title' });
+      expect(readPendingSyncEdits('cloud-id')).toBe(1);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Replacement Offline Title' });
+    });
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'cloud-id')).toEqual({
+        title: 'Replacement Offline Title',
+      });
+      expect(readPendingSyncEdits('cloud-id')).toBe(2);
+    });
+  });
+
   it('should preserve cached shared access level when authenticated offline fallback loads local copy', async () => {
     const localYdoc = new Y.Doc();
     const localMeta = {
@@ -2065,6 +2203,40 @@ describe('useDocument', () => {
       'test-id',
       expect.objectContaining({ title: 'Untitled' })
     );
+  });
+
+  it('queues a guest title when the public PATCH fails transiently', async () => {
+    useGuestAuth();
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Editable Share',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getPublicDocumentSpy.mockResolvedValue({ ydoc, meta, accessLevel: 'EDIT' });
+    updatePublicMetadataSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => useDocument('shared-queue-id', { isSharedDocument: true }),
+      { wrapper: createWrapper() }
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Guest Rename' });
+    });
+
+    // The guest has no cloud queue, but the title is still the only durable copy
+    // for lists and search; the replay owner keeps it out of account queues.
+    await waitFor(() => {
+      expect(readPendingMetaPatch('public', 'shared-queue-id')).toEqual({ title: 'Guest Rename' });
+      expect(readPendingSyncEdits('shared-queue-id')).toBe(1);
+    });
   });
 
   it('should send Untitled from a guest that clears the title on a share link', async () => {
@@ -2283,7 +2455,6 @@ describe('useDocument', () => {
     });
     expect(loadDocumentSpy).not.toHaveBeenCalled();
     expect(createCloudDocumentSpy).not.toHaveBeenCalled();
-    expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
   });
@@ -2976,6 +3147,216 @@ describe('useDocument', () => {
       expect(result.current.ydoc).toBeNull();
     });
 
+    it('should show the trash copy when a 4404 close leaves access intact', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Purged Room Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const trashedMeta = {
+        ...meta,
+        deletedAt: '2024-01-03T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-4404',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      const cloudCallsAfterLoad = getCloudDocumentSpy.mock.calls.length;
+      act(() => {
+        registeredStatusHandler!({ status: 'connected' });
+      });
+
+      // Yhub lost the room, but the user kept access and the page still has a
+      // retained trash copy. That is not a revocation, so the close must not flip
+      // the editor to the restricted screen.
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        trashed: true,
+      });
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta: trashedMeta });
+
+      act(() => {
+        registeredCloseHandler!({ code: 4404 });
+      });
+
+      // The load already asked for the trashed scope; the close has to ask again,
+      // after the access check proves the page is still readable.
+      await waitFor(() => {
+        expect(getCloudDocumentSpy.mock.calls.length).toBeGreaterThan(cloudCallsAfterLoad);
+      });
+      expect(getCloudDocumentSpy.mock.calls.at(-1)).toEqual([
+        validUuid,
+        'token-4404',
+        { includeTrashed: true },
+      ]);
+      await waitFor(() => {
+        expect(result.current.meta?.deletedAt).toBe('2024-01-03T00:00:00.000Z');
+      });
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.isReadOnly).toBe(true);
+      expect(mockProviderInstance.shouldConnect).toBe(false);
+    });
+
+    it('should restrict when a 4404 close leaves no retained trash copy', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Purged Room Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-4404-gone',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const cloudCallsAfterLoad = getCloudDocumentSpy.mock.calls.length;
+      getMyAccessSpy.mockResolvedValue({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        trashed: false,
+      });
+
+      act(() => {
+        registeredCloseHandler!({ code: 4404 });
+      });
+
+      // Access survived but the room did not, and there is no trash copy to show:
+      // reconnecting would silently present an empty document.
+      await waitFor(() => {
+        expect(result.current.errorState).toMatchObject({
+          kind: 'restricted',
+          statusCode: 404,
+        });
+      });
+      expect(getCloudDocumentSpy).toHaveBeenCalledTimes(cloudCallsAfterLoad);
+    });
+
+    it('should refresh instead of restricting when the 4404 access check returns 401', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Purged Room Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-4404-stale',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Unauthorized', 401));
+
+      act(() => {
+        registeredCloseHandler!({ code: 4404 });
+      });
+
+      await waitFor(() => {
+        expect(mockRefreshSession).toHaveBeenCalledTimes(1);
+      });
+      expect(result.current.errorState).toBeNull();
+    });
+
+    it('should retry after a transient 4404 access check instead of restricting', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Purged Room Doc',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+
+      (useAuth as jest.Mock).mockReturnValue({
+        isAuthenticated: true,
+        accessToken: 'token-4404-transient',
+        isInitializing: false,
+        refresh: mockRefreshSession,
+      });
+
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: validUuid,
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+      });
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(registeredCloseHandler).not.toBeNull();
+      getMyAccessSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      act(() => {
+        registeredCloseHandler!({ code: 4404 });
+      });
+
+      await waitFor(() => {
+        expect(mockConnect).toHaveBeenCalledTimes(1);
+      });
+      expect(result.current.errorState).toBeNull();
+    });
+
     it('should keep reconnecting when the access re-check after a 1008 close fails transiently', async () => {
       const ydoc = new Y.Doc();
       const meta = {
@@ -3170,10 +3551,12 @@ describe('useDocument', () => {
       });
       expect(mockConnect).toHaveBeenCalledTimes(2);
 
-      // A live socket means the closes are behind us: the backoff and the
-      // reconnect it had scheduled are dropped, so the next close is immediate.
+      // A completed sync (not merely a connected socket the server may close
+      // again) means the closes are behind us: the backoff and its reconnect are
+      // dropped, so the next close is immediate.
       act(() => {
         registeredStatusHandler!({ status: 'connected' });
+        registeredSyncHandler!(true);
       });
       act(() => {
         registeredCloseHandler!({ code: 1008 });
