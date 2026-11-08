@@ -1,259 +1,122 @@
 import 'dotenv/config';
-import net from 'net';
 
-type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const DEV_JWT_SECRET = 'dev-jwt-secret';
+const DEV_SERVICE_TOKEN = 'dev-yhub-service-token';
+const PLACEHOLDER_SECRET = 'CHANGE_ME_IN_PRODUCTION';
+const MIN_SECRET_BYTES = 32;
 
-const VALID_LOG_LEVELS: readonly LogLevel[] = ['error', 'warn', 'info', 'debug'] as const;
+/**
+ * Read a shared secret.
+ *
+ * Development keeps the zero-setup defaults so `./nd dev` works without an env
+ * file. Production must never run on a published value: a known JWT secret lets
+ * anyone mint tokens, and a known service token grants full admin access to every
+ * document through Yhub's permission model. Failing at module load is deliberate —
+ * a server that starts with the wrong secret looks healthy while rejecting every
+ * connection (or accepting forged ones).
+ */
+function readSecret(
+  name: string,
+  raw: string | undefined,
+  devDefault: string,
+  options?: { preserveWhitespace?: boolean }
+): string {
+  const rawValue = raw ?? '';
+  const trimmed = rawValue.trim();
+  // A blank value means "unset" in either mode. Otherwise a signing secret is used
+  // byte-for-byte: the API signs with the configured value untrimmed, so trimming
+  // here would reject every token whenever the deployment carries surrounding space.
+  const value = trimmed
+    ? options?.preserveWhitespace
+      ? rawValue
+      : trimmed
+    : IS_PRODUCTION
+      ? ''
+      : devDefault;
 
-function parseLogLevel(value: string | undefined): LogLevel {
-  if (value && VALID_LOG_LEVELS.includes(value as LogLevel)) {
-    return value as LogLevel;
+  if (!value) {
+    throw new Error(
+      `${name} is required: set it to a unique value of at least ${MIN_SECRET_BYTES} bytes.`
+    );
   }
-  return 'info';
+
+  if (IS_PRODUCTION) {
+    if (trimmed === devDefault || trimmed === PLACEHOLDER_SECRET) {
+      throw new Error(
+        `${name} still has a development default; set a unique secret before starting in production.`
+      );
+    }
+    if (Buffer.byteLength(value, 'utf8') < MIN_SECRET_BYTES) {
+      throw new Error(`${name} must be at least ${MIN_SECRET_BYTES} bytes.`);
+    }
+  }
+
+  return value;
 }
 
-interface Limits {
-  maxPayload: number;
-  maxConnsPerIp: number;
-  maxGlobalConns: number;
-  maxConnRatePerMin: number;
-  maxMsgRatePerSec: number;
-  memoryThreshold: number; // Percentage of heap used (0-1)
-}
-
-interface Config {
-  port: number;
-  host: string;
-  apiBaseUrl: string;
-  corsOrigins: string[];
-  logLevel: LogLevel;
-  trustedProxies: string[];
-  roomCleanupInterval: number;
-  roomInactiveTimeout: number;
-  accessRevalidationIntervalMs: number;
-  anonymousAccessRevalidationIntervalMs: number;
-  fetchTimeoutMs: number;
-  unauthorizedAccessCooldownMs: number;
-  unauthorizedAccessWarnIntervalMs: number;
-  enforceMemoryThreshold: boolean;
-  limits: Limits;
-}
-
-function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) {
+function readPositiveInt(name: string, raw: string | undefined, fallback: number, min = 1): number {
+  if (raw == null || raw.trim() === '') {
     return fallback;
   }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
-    return true;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be an integer >= ${min}, received "${raw}".`);
   }
-  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
-    return false;
-  }
-
-  return fallback;
+  return value;
 }
 
-const isProd = process.env.NODE_ENV === 'production';
+export const ORG = 'nextdocs';
+export const IS_PRODUCTION_ENV = IS_PRODUCTION;
+// Port 0 is valid: it asks the OS for an ephemeral port (tests use it).
+export const PORT = readPositiveInt('PORT', process.env.PORT, 1234, 0);
+export const REDIS_URL = process.env.REDIS || 'redis://localhost:6379';
+export const POSTGRES_URL =
+  process.env.POSTGRES || 'postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub';
+export const API_BASE_URL = (process.env.API_BASE_URL || 'http://localhost:8080').replace(
+  /\/+$/,
+  ''
+);
+export const JWT_SECRET = readSecret('JWT_SECRET', process.env.JWT_SECRET, DEV_JWT_SECRET, {
+  preserveWhitespace: true,
+});
+export const YHUB_SERVICE_TOKEN = readSecret(
+  'YHUB_SERVICE_TOKEN',
+  process.env.YHUB_SERVICE_TOKEN,
+  DEV_SERVICE_TOKEN
+);
 
-const config: Config = {
-  port: parseInt(process.env.PORT || '1234', 10),
-  host: process.env.HOST || '0.0.0.0',
-  apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:8080',
+export const CORS_ORIGINS = (
+  process.env.CORS_ORIGIN ||
+  process.env.CORS_ALLOWED_ORIGINS ||
+  // Legacy name kept for deployments that predate the split options.
+  process.env.CORS_ORIGINS ||
+  'http://localhost:3000'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-  corsOrigins: process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',')
-        .map((origin) => origin.trim())
-        .filter(Boolean)
-    : process.env.NODE_ENV === 'production'
-      ? ['http://localhost:3000']
-      : [
-          'http://localhost:3000',
-          'http://127.0.0.1:3000',
-          // Allow phone/tablet testing over LAN without per-network env edits in development.
-          // Private IPv4 ranges (RFC 1918): 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
-          'http://192.168.*.*:3000',
-          'http://10.*.*.*:3000',
-          ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
-        ],
+/** Same ceiling the plan set: far below Yhub's 500 MB default, which is a memory hazard. */
+export const MAX_DOC_SIZE_BYTES = readPositiveInt(
+  'MAX_DOC_SIZE_BYTES',
+  process.env.MAX_DOC_SIZE_BYTES,
+  16 * 1024 * 1024
+);
 
-  logLevel: parseLogLevel(process.env.LOG_LEVEL),
+/** Re-auth every room with a live socket this often, to catch a missed revocation event. */
+export const SWEEP_INTERVAL_MS = readPositiveInt(
+  'SWEEP_INTERVAL_MS',
+  process.env.SWEEP_INTERVAL_MS,
+  30_000
+);
 
-  // Comma-separated list of trusted proxy IPs or IPv4 CIDRs whose X-Forwarded-For
-  // header is accepted (e.g. '127.0.0.1,10.0.0.0/8'). IPv6 CIDRs are rejected
-  // at startup: matching is IPv4-only, so accepting them would silently ignore
-  // the header. Empty by default.
-  //
-  // X-Forwarded-For is read right to left, skipping these proxies, so list only
-  // the proxies in front of this server: a CIDR that also covers real clients
-  // would let those clients spoof the per-IP limits.
-  trustedProxies: process.env.TRUSTED_PROXIES
-    ? process.env.TRUSTED_PROXIES.split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [],
+/** Upper bound for one batched recheck request, so a subtree move cannot fan out unbounded. */
+export const MAX_RECHECK_DOCS = readPositiveInt(
+  'MAX_RECHECK_DOCS',
+  process.env.MAX_RECHECK_DOCS,
+  5000
+);
 
-  roomCleanupInterval: parseInt(process.env.ROOM_CLEANUP_INTERVAL || '300000', 10),
-  roomInactiveTimeout: parseInt(process.env.ROOM_INACTIVE_TIMEOUT || '3600000', 10),
-  accessRevalidationIntervalMs: parseInt(process.env.ACCESS_REVALIDATION_INTERVAL_MS || '5000', 10),
-  // Anonymous share-link rooms revalidate lazily: link revocation is enforced
-  // on every (re)connect, and guests share one API rate-limit budget per IP,
-  // so a 5s cadence per room would starve page loads on multi-tab/NAT setups.
-  anonymousAccessRevalidationIntervalMs: parseInt(
-    process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS || '30000',
-    10
-  ),
-  fetchTimeoutMs: parseInt(process.env.FETCH_TIMEOUT_MS || '5000', 10),
-  unauthorizedAccessCooldownMs: parseInt(
-    process.env.UNAUTHORIZED_ACCESS_COOLDOWN_MS || '15000',
-    10
-  ),
-  unauthorizedAccessWarnIntervalMs: parseInt(
-    process.env.UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS || '10000',
-    10
-  ),
-  enforceMemoryThreshold: parseBoolean(process.env.ENFORCE_MEMORY_THRESHOLD, isProd),
-
-  limits: {
-    maxPayload: parseInt(process.env.MAX_PAYLOAD || '5242880', 10),
-    maxConnsPerIp: parseInt(process.env.MAX_CONNS_PER_IP || '100', 10),
-    maxGlobalConns: parseInt(process.env.MAX_GLOBAL_CONNS || '10000', 10),
-    maxConnRatePerMin: parseInt(process.env.MAX_CONN_RATE_PER_MIN || '100', 10),
-    maxMsgRatePerSec: parseInt(process.env.MAX_MSG_RATE_PER_SEC || '100', 10),
-    memoryThreshold: parseFloat(process.env.MEMORY_THRESHOLD || (isProd ? '0.8' : '0.95')),
-  },
-};
-
-if (Number.isNaN(config.port) || config.port < 1 || config.port > 65535) {
-  throw new Error(`Invalid PORT: ${process.env.PORT}. Must be between 1 and 65535.`);
-}
-
-if (Number.isNaN(config.roomCleanupInterval) || config.roomCleanupInterval <= 0) {
-  throw new Error(
-    `Invalid ROOM_CLEANUP_INTERVAL: ${process.env.ROOM_CLEANUP_INTERVAL}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (Number.isNaN(config.roomInactiveTimeout) || config.roomInactiveTimeout <= 0) {
-  throw new Error(
-    `Invalid ROOM_INACTIVE_TIMEOUT: ${process.env.ROOM_INACTIVE_TIMEOUT}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (Number.isNaN(config.accessRevalidationIntervalMs) || config.accessRevalidationIntervalMs <= 0) {
-  throw new Error(
-    `Invalid ACCESS_REVALIDATION_INTERVAL_MS: ${process.env.ACCESS_REVALIDATION_INTERVAL_MS}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (
-  Number.isNaN(config.anonymousAccessRevalidationIntervalMs) ||
-  config.anonymousAccessRevalidationIntervalMs <= 0
-) {
-  throw new Error(
-    `Invalid ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS: ${process.env.ANONYMOUS_ACCESS_REVALIDATION_INTERVAL_MS}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (Number.isNaN(config.fetchTimeoutMs) || config.fetchTimeoutMs <= 0) {
-  throw new Error(
-    `Invalid FETCH_TIMEOUT_MS: ${process.env.FETCH_TIMEOUT_MS}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (Number.isNaN(config.unauthorizedAccessCooldownMs) || config.unauthorizedAccessCooldownMs <= 0) {
-  throw new Error(
-    `Invalid UNAUTHORIZED_ACCESS_COOLDOWN_MS: ${process.env.UNAUTHORIZED_ACCESS_COOLDOWN_MS}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (
-  Number.isNaN(config.unauthorizedAccessWarnIntervalMs) ||
-  config.unauthorizedAccessWarnIntervalMs <= 0
-) {
-  throw new Error(
-    `Invalid UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS: ${process.env.UNAUTHORIZED_ACCESS_WARN_INTERVAL_MS}. Must be a positive number (milliseconds).`
-  );
-}
-
-if (config.limits.maxPayload <= 0 || Number.isNaN(config.limits.maxPayload)) {
-  throw new Error(`Invalid MAX_PAYLOAD: ${process.env.MAX_PAYLOAD}. Must be a positive number.`);
-}
-
-if (config.limits.maxConnsPerIp <= 0 || Number.isNaN(config.limits.maxConnsPerIp)) {
-  throw new Error(
-    `Invalid MAX_CONNS_PER_IP: ${process.env.MAX_CONNS_PER_IP}. Must be a positive number.`
-  );
-}
-
-if (config.limits.maxGlobalConns <= 0 || Number.isNaN(config.limits.maxGlobalConns)) {
-  throw new Error(
-    `Invalid MAX_GLOBAL_CONNS: ${process.env.MAX_GLOBAL_CONNS}. Must be a positive number.`
-  );
-}
-
-if (config.limits.maxConnRatePerMin <= 0 || Number.isNaN(config.limits.maxConnRatePerMin)) {
-  throw new Error(
-    `Invalid MAX_CONN_RATE_PER_MIN: ${process.env.MAX_CONN_RATE_PER_MIN}. Must be a positive number.`
-  );
-}
-
-if (config.limits.maxMsgRatePerSec <= 0 || Number.isNaN(config.limits.maxMsgRatePerSec)) {
-  throw new Error(
-    `Invalid MAX_MSG_RATE_PER_SEC: ${process.env.MAX_MSG_RATE_PER_SEC}. Must be a positive number.`
-  );
-}
-
-if (
-  Number.isNaN(config.limits.memoryThreshold) ||
-  config.limits.memoryThreshold <= 0 ||
-  config.limits.memoryThreshold > 1
-) {
-  throw new Error(
-    `Invalid MEMORY_THRESHOLD: ${process.env.MEMORY_THRESHOLD}. Must be between 0 and 1.`
-  );
-}
-
-for (const proxy of config.trustedProxies) {
-  const trimmed = proxy.trim();
-  if (!trimmed) continue;
-  if (trimmed.includes('/')) {
-    const parts = trimmed.split('/');
-    if (parts.length !== 2) {
-      throw new Error(
-        `Invalid TRUSTED_PROXIES entry: "${proxy}". Expected IP or CIDR (e.g. 10.0.0.0/8).`
-      );
-    }
-    const [subnet, prefixStr] = parts;
-    if (!/^\d+$/.test(prefixStr)) {
-      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
-    }
-    const prefix = parseInt(prefixStr, 10);
-    // Normalize before validation so ::ffff:10.0.0.1/8 is judged the same way
-    // isTrustedProxy matches it at runtime (IPv4-mapped IPv6 → IPv4).
-    const normalizedSubnet = subnet.toLowerCase().startsWith('::ffff:')
-      ? subnet.toLowerCase().slice(7)
-      : subnet;
-    const ver = net.isIP(normalizedSubnet);
-    if (ver === 0 || Number.isNaN(prefix)) {
-      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Invalid subnet or prefix.`);
-    }
-    if (ver === 4 && (prefix < 0 || prefix > 32)) {
-      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". IPv4 prefix must be 0-32.`);
-    }
-    if (ver === 6) {
-      // isTrustedProxy only implements IPv4 CIDR matching; accepting an IPv6
-      // CIDR would force the X-Forwarded-For header to be ignored silently.
-      throw new Error(
-        `Invalid TRUSTED_PROXIES entry: "${proxy}". IPv6 CIDR is not supported; use a plain IPv6 address for exact matches.`
-      );
-    }
-  } else {
-    if (net.isIP(trimmed) === 0) {
-      throw new Error(`Invalid TRUSTED_PROXIES entry: "${proxy}". Must be a valid IP or CIDR.`);
-    }
-  }
-}
-
-export default config;
+export const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
