@@ -9,7 +9,6 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import jakarta.persistence.EntityManager;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -56,13 +55,11 @@ class AttachmentRepositoryTest {
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Active")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         trashed = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Trashed")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC).minusDays(60))
                 .build());
     }

@@ -9,10 +9,15 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
-import org.hibernate.type.SqlTypes;
 
+/**
+ * Document metadata, access, and tree position.
+ *
+ * <p>Content is deliberately absent: Yhub owns the document body. The API reads it
+ * on demand for first paint and never stores a copy, so there is exactly one writer
+ * and one source of truth.
+ */
 @Entity
 @Table(
         name = "documents",
@@ -37,10 +42,6 @@ public class Document {
 
     @Column(nullable = false, length = 255)
     private String title;
-
-    @JdbcTypeCode(SqlTypes.VARBINARY)
-    @Column(name = "yjs_state", nullable = false, columnDefinition = "bytea")
-    private byte[] yjsState;
 
     @Column(name = "created_by", length = 255)
     private String createdBy;

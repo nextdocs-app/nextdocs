@@ -12,7 +12,6 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -65,7 +64,6 @@ class AttachmentQuotaPersistenceTest {
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Quota doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
     }
 

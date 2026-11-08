@@ -89,7 +89,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "My Doc",
-                "AQID",
                 null,
                 null,
                 false,
@@ -126,7 +125,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "My Doc",
-                "AQID",
                 null,
                 null,
                 false,
@@ -165,7 +163,6 @@ class DocumentControllerTest {
                 documentId,
                 "My Doc",
                 null,
-                null,
                 "a0",
                 false,
                 false,
@@ -195,7 +192,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Root Private",
-                null,
                 null,
                 "a0",
                 true,
@@ -230,7 +226,6 @@ class DocumentControllerTest {
                 documentId,
                 "Root Shared",
                 null,
-                null,
                 "a0",
                 false,
                 true,
@@ -264,7 +259,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Child Doc",
-                null,
                 parentId,
                 "a0",
                 false,
@@ -296,7 +290,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Trashed",
-                null,
                 null,
                 null,
                 false,
@@ -335,7 +328,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Updated",
-                "AQID",
                 null,
                 null,
                 false,
@@ -369,7 +361,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Doc",
-                null,
                 null,
                 null,
                 false,
@@ -437,7 +428,6 @@ class DocumentControllerTest {
                 "Restored",
                 null,
                 null,
-                null,
                 false,
                 false,
                 DocumentAccessLevel.OWNER,
@@ -462,7 +452,6 @@ class DocumentControllerTest {
         DocumentResponse moved = DocumentResponse.withoutBranding(
                 documentId,
                 "Moved",
-                null,
                 null,
                 "a1",
                 false,
@@ -521,7 +510,6 @@ class DocumentControllerTest {
                 null,
                 null,
                 null,
-                null,
                 false,
                 false,
                 DocumentAccessLevel.VIEW,
@@ -562,7 +550,6 @@ class DocumentControllerTest {
         DocumentResponse child = DocumentResponse.withoutBranding(
                 UUID.randomUUID(),
                 "Public Child",
-                null,
                 documentId,
                 "a0",
                 false,
@@ -590,7 +577,6 @@ class DocumentControllerTest {
         DocumentResponse response = DocumentResponse.withoutBranding(
                 documentId,
                 "Guest edit",
-                null,
                 null,
                 null,
                 false,

@@ -140,7 +140,7 @@ public class DocumentListQueryHelper {
             // Access inheritance and deny breakpoints have to resolve for every candidate
             // before pagination, so the candidate query stays unpaged. It returns metadata
             // only; the requested page's full rows are loaded afterwards so the scan never
-            // materialises every candidate's yjs_state.
+            // materialises every candidate row.
             List<SharedRootCandidate> candidates = documentRepository.findSharedRootDocuments(userId);
             if (candidates.isEmpty()) {
                 return new PageImpl<>(List.of(), pageable, 0);

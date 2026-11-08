@@ -18,8 +18,9 @@ public record DocumentCreateRequest(
         @Size(max = 255, message = "Title must be at most 255 characters")
         String title,
 
-        @Schema(description = "Base64-encoded Yjs state")
-        @NotBlank(message = "yjsState is required")
+        @Schema(
+                description = "Base64-encoded initial Yjs update, applied to the Yhub room. "
+                        + "The bytes are never stored in Postgres; omitted or empty content creates no room.")
         @Size(max = 10_485_760, message = "yjsState must be at most 10485760 characters (~10 MB Base64 payload)")
         String yjsState,
 

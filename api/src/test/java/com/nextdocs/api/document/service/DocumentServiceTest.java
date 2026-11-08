@@ -39,11 +39,13 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.realtime.client.YhubClient;
+import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.service.WorkspaceService;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
@@ -103,6 +105,12 @@ class DocumentServiceTest {
 
     private DocumentService documentService;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
+    @Mock
+    private YhubClient yhubClient;
+
     @BeforeEach
     void setUp() {
         documentProperties = new DocumentProperties();
@@ -119,7 +127,39 @@ class DocumentServiceTest {
                 commentCleanup,
                 iconCoverApplier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository,
+                yhubClient);
+        org.mockito.Mockito.lenient()
+                .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
+    }
+
+    @Test
+    void create_reusingAPurgedIdIsRejectedPermanently() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder()
+                .id(userId)
+                .email("owner@example.com")
+                .displayName("Owner")
+                .build();
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
+        when(yhubPurgeOutboxRepository.existsByDocumentId(documentId)).thenReturn(true);
+
+        ApiException error = assertThrows(
+                ApiException.class,
+                () -> documentService.insertDocument(
+                        userId,
+                        new DocumentCreateRequest(
+                                documentId, "Doc", "AQID", null, null, null, null, null, null, null)));
+
+        // Yhub keeps a hard tombstone after a purge, so the id can never host a room
+        // again. A conflict is permanent: the offline create queue stops retrying.
+        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
     }
 
     @Test
@@ -139,6 +179,15 @@ class DocumentServiceTest {
         ArgumentCaptor<OffsetDateTime> cutoff = ArgumentCaptor.forClass(OffsetDateTime.class);
         verify(documentRepository, atLeastOnce()).findExpiredTrashRoots(cutoff.capture(), any());
         assertEquals(OffsetDateTime.of(2025, 5, 16, 12, 0, 0, 0, ZoneOffset.UTC), cutoff.getValue());
+
+        // Every purged row is enrolled for Yhub cleanup, descendants included: a root
+        // alone would strand the subtree's rooms.
+        ArgumentCaptor<List<YhubPurgeOutbox>> outbox = ArgumentCaptor.forClass(List.class);
+        verify(yhubPurgeOutboxRepository).saveAll(outbox.capture());
+        List<UUID> enqueued =
+                outbox.getValue().stream().map(YhubPurgeOutbox::getDocumentId).toList();
+        assertEquals(2, enqueued.size());
+        assertTrue(enqueued.containsAll(List.of(rootId, childId)));
     }
 
     @Test
@@ -401,7 +450,6 @@ class DocumentServiceTest {
                 .id(documentId)
                 .user(user)
                 .title("Existing")
-                .yjsState(new byte[] {1, 2, 3})
                 .createdBy("Alice")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -432,7 +480,6 @@ class DocumentServiceTest {
                 .id(documentId)
                 .user(user)
                 .title("Existing")
-                .yjsState(new byte[] {1, 2, 3})
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
@@ -489,7 +536,6 @@ class DocumentServiceTest {
                 .id(documentId)
                 .user(user)
                 .title("Trashed")
-                .yjsState(new byte[] {1})
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
@@ -687,7 +733,7 @@ class DocumentServiceTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         var response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null));
+                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null));
 
         assertEquals("Updated title", response.title());
         verify(permissionService, atLeastOnce()).resolveAccess(requesterId, documentId);
@@ -705,7 +751,7 @@ class DocumentServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null)));
+                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null)));
 
         assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -721,8 +767,7 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null, null, null));
+        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -737,8 +782,8 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest("   ", null, null, null, null));
+        var response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -1160,6 +1205,13 @@ class DocumentServiceTest {
         verify(accessGrantRepository).deleteGrantsByDocumentIdIn(List.of(parentDocId));
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(parentDocId));
         verify(documentRepository).deleteByIdIn(List.of(parentDocId));
+
+        ArgumentCaptor<List<YhubPurgeOutbox>> outbox = ArgumentCaptor.forClass(List.class);
+        verify(yhubPurgeOutboxRepository).saveAll(outbox.capture());
+        List<UUID> enqueued =
+                outbox.getValue().stream().map(YhubPurgeOutbox::getDocumentId).toList();
+        assertEquals(2, enqueued.size());
+        assertTrue(enqueued.containsAll(List.of(parentDocId, childDocId)));
     }
 
     @Test
@@ -1597,7 +1649,6 @@ class DocumentServiceTest {
                 .id(documentId)
                 .user(User.builder().id(ownerId).build())
                 .title("Shared Trashed")
-                .yjsState(new byte[] {1})
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1677,7 +1728,7 @@ class DocumentServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        viewerId, documentId, new DocumentUpdateRequest("New title", null, null, null, null)));
+                        viewerId, documentId, new DocumentUpdateRequest("New title", null, null, null)));
 
         assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
     }
@@ -1730,7 +1781,6 @@ class DocumentServiceTest {
         DocumentResponse trashedResponse = DocumentResponse.withoutBranding(
                 trashed.getId(),
                 "Trashed",
-                null,
                 null,
                 null,
                 false,
@@ -2419,7 +2469,7 @@ class DocumentServiceTest {
         when(accessGrantRepository.existsPositiveGrantByDocumentId(documentId)).thenReturn(true);
 
         DocumentResponse response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null, null));
+                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null));
 
         assertTrue(response.hasCollaborators());
     }
@@ -2440,7 +2490,7 @@ class DocumentServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null, null, null)));
+                        requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -2458,31 +2508,10 @@ class DocumentServiceTest {
 
         String longest = "t".repeat(DocumentService.MAX_TITLE_LENGTH);
 
-        DocumentResponse response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest(longest, null, null, null, null));
+        DocumentResponse response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest(longest, null, null, null));
 
         assertEquals(longest, response.title());
-    }
-
-    @Test
-    void update_oversizedState_throwsValidationFailed() {
-        UUID requesterId = UUID.randomUUID();
-        UUID documentId = UUID.randomUUID();
-        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
-        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
-
-        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
-        String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest(null, encodedState, null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        verify(documentRepository, never()).save(any(Document.class));
     }
 
     @Test
@@ -2497,14 +2526,14 @@ class DocumentServiceTest {
 
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any());
     }
 
     @Test
-    void updatePublic_editLink_updatesTitleAndState() {
+    void updatePublic_editLink_updatesTitleButNotContent() {
         UUID docId = UUID.randomUUID();
         Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
 
@@ -2513,76 +2542,12 @@ class DocumentServiceTest {
         when(documentRepository.save(doc)).thenReturn(doc);
         when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
-        String encodedState = java.util.Base64.getEncoder().encodeToString("edit".getBytes(StandardCharsets.UTF_8));
-        DocumentResponse response = documentService.updatePublic(
-                docId, new DocumentUpdateRequest("Guest edit", encodedState, "Guest", null, null));
+        DocumentResponse response =
+                documentService.updatePublic(docId, new DocumentUpdateRequest("Guest edit", "Guest", null, null));
 
         assertEquals("Guest edit", response.title());
         // Guest creator labels are not adopted for public saves.
         assertNull(doc.getCreatedBy());
-    }
-
-    @Test
-    void updatePublic_oversizedState_throwsValidationFailed() {
-        UUID docId = UUID.randomUUID();
-        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
-
-        byte[] oversized = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES + 1];
-        String encodedState = java.util.Base64.getEncoder().encodeToString(oversized);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.updatePublic(
-                        docId, new DocumentUpdateRequest("Too big", encodedState, null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        verify(documentRepository, never()).save(any());
-    }
-
-    @Test
-    void updatePublic_stateAtTheExactByteLimit_isAccepted() {
-        UUID docId = UUID.randomUUID();
-        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
-        when(documentRepository.save(doc)).thenReturn(doc);
-        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
-
-        // Exactly at the cap, not one byte over: the bound is inclusive, so a snapshot
-        // the realtime layer accepts can always be persisted through the API.
-        byte[] atLimit = new byte[DocumentService.MAX_PUBLIC_STATE_BYTES];
-        String encodedState = java.util.Base64.getEncoder().encodeToString(atLimit);
-
-        documentService.updatePublic(docId, new DocumentUpdateRequest(null, encodedState, null, null, null));
-
-        assertEquals(DocumentService.MAX_PUBLIC_STATE_BYTES, doc.getYjsState().length);
-    }
-
-    @Test
-    void updatePublic_malformedOversizedState_rejectsOnSizeBeforeDecoding() {
-        UUID docId = UUID.randomUUID();
-        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
-
-        // Not valid base64, so a decode-first implementation would report "must be valid
-        // base64" instead of the size violation. The size message proves the oversized
-        // payload was rejected without ever being decoded.
-        String oversizedGarbage = "!".repeat(DocumentService.MAX_PUBLIC_STATE_ENCODED_LENGTH + 1);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentService.updatePublic(
-                        docId, new DocumentUpdateRequest("Too big", oversizedGarbage, null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        assertTrue(ex.getMessage().contains("exceeds the maximum size"));
-        verify(documentRepository, never()).save(any());
     }
 
     @Test
@@ -2595,7 +2560,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2609,7 +2574,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2623,7 +2588,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
@@ -2697,7 +2662,6 @@ class DocumentServiceTest {
                 .id(documentId)
                 .user(owner)
                 .title("Shared doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(linkAccessLevel)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))

@@ -25,11 +25,12 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.realtime.client.YhubClient;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.service.WorkspaceService;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -83,6 +84,12 @@ class DocumentSpaceServiceTest {
     private User user;
     private Space space;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
+    @Mock
+    private YhubClient yhubClient;
+
     @BeforeEach
     void setUp() {
         DocumentProperties properties = new DocumentProperties();
@@ -98,7 +105,12 @@ class DocumentSpaceServiceTest {
                 commentCleanup,
                 iconCoverApplier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository,
+                yhubClient);
+        org.mockito.Mockito.lenient()
+                .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
 
         userId = UUID.randomUUID();
         user = User.builder().email("alice@example.com").displayName("Alice").build();
@@ -115,7 +127,6 @@ class DocumentSpaceServiceTest {
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Page")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();

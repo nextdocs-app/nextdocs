@@ -3,7 +3,6 @@ package com.nextdocs.api.document.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nextdocs.api.PostgresTestSupport;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -978,28 +977,27 @@ class PermissionGoldenMatrixPostgresTest {
             boolean trashed)
             throws SQLException {
         UUID id = UUID.randomUUID();
-        String sql = "INSERT INTO documents (id, user_id, workspace_id, parent_id, space_id, title, yjs_state, "
+        String sql = "INSERT INTO documents (id, user_id, workspace_id, parent_id, space_id, title, "
                 + "general_access_mode, link_access_level, link_inherit_blocked, sibling_order_key, deleted_at, "
                 + "created_at, updated_at) "
                 + "VALUES (?, ?, (SELECT workspace_id FROM workspace_members ORDER BY created_at LIMIT 1), "
-                + "?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())";
+                + "?, ?, ?, ?, ?, ?, ?, ?, now(), now())";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setObject(1, id);
             stmt.setObject(2, creatorId);
             stmt.setObject(3, parentId);
             stmt.setObject(4, spaceId);
             stmt.setString(5, "Page " + id);
-            stmt.setBytes(6, "seed".getBytes(StandardCharsets.UTF_8));
-            stmt.setString(7, linkMode == null ? "RESTRICTED" : linkMode);
-            stmt.setString(8, linkLevel == null ? "VIEW" : linkLevel);
-            stmt.setBoolean(9, linkBlocked);
+            stmt.setString(6, linkMode == null ? "RESTRICTED" : linkMode);
+            stmt.setString(7, linkLevel == null ? "VIEW" : linkLevel);
+            stmt.setBoolean(8, linkBlocked);
             // Space roots need a shared key (V28); child keys only need to be non-null.
             stmt.setString(
-                    10,
+                    9,
                     parentId != null || spaceId != null
                             ? "a" + id.toString().replace("-", "").substring(0, 12)
                             : null);
-            stmt.setTimestamp(11, trashed ? Timestamp.from(Instant.now()) : null);
+            stmt.setTimestamp(10, trashed ? Timestamp.from(Instant.now()) : null);
             stmt.executeUpdate();
         }
         return id;
