@@ -6,13 +6,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-@Schema(description = "Document response")
+@Schema(description = "Document metadata response; content is read from Yhub separately")
 public record DocumentResponse(
         @Schema(description = "Document ID") UUID id,
         @Schema(description = "Document title") String title,
-
-        @Schema(description = "Base64-encoded Yjs state when requested")
-        String yjsState,
 
         @Schema(description = "Parent document ID, null for root-level")
         UUID parentId,
@@ -64,7 +61,6 @@ public record DocumentResponse(
     public static DocumentResponse withoutBranding(
             UUID id,
             String title,
-            String yjsState,
             UUID parentId,
             String orderKey,
             boolean hasChildren,
@@ -80,7 +76,6 @@ public record DocumentResponse(
         return withoutBranding(
                 id,
                 title,
-                yjsState,
                 parentId,
                 orderKey,
                 hasChildren,
@@ -100,7 +95,6 @@ public record DocumentResponse(
     public static DocumentResponse withoutBranding(
             UUID id,
             String title,
-            String yjsState,
             UUID parentId,
             String orderKey,
             boolean hasChildren,
@@ -117,7 +111,6 @@ public record DocumentResponse(
         return new DocumentResponse(
                 id,
                 title,
-                yjsState,
                 parentId,
                 spaceId,
                 orderKey,

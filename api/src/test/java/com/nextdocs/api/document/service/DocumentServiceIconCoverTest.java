@@ -33,6 +33,8 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.realtime.client.YhubClient;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
@@ -93,6 +95,12 @@ class DocumentServiceIconCoverTest {
 
     private DocumentService documentService;
 
+    @Mock
+    private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+
+    @Mock
+    private YhubClient yhubClient;
+
     @BeforeEach
     void setUp() {
         DocumentProperties documentProperties = new DocumentProperties();
@@ -113,7 +121,12 @@ class DocumentServiceIconCoverTest {
                 commentCleanup,
                 applier,
                 workspaceService,
-                spaceAccessService);
+                spaceAccessService,
+                yhubPurgeOutboxRepository,
+                yhubClient);
+        org.mockito.Mockito.lenient()
+                .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
     }
 
     @Test
@@ -149,6 +162,54 @@ class DocumentServiceIconCoverTest {
         assertEquals(
                 new DocumentCoverResponse("link", "https://example.com/c.png", 0.25),
                 result.document().cover());
+    }
+
+    @Test
+    void create_seedsYhubWithTheDecodedInitialState() {
+        UUID userId = UUID.randomUUID();
+        when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        DocumentService.CreateDocumentResult result = documentService.create(
+                userId, new DocumentCreateRequest(null, "Doc", "AQID", "Alice", null, null, null, null, null, null));
+
+        ArgumentCaptor<byte[]> state = ArgumentCaptor.forClass(byte[].class);
+        verify(yhubClient)
+                .seed(org.mockito.ArgumentMatchers.eq(result.document().id()), state.capture());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {1, 2, 3}, state.getValue());
+    }
+
+    @Test
+    void create_emptyUpdateDoesNotSeedYhub() {
+        UUID userId = UUID.randomUUID();
+        when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.create(
+                userId, new DocumentCreateRequest(null, "Doc", "AAA=", "Alice", null, null, null, null, null, null));
+
+        // A Yjs v1 update for an empty document is two bytes; the first socket
+        // connection creates that room, so creation does not depend on Yhub.
+        verify(yhubClient, never()).seed(any(), any());
+    }
+
+    @Test
+    void create_seedFailureReturns503() {
+        UUID userId = UUID.randomUUID();
+        when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(yhubClient.seed(any(), any())).thenReturn(false);
+
+        ApiException error = assertThrows(
+                ApiException.class,
+                () -> documentService.create(
+                        userId,
+                        new DocumentCreateRequest(null, "Doc", "AQID", "Alice", null, null, null, null, null, null)));
+
+        assertEquals(ErrorCode.SERVICE_UNAVAILABLE, error.getErrorCode());
     }
 
     @Test
@@ -192,7 +253,6 @@ class DocumentServiceIconCoverTest {
                 new DocumentUpdateRequest(
                         null,
                         null,
-                        null,
                         new PageIconRequest("BUILTIN", "add-circle-bold"),
                         new DocumentCoverRequest(null, null, null)));
 
@@ -215,11 +275,7 @@ class DocumentServiceIconCoverTest {
                         userId,
                         documentId,
                         new DocumentUpdateRequest(
-                                null,
-                                null,
-                                null,
-                                null,
-                                new DocumentCoverRequest("LINK", "http://example.com/c.png", null))));
+                                null, null, null, new DocumentCoverRequest("LINK", "http://example.com/c.png", null))));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -237,8 +293,8 @@ class DocumentServiceIconCoverTest {
         when(permissionService.resolveAccess(userId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        DocumentResponse response = documentService.update(
-                userId, documentId, new DocumentUpdateRequest("Renamed", null, null, null, null));
+        DocumentResponse response =
+                documentService.update(userId, documentId, new DocumentUpdateRequest("Renamed", null, null, null));
 
         assertEquals("Renamed", response.title());
         assertEquals(new DocumentIconResponse("emoji", "📝"), response.icon());
@@ -256,7 +312,6 @@ class DocumentServiceIconCoverTest {
         DocumentResponse response = documentService.updatePublic(
                 documentId,
                 new DocumentUpdateRequest(
-                        null,
                         null,
                         null,
                         new PageIconRequest("EMOJI", "🚀"),
@@ -279,7 +334,6 @@ class DocumentServiceIconCoverTest {
                 .id(documentId)
                 .user(owner(ownerId))
                 .title("Doc")
-                .yjsState(new byte[] {1})
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();

@@ -98,6 +98,7 @@ class PublicAccessMigrationPostgresTest {
     private void insertDoc(
             UUID id, UUID parentId, String generalAccessMode, String linkAccessLevel, boolean blocked, boolean trashed)
             throws SQLException {
+        // This suite pins V30, before V41 removed the last non-Yhub content column.
         String sql = "INSERT INTO documents (id, user_id, parent_id, title, yjs_state, general_access_mode, "
                 + "link_access_level, link_inherit_blocked, sibling_order_key, deleted_at, created_at, updated_at) "
                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())";

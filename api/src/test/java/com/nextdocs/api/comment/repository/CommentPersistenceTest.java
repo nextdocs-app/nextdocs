@@ -12,7 +12,6 @@ import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import jakarta.persistence.EntityManager;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -66,7 +65,6 @@ class CommentPersistenceTest {
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Document")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
     }
 

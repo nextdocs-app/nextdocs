@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
@@ -28,7 +29,7 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // Lean candidates for the flat Shared listing. Effective access, parent inheritance
     // and the caller's personal order have to resolve for every candidate before the
     // listing can paginate, so this cannot be a paged entity query: loading Document
-    // here would pull each candidate's yjs_state into heap. The page's full rows are
+    // here would pull each candidate row into heap. The page's full rows are
     // loaded by id after filtering and pagination in DocumentListQueryHelper.
     @Query("SELECT new com.nextdocs.api.document.repository.SharedDocumentCandidate("
             + "d.id, d.parent.id, d.siblingOrderKey, d.title, d.createdAt, d.updatedAt) "
@@ -58,7 +59,7 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
     /**
      * Id-only child lookup for delete walks: loading the entities would pull every
-     * descendant's yjsState into heap just to find the next level.
+     * descendant row into heap just to find the next level.
      */
     @Query("SELECT d.id FROM Document d WHERE d.parent.id IN :parentIds")
     List<UUID> findIdsByParent_IdIn(@Param("parentIds") Collection<UUID> parentIds);
@@ -137,6 +138,10 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
      * report this same count, so the settings delete gate matches the delete endpoint.
      */
     long countBySpace_Id(UUID spaceId);
+
+    /** Root pages filed into a space; descendants follow through the parent chain. */
+    @Query("SELECT d.id FROM Document d WHERE d.space.id = :spaceId")
+    List<UUID> findIdsBySpace_Id(@Param("spaceId") UUID spaceId);
 
     @Query("SELECT d.space.id, COUNT(d) FROM Document d WHERE d.space.id IN :spaceIds GROUP BY d.space.id")
     List<Object[]> countBySpaceIds(@Param("spaceIds") Collection<UUID> spaceIds);
@@ -314,6 +319,31 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
                     + ") SELECT id FROM sub",
             nativeQuery = true)
     List<UUID> findSubtreeDocumentIds(@Param("subtreeRootId") UUID subtreeRootId);
+
+    /**
+     * Subtree ids regardless of trash state, for revocation. After a trash the sockets
+     * that must close sit on rows that are now trashed; an {@code IS NULL} filter would
+     * return none of them.
+     */
+    @Query(
+            value = "WITH RECURSIVE sub AS ("
+                    + "  SELECT id, 1 AS depth FROM documents WHERE id = :subtreeRootId "
+                    + "  UNION ALL "
+                    + "  SELECT d.id, s.depth + 1 FROM documents d JOIN sub s ON d.parent_id = s.id "
+                    + "  WHERE s.depth < :maxDepth"
+                    + ") SELECT id FROM sub",
+            nativeQuery = true)
+    List<UUID> findSubtreeIdsIncludingTrashed(
+            @Param("subtreeRootId") UUID subtreeRootId, @Param("maxDepth") int maxDepth);
+
+    /**
+     * Moves the sidebar sort key after Yhub persisted new content. Content lives in
+     * Yhub; only the timestamp the user can see is written here.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Document d SET d.updatedAt = :now WHERE d.id = :id AND d.deletedAt IS NULL")
+    int markContentUpdated(@Param("id") UUID id, @Param("now") OffsetDateTime now);
 
     /**
      * Ancestor ids of a document, closest first, bounded like resolve_effective_access

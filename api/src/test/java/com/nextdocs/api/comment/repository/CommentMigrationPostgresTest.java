@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nextdocs.api.PostgresTestSupport;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -210,14 +209,13 @@ class CommentMigrationPostgresTest {
     private UUID insertDocument() throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, yjs_state, general_access_mode, link_access_level, "
+                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, link_access_level, "
                         + "link_inherit_blocked, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
+                        + "VALUES (?, ?, ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
             stmt.setObject(1, id);
             stmt.setObject(2, ownerId);
             stmt.setObject(3, workspaceId);
             stmt.setString(4, "Comment doc " + id);
-            stmt.setBytes(5, "seed".getBytes(StandardCharsets.UTF_8));
             stmt.executeUpdate();
         }
         return id;
