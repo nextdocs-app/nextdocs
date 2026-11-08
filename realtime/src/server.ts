@@ -19,18 +19,14 @@ import {
   checkApiAccess,
   type UserAuthInfo,
 } from './auth.js';
-import {
-  documentPermissions,
-  adminDocumentPermissions,
-  serviceOrgPermissions,
-} from './permissions.js';
-import { ActiveRoomTracker, startRoomSweep } from './sweep.js';
-import { checkStore, jsonResponse } from './health.js';
+import { buildAuthCallbacks } from './authorize.js';
+import { ActiveRoomTracker, startRoomSweep, withTimeout } from './sweep.js';
+import { checkStore, describeError, jsonResponse } from './health.js';
 
 /** Rooms this instance currently serves, refreshed by every authorize call. */
 const activeRooms = new ActiveRoomTracker();
 
-type RecheckRequest = {
+export type RecheckRequest = {
   org: string;
   yhub: {
     recheckAuth(
@@ -48,70 +44,19 @@ type HealthRequest = {
   };
 };
 
+const authCallbacks = buildAuthCallbacks({
+  org: ORG,
+  uuidRegex: UUID_REGEX,
+  jwtSecret: JWT_SECRET,
+  isService: isServiceAuthorization,
+  verifyToken: verifyAccessToken,
+  checkAccess: checkApiAccess,
+  onAuthorized: (docid) => activeRooms.touch(docid),
+});
+
 const authPlugin = createAuthPlugin<UserAuthInfo>({
-  async authenticate(req) {
-    const authHeader = req.getHeader('authorization');
-    const queryToken = req.getQuery('token')?.trim();
-
-    // The service identity is server-to-server only. A query token is a URL a
-    // browser can be tricked into opening, so it is never accepted as the service
-    // credential — even if it holds the right value.
-    if (isServiceAuthorization(authHeader)) {
-      return { userid: 'service', isService: true };
-    }
-
-    const headerToken = authHeader
-      ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader).trim()
-      : '';
-    const token = headerToken || queryToken || '';
-
-    if (!token) {
-      return { userid: 'anonymous' };
-    }
-
-    const payload = verifyAccessToken(token, JWT_SECRET);
-    if (!payload) {
-      throw apiError(401, 'Invalid or expired token');
-    }
-
-    return { userid: payload.sub, token };
-  },
-
-  authorize: createAuthorize<UserAuthInfo>({
-    async document({ org, docid, branch }, user) {
-      if (user?.isService) {
-        return adminDocumentPermissions;
-      }
-
-      if (org !== ORG || branch !== 'main' || !UUID_REGEX.test(docid)) {
-        return null;
-      }
-
-      const access = await checkApiAccess(docid, user?.token);
-      // An allowed verdict without a level cannot grant anything; the API always
-      // sends one for an admitted document, so this only rejects a malformed reply.
-      if (!access || !access.allowed || access.trashed || !access.accessLevel) {
-        return null;
-      }
-
-      activeRooms.touch(docid);
-      return documentPermissions(access.accessLevel);
-    },
-
-    async org({ org }, user) {
-      if (!user?.isService || org !== ORG) {
-        return null;
-      }
-      return serviceOrgPermissions;
-    },
-
-    async global() {
-      return {
-        type: 'permissions:global:v1',
-        endpoint: { health: '-r--', ping: '-r--' },
-      };
-    },
-  }),
+  authenticate: authCallbacks.authenticate,
+  authorize: createAuthorize<UserAuthInfo>(authCallbacks.authorize),
 });
 
 const customEndpoints = [
@@ -123,41 +68,7 @@ const customEndpoints = [
   createApiEndpoint('recheck', {
     scope: 'org',
     post: {
-      handler: async (req) => {
-        const request = req as unknown as RecheckRequest;
-        const body = await readJsonBody(request);
-        const docids = Array.isArray(body?.docids) ? body.docids : [];
-        // Yhub treats `users: []` as "match no connection" and null as "match all".
-        // An empty list must not turn a recheck into a silent no-op.
-        const users = Array.isArray(body?.users) && body.users.length > 0 ? body.users : null;
-
-        if (docids.length === 0 || docids.length > MAX_RECHECK_DOCS) {
-          throw apiError(400, `docids must contain between 1 and ${MAX_RECHECK_DOCS} entries`);
-        }
-
-        for (const docid of docids) {
-          if (typeof docid !== 'string' || !UUID_REGEX.test(docid)) {
-            throw apiError(400, 'docids must be document UUIDs');
-          }
-        }
-
-        // The user list narrows a recheck, so a malformed entry would silently make
-        // the whole request re-check nobody. Reject it instead.
-        for (const userid of users ?? []) {
-          if (typeof userid !== 'string' || !UUID_REGEX.test(userid)) {
-            throw apiError(400, 'users must be user UUIDs');
-          }
-        }
-
-        for (const docid of docids) {
-          await request.yhub.recheckAuth({ org: request.org, docid, branch: 'main' }, { users });
-        }
-
-        return {
-          status: 'ok',
-          rechecked: docids.length,
-        };
-      },
+      handler: handleRecheck,
     },
   }),
   /**
@@ -204,6 +115,62 @@ const customEndpoints = [
   }),
 ];
 
+/**
+ * Validates and runs a batched recheck. Exported so the request contract can be tested
+ * without a live Yhub: the batch must be bounded, every id a UUID, and one wedged room
+ * must not stop the rooms behind it.
+ */
+export async function handleRecheck(req: unknown): Promise<{ status: string; rechecked: number }> {
+  const request = req as RecheckRequest;
+  const body = await readJsonBody(request);
+  const docids = Array.isArray(body?.docids) ? body.docids : [];
+  // Yhub treats `users: []` as "match no connection" and null as "match all".
+  // An empty list must not turn a recheck into a silent no-op.
+  const users = Array.isArray(body?.users) && body.users.length > 0 ? body.users : null;
+
+  if (docids.length === 0 || docids.length > MAX_RECHECK_DOCS) {
+    throw apiError(400, `docids must contain between 1 and ${MAX_RECHECK_DOCS} entries`);
+  }
+
+  for (const docid of docids) {
+    if (typeof docid !== 'string' || !UUID_REGEX.test(docid)) {
+      throw apiError(400, 'docids must be document UUIDs');
+    }
+  }
+
+  // The user list narrows a recheck, so a malformed entry would silently make
+  // the whole request re-check nobody. Reject it instead.
+  for (const userid of users ?? []) {
+    if (typeof userid !== 'string' || !UUID_REGEX.test(userid)) {
+      throw apiError(400, 'users must be user UUIDs');
+    }
+  }
+
+  const failed: string[] = [];
+  for (const docid of docids) {
+    try {
+      await withTimeout(
+        request.yhub.recheckAuth({ org: request.org, docid, branch: 'main' }, { users }),
+        RECHECK_TIMEOUT_MS,
+        docid
+      );
+    } catch {
+      // One wedged room must not hold up the rooms behind it. The sweep is the
+      // safety net for this document; the rest of the batch still gets rechecked.
+      failed.push(docid);
+    }
+  }
+
+  if (failed.length > 0) {
+    throw apiError(503, `Failed to re-check ${failed.length} of ${docids.length} document(s)`);
+  }
+
+  return {
+    status: 'ok',
+    rechecked: docids.length,
+  };
+}
+
 async function readJsonBody(req: RecheckRequest): Promise<Record<string, unknown> | null> {
   try {
     const raw = await req.bytes();
@@ -215,6 +182,18 @@ async function readJsonBody(req: RecheckRequest): Promise<Record<string, unknown
   } catch {
     return null;
   }
+}
+
+/** Upper bound for one room's recheck before the batch moves on. */
+const RECHECK_TIMEOUT_MS = 10_000;
+
+/** The content-updated callback is limited to this org's main-branch documents. */
+export function shouldNotifyContentUpdated(docRef: {
+  org: string;
+  docid: string;
+  branch: string;
+}): boolean {
+  return docRef.org === ORG && docRef.branch === 'main' && UUID_REGEX.test(docRef.docid);
 }
 
 /** Notification attempts before the sort key is left stale until the next edit. */
@@ -231,12 +210,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * copied into Postgres, but the timestamp is the sidebar sort key and the API
  * owns it.
  *
+ * Ordering: `@y/hub` fires `docUpdate` just before it stores the update, so this
+ * notification can reach the API ahead of durable storage. It only moves a sort
+ * key, so the one-compaction lead is harmless.
+ *
  * Deliberately not awaited by the worker event: a slow API must never hold a
  * compaction. Transient failures are retried with backoff rather than logged
  * and forgotten; a notification that still fails leaves only a stale sort
  * position - the next edit re-sends it - never lost content.
  */
-async function touchContentUpdated(docid: string): Promise<void> {
+export async function touchContentUpdated(docid: string): Promise<void> {
   for (let attempt = 1; attempt <= CONTENT_UPDATED_ATTEMPTS; attempt++) {
     try {
       const res = await fetch(
@@ -261,8 +244,7 @@ async function touchContentUpdated(docid: string): Promise<void> {
       );
     } catch (err) {
       console.warn(
-        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid}:`,
-        err instanceof Error ? err.message : err
+        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid} (${describeError(err)})`
       );
     }
 
@@ -273,8 +255,12 @@ async function touchContentUpdated(docid: string): Promise<void> {
 }
 
 // The return type is explicit: declaration emit cannot name the config generic that
-// createYHub infers, and the entrypoint does not need the handle.
-export async function createServer(): Promise<void> {
+// createYHub infers. The entrypoint only needs the handle to drain on SIGTERM.
+export interface RunningServer {
+  destroy(options?: { drainMs?: number }): Promise<void> | void;
+}
+
+export async function createServer(): Promise<RunningServer> {
   const yhub = await createYHub({
     redis: {
       url: REDIS_URL,
@@ -295,7 +281,7 @@ export async function createServer(): Promise<void> {
       taskConcurrency: 5,
       events: {
         docUpdate: ({ docRef }: { docRef: { org: string; docid: string; branch: string } }) => {
-          if (docRef.org !== ORG || docRef.branch !== 'main' || !UUID_REGEX.test(docRef.docid)) {
+          if (!shouldNotifyContentUpdated(docRef)) {
             return;
           }
           void touchContentUpdated(docRef.docid);
@@ -308,10 +294,9 @@ export async function createServer(): Promise<void> {
     org: ORG,
     intervalMs: SWEEP_INTERVAL_MS,
     onError: (err, docid) => {
-      console.warn(
-        `Realtime access sweep failed for ${docid}:`,
-        err instanceof Error ? err.message : err
-      );
+      console.warn(`Realtime access sweep failed for ${docid} (${describeError(err)})`);
     },
   });
+
+  return yhub;
 }

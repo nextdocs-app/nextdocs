@@ -92,7 +92,8 @@ export function isServiceAuthorization(authHeader: string | undefined): boolean 
   if (!authHeader) {
     return false;
   }
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+  // The HTTP auth scheme is case-insensitive, and a proxy may normalize it.
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   return token.length > 0 && secretsMatch(token, YHUB_SERVICE_TOKEN);
 }
 
@@ -101,6 +102,9 @@ export interface AccessVerdict {
   trashed: boolean;
   allowed: boolean;
 }
+
+/** Every level the permission map can turn into a Yhub permission object. */
+const ACCESS_LEVELS: ReadonlySet<string> = new Set(['VIEW', 'COMMENT', 'EDIT', 'OWNER']);
 
 /**
  * A 200 is not a verdict by itself: a proxy error page or a changed envelope must
@@ -112,22 +116,36 @@ function isAccessVerdict(value: unknown): value is AccessVerdict {
     return false;
   }
   const verdict = value as Partial<AccessVerdict>;
+  if (
+    typeof verdict.allowed !== 'boolean' ||
+    typeof verdict.trashed !== 'boolean' ||
+    (verdict.accessLevel !== undefined &&
+      verdict.accessLevel !== null &&
+      typeof verdict.accessLevel !== 'string')
+  ) {
+    return false;
+  }
+
+  // A denial needs no level. An admitted document must name a level the permission
+  // map understands: treating a missing or unknown level as a denial would close a
+  // healthy socket with a permanent 4401 instead of retrying a transient contract
+  // error.
   return (
-    typeof verdict.allowed === 'boolean' &&
-    typeof verdict.trashed === 'boolean' &&
-    (verdict.accessLevel === undefined ||
-      verdict.accessLevel === null ||
-      typeof verdict.accessLevel === 'string')
+    !verdict.allowed ||
+    (typeof verdict.accessLevel === 'string' && ACCESS_LEVELS.has(verdict.accessLevel))
   );
 }
 
 /**
  * Resolve effective access through the API's internal endpoint.
  *
- * A definitive denial (401/403/404) is `null`; anything else is transient and is
+ * A definitive denial (401/403) is `null`; anything else is transient and is
  * surfaced as a 503 so Yhub retries instead of closing a healthy socket with a
- * permanent code. 429 belongs to the transient bucket: the internal endpoint is
- * exempt from the public budget, but an operator's proxy may still throttle it.
+ * permanent code. 404 is transient too: the API answers a real not-found with a
+ * 200 `allowed: false`, so a 404 can only mean this route is not reachable (a
+ * base-path error or a proxy blocking it) — never a verdict on the caller. 429
+ * belongs to the transient bucket as well: the internal endpoint is exempt from
+ * the public budget, but an operator's proxy may still throttle it.
  */
 export async function checkApiAccess(
   docid: string,
@@ -148,7 +166,7 @@ export async function checkApiAccess(
     throw apiError(503, 'Auth backend unreachable');
   }
 
-  if (res.status === 401 || res.status === 403 || res.status === 404) {
+  if (res.status === 401 || res.status === 403) {
     return null;
   }
   if (!res.ok) {

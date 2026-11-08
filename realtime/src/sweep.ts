@@ -67,7 +67,7 @@ interface Recheckable<T> {
 }
 
 /** Rejects when `promise` has not settled within the budget; the work itself continues. */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, docid: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, docid: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`recheckAuth timed out after ${timeoutMs} ms for ${docid}`));
