@@ -2,6 +2,8 @@ package com.nextdocs.api.space.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -31,6 +33,8 @@ import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.event.SpaceAccessChangedEvent;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
@@ -119,9 +123,12 @@ class SpaceServiceTest {
     private User actor;
     private UUID actorId;
     private Space space;
+    /** Events published by the mutation under test. */
+    private final List<Object> publishedEvents = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() {
+        publishedEvents.clear();
         spaceService = new SpaceService(
                 spaceRepository,
                 memberRepository,
@@ -136,7 +143,8 @@ class SpaceServiceTest {
                 documentService,
                 pageIconValidator,
                 attachmentService,
-                auditService);
+                auditService,
+                publishedEvents::add);
 
         workspace = Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
         actor = User.builder().email("owner@example.com").displayName("Owner").build();
@@ -288,6 +296,61 @@ class SpaceServiceTest {
         assertThat(response.name()).isEqualTo("Platform");
         assertThat(response.accessMode()).isEqualTo(SpaceAccessMode.PUBLIC);
         assertThat(response.everyoneAccessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
+
+        // The audience change inherits to every page the space anchors, so the whole
+        // subtree has to re-authorize; the rename alone would not.
+        assertEquals(1, publishedEvents.size());
+        assertEquals(new SpaceAccessChangedEvent(space.getId()), publishedEvents.get(0));
+    }
+
+    @Test
+    void updateSpace_accessModeOnlyChangeReAuthorizesTheSubtree() {
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(2L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+
+        spaceService.updateSpace(
+                actorId, space.getId(), new SpaceUpdateRequest(null, null, SpaceAccessMode.PUBLIC, null));
+
+        // Only the audience field moved; the everyone level stayed at its old value.
+        assertThat(space.getAccessMode()).isEqualTo(SpaceAccessMode.PUBLIC);
+        assertThat(space.getEveryoneAccessLevel()).isEqualTo(DocumentAccessLevel.VIEW);
+        assertThat(publishedEvents).containsExactly(new SpaceAccessChangedEvent(space.getId()));
+    }
+
+    @Test
+    void updateSpace_everyoneLevelOnlyChangeReAuthorizesTheSubtree() {
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(2L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+
+        spaceService.updateSpace(
+                actorId, space.getId(), new SpaceUpdateRequest(null, null, null, DocumentAccessLevel.COMMENT));
+
+        // Only the everyone level moved; the access mode stayed CUSTOM.
+        assertThat(space.getAccessMode()).isEqualTo(SpaceAccessMode.CUSTOM);
+        assertThat(space.getEveryoneAccessLevel()).isEqualTo(DocumentAccessLevel.COMMENT);
+        assertThat(publishedEvents).containsExactly(new SpaceAccessChangedEvent(space.getId()));
+    }
+
+    @Test
+    void updateSpace_renamingDoesNotReAuthorizeTheSubtree() {
+        callerAdministers(DocumentAccessLevel.OWNER);
+        when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
+        when(spaceRepository.save(any(Space.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(spaceAccessService.resolveLevel(actorId, space)).thenReturn(DocumentAccessLevel.OWNER);
+        when(memberRepository.countBySpace_Id(space.getId())).thenReturn(2L);
+        when(documentRepository.countBySpace_Id(space.getId())).thenReturn(0L);
+
+        spaceService.updateSpace(actorId, space.getId(), new SpaceUpdateRequest("Platform", null, null, null));
+
+        assertTrue(publishedEvents.isEmpty());
     }
 
     @Test
@@ -427,6 +490,8 @@ class SpaceServiceTest {
         verify(memberRepository).save(captor.capture());
         assertThat(captor.getValue().getAccessLevel()).isEqualTo(DocumentAccessLevel.EDIT);
         assertThat(captor.getValue().getGrantedBy()).isSameAs(actor);
+        // A new member widens the audience of every page in the space.
+        assertEquals(List.of(new SpaceAccessChangedEvent(space.getId())), publishedEvents);
     }
 
     @Test
@@ -544,6 +609,7 @@ class SpaceServiceTest {
 
         assertThat(bobRow.getAccessLevel()).isEqualTo(DocumentAccessLevel.OWNER);
         assertThat(roster).extracting(SpaceMemberResponse::accessLevel).contains(DocumentAccessLevel.OWNER);
+        assertEquals(List.of(new SpaceAccessChangedEvent(space.getId())), publishedEvents);
     }
 
     @Test
@@ -576,6 +642,7 @@ class SpaceServiceTest {
 
         verify(accessGrantRepository).deleteUserGrantsInSpace(space.getId(), actorId);
         verify(memberRepository).delete(ownRow);
+        assertEquals(List.of(new SpaceAccessChangedEvent(space.getId())), publishedEvents);
     }
 
     @Test
@@ -590,6 +657,7 @@ class SpaceServiceTest {
         verify(auditService)
                 .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_ATTACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+        assertEquals(List.of(new DocumentAccessChangedEvent(documentId)), publishedEvents);
     }
 
     @Test
@@ -604,6 +672,7 @@ class SpaceServiceTest {
         verify(auditService)
                 .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+        assertEquals(List.of(new DocumentAccessChangedEvent(documentId)), publishedEvents);
     }
 
     @Test
@@ -704,10 +773,14 @@ class SpaceServiceTest {
         assertThat(space.getArchivedAt()).isNotNull();
         assertThat(space.getArchivedBy()).isSameAs(actor);
         assertThat(response.archivedAt()).isEqualTo(space.getArchivedAt());
+        assertThat(publishedEvents).containsExactly(new SpaceAccessChangedEvent(space.getId()));
 
         spaceService.archiveSpace(actorId, space.getId());
 
         verify(spaceRepository).save(space);
+        // Archiving an already archived space changes nothing, so it must not
+        // fan out another subtree recheck.
+        assertThat(publishedEvents).hasSize(1);
     }
 
     @Test
@@ -726,10 +799,13 @@ class SpaceServiceTest {
         assertThat(space.getArchivedAt()).isNull();
         assertThat(space.getArchivedBy()).isNull();
         assertThat(response.archivedAt()).isNull();
+        assertThat(publishedEvents).containsExactly(new SpaceAccessChangedEvent(space.getId()));
 
         spaceService.restoreSpace(actorId, space.getId());
 
         verify(spaceRepository).save(space);
+        // A no-op restore publishes no second event.
+        assertThat(publishedEvents).hasSize(1);
     }
 
     @Test

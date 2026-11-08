@@ -22,7 +22,6 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -118,7 +117,6 @@ class SpaceDeleteConcurrencyTest {
                 .id(UUID.randomUUID())
                 .user(actor)
                 .title("Page")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         mockMvc = MockMvcBuilders.standaloneSetup(new AttachProbe(documentService))
                 .setControllerAdvice(new GlobalExceptionHandler())

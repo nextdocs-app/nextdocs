@@ -18,7 +18,6 @@ import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import jakarta.persistence.EntityManager;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -82,7 +81,6 @@ class DocumentSharingReconcilePersistenceTest {
                 .user(owner)
                 .workspace(workspace)
                 .title("Grandparent")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         Document root = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
@@ -90,7 +88,6 @@ class DocumentSharingReconcilePersistenceTest {
                 .workspace(workspace)
                 .parent(grandparent)
                 .title("Root")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         Document child = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
@@ -98,7 +95,6 @@ class DocumentSharingReconcilePersistenceTest {
                 .workspace(workspace)
                 .parent(root)
                 .title("Child")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
 
         // Bob floated the child earlier; overriding his access on the root has to drop that row
