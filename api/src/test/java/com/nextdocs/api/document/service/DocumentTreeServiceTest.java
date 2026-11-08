@@ -27,6 +27,7 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -70,9 +71,12 @@ class DocumentTreeServiceTest {
 
     private UUID userId;
     private User user;
+    /** Events published by the mutation under test. */
+    private final List<Object> publishedEvents = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
+        publishedEvents.clear();
         userId = UUID.randomUUID();
         user = User.builder()
                 .id(userId)
@@ -85,7 +89,8 @@ class DocumentTreeServiceTest {
                 userDocumentOrderRepository,
                 userRepository,
                 permissionService,
-                spaceAccessService);
+                spaceAccessService,
+                publishedEvents::add);
     }
 
     @Test
@@ -423,6 +428,8 @@ class DocumentTreeServiceTest {
         // Intra-tree reparenting never touches ownership; no cascade walk happens.
         assertEquals(user.getId(), doc.getUser().getId());
         verify(documentRepository, never()).saveAll(anyList());
+        // A move changes inherited access even when ownership stays put.
+        assertEquals(List.of(new DocumentAccessChangedEvent(docId)), publishedEvents);
     }
 
     @Test

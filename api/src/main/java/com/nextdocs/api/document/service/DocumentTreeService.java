@@ -18,6 +18,7 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -29,6 +30,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -49,6 +51,7 @@ public class DocumentTreeService {
     private final UserRepository userRepository;
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -58,9 +61,14 @@ public class DocumentTreeService {
         int attempt = 0;
         while (true) {
             try {
-                return selfProxy != null
+                DocumentResponse response = selfProxy != null
                         ? selfProxy.moveAndPersist(userId, documentId, request, attempt > 0)
                         : moveAndPersist(userId, documentId, request, attempt > 0);
+                // A reparent changes the inherited access of the whole moved subtree, and a
+                // reorder inside a space can change what its members see first. Either way
+                // the open sockets must re-authorize against the new chain.
+                eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
+                return response;
             } catch (DataIntegrityViolationException ex) {
                 log.warn(
                         "Concurrent position change during move attempt={} userId={} documentId={}",

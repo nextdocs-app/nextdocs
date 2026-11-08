@@ -28,8 +28,8 @@ import tools.jackson.databind.ObjectMapper;
  * budget as credentialed or write traffic:
  * - {@code auth:<ip>} — /api/v1/auth/* (login/signup/refresh), strict default budget.
  * - {@code public-read:<ip>} — anonymous reads: GET .../public, /public/path,
- *   /public/children, anonymous GET .../access-check, .../my-access, plus the
- *   onboarding read /api/v1/instance/status.
+ *   /public/children, /public/content, anonymous GET .../access-check,
+ *   .../my-access, plus the onboarding read /api/v1/instance/status.
  * - {@code icons:<ip>} — builtin icon catalog, bundle, and glyphs
  *   (GET|HEAD /api/v1/icons[/{name},/bundle]). Separate from public-read: the
  *   bundle is ~830KB, so sharing the 120/min browsing bucket would let one
@@ -518,7 +518,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (parts.length == 3
                 && !parts[0].isBlank()
                 && parts[1].equals("public")
-                && (parts[2].equals("path") || parts[2].equals("children"))) {
+                && (parts[2].equals("path") || parts[2].equals("children") || parts[2].equals("content"))) {
             return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
         }
 

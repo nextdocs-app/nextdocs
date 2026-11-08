@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -38,6 +39,10 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.realtime.client.YhubClient;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.service.RealtimeAccessScopeResolver;
+import com.nextdocs.api.realtime.service.RealtimeRevocationNotifier;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
@@ -45,7 +50,6 @@ import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
@@ -93,9 +97,12 @@ class DocumentSharingServicesTest {
 
     private DocumentSharingService sharingService;
     private DocumentSharingSettingsService settingsService;
+    /** Events published by the mutation under test, asserted where access changes. */
+    private final List<Object> publishedEvents = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() {
+        publishedEvents.clear();
         sharingService = new DocumentSharingService(
                 documentRepository,
                 accessGrantRepository,
@@ -105,8 +112,10 @@ class DocumentSharingServicesTest {
                 spaceAccessService,
                 spaceMemberRepository,
                 accessGrantSyncService,
-                auditService);
-        settingsService = new DocumentSharingSettingsService(documentRepository, permissionService, auditService);
+                auditService,
+                publishedEvents::add);
+        settingsService = new DocumentSharingSettingsService(
+                documentRepository, permissionService, auditService, publishedEvents::add);
 
         org.mockito.Mockito.lenient()
                 .when(accessGrantSyncService.upsertUserGrant(any(), any(), any(), any()))
@@ -409,7 +418,6 @@ class DocumentSharingServicesTest {
                 .id(documentId)
                 .user(owner)
                 .title("Shared doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -455,7 +463,6 @@ class DocumentSharingServicesTest {
                 .id(documentId)
                 .user(owner)
                 .title("Shared doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -501,6 +508,45 @@ class DocumentSharingServicesTest {
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorId);
         verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorId, documentId);
+
+        assertEquals(1, publishedEvents.size());
+        DocumentAccessChangedEvent event = (DocumentAccessChangedEvent) publishedEvents.get(0);
+        assertEquals(documentId, event.documentId());
+        assertEquals(List.of(collaboratorId), event.affectedUsers());
+        assertTrue(event.subtree());
+    }
+
+    @Test
+    void removeCollaborator_eventNotifiesYhubForTheRemovedCollaborator() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID collaboratorId = UUID.randomUUID();
+        UUID descendantId = UUID.randomUUID();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(User.builder().id(ownerId).build())
+                .build();
+
+        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
+        when(accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorId))
+                .thenReturn(true);
+
+        sharingService.removeCollaborator(ownerId, documentId, collaboratorId);
+
+        // The event captured above is what the after-commit listener receives. Running
+        // it through the real listener pins the Yhub notification (subtree + user) that
+        // closes the removed collaborator's open socket.
+        YhubClient yhubClient = mock(YhubClient.class);
+        RealtimeAccessScopeResolver scopeResolver = mock(RealtimeAccessScopeResolver.class);
+        when(scopeResolver.forDocument(documentId)).thenReturn(List.of(documentId, descendantId));
+        RealtimeRevocationNotifier notifier = new RealtimeRevocationNotifier(yhubClient, scopeResolver);
+
+        for (Object published : publishedEvents) {
+            notifier.onAccessChanged((DocumentAccessChangedEvent) published);
+        }
+
+        verify(scopeResolver).forDocument(documentId);
+        verify(yhubClient).recheck(List.of(documentId, descendantId), List.of(collaboratorId));
     }
 
     @Test
@@ -2277,7 +2323,6 @@ class DocumentSharingServicesTest {
                 .id(documentId)
                 .user(owner)
                 .title("Shared doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(linkAccessLevel)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
