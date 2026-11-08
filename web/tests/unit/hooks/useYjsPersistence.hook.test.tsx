@@ -815,6 +815,101 @@ describe('useYjsPersistence', () => {
     });
   });
 
+  it('flushes a replacement title queued while the first replay is in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    let releaseFirst!: () => void;
+    updateCloudMetadataSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+
+    writePendingMetaPatch('user-1', 'title-race', { title: 'First' });
+    writePendingSyncEdits('title-race', 2);
+
+    const { result } = renderHook(() => useYjsPersistence('title-race', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'title-race',
+        { title: 'First' },
+        'token-1'
+      );
+    });
+
+    // The user keeps typing while the first title is still on the wire.
+    act(() => {
+      writePendingMetaPatch('user-1', 'title-race', { title: 'Second' });
+    });
+
+    await act(async () => {
+      releaseFirst();
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'title-race',
+        { title: 'Second' },
+        'token-1'
+      );
+    });
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'title-race')).toBeNull();
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
+  it('drops a permanently rejected guest title instead of retrying it', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      refresh: mockRefreshSession,
+    });
+    isPublicLinkDocumentSpy.mockReturnValue(true);
+    updatePublicMetadataSpy.mockRejectedValue(
+      new DocumentServiceApiError('Title is too long', 400)
+    );
+    writePendingMetaPatch('public', 'guest-rejected', { title: 'Rejected' });
+    writePendingSyncEdits('guest-rejected', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('guest-rejected', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(readPendingMetaPatch('public', 'guest-rejected')).toBeNull();
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
   it('replays a queued guest title through the public metadata endpoint', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {

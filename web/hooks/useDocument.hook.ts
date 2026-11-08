@@ -560,6 +560,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             loadedFromShareLink = true;
             try {
               result = await documentService.getPublicDocument(id);
+              // An in-place sign-in cancels this guest load; it must not restore
+              // public-link provenance on the account that just signed in.
+              if (cancelled) return;
               documentService.notePublicLinkDocument(id);
               guestAccessLevel = await resolveGuestAccessLevel(id, {
                 payloadLevel: result.accessLevel,
@@ -602,6 +605,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             loadedFromShareLink = localResult !== null || isKnownPublicLink;
             try {
               result = await documentService.getPublicDocument(id);
+              // Same guard for the unauthenticated private-route fallback: a load
+              // that sign-in already superseded must not tag the session.
+              if (cancelled) return;
               documentService.notePublicLinkDocument(id);
               loadedFromShareLink = true;
               guestAccessLevel = await resolveGuestAccessLevel(id, {
@@ -917,8 +923,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           return;
         }
         console.warn('Failed to verify access after Yhub deleted the room:', err);
-        // Nothing proved revocation (network, 429 or 5xx). Retry through the same
-        // capped backoff the close handler uses; the next 4404 re-runs verification.
+        // Nothing proved revocation (network, 429 or 5xx). The provider was dropped
+        // when the room 4404ed; put it back before resuming so connection-triggered
+        // comment refreshes still have an active provider after the reconnect.
+        setRealtimeProvider((current) => current ?? provider);
+        // Retry through the same capped backoff the close handler uses; the next
+        // 4404 re-runs verification.
         scheduleCloseReconnect();
       }
     };
