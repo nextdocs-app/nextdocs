@@ -77,6 +77,8 @@ describe('Config', () => {
   it('validates UUID regex', async () => {
     const { UUID_REGEX } = await import('../../src/config.js');
     expect(UUID_REGEX.test('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
+    // A room key is the exact string, so a second casing would be a second room.
+    expect(UUID_REGEX.test('550E8400-E29B-41D4-A716-446655440000')).toBe(false);
     expect(UUID_REGEX.test('not-a-uuid')).toBe(false);
   });
 

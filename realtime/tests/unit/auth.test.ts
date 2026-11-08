@@ -6,7 +6,7 @@ import {
   checkApiAccess,
   secretsMatch,
 } from '../../src/auth.js';
-import { YHUB_SERVICE_TOKEN } from '../../src/config.js';
+import { API_BASE_URL, YHUB_SERVICE_TOKEN } from '../../src/config.js';
 
 describe('Auth', () => {
   const secret = 'super-secret-key-at-least-32-characters-long';
@@ -109,6 +109,7 @@ describe('Auth', () => {
   describe('isServiceAuthorization', () => {
     it('accepts the configured service token from the Authorization header', () => {
       expect(isServiceAuthorization(`Bearer ${YHUB_SERVICE_TOKEN}`)).toBe(true);
+      expect(isServiceAuthorization(`bearer ${YHUB_SERVICE_TOKEN}`)).toBe(true);
       expect(isServiceAuthorization(YHUB_SERVICE_TOKEN)).toBe(true);
     });
 
@@ -145,9 +146,7 @@ describe('Auth', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe(
-        'http://localhost:8080/api/v1/internal/realtime/access?documentId=doc%20uuid%2F1'
-      );
+      expect(url).toBe(`${API_BASE_URL}/api/v1/internal/realtime/access?documentId=doc%20uuid%2F1`);
       const headers = init.headers as Record<string, string>;
       expect(headers['X-Yhub-Service']).toBe(YHUB_SERVICE_TOKEN);
       expect(headers['Authorization']).toBe('Bearer token-123');
@@ -178,6 +177,10 @@ describe('Auth', () => {
       const bodies = [
         { data: { allowed: true, trashed: false } },
         { success: true, data: { allowed: true } },
+        // Admitted without a level: the permission map could not grant anything.
+        { success: true, data: { allowed: true, trashed: false } },
+        // Admitted with a level the permission map does not know.
+        { success: true, data: { allowed: true, trashed: false, accessLevel: 'ADMIN' } },
         { success: true, data: null },
         { success: false, data: { allowed: true, trashed: false } },
       ];
@@ -196,7 +199,7 @@ describe('Auth', () => {
     });
 
     it('returns null on a definitive denial', async () => {
-      for (const status of [401, 403, 404]) {
+      for (const status of [401, 403]) {
         global.fetch = jest
           .fn()
           .mockImplementation(() =>
@@ -208,7 +211,9 @@ describe('Auth', () => {
     });
 
     it('raises a transient 503 for a backend error instead of denying access', async () => {
-      for (const status of [429, 500, 503]) {
+      // 404 means the route was not reached: the API folds a real not-found into
+      // 200 allowed:false, so treating this as a denial would reconnect-loop.
+      for (const status of [404, 429, 500, 503]) {
         global.fetch = jest
           .fn()
           .mockImplementation(() =>
