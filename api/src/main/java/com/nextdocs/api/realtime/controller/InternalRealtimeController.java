@@ -75,14 +75,17 @@ public class InternalRealtimeController {
             JwtTokenProvider jwtTokenProvider,
             DocumentRepository documentRepository,
             WorkspaceAccessService workspaceAccessService) {
-        if (serviceToken == null
-                || serviceToken.isBlank()
-                || PUBLISHED_DEV_TOKEN.equals(serviceToken)
-                || serviceToken.getBytes(StandardCharsets.UTF_8).length < MIN_TOKEN_BYTES) {
+        // Trim like the realtime service reads its copy: an env var or mounted secret
+        // often carries a trailing newline, and an untrimmed value would never match.
+        String normalizedToken = serviceToken == null ? null : serviceToken.trim();
+        if (normalizedToken == null
+                || normalizedToken.isBlank()
+                || PUBLISHED_DEV_TOKEN.equals(normalizedToken)
+                || normalizedToken.getBytes(StandardCharsets.UTF_8).length < MIN_TOKEN_BYTES) {
             throw new IllegalStateException("app.yhub.service-token must be a unique secret of at least "
                     + MIN_TOKEN_BYTES + " bytes shared with the realtime service; the published default is rejected.");
         }
-        this.serviceToken = serviceToken;
+        this.serviceToken = normalizedToken;
         this.sharingService = sharingService;
         this.jwtTokenProvider = jwtTokenProvider;
         this.documentRepository = documentRepository;

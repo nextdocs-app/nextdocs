@@ -61,7 +61,9 @@ public class YhubClient {
             @Value("${app.yhub.service-token}") String serviceToken,
             ObjectMapper objectMapper) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
-        this.serviceToken = serviceToken;
+        // Match the realtime service's trimmed comparison; a trailing newline from a
+        // mounted secret would otherwise make the header invalid or the value unequal.
+        this.serviceToken = serviceToken.trim();
         this.objectMapper = objectMapper;
         this.httpClient =
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
