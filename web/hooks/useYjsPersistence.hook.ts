@@ -68,6 +68,9 @@ export function useYjsPersistence(
   const localRevisionRef = useRef(0);
   const [pendingEdits, setPendingEdits] = useState(() => readPendingSyncEdits(documentId));
   const pendingEditsRef = useRef(pendingEdits);
+  // Bumped when a replay left a newer title queued: the pendingEdits effect can run
+  // while the flush lock is held, so it cannot be relied on to start the next pass.
+  const [flushTick, setFlushTick] = useState(0);
 
   // We use a ref to avoid recreating the timeout handler when meta changes
   const metaRef = useRef(meta);
@@ -291,6 +294,7 @@ export function useYjsPersistence(
     }
 
     const owner = metaOwnerRef.current;
+    let replayNeedsAnotherPass = false;
 
     // A guest on an edit-level share link has no cloud session, but a title that
     // failed to PATCH must still reach REST: lists and search read documents.title.
@@ -312,9 +316,15 @@ export function useYjsPersistence(
       isFlushingPendingRef.current = true;
       try {
         await documentService.updatePublicMetadata(documentId, { title: queuedTitle });
-        if (readPendingMetaPatch(owner, documentId)?.title === queuedTitle) {
+        const queuedAfterReplay = readPendingMetaPatch(owner, documentId);
+        if (queuedAfterReplay?.title === queuedTitle) {
           clearPendingMetaPatch(owner, documentId, queuedTitle);
           acknowledgePendingSyncEdits(documentId);
+        } else if (queuedAfterReplay) {
+          // The guest renamed again while this request was in flight. The sent title
+          // landed, so receipt its marker and let the newer title replay next.
+          acknowledgePendingSyncEdits(documentId);
+          replayNeedsAnotherPass = true;
         }
         clearBackoff();
         dispatch(setLastSaved(new Date().toISOString()));
@@ -323,9 +333,30 @@ export function useYjsPersistence(
           triggerBackoff(backoffMsFor(guestErr));
           return;
         }
+        // A 4xx is a verdict on this title (e.g. too long), not backpressure. Clear
+        // it only if it is still the queued value and tell the guest it was rejected;
+        // a newer rename of their own stays queued.
+        if (
+          guestErr instanceof DocumentServiceApiError &&
+          guestErr.status >= 400 &&
+          guestErr.status < 500 &&
+          guestErr.status !== 401 &&
+          guestErr.status !== 429
+        ) {
+          console.warn('Dropping a rejected queued guest title:', guestErr.message);
+          if (readPendingMetaPatch(owner, documentId)?.title === queuedTitle) {
+            clearPendingMetaPatch(owner, documentId, queuedTitle);
+            acknowledgePendingSyncEdits(documentId);
+          }
+          dispatch(setError(guestErr.message));
+          return;
+        }
         console.warn('Failed to replay a queued guest title:', guestErr);
       } finally {
         isFlushingPendingRef.current = false;
+        if (replayNeedsAnotherPass) {
+          setFlushTick((tick) => tick + 1);
+        }
       }
       return;
     }
@@ -378,9 +409,15 @@ export function useYjsPersistence(
         const title = pendingMeta.title;
         try {
           await documentService.updateCloudMetadata(documentId, { title }, accessToken);
-          if (readPendingMetaPatch(owner, documentId)?.title === title) {
+          const queuedAfterReplay = readPendingMetaPatch(owner, documentId);
+          if (queuedAfterReplay?.title === title) {
             clearPendingMetaPatch(owner, documentId, title);
             acknowledgePendingSyncEdits(documentId);
+          } else if (queuedAfterReplay) {
+            // A newer title landed while the request was in flight. This title is
+            // durable now, so receipt its marker; the next pass carries the newer one.
+            acknowledgePendingSyncEdits(documentId);
+            replayNeedsAnotherPass = true;
           }
         } catch (titleErr) {
           if (
@@ -451,6 +488,9 @@ export function useYjsPersistence(
     } finally {
       dispatch(setSaving(false));
       isFlushingPendingRef.current = false;
+      if (replayNeedsAnotherPass) {
+        setFlushTick((tick) => tick + 1);
+      }
     }
   }, [
     documentId,
@@ -469,9 +509,10 @@ export function useYjsPersistence(
 
   useEffect(() => {
     // A landed sync can queue a legacy title (or leave metadata pending), so it is
-    // also a trigger for the REST replay, not just a counter acknowledgement.
+    // also a trigger for the REST replay, not just a counter acknowledgement. The
+    // tick covers a title queued while the previous flush held the lock.
     void flushPendingEditsToCloud();
-  }, [flushPendingEditsToCloud, pendingEdits, isRealtimeSynced]);
+  }, [flushPendingEditsToCloud, pendingEdits, isRealtimeSynced, flushTick]);
 
   useEffect(() => {
     if (!ydoc || !hasMeta || isReadOnly) {

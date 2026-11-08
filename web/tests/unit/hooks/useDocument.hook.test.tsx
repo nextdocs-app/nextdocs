@@ -3354,6 +3354,11 @@ describe('useDocument', () => {
       await waitFor(() => {
         expect(mockConnect).toHaveBeenCalledTimes(1);
       });
+      // The 4404 handler drops the provider; a transient verification failure must
+      // put it back so connection-driven comment refreshes keep working.
+      await waitFor(() => {
+        expect(result.current.realtimeProvider).not.toBeNull();
+      });
       expect(result.current.errorState).toBeNull();
     });
 
