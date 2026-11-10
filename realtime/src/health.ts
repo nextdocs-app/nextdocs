@@ -11,6 +11,8 @@
  *                    this service cannot work without.
  */
 
+import { log } from './logger.js';
+
 /** Time a readiness probe gives a store before reporting it unreachable. */
 export const READINESS_TIMEOUT_MS = 2000;
 
@@ -52,7 +54,7 @@ function runProbe(name: string, probe: () => PromiseLike<unknown>): Promise<Stor
       // The message never leaves the process: the readiness route is unauthenticated,
       // and a client will happily put its connection string - password included -
       // in the message it raises. Logs get the failure class only.
-      console.warn(`Realtime readiness: ${name} is unreachable (${describeError(err)})`);
+      log.warn(`Realtime readiness: ${name} is unreachable (${describeError(err)})`);
       return 'unreachable';
     });
 }
@@ -89,7 +91,7 @@ export async function checkStore(
     ]);
     return [name, state];
   } catch (err) {
-    console.warn(`Realtime readiness: ${name} did not answer in time (${describeError(err)})`);
+    log.warn(`Realtime readiness: ${name} did not answer in time (${describeError(err)})`);
     return [name, 'unreachable'];
   } finally {
     clearTimeout(timer);

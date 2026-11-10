@@ -83,10 +83,32 @@ describe('handleRecheck', () => {
     });
 
     await expect(handleRecheck(request)).resolves.toEqual({ status: 'ok', rechecked: 2 });
-    expect(seen).toEqual([
-      { docid: documentId, branch: 'main' },
-      { docid: otherDocumentId, branch: 'main' },
-    ]);
+    expect(seen.sort((a, b) => a.docid.localeCompare(b.docid))).toEqual(
+      [
+        { docid: documentId, branch: 'main' },
+        { docid: otherDocumentId, branch: 'main' },
+      ].sort((a, b) => a.docid.localeCompare(b.docid))
+    );
+  });
+
+  it('rechecks a large batch in parallel instead of serially', async () => {
+    const docids = Array.from(
+      { length: 4 },
+      (_, index) => `${String(index + 1).repeat(8)}-0000-4000-8000-000000000000`
+    );
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const request = recheckRequest({ docids }, async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+    });
+
+    await expect(handleRecheck(request)).resolves.toEqual({ status: 'ok', rechecked: 4 });
+    // Serial rechecks leave this at 1; the gate's whole point is more than that.
+    expect(maxInFlight).toBeGreaterThan(1);
   });
 
   it('continues past a failed room and answers 503 for the partial batch', async () => {

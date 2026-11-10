@@ -66,8 +66,22 @@ function readPositiveInt(name: string, raw: string | undefined, fallback: number
   return value;
 }
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+const LOG_LEVELS: ReadonlySet<string> = new Set(['debug', 'info', 'warn', 'error']);
+
+/** An unknown level would silently silence everything; fail at startup instead. */
+function readLogLevel(raw: string | undefined): LogLevel {
+  const value = (raw ?? 'info').trim().toLowerCase();
+  if (!LOG_LEVELS.has(value)) {
+    throw new Error(`LOG_LEVEL must be one of debug, info, warn, error; received "${raw}".`);
+  }
+  return value as LogLevel;
+}
+
 export const ORG = 'nextdocs';
 export const IS_PRODUCTION_ENV = IS_PRODUCTION;
+export const LOG_LEVEL = readLogLevel(process.env.LOG_LEVEL);
 // Port 0 is valid: it asks the OS for an ephemeral port (tests use it).
 export const PORT = readPositiveInt('PORT', process.env.PORT, 1234, 0);
 export const REDIS_URL = process.env.REDIS || 'redis://localhost:6379';
@@ -116,6 +130,16 @@ export const MAX_RECHECK_DOCS = readPositiveInt(
   'MAX_RECHECK_DOCS',
   process.env.MAX_RECHECK_DOCS,
   5000
+);
+
+/**
+ * Rooms rechecked in parallel by the sweep and the batch endpoint. A sweep over a
+ * few hundred rooms must finish inside its 30 s interval even when the API is slow.
+ */
+export const RECHECK_CONCURRENCY = readPositiveInt(
+  'RECHECK_CONCURRENCY',
+  process.env.RECHECK_CONCURRENCY,
+  8
 );
 
 // Canonical lowercase only: Yhub keys rooms by the exact docid string, so accepting
