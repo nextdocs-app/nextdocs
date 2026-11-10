@@ -14,7 +14,10 @@ describe('Config', () => {
     delete process.env.JWT_SECRET;
     delete process.env.YHUB_SERVICE_TOKEN;
     delete process.env.MAX_DOC_SIZE_BYTES;
+    delete process.env.MAX_RECHECK_DOCS;
+    delete process.env.RECHECK_CONCURRENCY;
     delete process.env.SWEEP_INTERVAL_MS;
+    delete process.env.LOG_LEVEL;
     delete process.env.CORS_ORIGIN;
     delete process.env.CORS_ALLOWED_ORIGINS;
     delete process.env.CORS_ORIGINS;
@@ -37,6 +40,24 @@ describe('Config', () => {
     expect(config.YHUB_SERVICE_TOKEN).toBe('dev-yhub-service-token');
     expect(config.MAX_DOC_SIZE_BYTES).toBe(16 * 1024 * 1024);
     expect(config.SWEEP_INTERVAL_MS).toBe(30_000);
+    expect(config.RECHECK_CONCURRENCY).toBe(8);
+    expect(config.LOG_LEVEL).toBe('info');
+  });
+
+  it('reads a log level and rejects an unknown one', async () => {
+    process.env.LOG_LEVEL = 'DEBUG';
+    const config = await import('../../src/config.js');
+    expect(config.LOG_LEVEL).toBe('debug');
+
+    jest.resetModules();
+    process.env.LOG_LEVEL = 'verbose';
+    await expect(import('../../src/config.js')).rejects.toThrow(/LOG_LEVEL must be one of/);
+  });
+
+  it('reads the recheck concurrency', async () => {
+    process.env.RECHECK_CONCURRENCY = '16';
+    const config = await import('../../src/config.js');
+    expect(config.RECHECK_CONCURRENCY).toBe(16);
   });
 
   it('falls back to the legacy CORS_ORIGINS name', async () => {

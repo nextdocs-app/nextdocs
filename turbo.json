@@ -16,7 +16,9 @@
     "NODE_ENV",
     "MAX_DOC_SIZE_BYTES",
     "SWEEP_INTERVAL_MS",
-    "MAX_RECHECK_DOCS"
+    "MAX_RECHECK_DOCS",
+    "LOG_LEVEL",
+    "RECHECK_CONCURRENCY"
   ],
   "tasks": {
     "build": {

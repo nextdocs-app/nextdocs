@@ -9,6 +9,7 @@ import {
   UUID_REGEX,
   MAX_DOC_SIZE_BYTES,
   MAX_RECHECK_DOCS,
+  RECHECK_CONCURRENCY,
   SWEEP_INTERVAL_MS,
   API_BASE_URL,
   YHUB_SERVICE_TOKEN,
@@ -20,11 +21,20 @@ import {
   type UserAuthInfo,
 } from './auth.js';
 import { buildAuthCallbacks } from './authorize.js';
-import { ActiveRoomTracker, startRoomSweep, withTimeout } from './sweep.js';
+import { ActiveRoomTracker, RecheckGate, startRoomSweep } from './sweep.js';
 import { checkStore, describeError, jsonResponse } from './health.js';
+import { log } from './logger.js';
 
 /** Rooms this instance currently serves, refreshed by every authorize call. */
 const activeRooms = new ActiveRoomTracker();
+
+/**
+ * One in-flight registry for the sweep and the batch endpoint. A batch that lands
+ * while a sweep is rechecking the same room joins that call instead of issuing a
+ * duplicate `recheckAuth`; a different user filter is a different question and runs
+ * on its own.
+ */
+const recheckGate = new RecheckGate(RECHECK_CONCURRENCY);
 
 export type RecheckRequest = {
   org: string;
@@ -147,19 +157,23 @@ export async function handleRecheck(req: unknown): Promise<{ status: string; rec
   }
 
   const failed: string[] = [];
-  for (const docid of docids) {
-    try {
-      await withTimeout(
-        request.yhub.recheckAuth({ org: request.org, docid, branch: 'main' }, { users }),
-        RECHECK_TIMEOUT_MS,
-        docid
-      );
-    } catch {
-      // One wedged room must not hold up the rooms behind it. The sweep is the
-      // safety net for this document; the rest of the batch still gets rechecked.
-      failed.push(docid);
+  // Bounded parallel rather than one room at a time: a subtree move can enqueue
+  // thousands of documents, and a single wedged room must not make the request time
+  // out for every room behind it. The sweep is the safety net for any room that
+  // still fails.
+  await recheckGate.run(
+    docids,
+    (docid) => request.yhub.recheckAuth({ org: request.org, docid, branch: 'main' }, { users }),
+    {
+      users,
+      timeoutMs: RECHECK_TIMEOUT_MS,
+      onResult: (docid, outcome) => {
+        if (outcome === 'failed') {
+          failed.push(docid);
+        }
+      },
     }
-  }
+  );
 
   if (failed.length > 0) {
     throw apiError(503, `Failed to re-check ${failed.length} of ${docids.length} document(s)`);
@@ -236,14 +250,14 @@ export async function touchContentUpdated(docid: string): Promise<void> {
       // 4xx other than 429 is a contract error (a malformed id, a rejected
       // credential): retrying cannot succeed.
       if (res.status < 500 && res.status !== 429) {
-        console.warn(`Realtime content-updated rejected for ${docid}: status ${res.status}`);
+        log.warn(`Realtime content-updated rejected for ${docid}: status ${res.status}`);
         return;
       }
-      console.warn(
+      log.warn(
         `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid}: status ${res.status}`
       );
     } catch (err) {
-      console.warn(
+      log.warn(
         `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid} (${describeError(err)})`
       );
     }
@@ -293,8 +307,9 @@ export async function createServer(): Promise<RunningServer> {
   startRoomSweep(yhub, activeRooms, {
     org: ORG,
     intervalMs: SWEEP_INTERVAL_MS,
+    gate: recheckGate,
     onError: (err, docid) => {
-      console.warn(`Realtime access sweep failed for ${docid} (${describeError(err)})`);
+      log.warn(`Realtime access sweep failed for ${docid} (${describeError(err)})`);
     },
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, jest, afterEach } from '@jest/globals';
-import { ActiveRoomTracker, startRoomSweep } from '../../src/sweep.js';
+import { ActiveRoomTracker, RecheckGate, startRoomSweep } from '../../src/sweep.js';
 
 describe('ActiveRoomTracker', () => {
   it('keeps rooms regardless of age so a long-lived socket is still swept', () => {
@@ -36,6 +36,86 @@ describe('ActiveRoomTracker', () => {
     tracker.pruneNotSeenSince(cutoff!);
 
     expect(tracker.tracked()).toEqual(['open']);
+  });
+});
+
+describe('RecheckGate', () => {
+  const deferred = () => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  };
+
+  it('runs a batch at its configured concurrency', async () => {
+    const gate = new RecheckGate(4);
+    const docids = ['a', 'b', 'c', 'd'];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const seen: string[] = [];
+
+    await gate.run(docids, async (docid) => {
+      seen.push(docid);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+    });
+
+    expect(seen.sort()).toEqual(docids);
+    expect(maxInFlight).toBe(4);
+  });
+
+  it('never exceeds its concurrency', async () => {
+    const gate = new RecheckGate(3);
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    await gate.run(
+      Array.from({ length: 12 }, (_, index) => `room-${index}`),
+      async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+      }
+    );
+
+    expect(maxInFlight).toBeLessThanOrEqual(3);
+    expect(maxInFlight).toBeGreaterThan(1);
+  });
+
+  it('joins an identical recheck already in flight', async () => {
+    const gate = new RecheckGate(4);
+    const held = deferred();
+    const recheck = jest.fn(async () => held.promise);
+
+    const first = gate.run(['room'], recheck);
+    const second = gate.run(['room'], recheck);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(recheck).toHaveBeenCalledTimes(1);
+
+    held.release();
+    await Promise.all([first, second]);
+  });
+
+  it('keeps a recheck for a different audience separate', async () => {
+    const gate = new RecheckGate(4);
+    const held = deferred();
+    const recheck = jest.fn(async () => held.promise);
+
+    const allUsers = gate.run(['room'], recheck);
+    const narrowed = gate.run(['room'], recheck, { users: ['user-a'] });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    // A narrowed recheck asks a different question, so it must not join the
+    // all-users call; sharing that promise could leave a denied user unrechecked.
+    expect(recheck).toHaveBeenCalledTimes(2);
+
+    held.release();
+    await Promise.all([allUsers, narrowed]);
   });
 });
 
@@ -153,6 +233,37 @@ describe('startRoomSweep', () => {
     // The second sweep has a cutoff and the room failed it, but a failed recheck
     // proves nothing about the sockets: pruning would drop a live room.
     expect(tracker.tracked()).toContain('unknown');
+  });
+
+  it('runs a slow sweep in parallel instead of one room at a time', async () => {
+    const tracker = new ActiveRoomTracker();
+    const docids = ['a', 'b', 'c', 'd'];
+    docids.forEach((docid) => tracker.touch(docid));
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const seen = new Set<string>();
+    const recheckAuth = jest.fn(async (docRef: { docid: string }) => {
+      seen.add(docRef.docid);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      inFlight -= 1;
+    });
+
+    const stop = startRoomSweep({ recheckAuth }, tracker, {
+      org: 'nextdocs',
+      intervalMs: 20,
+      concurrency: 4,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    stop();
+
+    // More than one tick can fire in the window; what matters is that every room was
+    // rechecked and that the calls overlapped instead of running one at a time.
+    expect(seen.size).toBe(4);
+    expect(maxInFlight).toBeGreaterThan(1);
   });
 
   it('drops a room after a later sweep proves no socket re-authorized it', async () => {

@@ -1,4 +1,5 @@
 import { describeError } from './health.js';
+import { log as serviceLog } from './logger.js';
 
 /** The part of the Yhub handle shutdown needs. */
 export interface DrainableServer {
@@ -16,7 +17,14 @@ export interface ShutdownDeps {
 }
 
 export const SHUTDOWN_DRAIN_MS = 5_000;
-const FORCE_EXIT_GRACE_MS = 5_000;
+/**
+ * Headroom after the drain budget before the forced exit. Docker's stop grace
+ * defaults to 10 s and SIGKILLs at that point, so a forced exit scheduled at the
+ * same instant would race it: the process could be killed with 137 instead of
+ * reporting a failed drain. Compose raises the grace to 12 s, leaving this exit
+ * three seconds to run first.
+ */
+const FORCE_EXIT_GRACE_MS = 3_000;
 
 /**
  * Drain Yhub on SIGTERM/SIGINT instead of dying on Node's default handler.
@@ -31,7 +39,7 @@ const FORCE_EXIT_GRACE_MS = 5_000;
 export function installShutdownHandlers(server: DrainableServer, deps: ShutdownDeps = {}): void {
   const signals = deps.signals ?? process;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
-  const log = deps.log ?? ((message: string) => console.log(message));
+  const log = deps.log ?? ((message: string) => serviceLog.info(message));
   const drainMs = deps.drainMs ?? SHUTDOWN_DRAIN_MS;
   const forceExitMs = deps.forceExitMs ?? drainMs + FORCE_EXIT_GRACE_MS;
   let stopping = false;

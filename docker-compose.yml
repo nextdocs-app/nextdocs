@@ -107,6 +107,10 @@ services:
       - /app/realtime/node_modules
       - /app/realtime/dist
     command: npm run dev
+    # The server drains for 5s and force-exits at 8s, so the stop grace must sit
+    # above both. Docker's 10s default would SIGKILL at the same moment the forced
+    # exit runs, turning a bounded shutdown into a 137.
+    stop_grace_period: 12s
     # Readiness, not liveness: a container that cannot reach Redis or Postgres has
     # no business being marked healthy, but it must not be restarted for it —
     # restarting drops every websocket it is serving. Liveness is GET /api/ping/v1.
