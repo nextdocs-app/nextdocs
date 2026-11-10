@@ -5,27 +5,21 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
-import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.realtime.dto.response.InternalAccessResponse;
+import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -48,33 +42,18 @@ public class InternalRealtimeController {
 
     private static final int MIN_TOKEN_BYTES = 32;
 
-    /**
-     * Yhub compacts on a timer and fires one notification per document that changed.
-     * A bulk import compacts many documents back to back, and a row write per document
-     * per tick would be pure amplification — nothing reads updated_at more precisely
-     * than a few seconds. The first notification in the window wins.
-     */
-    private static final long CONTENT_UPDATED_THROTTLE_NANOS =
-            Duration.ofSeconds(5).toNanos();
-
-    /** A public-facing instance must not grow per-document state without a bound. */
-    private static final int CONTENT_UPDATED_MAX_ENTRIES = 10_000;
-
     private final String serviceToken;
     private final DocumentSharingService sharingService;
     private final JwtTokenProvider jwtTokenProvider;
-    private final DocumentRepository documentRepository;
     private final WorkspaceAccessService workspaceAccessService;
-    private final ConcurrentHashMap<UUID, Long> contentUpdatedAt = new ConcurrentHashMap<>();
-    /** Documents whose notification landed inside the throttle window, awaiting the flush. */
-    private final Set<UUID> deferredContentUpdates = ConcurrentHashMap.newKeySet();
+    private final ContentUpdatedThrottle contentUpdatedThrottle;
 
     public InternalRealtimeController(
             @Value("${app.yhub.service-token}") String serviceToken,
             DocumentSharingService sharingService,
             JwtTokenProvider jwtTokenProvider,
-            DocumentRepository documentRepository,
-            WorkspaceAccessService workspaceAccessService) {
+            WorkspaceAccessService workspaceAccessService,
+            ContentUpdatedThrottle contentUpdatedThrottle) {
         // Trim like the realtime service reads its copy: an env var or mounted secret
         // often carries a trailing newline, and an untrimmed value would never match.
         String normalizedToken = serviceToken == null ? null : serviceToken.trim();
@@ -88,8 +67,8 @@ public class InternalRealtimeController {
         this.serviceToken = normalizedToken;
         this.sharingService = sharingService;
         this.jwtTokenProvider = jwtTokenProvider;
-        this.documentRepository = documentRepository;
         this.workspaceAccessService = workspaceAccessService;
+        this.contentUpdatedThrottle = contentUpdatedThrottle;
     }
 
     @Operation(summary = "Resolve effective document access for Yhub auth plugin")
@@ -165,60 +144,10 @@ public class InternalRealtimeController {
                     .body(ApiResponse.error("SERVICE_UNAVAILABLE", "Invalid or missing X-Yhub-Service header"));
         }
 
-        long now = System.nanoTime();
-        Long previous = contentUpdatedAt.get(documentId);
-        if (previous != null && now - previous < CONTENT_UPDATED_THROTTLE_NANOS) {
-            // Trailing edge: the last compaction of a burst must not be dropped, or the
-            // sort key stays stale until the document is edited again. Remember it and
-            // write once when the window closes.
-            if (deferredContentUpdates.size() < CONTENT_UPDATED_MAX_ENTRIES) {
-                deferredContentUpdates.add(documentId);
-            }
-            return ResponseEntity.ok(ApiResponse.<Void>ok(null));
-        }
-        writeContentUpdated(documentId, now);
+        // The throttle owns the window, the deferred set and its scheduled flush; the
+        // request handler only records the notification.
+        contentUpdatedThrottle.record(documentId);
         return ResponseEntity.ok(ApiResponse.<Void>ok(null));
-    }
-
-    /**
-     * Flushes the notifications that arrived inside a throttle window.
-     *
-     * <p>The tick is cheap: the set only holds documents notified again before their
-     * window closed, and an entry is written (and removed) on the first tick after that.
-     */
-    @Scheduled(fixedDelayString = "${app.yhub.content-updated-flush-interval-ms:1000}")
-    void flushDeferredContentUpdates() {
-        flushDeferredContentUpdates(System.nanoTime());
-    }
-
-    void flushDeferredContentUpdates(long nowNanos) {
-        for (UUID documentId : deferredContentUpdates) {
-            Long previous = contentUpdatedAt.get(documentId);
-            if (previous != null && nowNanos - previous < CONTENT_UPDATED_THROTTLE_NANOS) {
-                continue;
-            }
-            try {
-                writeContentUpdated(documentId, nowNanos);
-                deferredContentUpdates.remove(documentId);
-            } catch (RuntimeException e) {
-                // Stay deferred: the next tick retries rather than leaving the sort key
-                // behind for good. Only the exception type is logged.
-                log.warn(
-                        "Deferred content-updated write failed for {}: {}",
-                        documentId,
-                        e.getClass().getSimpleName());
-            }
-        }
-    }
-
-    private void writeContentUpdated(UUID documentId, long nowNanos) {
-        if (contentUpdatedAt.size() >= CONTENT_UPDATED_MAX_ENTRIES) {
-            // Bounded reset rather than an LRU: the map only suppresses redundant writes,
-            // so losing it costs one extra UPDATE per document at worst.
-            contentUpdatedAt.clear();
-        }
-        documentRepository.markContentUpdated(documentId, OffsetDateTime.now(ZoneOffset.UTC));
-        contentUpdatedAt.put(documentId, nowNanos);
     }
 
     /** Constant-time comparison; the length difference alone is not a secret. */
