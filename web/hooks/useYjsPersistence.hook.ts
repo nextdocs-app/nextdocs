@@ -322,8 +322,9 @@ export function useYjsPersistence(
           acknowledgePendingSyncEdits(documentId);
         } else if (queuedAfterReplay) {
           // The guest renamed again while this request was in flight. The sent title
-          // landed, so receipt its marker and let the newer title replay next.
-          acknowledgePendingSyncEdits(documentId);
+          // landed, but the marker must stay: the queue holds only the newer title now,
+          // and its replacement keystroke did not add a marker of its own. Receipting
+          // here would clear the pending badge for a title REST does not have yet.
           replayNeedsAnotherPass = true;
         }
         clearBackoff();
@@ -414,9 +415,11 @@ export function useYjsPersistence(
             clearPendingMetaPatch(owner, documentId, title);
             acknowledgePendingSyncEdits(documentId);
           } else if (queuedAfterReplay) {
-            // A newer title landed while the request was in flight. This title is
-            // durable now, so receipt its marker; the next pass carries the newer one.
-            acknowledgePendingSyncEdits(documentId);
+            // A newer title replaced this one while the request was in flight. This
+            // title is durable now, but the marker belongs to the queued one too: the
+            // replacement keystroke did not add a marker, so receipting here would let
+            // the badge clear before the newer title reaches REST. The next pass sends
+            // it and receipts the marker then.
             replayNeedsAnotherPass = true;
           }
         } catch (titleErr) {

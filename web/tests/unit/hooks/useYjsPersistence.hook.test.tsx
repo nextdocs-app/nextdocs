@@ -815,7 +815,7 @@ describe('useYjsPersistence', () => {
     });
   });
 
-  it('flushes a replacement title queued while the first replay is in flight', async () => {
+  it('keeps the marker when a replacement title lands while the first replay is in flight', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {
       title: 'Original',
@@ -831,6 +831,7 @@ describe('useYjsPersistence', () => {
     saveDocumentSpy.mockResolvedValue(undefined);
 
     let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
     updateCloudMetadataSpy
       .mockImplementationOnce(
         () =>
@@ -838,10 +839,16 @@ describe('useYjsPersistence', () => {
             releaseFirst = resolve;
           })
       )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          })
+      )
       .mockResolvedValue(undefined);
 
     writePendingMetaPatch('user-1', 'title-race', { title: 'First' });
-    writePendingSyncEdits('title-race', 2);
+    writePendingSyncEdits('title-race', 1);
 
     const { result } = renderHook(() => useYjsPersistence('title-race', ydoc, meta), {
       wrapper,
@@ -855,7 +862,9 @@ describe('useYjsPersistence', () => {
       );
     });
 
-    // The user keeps typing while the first title is still on the wire.
+    // The user keeps typing while the first title is still on the wire. The queue
+    // holds only the latest title, so replacing it must not add a marker: First's
+    // marker now stands for the replacement too.
     act(() => {
       writePendingMetaPatch('user-1', 'title-race', { title: 'Second' });
     });
@@ -871,8 +880,90 @@ describe('useYjsPersistence', () => {
         'token-1'
       );
     });
+
+    // First reached REST, but Second has not. Acknowledging First here would clear
+    // the badge and let a cloud read replace the unsaved title.
+    expect(readPendingSyncEdits('title-race')).toBe(1);
+    expect(readPendingMetaPatch('user-1', 'title-race')).toEqual({ title: 'Second' });
+
+    await act(async () => {
+      releaseSecond();
+    });
+
     await waitFor(() => {
       expect(readPendingMetaPatch('user-1', 'title-race')).toBeNull();
+      expect(readPendingSyncEdits('title-race')).toBe(0);
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
+  it('keeps the marker when a replacement guest title lands while the first replay is in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      refresh: mockRefreshSession,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    isPublicLinkDocumentSpy.mockReturnValue(true);
+
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    updatePublicMetadataSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+
+    writePendingMetaPatch('public', 'guest-race', { title: 'First' });
+    writePendingSyncEdits('guest-race', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('guest-race', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('guest-race', { title: 'First' });
+    });
+
+    act(() => {
+      writePendingMetaPatch('public', 'guest-race', { title: 'Second' });
+    });
+
+    await act(async () => {
+      releaseFirst();
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('guest-race', { title: 'Second' });
+    });
+
+    // The guest path has the same shared counter: First landed, Second did not.
+    expect(readPendingSyncEdits('guest-race')).toBe(1);
+    expect(readPendingMetaPatch('public', 'guest-race')).toEqual({ title: 'Second' });
+
+    await act(async () => {
+      releaseSecond();
+    });
+
+    await waitFor(() => {
+      expect(readPendingMetaPatch('public', 'guest-race')).toBeNull();
+      expect(readPendingSyncEdits('guest-race')).toBe(0);
       expect(result.current.pendingEdits).toBe(0);
     });
   });
