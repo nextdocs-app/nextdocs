@@ -39,6 +39,6 @@ COPY realtime/scripts/init-yhub-db.mjs ./init-yhub-db.mjs
 EXPOSE 1234
 # SIGTERM has to reach node for the drain handler in dist/main.js to run: `sh`
 # does not forward it, so `exec` replaces the shell with the server as PID 1.
-CMD ["sh", "-c", "node ./init-yhub-db.mjs && node /app/node_modules/@y/hub/bin/init-db.js && exec node dist/main.js"]
+CMD ["sh", "-c", "node ./init-yhub-db.mjs && exec node dist/main.js"]
 # Nothing in the runtime image needs to write, so it does not run as root.
 USER node
