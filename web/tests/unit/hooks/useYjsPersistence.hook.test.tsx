@@ -1219,4 +1219,74 @@ describe('useYjsPersistence', () => {
       await Promise.resolve();
     });
   });
+
+  it('replays a newer icon queued while the previous PATCH was in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    let releaseFirst!: () => void;
+    updateCloudIconCoverSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+
+    const firstIcon = { type: 'emoji' as const, value: '📝' };
+    const secondIcon = { type: 'emoji' as const, value: '🔥' };
+    mergePendingIconCoverPatch('icon-race', { icon: firstIcon });
+    writePendingSyncEdits('icon-race', 1);
+
+    const { result } = renderHook(
+      () => useYjsPersistence('icon-race', ydoc, meta, false, true, 'OWNER', true),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'icon-race',
+        { icon: firstIcon },
+        'token-1'
+      );
+    });
+
+    // A newer icon lands while the first PATCH is still on the wire. It merges
+    // into the same queued patch entry, so the pending counter does not change.
+    await act(async () => {
+      mergePendingIconCoverPatch('icon-race', { icon: secondIcon });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      releaseFirst();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'icon-race',
+        { icon: secondIcon },
+        'token-1'
+      );
+    });
+    await waitFor(() => {
+      expect(readPendingIconCoverPatch('icon-race')).toBeNull();
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
 });

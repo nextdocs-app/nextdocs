@@ -18,7 +18,11 @@ import {
   revertIconCoverInYjs,
 } from '@/lib/document-meta-sync.util';
 import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
-import { incrementPendingSyncEdits, mergePendingIconCoverPatch } from '@/lib/offline-sync.util';
+import {
+  incrementPendingSyncEdits,
+  mergePendingIconCoverPatch,
+  readPendingIconCoverPatch,
+} from '@/lib/offline-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
 import type { AppDispatch } from '@/stores/store';
 import { updateMeta as updateMetaAction } from '@/stores/document/document.slice';
@@ -171,9 +175,15 @@ export function useDocumentIconCover(deps: DocumentIconCoverDeps) {
       };
 
       const queuePendingSync = () => {
-        if (isAuthenticated && accessToken) {
-          incrementPendingSyncEdits(resolvedDocumentId);
+        if (!isAuthenticated || !accessToken) {
+          return;
         }
+        // One queued patch is replayed and receipted once, however many icon or
+        // cover edits merge into it. Counting each edit would leave stale markers.
+        if (readPendingIconCoverPatch(resolvedDocumentId)) {
+          return;
+        }
+        incrementPendingSyncEdits(resolvedDocumentId);
       };
 
       // The counter alone cannot replay a clear: a cleared icon is absent from the

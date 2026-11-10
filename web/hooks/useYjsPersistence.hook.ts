@@ -466,6 +466,14 @@ export function useYjsPersistence(
         }
       }
 
+      // A patch queued while this pass held the lock (an icon added during the
+      // title PATCH, or a newer value merged into the icon patch) was not part
+      // of the snapshot this pass read. Run again once the lock is released
+      // instead of leaving it for an unrelated edit to trigger.
+      if (readPendingMetaPatch(owner, documentId) || readPendingIconCoverPatch(documentId)) {
+        replayNeedsAnotherPass = true;
+      }
+
       clearBackoff();
       dispatch(setLastSaved(new Date().toISOString()));
     } catch (err) {

@@ -13,6 +13,8 @@ import {
   readPendingIconCoverPatch,
   readPendingMetaPatch,
   readPendingSyncEdits,
+  writePendingMetaPatch,
+  writePendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
@@ -1257,6 +1259,63 @@ describe('useDocument', () => {
     });
   });
 
+  it('should keep one pending marker when offline icon edits coalesce', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Cloud Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-offline',
+      isInitializing: false,
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
+
+    loadDocumentSpy.mockResolvedValueOnce({ ydoc, meta });
+    updateMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('icon-coalesce-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.updateIcon({ type: 'emoji', value: '📴' });
+    });
+    await waitFor(() => {
+      expect(readPendingIconCoverPatch('icon-coalesce-id')).toEqual({
+        icon: { type: 'emoji', value: '📴' },
+      });
+    });
+
+    await act(async () => {
+      result.current.updateCover({
+        type: 'link',
+        value: 'https://example.com/cover.png',
+        position: 0,
+      });
+    });
+    await waitFor(() => {
+      expect(readPendingIconCoverPatch('icon-coalesce-id')).toEqual({
+        icon: { type: 'emoji', value: '📴' },
+        cover: { type: 'link', value: 'https://example.com/cover.png', position: 0 },
+      });
+    });
+
+    // Both edits replay as one merged PATCH, so the badge must count one pending
+    // operation rather than one marker per picker interaction.
+    expect(readPendingSyncEdits('icon-coalesce-id')).toBe(1);
+  });
+
   it('should queue an explicit clear for an icon removed while offline', async () => {
     const ydoc = new Y.Doc();
     const existingIcon = { type: 'builtin', value: 'barcode', color: 'pink' } as const;
@@ -1990,7 +2049,7 @@ describe('useDocument', () => {
     expect(readPendingSyncEdits('cloud-id')).toBe(1);
   });
 
-  it('should queue a replacement offline title and bump the pending marker for replay', async () => {
+  it('should keep one pending marker for a replacement offline title', async () => {
     const ydoc = new Y.Doc();
     const meta = {
       title: 'Original',
@@ -2033,7 +2092,9 @@ describe('useDocument', () => {
       expect(readPendingMetaPatch('user-1', 'cloud-id')).toEqual({
         title: 'Replacement Offline Title',
       });
-      expect(readPendingSyncEdits('cloud-id')).toBe(2);
+      // One queued patch is replayed and receipted once; replacement keystrokes
+      // must not accumulate markers the single PATCH cannot acknowledge.
+      expect(readPendingSyncEdits('cloud-id')).toBe(1);
     });
   });
 
@@ -3861,6 +3922,52 @@ describe('useDocument', () => {
 
       expect(result.current.accessLevel).toBe('EDIT');
       expect(result.current.isReadOnly).toBe(true);
+    });
+  });
+
+  it('drops an older queued title when a newer title saves directly', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    updateCloudMetadataSpy.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useDocument('stale-title-id'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // An older title is queued from a failure that has since cleared.
+    writePendingMetaPatch('user-1', 'stale-title-id', {
+      title: 'Stale Queued Title',
+      queuedAt: Date.now() - 1000,
+    });
+    writePendingSyncEdits('stale-title-id', 1);
+
+    await act(async () => {
+      result.current.updateMeta({ title: 'Newer Direct Title' });
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'stale-title-id',
+        { title: 'Newer Direct Title' },
+        'token-1'
+      );
+    });
+
+    // The direct PATCH carried the newest title, so the older queue must not
+    // replay over it.
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'stale-title-id')).toBeNull();
     });
   });
 });

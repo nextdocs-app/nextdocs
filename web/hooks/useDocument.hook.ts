@@ -37,6 +37,7 @@ import {
   incrementPendingSyncEdits,
   pendingMetaOwner,
   readPendingMetaPatch,
+  readPendingMetaQueuedAt,
   readPendingSyncEdits,
   writePendingMetaPatch,
 } from '@/lib/offline-sync.util';
@@ -1440,6 +1441,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       const previousMeta = { ...meta };
       const updatedAt = new Date().toISOString();
       const updatedMeta = { ...meta, ...normalizedUpdates, updatedAt };
+      const writeStartedAt = Date.parse(updatedAt);
 
       dispatch(updateMetaAction({ ...normalizedUpdates, updatedAt }));
 
@@ -1482,10 +1484,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         if (normalizedUpdates.title !== undefined) {
           const pendingTitle = readPendingMetaPatch(metaOwner, resolvedDocumentId)?.title;
           writePendingMetaPatch(metaOwner, resolvedDocumentId, { title: normalizedUpdates.title });
-          // Retrying the same queued title is not another pending edit. A different
-          // title still bumps the marker so the replay runs with the replacement;
-          // a later sync reconciles any extra metadata marker.
-          if (pendingTitle === normalizedUpdates.title) {
+          // The queue holds only the latest title, and one replay patches it once
+          // and receipts one marker. Bumping per replacement keystroke would leave
+          // a stale pending badge for edits that single PATCH already carried.
+          if (pendingTitle !== undefined) {
             return;
           }
         } else if (!isAuthenticated || !accessToken) {
@@ -1520,19 +1522,24 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         persistLocal: persistLocalMetadata,
         queuePendingSync,
         onRemoteSuccess: () => {
-          // A direct PATCH just saved this exact title. A queued copy from an
-          // earlier failure is now stale; drop it (only if it still matches, so a
-          // keystroke that landed during the request survives) and receipt its
-          // marker. The queued replay can no longer resurrect an older title.
+          // A direct PATCH just saved this exact title. A queued copy that
+          // predates it is stale and can no longer be the newest intent; drop it
+          // (and receipt its marker) even when its title differs. A patch queued
+          // after this write started is newer and must survive for the replay.
           if (normalizedUpdates.title === undefined) {
             return;
           }
+          const queued = readPendingMetaPatch(metaOwner, resolvedDocumentId);
+          if (!queued) {
+            return;
+          }
           if (
-            readPendingMetaPatch(metaOwner, resolvedDocumentId)?.title !== normalizedUpdates.title
+            readPendingMetaQueuedAt(metaOwner, resolvedDocumentId) > writeStartedAt &&
+            queued.title !== normalizedUpdates.title
           ) {
             return;
           }
-          clearPendingMetaPatch(metaOwner, resolvedDocumentId, normalizedUpdates.title);
+          clearPendingMetaPatch(metaOwner, resolvedDocumentId, queued.title);
           acknowledgePendingSyncEdits(resolvedDocumentId);
         },
         triggerBackoff: triggerCloudMetadataBackoff,
