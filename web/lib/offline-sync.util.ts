@@ -215,6 +215,12 @@ export function clearPendingIconCoverPatch(
  */
 export interface PendingMetaPatch {
   title?: string;
+  /**
+   * Epoch ms when this title was queued. A direct PATCH compares it with its own
+   * start time so an older queued title cannot replay over a newer save, while a
+   * title queued during the request still survives.
+   */
+  queuedAt?: number;
 }
 
 /** The account a queued metadata patch belongs to; guests use a fixed scope. */
@@ -226,8 +232,7 @@ function getMetaStorageKey(owner: string, documentId: string): string {
   return `${PENDING_META_KEY_PREFIX}${owner}:${documentId}`;
 }
 
-/** Queued metadata patch for `documentId`, or null when there is none. */
-export function readPendingMetaPatch(owner: string, documentId: string): PendingMetaPatch | null {
+function readPendingMetaEntry(owner: string, documentId: string): PendingMetaPatch | null {
   if (typeof window === 'undefined') {
     return null;
   }
@@ -248,8 +253,24 @@ export function readPendingMetaPatch(owner: string, documentId: string): Pending
     return null;
   }
 
-  const { title } = parsed as PendingMetaPatch;
-  return typeof title === 'string' ? { title } : null;
+  const { title, queuedAt } = parsed as PendingMetaPatch;
+  if (typeof title !== 'string') {
+    return null;
+  }
+  return typeof queuedAt === 'number' && Number.isFinite(queuedAt)
+    ? { title, queuedAt }
+    : { title };
+}
+
+/** Queued metadata patch for `documentId`, or null when there is none. */
+export function readPendingMetaPatch(owner: string, documentId: string): PendingMetaPatch | null {
+  const entry = readPendingMetaEntry(owner, documentId);
+  return entry ? { title: entry.title } : null;
+}
+
+/** When the queued title was written, or 0 for a pre-timestamp entry. */
+export function readPendingMetaQueuedAt(owner: string, documentId: string): number {
+  return readPendingMetaEntry(owner, documentId)?.queuedAt ?? 0;
 }
 
 /** Queues the title a replay has to PATCH; a newer edit replaces the earlier one. */
@@ -264,7 +285,7 @@ export function writePendingMetaPatch(
 
   window.localStorage.setItem(
     getMetaStorageKey(owner, documentId),
-    JSON.stringify({ title: patch.title })
+    JSON.stringify({ title: patch.title, queuedAt: patch.queuedAt ?? Date.now() })
   );
 }
 
