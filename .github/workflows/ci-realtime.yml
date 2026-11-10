@@ -63,9 +63,9 @@ jobs:
       - name: Lint
         run: npx turbo run lint --filter=realtime
 
-  # Job 2: Unit & integration tests
+  # Job 2: Unit tests (no external services)
   test:
-    name: Test
+    name: Unit Tests
     runs-on: ubuntu-latest
     needs: lint
     steps:
@@ -111,13 +111,114 @@ jobs:
       - name: Build
         run: npx turbo run build --filter=realtime
 
-  # Job 4: Docker image build (validates Dockerfile)
-  docker-build:
-    name: Docker Build
+  # Job 4: Service integration (real Postgres + Redis, spawned dist)
+  integration:
+    name: Integration Tests
     runs-on: ubuntu-latest
     needs: build
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: nextdocs
+          POSTGRES_PASSWORD: nextdocs
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextdocs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES: postgres://nextdocs:nextdocs@localhost:5432/nextdocs_yhub
+      REDIS: redis://localhost:6379
+      JWT_SECRET: integration-jwt-secret-0123456789abcdef
+      YHUB_SERVICE_TOKEN: integration-service-token-0123456789abcdef
     steps:
       - uses: actions/checkout@v7
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Validate workspace lockfile policy
+        run: npm run check:lockfiles
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx turbo run build --filter=realtime
+
+      - name: Run integration tests
+        run: npm run test:integration -w realtime
+
+  # Job 5: Docker image (PID 1 shutdown and schema bootstrap)
+  docker-integration:
+    name: Docker Integration
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: nextdocs
+          POSTGRES_PASSWORD: nextdocs
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextdocs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES: postgres://nextdocs:nextdocs@localhost:5432/nextdocs_yhub
+      REDIS: redis://localhost:6379
+      JWT_SECRET: integration-jwt-secret-0123456789abcdef
+      YHUB_SERVICE_TOKEN: integration-service-token-0123456789abcdef
+      REALTIME_IMAGE: nextdocs-realtime:it
+      DOCKER_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Validate workspace lockfile policy
+        run: npm run check:lockfiles
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx turbo run build --filter=realtime
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -128,6 +229,10 @@ jobs:
           context: .
           file: ./realtime/Dockerfile
           push: false
-          tags: nextdocs-realtime:${{ github.sha }}
+          load: true
+          tags: nextdocs-realtime:it
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Run Docker integration tests
+        run: npm run test:integration -w realtime
