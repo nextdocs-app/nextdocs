@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -81,6 +82,17 @@ public class DocumentService {
     // Mirrors documents.title VARCHAR(255) in V2 and the DTOs' @Size bound.
     static final int MAX_TITLE_LENGTH = 255;
 
+    /**
+     * The room key the realtime broker accepts, mirrored from its UUID_REGEX.
+     *
+     * The broker keys a room by the exact docid string and admits only versions 1-5
+     * with an RFC 4122 variant. A client-generated v6-v8 id would create a document
+     * whose room can never open a socket, so the create is rejected while the caller
+     * can still retry with a usable id.
+     */
+    private static final Pattern REALTIME_DOCUMENT_ID =
+            Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
@@ -96,8 +108,12 @@ public class DocumentService {
     private final YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
     private final YhubClient yhubClient;
 
-    @Autowired(required = false)
-    private ApplicationEventPublisher eventPublisher;
+    /**
+     * Required, not optional: an instance built without a publisher silently skips the
+     * access-changed and purged events, leaving open sockets authorized until the next
+     * sweep. Constructor injection makes that a startup failure instead.
+     */
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -152,6 +168,12 @@ public class DocumentService {
                     ErrorCode.VALIDATION_FAILED,
                     "A page cannot be created inside a space and under a parent at once; "
                             + "create it at the space root and nest it there.");
+        }
+        if (request.id() != null
+                && !REALTIME_DOCUMENT_ID.matcher(request.id().toString()).matches()) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Document ID must be a UUID version 1 through 5 with an RFC 4122 variant.");
         }
         User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
         // Decode before any database work: invalid base64 must not create a row.
@@ -245,6 +267,13 @@ public class DocumentService {
         // Yhub owns content; applying the initial update is the only content write this
         // endpoint performs. It runs after every row write so a failed seed rolls back
         // the whole create and the offline queue can retry its only copy.
+        //
+        // The seed holds this transaction open for the Yhub round trip (up to the
+        // client's 5s timeout), so create throughput is bounded by Yhub's latency and
+        // the document row lock lives for the same window. Accepted: the alternative is
+        // a create that commits a document whose content seed can fail permanently,
+        // which is exactly the state the offline queue cannot repair. Revisit only if
+        // create throughput becomes a measured problem.
         seedInitialContent(saved.getId(), initialState);
 
         return new CreateDocumentResult(toResponse(saved, userId), true);
@@ -671,10 +700,8 @@ public class DocumentService {
                 documentRepository.save(descendant);
             }
         }
-        if (eventPublisher != null) {
-            // The whole subtree changed state: every descendant socket has to re-authorize.
-            eventPublisher.publishEvent(new DocumentAccessChangedEvent(document.getId()));
-        }
+        // The whole subtree changed state: every descendant socket has to re-authorize.
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(document.getId()));
     }
 
     /**
@@ -850,9 +877,7 @@ public class DocumentService {
             }
         }
 
-        if (eventPublisher != null) {
-            eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
-        }
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
 
         return toResponse(savedRoot, userId);
     }
@@ -971,9 +996,7 @@ public class DocumentService {
 
         attachmentService.deleteStoredFilesAfterCommit(attachmentStorageKeys);
 
-        if (eventPublisher != null) {
-            eventPublisher.publishEvent(new DocumentPurgedEvent(List.copyOf(allIds)));
-        }
+        eventPublisher.publishEvent(new DocumentPurgedEvent(List.copyOf(allIds)));
         return allIds.size();
     }
 

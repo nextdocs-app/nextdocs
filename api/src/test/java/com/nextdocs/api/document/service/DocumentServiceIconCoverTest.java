@@ -101,6 +101,9 @@ class DocumentServiceIconCoverTest {
     @Mock
     private YhubClient yhubClient;
 
+    @Mock
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     @BeforeEach
     void setUp() {
         DocumentProperties documentProperties = new DocumentProperties();
@@ -123,7 +126,8 @@ class DocumentServiceIconCoverTest {
                 workspaceService,
                 spaceAccessService,
                 yhubPurgeOutboxRepository,
-                yhubClient);
+                yhubClient,
+                eventPublisher);
         org.mockito.Mockito.lenient()
                 .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(true);

@@ -90,6 +90,9 @@ class DocumentSpaceServiceTest {
     @Mock
     private YhubClient yhubClient;
 
+    @Mock
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     @BeforeEach
     void setUp() {
         DocumentProperties properties = new DocumentProperties();
@@ -107,7 +110,8 @@ class DocumentSpaceServiceTest {
                 workspaceService,
                 spaceAccessService,
                 yhubPurgeOutboxRepository,
-                yhubClient);
+                yhubClient,
+                eventPublisher);
         org.mockito.Mockito.lenient()
                 .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(true);
