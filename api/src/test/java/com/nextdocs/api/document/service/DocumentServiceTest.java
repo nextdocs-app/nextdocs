@@ -41,6 +41,8 @@ import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.event.DocumentPurgedEvent;
 import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
@@ -61,6 +63,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -111,6 +114,9 @@ class DocumentServiceTest {
     @Mock
     private YhubClient yhubClient;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @BeforeEach
     void setUp() {
         documentProperties = new DocumentProperties();
@@ -129,7 +135,8 @@ class DocumentServiceTest {
                 workspaceService,
                 spaceAccessService,
                 yhubPurgeOutboxRepository,
-                yhubClient);
+                yhubClient,
+                eventPublisher);
         org.mockito.Mockito.lenient()
                 .when(yhubClient.seed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(true);
@@ -188,6 +195,33 @@ class DocumentServiceTest {
                 outbox.getValue().stream().map(YhubPurgeOutbox::getDocumentId).toList();
         assertEquals(2, enqueued.size());
         assertTrue(enqueued.containsAll(List.of(rootId, childId)));
+
+        // Deletion is never silent: the notifier revokes the rooms from the same event.
+        verify(eventPublisher).publishEvent(any(DocumentPurgedEvent.class));
+    }
+
+    @Test
+    void create_rejectsAnIdTheRealtimeBrokerCannotOpen() {
+        UUID userId = UUID.randomUUID();
+
+        // The broker accepts versions 1-5 with an RFC 4122 variant. A v6-v8 id would
+        // create a page whose room can never open a socket, so it is rejected at create
+        // time while the caller can still pick a usable id.
+        for (String id : List.of(
+                "0190a5c4-1a2b-6c3d-8e4f-567890abcdef",
+                "0190a5c4-1a2b-7c3d-8e4f-567890abcdef",
+                "0190a5c4-1a2b-8c3d-8e4f-567890abcdef",
+                "550e8400-e29b-41d4-7166-446655440000")) {
+            ApiException error = assertThrows(
+                    ApiException.class,
+                    () -> documentService.create(
+                            userId,
+                            new DocumentCreateRequest(
+                                    UUID.fromString(id), "Doc", null, null, null, null, null, null, null, null)));
+            assertEquals(ErrorCode.VALIDATION_FAILED, error.getErrorCode());
+        }
+
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
     }
 
     @Test
@@ -1452,6 +1486,9 @@ class DocumentServiceTest {
         ArgumentCaptor<UserDocumentOrder> udoCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
         verify(userDocumentOrderRepository).saveAndFlush(udoCaptor.capture());
         assertEquals(ownerId, udoCaptor.getValue().getUser().getId());
+        // Restore changes who may re-authorize the subtree; the event is what tells the
+        // realtime notifier to run the batch recheck.
+        verify(eventPublisher).publishEvent(any(DocumentAccessChangedEvent.class));
     }
 
     @Test

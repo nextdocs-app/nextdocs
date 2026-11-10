@@ -43,8 +43,7 @@ class YhubPurgeJobTest {
                 .nextAttemptAt(OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
-        when(outboxRepository.findTop50ByCompletedAtIsNullAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(any()))
-                .thenReturn(List.of(entry));
+        when(outboxRepository.findPendingForUpdate(any(), any())).thenReturn(List.of(entry));
     }
 
     @Test

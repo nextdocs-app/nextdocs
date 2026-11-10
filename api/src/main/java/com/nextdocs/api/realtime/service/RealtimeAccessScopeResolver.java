@@ -1,9 +1,7 @@
 package com.nextdocs.api.realtime.service;
 
 import com.nextdocs.api.document.repository.DocumentRepository;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -39,10 +37,12 @@ public class RealtimeAccessScopeResolver {
      */
     @Transactional(readOnly = true)
     public List<UUID> forSpace(UUID spaceId) {
-        Set<UUID> ids = new LinkedHashSet<>();
-        for (UUID rootId : documentRepository.findIdsBySpace_Id(spaceId)) {
-            ids.addAll(documentRepository.findSubtreeIdsIncludingTrashed(rootId, MAX_TREE_DEPTH + 1));
+        List<UUID> roots = documentRepository.findIdsBySpace_Id(spaceId);
+        if (roots.isEmpty()) {
+            return List.of();
         }
-        return List.copyOf(ids);
+        // One walk for the whole root set: a per-root recursive query made a space
+        // audience change pay one round trip per root on the request thread.
+        return documentRepository.findSubtreesIncludingTrashed(roots, MAX_TREE_DEPTH + 1);
     }
 }

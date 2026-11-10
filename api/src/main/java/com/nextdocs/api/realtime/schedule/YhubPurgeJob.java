@@ -10,8 +10,10 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Drains the purge outbox.
@@ -43,11 +45,16 @@ public class YhubPurgeJob {
         this.yhubClient = yhubClient;
     }
 
+    /**
+     * One drain pass. Transactional so the row locks taken by the query are held until
+     * the completed/backoff writes commit; without that, a second replica could read the
+     * same pending rows and issue a duplicate hard delete.
+     */
+    @Transactional
     @Scheduled(fixedDelayString = "${app.yhub.purge-interval-ms:30000}")
     public void drain() {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        List<YhubPurgeOutbox> pending =
-                outboxRepository.findTop50ByCompletedAtIsNullAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(now);
+        List<YhubPurgeOutbox> pending = outboxRepository.findPendingForUpdate(now, PageRequest.of(0, 50));
 
         for (YhubPurgeOutbox entry : pending) {
             try {

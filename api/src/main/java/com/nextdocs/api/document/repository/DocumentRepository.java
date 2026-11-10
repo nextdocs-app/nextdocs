@@ -337,6 +337,25 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             @Param("subtreeRootId") UUID subtreeRootId, @Param("maxDepth") int maxDepth);
 
     /**
+     * Every descendant of several roots in one walk, for a space-wide revocation.
+     *
+     * A space's pages are its roots plus their descendants; walking each root with its
+     * own recursive query made the request pay one round trip per root. The base case
+     * takes the whole root set, so the walk is one query regardless of how many roots
+     * the space has.
+     */
+    @Query(
+            value = "WITH RECURSIVE sub AS ("
+                    + "  SELECT id, 1 AS depth FROM documents WHERE id IN (:rootIds) "
+                    + "  UNION ALL "
+                    + "  SELECT d.id, s.depth + 1 FROM documents d JOIN sub s ON d.parent_id = s.id "
+                    + "  WHERE s.depth < :maxDepth"
+                    + ") SELECT DISTINCT id FROM sub",
+            nativeQuery = true)
+    List<UUID> findSubtreesIncludingTrashed(
+            @Param("rootIds") Collection<UUID> rootIds, @Param("maxDepth") int maxDepth);
+
+    /**
      * Moves the sidebar sort key after Yhub persisted new content. Content lives in
      * Yhub; only the timestamp the user can see is written here.
      */
