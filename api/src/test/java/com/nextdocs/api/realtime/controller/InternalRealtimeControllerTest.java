@@ -20,6 +20,7 @@ import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,8 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import({
     com.nextdocs.api.auth.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class,
+    ContentUpdatedThrottle.class
 })
 class InternalRealtimeControllerTest {
 
@@ -45,6 +47,9 @@ class InternalRealtimeControllerTest {
 
     @Autowired
     private InternalRealtimeController controller;
+
+    @Autowired
+    private ContentUpdatedThrottle contentUpdatedThrottle;
 
     @MockitoBean
     private DocumentSharingService sharingService;
@@ -69,16 +74,16 @@ class InternalRealtimeControllerTest {
                         "dev-yhub-service-token",
                         sharingService,
                         jwtTokenProvider,
-                        documentRepository,
-                        workspaceAccessService));
+                        workspaceAccessService,
+                        contentUpdatedThrottle));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
-                        "too-short", sharingService, jwtTokenProvider, documentRepository, workspaceAccessService));
+                        "too-short", sharingService, jwtTokenProvider, workspaceAccessService, contentUpdatedThrottle));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
-                        "   ", sharingService, jwtTokenProvider, documentRepository, workspaceAccessService));
+                        "   ", sharingService, jwtTokenProvider, workspaceAccessService, contentUpdatedThrottle));
     }
 
     @Test
@@ -87,8 +92,8 @@ class InternalRealtimeControllerTest {
                 "  " + SERVICE_TOKEN + "\n",
                 sharingService,
                 jwtTokenProvider,
-                documentRepository,
-                workspaceAccessService);
+                workspaceAccessService,
+                contentUpdatedThrottle);
         UUID docId = UUID.randomUUID();
 
         assertEquals(
@@ -201,7 +206,7 @@ class InternalRealtimeControllerTest {
     }
 
     @Test
-    void contentUpdatedDefersTheLastWriteInsideTheThrottleWindow() throws Exception {
+    void contentUpdatedThrottlesRepeatedNotifications() throws Exception {
         UUID docId = UUID.randomUUID();
 
         for (int i = 0; i < 2; i++) {
@@ -216,18 +221,20 @@ class InternalRealtimeControllerTest {
         // turn that into a row write per document per tick.
         verify(documentRepository).markContentUpdated(eq(docId), any());
 
-        // The second notification is not dropped: once the window closes it is written,
-        // or the last compaction of a burst would leave the sidebar sort key stale.
-        controller.flushDeferredContentUpdates(System.nanoTime() + 10_000_000_000L);
-
-        verify(documentRepository, times(2)).markContentUpdated(eq(docId), any());
+        // The trailing-edge flush lives in ContentUpdatedThrottle and is covered by its
+        // own test: the controller only records the notification.
     }
 
     @Test
     void contentUpdatedDoesNotThrottleAfterAFailedWrite() {
         UUID docId = UUID.randomUUID();
         InternalRealtimeController controller = new InternalRealtimeController(
-                SERVICE_TOKEN, sharingService, jwtTokenProvider, documentRepository, workspaceAccessService);
+                SERVICE_TOKEN,
+                sharingService,
+                jwtTokenProvider,
+                workspaceAccessService,
+                // A fresh throttle: this test needs an empty window for the failing write.
+                new ContentUpdatedThrottle(documentRepository));
 
         when(documentRepository.markContentUpdated(eq(docId), any()))
                 .thenThrow(new IllegalStateException("database unavailable"))
