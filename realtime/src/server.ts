@@ -21,6 +21,7 @@ import {
   type UserAuthInfo,
 } from './auth.js';
 import { buildAuthCallbacks } from './authorize.js';
+import { handleAnchorCreate, handleAnchorDelete } from './anchor.js';
 import { ActiveRoomTracker, RecheckGate, startRoomSweep } from './sweep.js';
 import { checkStore, describeError, jsonResponse } from './health.js';
 import { log } from './logger.js';
@@ -70,6 +71,22 @@ const authPlugin = createAuthPlugin<UserAuthInfo>({
 });
 
 const customEndpoints = [
+  /**
+   * Comment anchors. COMMENT users cannot write the Y.Doc, so the browser sends
+   * the selection as Yjs relative positions and this service inserts the
+   * BlockNote comment mark through `agentTask`. The thread id is checked against
+   * the API first; DELETE only clears a mark after the API reports the thread
+   * gone, so the `d` bit on COMMENT cannot strip a live discussion.
+   */
+  createApiEndpoint('anchor', {
+    scope: 'document',
+    post: {
+      handler: handleAnchorCreate,
+    },
+    delete: {
+      handler: handleAnchorDelete,
+    },
+  }),
   /**
    * Batched recheck. Access changes inherit (a grant on an ancestor applies to
    * every descendant), so one edit can affect a whole subtree; one request per

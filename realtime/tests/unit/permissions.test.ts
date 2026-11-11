@@ -12,6 +12,8 @@ describe('Permissions', () => {
     expect(perms.awareness).toBe('-r--');
     expect(perms.endpoint.ws).toBe('-r--');
     expect(perms.endpoint.ydoc).toBe('-r--');
+    // A viewer must never be able to create or remove a comment anchor.
+    expect(perms.endpoint.anchor).toBeUndefined();
   });
 
   it('maps COMMENT to read-only document but write awareness for presence/pings', () => {
@@ -20,6 +22,9 @@ describe('Permissions', () => {
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-r--');
     expect(perms.endpoint.ydoc).toBe('-r--');
+    // The only Y.Doc mutation COMMENT may request: the server inserts the mark.
+    // `d` exists for orphan cleanup after the API reports the thread gone.
+    expect(perms.endpoint.anchor).toBe('c--d');
   });
 
   it('maps EDIT to write document and write awareness', () => {
@@ -28,6 +33,7 @@ describe('Permissions', () => {
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-ru-');
     expect(perms.endpoint.ydoc).toBe('-ru-');
+    expect(perms.endpoint.anchor).toBe('c--d');
   });
 
   it('maps OWNER to write document and write awareness', () => {
@@ -36,6 +42,7 @@ describe('Permissions', () => {
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-ru-');
     expect(perms.endpoint.ydoc).toBe('-ru-');
+    expect(perms.endpoint.anchor).toBe('c--d');
   });
 
   it('denies an unknown access level instead of falling through to write', () => {
