@@ -6,7 +6,6 @@ import { useIconCatalog } from '@/hooks/useIconCatalog.hook';
 import { useIconBundle } from '@/hooks/useIconBundle.hook';
 import { useIconSearchPagination } from '@/hooks/useIconSearchPagination.hook';
 import { usePageImageUpload } from '@/hooks/usePageImageUpload.hook';
-import { useTheme } from '@/hooks/useTheme.hook';
 import { IconCategoryMenu } from '@/components/page/IconCategoryMenu';
 import { IconGridButton } from '@/components/page/IconGridButton';
 import { IconColorMenu } from '@/components/page/IconColorMenu';
@@ -17,7 +16,7 @@ import {
   pickerInputClassName,
   pickerSectionHeaderClassName,
 } from '@/components/page/PickerShell';
-import { EmojiMartPicker, preloadEmojiMart } from '@/components/page/EmojiMartPicker';
+import { EmojiPicker, preloadEmojiPicker } from '@/components/page/EmojiPicker';
 import {
   PAGE_IMAGE_ACCEPT,
   isHttpsUrl,
@@ -61,9 +60,8 @@ export function IconPickerPanel({
   onRemove: () => void;
   onClose: () => void;
 }) {
-  // Icons first: the emoji tab parses a 424KB dataset on open (~50-150ms
-  // desktop, 300ms+ mobile), so it loads lazily on selection instead. Hovering
-  // the tab row warms the singleton ahead of the click (see below).
+  // Icons first: the emoji tab warms its on-demand locale chunk on hover and
+  // parses it when selected, so it does not delay opening the picker.
   const [tab, setTab] = useState<IconTab>('icons');
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
@@ -95,7 +93,6 @@ export function IconPickerPanel({
   const categoryMenuRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const { resolvedTheme } = useTheme();
   const { names, categories, isLoading, error: catalogError } = useIconCatalog(tab === 'icons');
   // The grid waits for the bundle: rendering glyphs on per-icon URLs first
   // would fire a request waterfall the bundle exists to avoid. A bundle
@@ -226,8 +223,8 @@ export function IconPickerPanel({
     >
       <div
         className="flex items-center justify-between gap-1 border-b border-border/70 dark:border-white/10 px-2 pt-2.5 pb-0 sm:px-3"
-        onMouseEnter={preloadEmojiMart}
-        onFocus={preloadEmojiMart}
+        onMouseEnter={() => preloadEmojiPicker()}
+        onFocus={() => preloadEmojiPicker()}
       >
         <PickerTabs<IconTab>
           tabs={[
@@ -366,15 +363,7 @@ export function IconPickerPanel({
         </>
       ) : (
         <div className="flex-1 overflow-hidden">
-          <EmojiMartPicker
-            onEmojiSelect={(emoji) => pick({ type: 'emoji', value: emoji.native })}
-            theme={resolvedTheme}
-            autoFocus
-            perLine={10}
-            dynamicWidth
-            previewPosition="none"
-            skinTonePosition="search"
-          />
+          <EmojiPicker onEmojiSelect={(emoji) => pick({ type: 'emoji', value: emoji })} autoFocus />
         </div>
       )}
 

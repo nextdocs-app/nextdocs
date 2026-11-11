@@ -110,20 +110,203 @@
     scrollbar-width: thin;
   }
 
-  /* EmojiMart custom element inside IconPickerPanel.
-     `--rgb-accent` is the element's only accent knob: it drives the search
-     field's focus ring and the active category / selected-swatch states, and
-     defaults to EmojiMart's blue (34, 102, 237). It takes a bare `r, g, b`
-     triplet, so this is `--nd-brand` (#e78f80) written in that form — the same
-     peach the rest of the picker uses, light or dark. */
-  em-emoji-picker {
-    --rgb-accent: 231, 143, 128;
-    --border-radius: 0px;
-    --shadow: none;
-    border: none;
-    width: 100% !important;
-    max-width: 100% !important;
-    height: 380px !important;
+  /* Frimousse ships layout primitives but no look, so the page-icon picker
+     supplies the same field, row and hover treatment as the icon tab. */
+  .nd-emoji-picker {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 380px;
+    min-height: 0;
+  }
+
+  .nd-emoji-picker .nd-emoji-search,
+  .nd-emoji-picker [frimousse-search] {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: calc(100% - 20px);
+    margin: 10px 10px 0;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--foreground);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 150ms ease;
+  }
+
+  .nd-emoji-picker [frimousse-search]::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  .nd-emoji-picker [frimousse-search]:focus-visible {
+    border-color: var(--nd-brand-ring);
+  }
+
+  .nd-emoji-picker [frimousse-viewport] {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    outline: none;
+  }
+
+  .nd-emoji-picker [frimousse-list] {
+    padding-bottom: 8px;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .nd-emoji-picker [frimousse-category-header] {
+    box-sizing: border-box;
+    background: var(--card);
+    color: var(--muted-foreground);
+    padding: 10px 12px 4px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .nd-emoji-picker [frimousse-row] {
+    padding-inline: 6px;
+  }
+
+  /* Ten fixed cells left a strip of unused width beside the scrollbar once the
+     viewport narrowed. Split the row evenly instead so every column ends flush
+     with the panel edge (last row included). */
+  .nd-emoji-picker [frimousse-emoji] {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(100% / var(--nd-emoji-columns, 10));
+    height: 32px;
+    border-radius: 6px;
+    font-size: 18px;
+    cursor: pointer;
+  }
+
+  .nd-emoji-picker [frimousse-emoji]:hover,
+  .nd-emoji-picker [frimousse-emoji][data-active] {
+    background: var(--nd-toolbar-hover-bg);
+  }
+
+  .nd-emoji-picker [frimousse-emoji]:focus-visible,
+  .nd-emoji-picker [frimousse-emoji][data-selected] {
+    outline: 2px solid var(--nd-brand-ring);
+    outline-offset: -2px;
+  }
+
+  .nd-emoji-status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground);
+    font-size: 12.5px;
+  }
+
+  .nd-emoji-footer {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .nd-emoji-active {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+
+  .nd-emoji-active-glyph {
+    flex-shrink: 0;
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .nd-emoji-active-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nd-emoji-skin-tone {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .nd-emoji-skin-tone-trigger {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .nd-emoji-skin-tone-trigger:hover,
+  .nd-emoji-skin-tone-trigger[aria-expanded='true'] {
+    background: var(--nd-toolbar-hover-bg);
+  }
+
+  .nd-emoji-skin-tone-trigger:focus-visible {
+    outline: 2px solid var(--nd-brand-ring);
+    outline-offset: -2px;
+  }
+
+  /* A pill above the trigger, mirroring the compact tone strip other pickers
+     show. It is anchored to the right so it grows into the panel instead of
+     off its edge. */
+  .nd-emoji-skin-tone-popover {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--muted);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .nd-emoji-skin-tone-option {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .nd-emoji-skin-tone-option:hover {
+    background: var(--nd-toolbar-hover-bg);
+  }
+
+  .nd-emoji-skin-tone-option[aria-pressed='true'] {
+    background: var(--nd-toolbar-hover-bg);
+  }
+
+  .nd-emoji-skin-tone-option:focus-visible {
+    outline: 2px solid var(--nd-brand-ring);
+    outline-offset: -2px;
   }
 
   .bn-root .bn-default-styles,
