@@ -98,18 +98,15 @@ jest.mock('../../../hooks/useTheme.hook', () => ({
   useTheme: () => ({ resolvedTheme: 'light', theme: 'light' }),
 }));
 
-jest.mock('../../../components/page/EmojiMartPicker', () => ({
-  EmojiMartPicker: ({ onEmojiSelect }: { onEmojiSelect: (emoji: { native: string }) => void }) => (
-    <div data-testid="emoji-mart-picker">
-      <button
-        type="button"
-        aria-label="grin happy smile"
-        onClick={() => onEmojiSelect({ native: '😀' })}
-      >
+jest.mock('../../../components/page/EmojiPicker', () => ({
+  EmojiPicker: ({ onEmojiSelect }: { onEmojiSelect: (emoji: string) => void }) => (
+    <div data-testid="emoji-picker">
+      <button type="button" aria-label="grin happy smile" onClick={() => onEmojiSelect('😀')}>
         😀
       </button>
     </div>
   ),
+  preloadEmojiPicker: jest.fn(),
 }));
 
 jest.mock('../../../services/attachment.service', () => ({
