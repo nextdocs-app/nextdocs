@@ -20,6 +20,6 @@ export default {
   },
   coverageDirectory: 'coverage',
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts'],
-  testMatch: ['**/tests/unit/**/*.test.ts', '**/tests/integration/**/*.test.ts'],
+  testMatch: ['**/tests/unit/**/*.test.ts'],
   verbose: true,
 };

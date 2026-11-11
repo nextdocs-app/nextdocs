@@ -322,7 +322,6 @@ class SpaceControllerTest {
                 "Root Page",
                 null,
                 null,
-                null,
                 false,
                 false,
                 DocumentAccessLevel.OWNER,

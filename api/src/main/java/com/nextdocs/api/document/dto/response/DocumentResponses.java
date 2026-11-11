@@ -17,7 +17,8 @@ public final class DocumentResponses {
     private DocumentResponses() {}
 
     /**
-     * A document without its Yjs state, for list and tree responses.
+     * A document's metadata, for list and tree responses. Content is read from Yhub
+     * separately, on demand.
      *
      * @param parentId the row's parent, or null for root-level
      * @param deletedAt when the document was trashed, or null
@@ -35,7 +36,6 @@ public final class DocumentResponses {
         return DocumentResponse.withoutBranding(
                 document.getId(),
                 document.getTitle(),
-                null,
                 parentId,
                 orderKey,
                 hasChildren,

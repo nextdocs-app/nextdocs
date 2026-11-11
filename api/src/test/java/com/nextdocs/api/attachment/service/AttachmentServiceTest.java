@@ -137,12 +137,7 @@ class AttachmentServiceTest {
                 .email("alice@example.com")
                 .displayName("Alice")
                 .build();
-        document = Document.builder()
-                .id(documentId)
-                .user(user)
-                .title("Doc")
-                .yjsState(new byte[] {1, 2, 3})
-                .build();
+        document = Document.builder().id(documentId).user(user).title("Doc").build();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
     }
 

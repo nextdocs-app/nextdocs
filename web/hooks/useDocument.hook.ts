@@ -31,25 +31,31 @@ import {
   persistMetaWrite,
 } from '@/lib/document-meta-sync.util';
 import { isReadOnlyAccessLevel } from '@/lib/realtime.util';
-import { incrementPendingSyncEdits, readPendingSyncEdits } from '@/lib/offline-sync.util';
+import {
+  acknowledgePendingSyncEdits,
+  clearPendingMetaPatch,
+  incrementPendingSyncEdits,
+  pendingMetaOwner,
+  readPendingMetaPatch,
+  readPendingMetaQueuedAt,
+  readPendingSyncEdits,
+  writePendingMetaPatch,
+} from '@/lib/offline-sync.util';
 import {
   getPendingCloudCreate,
   PENDING_CLOUD_CREATE_EVENT,
   PENDING_CLOUD_CREATE_STORAGE_KEY_PREFIX,
 } from '@/lib/pending-cloud-create.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
-import { getRealtimeUrl } from '@/lib/api-url.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
+import { mergeYjsSnapshot } from '@/lib/yjs.util';
 import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
-const MESSAGE_ACCESS_LEVEL = 2;
 
-// A 1008 close is answered with an HTTP access re-check and then a reconnect;
-// repeating that as fast as the round trips allow would hammer a server that
-// keeps refusing. Bounded exponential backoff caps it.
+// Reconnect backoff after server close (e.g. 1008 or 4401).
 const CLOSE_RECONNECT_BASE_MS = 500;
 const CLOSE_RECONNECT_MAX_MS = 8000;
 
@@ -137,46 +143,6 @@ function buildDocumentErrorState(error: unknown): DocumentErrorState {
   };
 }
 
-function decodeStringFromBuffer(data: ArrayBuffer, offset: number): string {
-  if (offset < 0 || offset >= data.byteLength) {
-    throw new Error('decodeStringFromBuffer: offset is out of bounds for provided buffer.');
-  }
-
-  // Simple varint decoder for the length prefix
-  const view = new DataView(data, offset);
-  let pos = 0;
-  let length = 0;
-  let shift = 0;
-
-  while (true) {
-    if (pos >= view.byteLength) {
-      throw new Error(
-        'decodeStringFromBuffer: reached end of buffer while decoding varint length.'
-      );
-    }
-
-    const byte = view.getUint8(pos);
-    length += (byte & 0x7f) * 2 ** shift;
-    pos++;
-    if ((byte & 0x80) === 0) break;
-    shift += 7;
-
-    if (shift > 35) {
-      throw new Error('decodeStringFromBuffer: invalid varint length, shift exceeded safe bounds.');
-    }
-  }
-
-  if (offset + pos + length > data.byteLength) {
-    throw new Error(
-      'decodeStringFromBuffer: decoded string length exceeds available buffer bytes.'
-    );
-  }
-
-  // Extract the string
-  const bytes = new Uint8Array(data, offset + pos, length);
-  return new TextDecoder().decode(bytes);
-}
-
 function resolveAuthenticatedFallbackAccessLevel(
   documentId: string,
   options: {
@@ -228,6 +194,31 @@ async function resolveLocalFallbackDocument(
   throw new OfflineDocumentUnavailableError('This document is not available in local cache.');
 }
 
+/**
+ * Fold this device's copy into the copy just read from the cloud.
+ *
+ * The pending-sync marker normally stops a cloud read from replacing unsynced
+ * work, but the marker is only added while the provider is not synced. A socket
+ * can read "connected" after it stopped delivering (a half-open connection,
+ * before the close is detected); y-websocket drops the update instead of queueing
+ * it, so that edit exists only in IndexedDB and has no marker. Merging it back
+ * before the cloud copy replaces the local snapshot is what keeps it, and the
+ * provider uploads whatever the merge added once it is connected again.
+ *
+ * A share-link mirror is someone else's document and is never merged; Yjs unions
+ * delete sets, so an ordinary stale local copy cannot resurrect removed content.
+ */
+async function mergeLocalSnapshotIntoCloudCopy(
+  documentId: string,
+  cloudYdoc: Awaited<ReturnType<typeof documentService.getCloudDocument>>['ydoc']
+): Promise<void> {
+  const local = await documentService.loadDocument(documentId);
+  if (!local || local.origin === 'public-link') {
+    return;
+  }
+  mergeYjsSnapshot(cloudYdoc, local.ydoc);
+}
+
 export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const id = documentId;
   const isSharedDocument = options?.isSharedDocument === true;
@@ -235,6 +226,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const { currentDocumentId, meta, isLoading, error } = useAppSelector((state) => state.document);
   const { isAuthenticated, accessToken, user, isInitializing, refresh } = useAuth();
   const { isOnline } = useNetworkStatus();
+  const metaOwner = pendingMetaOwner(user?.id);
   const initialFallbackAccessLevel =
     readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
   const accessTokenRef = useRef<string | null>(accessToken);
@@ -267,6 +259,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   );
   const [isGuestShareLink, setIsGuestShareLink] = useState(isSharedDocument);
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+  // A socket that is open has not necessarily exchanged state yet. Pending local
+  // edits are acknowledged by a completed sync, not by the connection itself.
+  const [isRealtimeSynced, setIsRealtimeSynced] = useState(false);
   const [realtimeProvider, setRealtimeProvider] = useState<WebsocketProvider | null>(null);
   const [errorState, setErrorState] = useState<DocumentErrorState | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
@@ -566,6 +561,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             loadedFromShareLink = true;
             try {
               result = await documentService.getPublicDocument(id);
+              // An in-place sign-in cancels this guest load; it must not restore
+              // public-link provenance on the account that just signed in.
+              if (cancelled) return;
               documentService.notePublicLinkDocument(id);
               guestAccessLevel = await resolveGuestAccessLevel(id, {
                 payloadLevel: result.accessLevel,
@@ -608,6 +606,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             loadedFromShareLink = localResult !== null || isKnownPublicLink;
             try {
               result = await documentService.getPublicDocument(id);
+              // Same guard for the unauthenticated private-route fallback: a load
+              // that sign-in already superseded must not tag the session.
+              if (cancelled) return;
               documentService.notePublicLinkDocument(id);
               loadedFromShareLink = true;
               guestAccessLevel = await resolveGuestAccessLevel(id, {
@@ -705,6 +706,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
           if (isAuthenticated && token && loadedFromCloud) {
             try {
+              // Merge before the cloud copy replaces the local snapshot: an edit the
+              // socket took but never delivered lives only here, with no marker to
+              // block the read (B4-1).
+              await mergeLocalSnapshotIntoCloudCopy(effectiveId, result.ydoc);
               // An account-backed read proves the local copy now belongs to the
               // signed-in user; re-tagging keeps a previous guest mirror from
               // staying filtered out of Private listings after login.
@@ -786,7 +791,6 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   const isGuestRealtimeLevelKnown = accessLevel !== null;
 
   useEffect(() => {
-    const realtimeUrl = getRealtimeUrl();
     // Guests connect anonymously: the realtime server evaluates access-check
     // without credentials against share-link grants. An empty token param is
     // sent so the server treats the connection as anonymous.
@@ -794,7 +798,6 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       ? Boolean(accessTokenRef.current)
       : isGuestRealtimeLevelKnown;
     if (
-      !realtimeUrl ||
       !ydoc ||
       !resolvedDocumentId ||
       !isRealtimeEligibleDocumentId(resolvedDocumentId) ||
@@ -823,16 +826,15 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       },
     };
 
-    const provider = new WebsocketProvider(realtimeUrl, resolvedDocumentId, ydoc, {
-      params: wsParams,
-      awareness: awareness ?? undefined,
-    });
-
+    let cancelled = false;
+    let provider: WebsocketProvider | null = null;
     let closeHandlerCancelled = false;
-    // The first reconnect after a 1008 stays immediate; only repeats wait, so a
+    // The first reconnect after a 1008 or 4401 stays immediate; only repeats wait, so a
     // single stale token still resumes instantly.
     let closeReconnectAttempts = 0;
     let closeReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let sessionRetryAttempts = 0;
+    let sessionRetryTimer: ReturnType<typeof setTimeout> | undefined;
     const scheduleCloseReconnect = () => {
       if (closeHandlerCancelled) {
         return;
@@ -849,25 +851,123 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       closeReconnectAttempts += 1;
       closeReconnectTimer = setTimeout(() => {
         closeReconnectTimer = undefined;
-        if (!closeHandlerCancelled) {
+        if (!closeHandlerCancelled && provider) {
           provider.connect();
         }
       }, delayMs);
     };
 
     const statusHandler = (event: { status: 'connected' | 'disconnected' | 'connecting' }) => {
-      if (event.status === 'connected') {
-        // A live socket proves the last close is behind us: drop the backoff
-        // and the reconnect it had scheduled.
+      if (event.status !== 'connected') {
+        setIsRealtimeSynced(false);
+      }
+      // Do not reset the close backoff here: a socket the server closes again
+      // immediately (a repeated 4401/1008) must keep accumulating delay. The sync
+      // handler resets it once a completed sync proves the connection stable.
+      setIsRealtimeConnected(event.status === 'connected');
+    };
+
+    const syncHandler = (isSynced: boolean) => {
+      if (isSynced) {
+        // The initial sync only completes after the server admitted the session and
+        // the post-connection access recheck, so the last close is behind us.
         closeReconnectAttempts = 0;
         clearTimeout(closeReconnectTimer);
         closeReconnectTimer = undefined;
       }
-      setIsRealtimeConnected(event.status === 'connected');
+      setIsRealtimeSynced(isSynced);
+    };
+
+    // Yhub no longer has this room (the document was purged, or its content was
+    // hard-deleted out of band). That is not proof of lost access: verify it first
+    // and prefer the trash copy, so a trashed page keeps its read-only view instead
+    // of flipping to the restricted screen.
+    const verifyAccessAfterRoomDeletion = async () => {
+      const token = accessTokenRef.current;
+      if (!token) {
+        enterRestrictedState(resolvedDocumentId, 404);
+        return;
+      }
+
+      try {
+        const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+        if (closeHandlerCancelled) return;
+        if (!myAccess.allowed || !myAccess.accessLevel) {
+          enterRestrictedState(resolvedDocumentId, 404);
+          return;
+        }
+        setSharingContext(toSharingContext(myAccess));
+        if (myAccess.trashed) {
+          const cloudCopy = await documentService.getCloudDocument(resolvedDocumentId, token, {
+            includeTrashed: true,
+          });
+          if (closeHandlerCancelled) return;
+          if (cloudCopy.meta.deletedAt) {
+            applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
+            return;
+          }
+        }
+        // Access survived but the room did not: reconnecting would sync against an
+        // empty room. Re-seeding a lost room belongs to the content-read phase; until
+        // then restricting is honest instead of showing a silently blank document.
+        enterRestrictedState(resolvedDocumentId, 404);
+      } catch (err) {
+        if (closeHandlerCancelled) return;
+        if (err instanceof DocumentServiceApiError && err.status === 401) {
+          // A stale token is not an access verdict: refresh and let the provider
+          // effect reconnect with the new token instead of restricting the page.
+          void refresh();
+          return;
+        }
+        if (err instanceof DocumentServiceApiError && (err.status === 403 || err.status === 404)) {
+          enterRestrictedState(resolvedDocumentId, err.status);
+          return;
+        }
+        console.warn('Failed to verify access after Yhub deleted the room:', err);
+        // Nothing proved revocation (network, 429 or 5xx). The provider was dropped
+        // when the room 4404ed; put it back before resuming so connection-triggered
+        // comment refreshes still have an active provider after the reconnect.
+        setRealtimeProvider((current) => current ?? provider);
+        // Retry through the same capped backoff the close handler uses; the next
+        // 4404 re-runs verification.
+        scheduleCloseReconnect();
+      }
+    };
+
+    const connectionErrorHandler = (error: unknown) => {
+      if (closeHandlerCancelled) {
+        return;
+      }
+      // y-websocket retries on its own; surfacing the failure is the point. Silence
+      // here made a misconfigured URL look like an idle document.
+      console.warn('Realtime connection error:', error);
+      setIsRealtimeConnected(false);
     };
 
     const connectionCloseHandler = (event: CloseEvent | null) => {
-      if (!event || event.code !== 1008) {
+      if (!event) {
+        return;
+      }
+
+      if (event.code === 4404) {
+        if (closeHandlerCancelled) return;
+        if (provider) {
+          provider.shouldConnect = false;
+        }
+        setIsRealtimeConnected(false);
+        setIsRealtimeSynced(false);
+        setRealtimeProvider((current) => (current === provider ? null : current));
+        void verifyAccessAfterRoomDeletion();
+        return;
+      }
+
+      if (event.code === 4503) {
+        // Realtime server draining or restarting; reconnect with backoff.
+        scheduleCloseReconnect();
+        return;
+      }
+
+      if (event.code !== 1008 && event.code !== 4401) {
         return;
       }
 
@@ -877,7 +977,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // Halt the automatic retry while that check is in flight, so it cannot
       // race the decision below. y-websocket checks this flag exactly once,
       // on its own backoff tick, so resuming has to go through connect().
-      provider.shouldConnect = false;
+      if (provider) {
+        provider.shouldConnect = false;
+      }
 
       const verifyAccessAndHandleClose = async () => {
         try {
@@ -890,7 +992,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
             if (myAccess.trashed && myAccess.allowed && myAccess.accessLevel) {
               // The realtime server strictly rejects access checks for trashed documents,
-              // so a 1008 close here means the document moved to trash (from another
+              // so a close here means the document moved to trash (from another
               // tab/device), not that access was revoked. Anyone who held pre-trash access
               // gets the read-only trash view.
               try {
@@ -902,7 +1004,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 if (closeHandlerCancelled) return;
                 if (cloudCopy.meta.deletedAt) {
                   applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
-                  provider.shouldConnect = false;
+                  if (provider) {
+                    provider.shouldConnect = false;
+                  }
                   setIsRealtimeConnected(false);
                   setRealtimeProvider((current) => (current === provider ? null : current));
                   return;
@@ -935,7 +1039,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               handleAccessRevoked(404);
               return;
             }
-            // Access is still valid - allow reconnection
+            // Access is still valid - update level and allow reconnection
+            writeCachedDocumentAccessLevel(resolvedDocumentId, myAccess.accessLevel);
+            setResolvedAccessLevel(myAccess.accessLevel, true);
             scheduleCloseReconnect();
             return;
           } else if (!isAuthenticated) {
@@ -990,10 +1096,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         }
 
         // A transient failure (network error, 429, 5xx) says nothing about
-        // access, so resume the provider halted above. `shouldConnect = true`
-        // is not enough: y-websocket only reads it on the retry it already
-        // scheduled, which is long gone by the time a slow round trip answers.
-        // The scheduled reconnect opens a socket when none is pending.
+        // access, so resume the provider halted above.
         scheduleCloseReconnect();
       };
 
@@ -1001,7 +1104,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         if (closeHandlerCancelled) return;
         enterRestrictedState(resolvedDocumentId, statusCode);
 
-        provider.shouldConnect = false;
+        if (provider) {
+          provider.shouldConnect = false;
+        }
         setIsRealtimeConnected(false);
         setRealtimeProvider((current) => (current === provider ? null : current));
       };
@@ -1009,22 +1114,110 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       void verifyAccessAndHandleClose();
     };
 
-    provider.on('status', statusHandler);
-    provider.on('connection-close', connectionCloseHandler);
-    setRealtimeProvider(provider);
+    const scheduleSessionRetry = () => {
+      const delayMs = Math.min(
+        CLOSE_RECONNECT_BASE_MS * 2 ** sessionRetryAttempts,
+        CLOSE_RECONNECT_MAX_MS
+      );
+      sessionRetryAttempts += 1;
+      clearTimeout(sessionRetryTimer);
+      sessionRetryTimer = setTimeout(() => {
+        if (!cancelled) {
+          void initRealtimeSession();
+        }
+      }, delayMs);
+    };
+
+    const initRealtimeSession = async () => {
+      sessionRetryTimer = undefined;
+      try {
+        const session = await documentService.createRealtimeSession(
+          resolvedDocumentId,
+          accessTokenRef.current
+        );
+        if (cancelled) return;
+
+        if (session.accessLevel) {
+          writeCachedDocumentAccessLevel(resolvedDocumentId, session.accessLevel);
+          setResolvedAccessLevel(session.accessLevel, true);
+        }
+
+        // The API owns the socket URL. A guessed host silently pointed browsers at a
+        // different deployment, so a missing URL is a configuration error, not a
+        // cue to fall back.
+        if (!session.wsUrl) {
+          console.error('Realtime session did not include a websocket URL; skipping connection.');
+          return;
+        }
+
+        const p = new WebsocketProvider(
+          session.wsUrl,
+          session.documentId || resolvedDocumentId,
+          ydoc,
+          {
+            params: wsParams,
+            awareness: awareness ?? undefined,
+            disableBc: true,
+            maxBackoffTime: 30000,
+            resyncInterval: 20000,
+          }
+        );
+
+        provider = p;
+        sessionRetryAttempts = 0;
+        p.on('status', statusHandler);
+        p.on('sync', syncHandler);
+        p.on('connection-close', connectionCloseHandler);
+        p.on('connection-error', connectionErrorHandler);
+        setRealtimeProvider(p);
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof DocumentServiceApiError && (err.status === 403 || err.status === 404)) {
+          enterRestrictedState(resolvedDocumentId, err.status);
+          return;
+        }
+        if (err instanceof DocumentServiceApiError && err.status === 401) {
+          void refresh();
+          return;
+        }
+
+        // A 5xx here is the API failing to seed Yhub; a 429 is the broker asking us
+        // to wait; a network error never reached it. All three recover, so retry with
+        // backoff instead of leaving the editor without a socket. Authorization
+        // failures (401/403/404) are handled above and never retried.
+        const retryableApiError =
+          err instanceof DocumentServiceApiError && (err.status >= 500 || err.status === 429);
+        if (retryableApiError || isConnectivityError(err)) {
+          scheduleSessionRetry();
+          return;
+        }
+
+        console.warn('Failed to establish realtime session:', err);
+      }
+    };
+
+    void initRealtimeSession();
 
     // NOTE: presence `user` field is written solely by EditorContent to avoid
     // last-render-wins nondeterminism from two writers to the same awareness.
 
     return () => {
+      cancelled = true;
       closeHandlerCancelled = true;
       clearTimeout(closeReconnectTimer);
       closeReconnectTimer = undefined;
-      provider.off('status', statusHandler);
-      provider.off('connection-close', connectionCloseHandler);
-      provider.shouldConnect = false;
-      provider.destroy();
+      clearTimeout(sessionRetryTimer);
+      sessionRetryTimer = undefined;
+      if (provider) {
+        provider.off('status', statusHandler);
+        provider.off('sync', syncHandler);
+        provider.off('connection-close', connectionCloseHandler);
+        provider.off('connection-error', connectionErrorHandler);
+        provider.shouldConnect = false;
+        provider.destroy();
+      }
       setIsRealtimeConnected(false);
+      setIsRealtimeSynced(false);
       setRealtimeProvider(null);
     };
   }, [
@@ -1037,7 +1230,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     isAuthenticated,
     // A refresh rotates the token the server captured at connect time. Rebuild
     // the provider so the new socket authenticates with the new token instead
-    // of staying closed after a 1008.
+    // of staying closed after a 1008 or 4401.
     accessToken,
     isGuestRealtimeLevelKnown,
     meta?.deletedAt,
@@ -1059,81 +1252,6 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       awareness?.destroy();
     };
   }, [awareness]);
-
-  // Listen for server-pushed access-level changes and apply them immediately.
-  useEffect(() => {
-    if (!realtimeProvider || !isRealtimeConnected) {
-      return;
-    }
-
-    // y-websocket stores the raw websocket on an internal field, which differs
-    // between versions. Support both names to avoid missing permission updates.
-    const wsConn =
-      (
-        realtimeProvider as WebsocketProvider & {
-          _conn?: WebSocket;
-          ws?: WebSocket;
-        }
-      )._conn ?? (realtimeProvider as WebsocketProvider & { ws?: WebSocket }).ws;
-
-    if (!wsConn) {
-      return;
-    }
-
-    const applyAccessLevelIfPresent = (payload: ArrayBuffer) => {
-      if (payload.byteLength < 1) {
-        return;
-      }
-
-      const messageType = new DataView(payload).getUint8(0);
-      if (messageType !== MESSAGE_ACCESS_LEVEL) {
-        return;
-      }
-
-      try {
-        const decodedAccessLevel = decodeStringFromBuffer(payload, 1);
-
-        if (!isValidDocumentAccessLevel(decodedAccessLevel)) {
-          console.warn(
-            'Ignoring invalid access level message from realtime payload:',
-            decodedAccessLevel
-          );
-          return;
-        }
-
-        setResolvedAccessLevel(decodedAccessLevel, true);
-        writeCachedDocumentAccessLevel(resolvedDocumentId, decodedAccessLevel);
-      } catch (err) {
-        console.warn('Failed to decode access level message:', err);
-      }
-    };
-
-    const messageHandler = (event: MessageEvent) => {
-      try {
-        if (event.data instanceof ArrayBuffer) {
-          applyAccessLevelIfPresent(event.data);
-          return;
-        }
-
-        if (event.data instanceof Blob) {
-          void event.data
-            .arrayBuffer()
-            .then(applyAccessLevelIfPresent)
-            .catch((err) => {
-              console.warn('Failed to read websocket blob message:', err);
-            });
-        }
-      } catch (err) {
-        console.warn('Error while handling websocket access-level message:', err);
-      }
-    };
-
-    wsConn.addEventListener('message', messageHandler);
-
-    return () => {
-      wsConn.removeEventListener('message', messageHandler);
-    };
-  }, [realtimeProvider, isRealtimeConnected, resolvedDocumentId, setResolvedAccessLevel]);
 
   // Periodically revalidate access level to detect downgrades immediately
   useEffect(() => {
@@ -1323,6 +1441,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       const previousMeta = { ...meta };
       const updatedAt = new Date().toISOString();
       const updatedMeta = { ...meta, ...normalizedUpdates, updatedAt };
+      const writeStartedAt = Date.parse(updatedAt);
 
       dispatch(updateMetaAction({ ...normalizedUpdates, updatedAt }));
 
@@ -1358,9 +1477,25 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       });
 
       const queuePendingSync = () => {
-        if (isAuthenticated && accessToken) {
-          incrementPendingSyncEdits(resolvedDocumentId);
+        // The title is mirrored into Yjs for collaborators, but only REST feeds
+        // lists, trees and search. Queue the exact value so the replay sends it.
+        // Guests on an edit-level share link queue too: their replay goes through
+        // the public endpoint. The owner scope keeps it out of another account.
+        if (normalizedUpdates.title !== undefined) {
+          const pendingTitle = readPendingMetaPatch(metaOwner, resolvedDocumentId)?.title;
+          writePendingMetaPatch(metaOwner, resolvedDocumentId, { title: normalizedUpdates.title });
+          // The queue holds only the latest title, and one replay patches it once
+          // and receipts one marker. Bumping per replacement keystroke would leave
+          // a stale pending badge for edits that single PATCH already carried.
+          if (pendingTitle !== undefined) {
+            return;
+          }
+        } else if (!isAuthenticated || !accessToken) {
+          // Guest icon/cover edits carry their own queued patch; there is no
+          // content queue to bump here.
+          return;
         }
+        incrementPendingSyncEdits(resolvedDocumentId);
       };
 
       // Only roll back if no newer updateMeta has dispatched since. Without
@@ -1386,6 +1521,27 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         mirrorRemote: mirrorRemoteMetadata,
         persistLocal: persistLocalMetadata,
         queuePendingSync,
+        onRemoteSuccess: () => {
+          // A direct PATCH just saved this exact title. A queued copy that
+          // predates it is stale and can no longer be the newest intent; drop it
+          // (and receipt its marker) even when its title differs. A patch queued
+          // after this write started is newer and must survive for the replay.
+          if (normalizedUpdates.title === undefined) {
+            return;
+          }
+          const queued = readPendingMetaPatch(metaOwner, resolvedDocumentId);
+          if (!queued) {
+            return;
+          }
+          if (
+            readPendingMetaQueuedAt(metaOwner, resolvedDocumentId) > writeStartedAt &&
+            queued.title !== normalizedUpdates.title
+          ) {
+            return;
+          }
+          clearPendingMetaPatch(metaOwner, resolvedDocumentId, queued.title);
+          acknowledgePendingSyncEdits(resolvedDocumentId);
+        },
         triggerBackoff: triggerCloudMetadataBackoff,
         clearBackoff: clearCloudMetadataBackoff,
         refreshSession: refresh,
@@ -1400,6 +1556,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       accessToken,
       isOnline,
       resolvedDocumentId,
+      metaOwner,
       isCloudMetadataInBackoff,
       clearCloudMetadataBackoff,
       triggerCloudMetadataBackoff,
@@ -1552,6 +1709,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
      */
     isGuestShareLink,
     isRealtimeConnected,
+    isRealtimeSynced,
     realtimeProvider,
     errorState,
     isLoading,

@@ -43,6 +43,7 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
     documentSpace,
     isReadOnly,
     isGuestShareLink,
+    isRealtimeSynced,
     realtimeProvider,
     errorState,
     isLoading,
@@ -73,7 +74,8 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
     meta,
     isReadOnly,
     !isReadOnly,
-    accessLevel
+    accessLevel,
+    isRealtimeSynced
   );
 
   const dispatch = useAppDispatch();

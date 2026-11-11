@@ -219,7 +219,8 @@ public class DocumentController {
 
     @Operation(
             summary = "Update a document",
-            description = "Updates metadata and/or Yjs state for an active document owned by the authenticated user. "
+            description = "Updates metadata for an active document owned by the authenticated user. "
+                    + "Content is owned by Yhub and is never written through this endpoint. "
                     + "Documents in trash cannot be updated.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(

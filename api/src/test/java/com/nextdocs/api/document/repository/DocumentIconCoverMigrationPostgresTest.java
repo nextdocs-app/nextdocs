@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nextdocs.api.PostgresTestSupport;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -178,14 +177,13 @@ class DocumentIconCoverMigrationPostgresTest {
     private UUID insertDocument() throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, yjs_state, general_access_mode, "
+                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, "
                         + "link_access_level, link_inherit_blocked, created_at, updated_at) "
                         + "VALUES (?, ?, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), "
-                        + "?, ?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
+                        + "?, 'RESTRICTED', 'VIEW', false, now(), now())")) {
             stmt.setObject(1, id);
             stmt.setObject(2, userId);
             stmt.setString(3, "Icon doc " + id);
-            stmt.setBytes(4, "seed".getBytes(StandardCharsets.UTF_8));
             stmt.executeUpdate();
             return id;
         }

@@ -1,72 +1,45 @@
-/* eslint-disable no-console */
-import config from './config.js';
+import { LOG_LEVEL, type LogLevel } from './config.js';
 
-const LOG_LEVELS = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  debug: 3,
-} as const;
-
-type LogLevel = keyof typeof LOG_LEVELS;
-type LogMeta = Record<string, unknown>;
-
-const currentLevel = LOG_LEVELS[config.logLevel] ?? LOG_LEVELS.info;
-
-const getSafeReplacer = () => {
-  const seen = new WeakSet();
-  return (key: string, value: unknown) => {
-    if (typeof value === 'object' && value !== null) {
-      if (seen.has(value)) {
-        return '[Circular]';
-      }
-      seen.add(value);
-    }
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n';
-    }
-    return value;
-  };
+const LEVEL_WEIGHT: Record<LogLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
 };
 
-function formatMessage(level: LogLevel, message: string, meta: LogMeta = {}): string {
-  const timestamp = new Date().toISOString();
-  let metaStr = '';
-  if (Object.keys(meta).length > 0) {
-    try {
-      metaStr = ` ${JSON.stringify(meta, getSafeReplacer())}`;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      metaStr = ` [unserializable meta: ${errorMessage}]`;
-    }
-  }
-  return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
+export interface Logger {
+  debug(message: string, ...args: unknown[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
 }
 
-const logger = {
-  error: (message: string, meta?: LogMeta) => {
-    if (currentLevel >= LOG_LEVELS.error) {
-      console.error(formatMessage('error', message, meta));
-    }
-  },
+/**
+ * A leveled, scoped logger over the console.
+ *
+ * The service is deployed as a single container with `docker logs`, so the console
+ * is the transport; what was missing was a level gate and a scope. `LOG_LEVEL`
+ * decides which lines leave the process (`debug` for a local session, `warn` for a
+ * noisy deployment), and every line names the module that wrote it. Direct `console`
+ * calls bypass both, so logging is centralized here.
+ */
+export function createLogger(scope: string, level: LogLevel = LOG_LEVEL): Logger {
+  const threshold = LEVEL_WEIGHT[level];
 
-  warn: (message: string, meta?: LogMeta) => {
-    if (currentLevel >= LOG_LEVELS.warn) {
-      console.warn(formatMessage('warn', message, meta));
+  const write = (method: keyof Logger, message: string, args: unknown[]): void => {
+    if (LEVEL_WEIGHT[method] < threshold) {
+      return;
     }
-  },
+    console[method](`[${scope}] ${message}`, ...args);
+  };
 
-  info: (message: string, meta?: LogMeta) => {
-    if (currentLevel >= LOG_LEVELS.info) {
-      console.log(formatMessage('info', message, meta));
-    }
-  },
+  return {
+    debug: (message, ...args) => write('debug', message, args),
+    info: (message, ...args) => write('info', message, args),
+    warn: (message, ...args) => write('warn', message, args),
+    error: (message, ...args) => write('error', message, args),
+  };
+}
 
-  debug: (message: string, meta?: LogMeta) => {
-    if (currentLevel >= LOG_LEVELS.debug) {
-      console.log(formatMessage('debug', message, meta));
-    }
-  },
-};
-
-export default logger;
+/** The server's own logger; other modules create one named for their responsibility. */
+export const log = createLogger('realtime');

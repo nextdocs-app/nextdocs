@@ -201,7 +201,7 @@ class AttachmentMigrationPostgresTest {
 
             userId = insertUser();
             insertWorkspace();
-            UUID documentId = insertDocument();
+            UUID documentId = insertDocument(true);
             UUID attachmentId = UUID.randomUUID();
             // Pre-V20 shape: only document_id exists, so insert without workspace_id.
             try (PreparedStatement stmt = connection.prepareStatement(
@@ -378,19 +378,33 @@ class AttachmentMigrationPostgresTest {
     }
 
     private UUID insertDocument() throws SQLException {
+        return insertDocument(false);
+    }
+
+    /**
+     * V19 still required {@code yjs_state}; the latest schema dropped it in V41. The
+     * V20 upgrade fixture has to insert a row under the older shape.
+     */
+    private UUID insertDocument(boolean legacyContentColumn) throws SQLException {
         UUID id = UUID.randomUUID();
         boolean hasWorkspace = hasWorkspaceColumn();
         String sql = "INSERT INTO documents (id, user_id"
                 + (hasWorkspace ? ", workspace_id" : "")
-                + ", title, yjs_state, general_access_mode, link_access_level, link_inherit_blocked, "
+                + ", title"
+                + (legacyContentColumn ? ", yjs_state" : "")
+                + ", general_access_mode, link_access_level, link_inherit_blocked, "
                 + "created_at, updated_at) VALUES (?, ?"
                 + (hasWorkspace ? ", (SELECT id FROM workspaces ORDER BY created_at LIMIT 1)" : "")
-                + ", ?, ?, 'RESTRICTED', 'VIEW', false, now(), now())";
+                + ", ?"
+                + (legacyContentColumn ? ", ?" : "")
+                + ", 'RESTRICTED', 'VIEW', false, now(), now())";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setObject(1, id);
             stmt.setObject(2, userId);
             stmt.setString(3, "Attachment doc " + id);
-            stmt.setBytes(4, "seed".getBytes(StandardCharsets.UTF_8));
+            if (legacyContentColumn) {
+                stmt.setBytes(4, "seed".getBytes(StandardCharsets.UTF_8));
+            }
             stmt.executeUpdate();
         }
         return id;
