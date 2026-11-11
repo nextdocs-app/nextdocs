@@ -9,7 +9,7 @@ import java.util.UUID;
  * owner's sibling key, and the sort keys.
  *
  * <p>Deliberately not a {@code Document}: loading the entity would materialise each
- * candidate's {@code yjs_state} byte array, and shared listings resolve effective
+ * candidate's content, and shared listings resolve effective
  * access for every candidate before they can paginate.
  */
 public record SharedDocumentCandidate(

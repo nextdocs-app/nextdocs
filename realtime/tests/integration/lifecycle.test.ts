@@ -1,178 +1,71 @@
-import { spawn, ChildProcess } from 'child_process';
-import path from 'path';
-import net, { AddressInfo } from 'net';
-import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
+import { afterEach, describe, expect, it } from '@jest/globals';
+import net from 'node:net';
+import {
+  connectClient,
+  destroyClients,
+  freePort,
+  mintToken,
+  newDocId,
+  startFakeApi,
+  startRealtime,
+  waitForClose,
+  waitForExit,
+  waitForSynced,
+  type FakeApi,
+  type RealtimeProcess,
+} from './helpers/harness.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
-
-const SERVER_PATH = path.join(__dirname, '../../src/main.ts');
-const TSX_PATH = path.resolve(path.dirname(require.resolve('tsx/package.json')), 'dist/cli.mjs');
-
-describe('Server Lifecycle Integration', () => {
-  let serverProcess: ChildProcess | null = null;
-  const TEST_PORT = 12345;
+/**
+ * IT-2 and IT-3: the process lifecycle a deploy depends on. SIGTERM must drain with a
+ * close frame (not vanish), and a taken port must fail loudly instead of serving nothing.
+ */
+describe('realtime lifecycle', () => {
+  const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    if (serverProcess) {
-      serverProcess.kill('SIGTERM');
-
-      let timeoutId: NodeJS.Timeout;
-      const timeoutPromise = new Promise<void>((resolve) => {
-        timeoutId = setTimeout(resolve, 2000);
-      });
-
-      const exitPromise = new Promise<void>((resolve) => {
-        if (!serverProcess) return resolve();
-        serverProcess.once('exit', () => resolve());
-      });
-
-      await Promise.race([exitPromise, timeoutPromise]);
-      clearTimeout(timeoutId!);
-
-      // Force kill if it hasn't exited
-      if (serverProcess && serverProcess.exitCode === null) {
-        serverProcess.kill('SIGKILL');
-      }
-
-      serverProcess = null;
-    }
+    destroyClients();
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup().catch(() => undefined)));
   });
 
-  function startServer(
-    env: Record<string, string> = {}
-  ): Promise<{ process: ChildProcess; output: string }> {
-    return new Promise((resolve, reject) => {
-      // Precedence: explicit env override > logic default (TEST_PORT) > process.env
-      const port = env.PORT || TEST_PORT.toString();
-
-      const proc = spawn(TSX_PATH, [SERVER_PATH], {
-        env: {
-          ...process.env,
-          PORT: port,
-          ...env,
-        },
-        stdio: 'pipe',
-      });
-
-      let output = '';
-      let errorOutput = '';
-      let settled = false;
-      // eslint-disable-next-line prefer-const
-      let startupTimeout: NodeJS.Timeout | undefined;
-
-      const cleanup = () => {
-        if (startupTimeout) clearTimeout(startupTimeout);
-        proc.stdout?.off('data', onStdout);
-        proc.stderr?.off('data', onStderr);
-        proc.off('error', onError);
-        proc.off('exit', onExit);
-      };
-
-      const settle = (err?: Error, result?: { process: ChildProcess; output: string }) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (err) reject(err);
-        else resolve(result!);
-      };
-
-      const onStdout = (data: Buffer) => {
-        const str = data.toString();
-        output += str;
-        if (str.includes('NextDocs Realtime Server started')) {
-          settle(undefined, { process: proc, output });
-        }
-      };
-
-      const onStderr = (data: Buffer) => {
-        errorOutput += data.toString();
-      };
-
-      const onError = (err: Error) => {
-        settle(err);
-      };
-
-      const onExit = (code: number) => {
-        if (!settled) {
-          settle(new Error(`Server exited with code ${code}. Stderr: ${errorOutput}`));
-        }
-      };
-
-      proc.stdout?.on('data', onStdout);
-      proc.stderr?.on('data', onStderr);
-      proc.on('error', onError);
-      proc.on('exit', onExit);
-
-      startupTimeout = setTimeout(() => {
-        if (!settled) {
-          settle(new Error(`Server startup timed out. Output: ${output} Error: ${errorOutput}`));
-        }
-      }, 5000);
+  it('drains on SIGTERM, closes clients with 4503, and exits 0', async () => {
+    const api: FakeApi = await startFakeApi();
+    const server: RealtimeProcess = await startRealtime({ apiUrl: api.url });
+    cleanups.push(async () => {
+      await server.stop();
+      await api.close();
     });
-  }
 
-  function waitForExit(proc: ChildProcess): Promise<number | null> {
-    return new Promise((resolve) => {
-      proc.on('exit', (code) => {
-        resolve(code);
-      });
+    const token = mintToken();
+    api.setVerdict(token, { allowed: true, accessLevel: 'EDIT' });
+    const client = connectClient(server.wsBase, newDocId(), { token });
+    cleanups.push(async () => client.destroy());
+    await waitForSynced(client.provider);
+
+    const closed = waitForClose(client.provider, 10_000);
+    server.child.kill('SIGTERM');
+
+    // 4503 is Yhub's "server shutting down, reconnect elsewhere" code: a planned restart
+    // must not look like a network fault to the client.
+    expect((await closed).code).toBe(4503);
+
+    const exit = await waitForExit(server.child, 10_000);
+    expect(exit.code).toBe(0);
+  }, 30_000);
+
+  it('exits non-zero and names the port when the port is already in use', async () => {
+    const port = await freePort();
+    const blocker = net.createServer();
+    await new Promise<void>((resolve) => blocker.listen(port, '127.0.0.1', resolve));
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
     });
-  }
 
-  function getFreePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const server = net.createServer();
-      server.unref();
-      server.on('error', reject);
-      server.listen(0, () => {
-        const addr = server.address();
-        if (addr && typeof addr !== 'string' && (addr as AddressInfo).port) {
-          const port = (addr as AddressInfo).port;
-          server.close(() => {
-            resolve(port);
-          });
-        } else {
-          server.close(() => {
-            reject(new Error('Failed to retrieve address from server'));
-          });
-        }
-      });
-    });
-  }
+    const server = await startRealtime({ port, waitForReady: false });
+    cleanups.push(async () => server.stop());
 
-  it('should start successfully', async () => {
-    const port = await getFreePort();
-    const { process: proc, output } = await startServer({
-      PORT: port.toString(),
-    });
-    serverProcess = proc;
-    expect(output).toContain('NextDocs Realtime Server started');
-    // Log content is JSON stringified, so quotes might be escaped
-    // or formatted differently
-    expect(output).toContain(`"port":${port}`);
-  });
-
-  it('should shut down gracefully on SIGTERM', async () => {
-    const port = await getFreePort();
-    const { process: proc } = await startServer({ PORT: port.toString() });
-    serverProcess = proc;
-
-    proc.kill('SIGTERM');
-
-    const code = await waitForExit(proc);
-
-    expect(code).toBe(0);
-    serverProcess = null;
-  }, 10000);
-
-  it('should fail if port is already in use', async () => {
-    const port = await getFreePort();
-    const { process: proc1 } = await startServer({ PORT: port.toString() });
-    serverProcess = proc1;
-
-    await expect(startServer({ PORT: port.toString() })).rejects.toThrow();
-  }, 10000);
+    const exit = await waitForExit(server.child, 15_000);
+    expect(exit.code).not.toBe(0);
+    // The message has to name the port, or an operator cannot tell which listener collided.
+    expect(server.output()).toContain(String(port));
+  }, 30_000);
 });

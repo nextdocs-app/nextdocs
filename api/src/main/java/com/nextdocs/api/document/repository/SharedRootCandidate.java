@@ -8,7 +8,7 @@ import java.util.UUID;
  * pagination: who owns it, how it sorts, and the caller's navigation key.
  *
  * <p>Deliberately not a {@code Document}: loading the entity would materialise each
- * candidate's {@code yjs_state} byte array, and shared listings resolve effective
+ * candidate's content, and shared listings resolve effective
  * access for every candidate before they can paginate.
  */
 public record SharedRootCandidate(

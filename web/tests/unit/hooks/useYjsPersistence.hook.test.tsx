@@ -12,11 +12,12 @@ import { documentService, DocumentServiceApiError } from '@/services/document.se
 import {
   mergePendingIconCoverPatch,
   readPendingIconCoverPatch,
+  readPendingMetaPatch,
   readPendingSyncEdits,
+  writePendingMetaPatch,
   writePendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { getPendingCloudCreate, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
-import { CLOUD_BACKOFF_MS } from '@/lib/cloud-connectivity.util';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -40,8 +41,10 @@ jest.mock('../../../hooks/useNetworkStatus.hook', () => ({
 describe('useYjsPersistence', () => {
   let loadDocumentSpy: jest.SpyInstance;
   let saveDocumentSpy: jest.SpyInstance;
-  let saveCloudDocumentSpy: jest.SpyInstance;
   let updateCloudIconCoverSpy: jest.SpyInstance;
+  let updateCloudMetadataSpy: jest.SpyInstance;
+  let updatePublicMetadataSpy: jest.SpyInstance;
+  let isPublicLinkDocumentSpy: jest.SpyInstance;
   let emitLocalDocumentsChangedSpy: jest.SpyInstance;
   let getCurrentUserIdSpy: jest.SpyInstance;
 
@@ -52,12 +55,18 @@ describe('useYjsPersistence', () => {
     getCurrentUserIdSpy = jest.spyOn(documentService, 'getCurrentUserId').mockReturnValue('user-1');
     loadDocumentSpy = jest.spyOn(documentService, 'loadDocument').mockResolvedValue(null);
     saveDocumentSpy = jest.spyOn(documentService, 'saveDocument').mockImplementation(jest.fn());
-    saveCloudDocumentSpy = jest
-      .spyOn(documentService, 'saveCloudDocument')
-      .mockImplementation(jest.fn());
     updateCloudIconCoverSpy = jest
       .spyOn(documentService, 'updateCloudIconCover')
       .mockImplementation(jest.fn());
+    updateCloudMetadataSpy = jest
+      .spyOn(documentService, 'updateCloudMetadata')
+      .mockImplementation(jest.fn());
+    updatePublicMetadataSpy = jest
+      .spyOn(documentService, 'updatePublicMetadata')
+      .mockResolvedValue(undefined);
+    isPublicLinkDocumentSpy = jest
+      .spyOn(documentService, 'isPublicLinkDocument')
+      .mockReturnValue(false);
     emitLocalDocumentsChangedSpy = jest
       .spyOn(documentService, 'emitLocalDocumentsChanged')
       .mockImplementation(jest.fn());
@@ -77,8 +86,10 @@ describe('useYjsPersistence', () => {
     window.localStorage.clear();
     loadDocumentSpy.mockRestore();
     saveDocumentSpy.mockRestore();
-    saveCloudDocumentSpy.mockRestore();
     updateCloudIconCoverSpy.mockRestore();
+    updateCloudMetadataSpy.mockRestore();
+    updatePublicMetadataSpy.mockRestore();
+    isPublicLinkDocumentSpy.mockRestore();
     emitLocalDocumentsChangedSpy.mockRestore();
     getCurrentUserIdSpy.mockRestore();
   });
@@ -174,116 +185,38 @@ describe('useYjsPersistence', () => {
   });
 
   it('should tag the local mirror as public-link when saving a share-link session', async () => {
-    const savePublicDocumentSpy = jest
-      .spyOn(documentService, 'savePublicDocument')
-      .mockResolvedValue(undefined);
-    documentService.notePublicLinkDocument('link-id');
+    // The suite stubs the lookup, so flag the document here rather than registering
+    // a real share-link session that `isPublicLinkDocument` would never consult.
+    isPublicLinkDocumentSpy.mockReturnValue(true);
 
-    try {
-      const ydoc = new Y.Doc();
-      const meta: DocumentMeta = {
-        title: 'Linked',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      };
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Linked',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
 
-      saveDocumentSpy.mockResolvedValue(undefined);
+    saveDocumentSpy.mockResolvedValue(undefined);
 
-      renderHook(() => useYjsPersistence('link-id', ydoc, meta, false, true, 'EDIT'), {
-        wrapper,
-      });
+    renderHook(() => useYjsPersistence('link-id', ydoc, meta, false, true, 'EDIT'), {
+      wrapper,
+    });
 
-      const fragment = ydoc.getXmlFragment('blocknote');
-      fragment.push([new Y.XmlElement('paragraph')]);
+    const fragment = ydoc.getXmlFragment('blocknote');
+    fragment.push([new Y.XmlElement('paragraph')]);
 
-      await act(async () => {
-        jest.advanceTimersByTime(500);
-      });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
 
-      await waitFor(() => {
-        expect(savePublicDocumentSpy).toHaveBeenCalled();
-        expect(saveDocumentSpy).toHaveBeenCalledWith(
-          'link-id',
-          ydoc,
-          expect.anything(),
-          expect.objectContaining({ origin: 'public-link' })
-        );
-      });
-    } finally {
-      savePublicDocumentSpy.mockRestore();
-    }
-  });
-
-  it('should not persist to public endpoint when accessLevel is VIEW or COMMENT', async () => {
-    const savePublicDocumentSpy = jest
-      .spyOn(documentService, 'savePublicDocument')
-      .mockResolvedValue(undefined);
-    documentService.notePublicLinkDocument('view-link-id');
-
-    try {
-      const ydoc = new Y.Doc();
-      const meta: DocumentMeta = {
-        title: 'View Only',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      };
-
-      saveDocumentSpy.mockResolvedValue(undefined);
-
-      renderHook(() => useYjsPersistence('view-link-id', ydoc, meta, false, true, 'VIEW'), {
-        wrapper,
-      });
-
-      const fragment = ydoc.getXmlFragment('blocknote');
-      fragment.push([new Y.XmlElement('paragraph')]);
-
-      await act(async () => {
-        jest.advanceTimersByTime(500);
-      });
-
-      await waitFor(() => {
-        expect(saveDocumentSpy).toHaveBeenCalled();
-      });
-      expect(savePublicDocumentSpy).not.toHaveBeenCalled();
-    } finally {
-      savePublicDocumentSpy.mockRestore();
-    }
-  });
-
-  it('should skip the public endpoint for local-only guest docs with EDIT', async () => {
-    const savePublicDocumentSpy = jest
-      .spyOn(documentService, 'savePublicDocument')
-      .mockResolvedValue(undefined);
-    // Never noted via notePublicLinkDocument: a signed-out open of a
-    // non-shared local id must stay local-only.
-    try {
-      const ydoc = new Y.Doc();
-      const meta: DocumentMeta = {
-        title: 'Local only',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-      };
-
-      saveDocumentSpy.mockResolvedValue(undefined);
-
-      renderHook(() => useYjsPersistence('local-only-guest-doc', ydoc, meta, false, true, 'EDIT'), {
-        wrapper,
-      });
-
-      const fragment = ydoc.getXmlFragment('blocknote');
-      fragment.push([new Y.XmlElement('paragraph')]);
-
-      await act(async () => {
-        jest.advanceTimersByTime(500);
-      });
-
-      await waitFor(() => {
-        expect(saveDocumentSpy).toHaveBeenCalled();
-      });
-      expect(savePublicDocumentSpy).not.toHaveBeenCalled();
-    } finally {
-      savePublicDocumentSpy.mockRestore();
-    }
+    await waitFor(() => {
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'link-id',
+        ydoc,
+        expect.anything(),
+        expect.objectContaining({ origin: 'public-link' })
+      );
+    });
   });
 
   it('creates the queued cloud document before saving edits to it', async () => {
@@ -319,14 +252,9 @@ describe('useYjsPersistence', () => {
       });
 
       await waitFor(() => {
-        expect(saveCloudDocumentSpy).toHaveBeenCalled();
+        expect(createCloudDocumentSpy).toHaveBeenCalled();
+        expect(getPendingCloudCreate('offline-doc')).toBeNull();
       });
-
-      // A PATCH before the POST would 404, so the create has to land first.
-      expect(createCloudDocumentSpy.mock.invocationCallOrder[0]).toBeLessThan(
-        saveCloudDocumentSpy.mock.invocationCallOrder[0]
-      );
-      expect(getPendingCloudCreate('offline-doc')).toBeNull();
     } finally {
       createCloudDocumentSpy.mockRestore();
       emitCloudDocumentsChangedSpy.mockRestore();
@@ -363,7 +291,6 @@ describe('useYjsPersistence', () => {
 
       expect(getPendingCloudCreate('offline-doc')).toBeNull();
       expect(readPendingSyncEdits('offline-doc')).toBe(0);
-      expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
     } finally {
       deleteDocumentSpy.mockRestore();
       createCloudDocumentSpy.mockRestore();
@@ -510,7 +437,7 @@ describe('useYjsPersistence', () => {
     expect(result.current.lastSaved).toBeInstanceOf(Date);
   });
 
-  it('should save to cloud when authenticated', async () => {
+  it('should save document locally after debounce when authenticated', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {
       title: 'Cloud Test',
@@ -522,49 +449,7 @@ describe('useYjsPersistence', () => {
       isAuthenticated: true,
       accessToken: 'token-1',
     });
-    saveCloudDocumentSpy.mockResolvedValue(undefined);
-
-    renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
-
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
-
-    await act(async () => {
-      jest.advanceTimersByTime(500);
-    });
-
-    await waitFor(() => {
-      expect(saveCloudDocumentSpy).toHaveBeenCalledWith('cloud-id', ydoc, meta, 'token-1');
-    });
-
-    expect(saveDocumentSpy).toHaveBeenCalledWith(
-      'cloud-id',
-      ydoc,
-      expect.objectContaining({
-        title: 'Cloud Test',
-      }),
-      {
-        touchUpdatedAt: false,
-        origin: 'local',
-      }
-    );
-    expect(emitLocalDocumentsChangedSpy).not.toHaveBeenCalled();
-  });
-
-  it('writes the local snapshot before attempting the cloud save', async () => {
-    const ydoc = new Y.Doc();
-    const meta: DocumentMeta = {
-      title: 'Local First',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-01T00:00:00.000Z',
-    };
-
-    (useAuth as jest.Mock).mockReturnValue({
-      isAuthenticated: true,
-      accessToken: 'token-1',
-    });
     saveDocumentSpy.mockResolvedValue(undefined);
-    saveCloudDocumentSpy.mockResolvedValue(undefined);
 
     renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
@@ -576,14 +461,15 @@ describe('useYjsPersistence', () => {
     });
 
     await waitFor(() => {
-      expect(saveCloudDocumentSpy).toHaveBeenCalled();
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
+        'cloud-id',
+        ydoc,
+        expect.objectContaining({
+          title: 'Cloud Test',
+        }),
+        undefined
+      );
     });
-
-    // An aborted PATCH must not be able to cost the edit: the IndexedDB write
-    // has already completed before the request leaves the browser.
-    expect(saveDocumentSpy.mock.invocationCallOrder[0]).toBeLessThan(
-      saveCloudDocumentSpy.mock.invocationCallOrder[0]
-    );
   });
 
   it('persists the pending debounce locally when the page is hidden', async () => {
@@ -629,29 +515,28 @@ describe('useYjsPersistence', () => {
       // The marker is what makes the next load prefer these bytes; the cloud
       // PATCH is deliberately left to the visible/flush path.
       expect(readPendingSyncEdits('cloud-id')).toBe(1);
-      expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
     } finally {
       delete (document as unknown as { visibilityState?: string }).visibilityState;
     }
   });
 
-  it('keeps the edit queued and refreshes when the cloud save is unauthorized', async () => {
+  it('keeps the edit queued when offline', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {
-      title: 'Expired Token Test',
+      title: 'Offline Queue Test',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
 
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
-      accessToken: 'expired-token',
+      accessToken: 'token-1',
       user: { id: 'user-1' },
-      refresh: mockRefreshSession,
     });
-    saveCloudDocumentSpy.mockRejectedValue(
-      new DocumentServiceApiError('Authentication required.', 401)
-    );
+    (useNetworkStatus as jest.Mock).mockReturnValue({
+      isOnline: false,
+      isOffline: true,
+    });
     saveDocumentSpy.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
@@ -667,13 +552,12 @@ describe('useYjsPersistence', () => {
       expect(saveDocumentSpy).toHaveBeenCalledWith(
         'cloud-id',
         ydoc,
-        expect.objectContaining({ title: 'Expired Token Test' }),
+        expect.objectContaining({ title: 'Offline Queue Test' }),
         undefined
       );
       expect(result.current.pendingEdits).toBe(1);
     });
 
-    expect(mockRefreshSession).toHaveBeenCalled();
     expect(result.current.isSaving).toBe(false);
   });
 
@@ -693,7 +577,6 @@ describe('useYjsPersistence', () => {
       isOnline: false,
       isOffline: true,
     });
-    saveCloudDocumentSpy.mockRejectedValue(new TypeError('Failed to fetch'));
     saveDocumentSpy.mockResolvedValue(undefined);
 
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -760,37 +643,40 @@ describe('useYjsPersistence', () => {
     });
   });
 
-  it('should sync pending edits automatically when back online', async () => {
+  it('keeps an offline edit until a realtime sync delivers it, then clears the marker', async () => {
     const ydoc = new Y.Doc();
-    const pendingYdoc = new Y.Doc();
-    pendingYdoc.getXmlFragment('blocknote').push([new Y.XmlElement('paragraph')]);
+    // Stands in for Yhub: a provider forwards this document's updates to it.
+    const receivingYdoc = new Y.Doc();
     const meta: DocumentMeta = {
       title: 'Reconnect Sync Test',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
-    const pendingMeta: DocumentMeta = {
-      title: 'Reconnect Sync Test (Local Pending)',
-      createdAt: '2024-01-01T00:00:00.000Z',
-      updatedAt: '2024-01-02T00:00:00.000Z',
-    };
 
-    const networkState = {
-      isOnline: false,
-      isOffline: true,
-    };
+    let synced = false;
 
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
     });
-    (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
     saveDocumentSpy.mockResolvedValue(undefined);
-    saveCloudDocumentSpy.mockResolvedValue(undefined);
-    loadDocumentSpy.mockResolvedValue({ ydoc: pendingYdoc, meta: pendingMeta });
 
-    const { result, rerender } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), {
-      wrapper,
+    const { result, rerender } = renderHook(
+      () => useYjsPersistence('cloud-id', ydoc, meta, false, true, 'EDIT', synced),
+      { wrapper }
+    );
+
+    // The provider cannot deliver while the socket is down. Buffer exactly what it
+    // would send, then flush that buffer before it reports `synced`: that ordering
+    // is what makes a cleared marker mean "delivered", not merely "reconnected".
+    const undelivered: Uint8Array[] = [];
+    ydoc.on('update', (update: Uint8Array) => {
+      if (synced) {
+        Y.applyUpdate(receivingYdoc, update);
+      } else {
+        undelivered.push(update);
+      }
     });
 
     const fragment = ydoc.getXmlFragment('blocknote');
@@ -800,33 +686,139 @@ describe('useYjsPersistence', () => {
       jest.advanceTimersByTime(500);
     });
 
+    // Online, but without a socket handshake the local save is not an acknowledgement.
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(1);
+      expect(result.current.hasPendingSync).toBe(true);
     });
 
-    networkState.isOnline = true;
-    networkState.isOffline = false;
+    // Nothing reached the receiving document while the socket was down.
+    expect(receivingYdoc.getXmlFragment('blocknote').length).toBe(0);
+
+    undelivered.forEach((update) => Y.applyUpdate(receivingYdoc, update));
+    synced = true;
     rerender();
-
-    await waitFor(() => {
-      expect(saveCloudDocumentSpy).toHaveBeenCalledWith(
-        'cloud-id',
-        pendingYdoc,
-        pendingMeta,
-        'token-1'
-      );
-    });
 
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(0);
       expect(result.current.hasPendingSync).toBe(false);
     });
+
+    // The provider delivered the offline edit to the receiving document; that
+    // delivery is what the cleared marker was asserting.
+    expect(receivingYdoc.getXmlFragment('blocknote').length).toBe(1);
   });
 
-  it('retries queued edits when the connectivity backoff expires', async () => {
+  it('replays a queued title through REST before clearing its marker', async () => {
     const ydoc = new Y.Doc();
     const meta: DocumentMeta = {
-      title: 'Backoff Retry Test',
+      title: 'Old Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    writePendingMetaPatch('user-1', 'title-queued', { title: 'Renamed offline' });
+    writePendingSyncEdits('title-queued', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('title-queued', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'title-queued',
+        { title: 'Renamed offline' },
+        'token-1'
+      );
+    });
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(0);
+    });
+    expect(readPendingMetaPatch('user-1', 'title-queued')).toBeNull();
+  });
+
+  it('keeps a rate-limited queued title and its marker for retry', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    updateCloudMetadataSpy.mockRejectedValue(new DocumentServiceApiError('Too many requests', 429));
+    writePendingMetaPatch('user-1', 'rate-limited', { title: 'Retry me' });
+    writePendingSyncEdits('rate-limited', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('rate-limited', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalled();
+    });
+
+    // 429 is backpressure, not a verdict: the title is still the only durable copy.
+    expect(readPendingMetaPatch('user-1', 'rate-limited')).toEqual({ title: 'Retry me' });
+    expect(result.current.pendingEdits).toBe(1);
+  });
+
+  it('acknowledges a replayed title even when the icon replay fails', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Title',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    updateCloudMetadataSpy.mockResolvedValue(undefined);
+    updateCloudIconCoverSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    writePendingMetaPatch('user-1', 'partial-ack', { title: 'Landed' });
+    mergePendingIconCoverPatch('partial-ack', { icon: { type: 'emoji', value: '📝' } });
+    writePendingSyncEdits('partial-ack', 2);
+
+    const { result } = renderHook(
+      () => useYjsPersistence('partial-ack', ydoc, meta, false, true, 'EDIT', true),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(updateCloudMetadataSpy).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(result.current.pendingEdits).toBe(1);
+    });
+    // The title landed and its marker is receipted; only the icon stays queued.
+    expect(readPendingMetaPatch('user-1', 'partial-ack')).toBeNull();
+    expect(readPendingIconCoverPatch('partial-ack')).toEqual({
+      icon: { type: 'emoji', value: '📝' },
+    });
+  });
+
+  it('keeps the marker when a replacement title lands while the first replay is in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Original',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
     };
@@ -837,37 +829,241 @@ describe('useYjsPersistence', () => {
       user: { id: 'user-1' },
     });
     saveDocumentSpy.mockResolvedValue(undefined);
-    loadDocumentSpy.mockResolvedValue({ ydoc, meta });
-    saveCloudDocumentSpy
-      .mockRejectedValueOnce(new DocumentServiceApiError('Service unavailable', 503))
-      .mockResolvedValueOnce(undefined);
 
-    const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    updateCloudMetadataSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    writePendingMetaPatch('user-1', 'title-race', { title: 'First' });
+    writePendingSyncEdits('title-race', 1);
 
-    await act(async () => {
-      jest.advanceTimersByTime(500);
+    const { result } = renderHook(() => useYjsPersistence('title-race', ydoc, meta), {
+      wrapper,
     });
 
     await waitFor(() => {
-      expect(result.current.pendingEdits).toBe(1);
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'title-race',
+        { title: 'First' },
+        'token-1'
+      );
     });
-    expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
 
-    // The 500 is retried after the backoff instead of waiting for the next
-    // keystroke to trigger a flush.
+    // The user keeps typing while the first title is still on the wire. The queue
+    // holds only the latest title, so replacing it must not add a marker: First's
+    // marker now stands for the replacement too.
+    act(() => {
+      writePendingMetaPatch('user-1', 'title-race', { title: 'Second' });
+    });
+
     await act(async () => {
-      jest.advanceTimersByTime(CLOUD_BACKOFF_MS);
+      releaseFirst();
     });
 
     await waitFor(() => {
-      expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(2);
+      expect(updateCloudMetadataSpy).toHaveBeenCalledWith(
+        'title-race',
+        { title: 'Second' },
+        'token-1'
+      );
     });
 
+    // First reached REST, but Second has not. Acknowledging First here would clear
+    // the badge and let a cloud read replace the unsaved title.
+    expect(readPendingSyncEdits('title-race')).toBe(1);
+    expect(readPendingMetaPatch('user-1', 'title-race')).toEqual({ title: 'Second' });
+
+    await act(async () => {
+      releaseSecond();
+    });
+
+    await waitFor(() => {
+      expect(readPendingMetaPatch('user-1', 'title-race')).toBeNull();
+      expect(readPendingSyncEdits('title-race')).toBe(0);
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
+  it('keeps the marker when a replacement guest title lands while the first replay is in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      refresh: mockRefreshSession,
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+    isPublicLinkDocumentSpy.mockReturnValue(true);
+
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    updatePublicMetadataSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+
+    writePendingMetaPatch('public', 'guest-race', { title: 'First' });
+    writePendingSyncEdits('guest-race', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('guest-race', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('guest-race', { title: 'First' });
+    });
+
+    act(() => {
+      writePendingMetaPatch('public', 'guest-race', { title: 'Second' });
+    });
+
+    await act(async () => {
+      releaseFirst();
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('guest-race', { title: 'Second' });
+    });
+
+    // The guest path has the same shared counter: First landed, Second did not.
+    expect(readPendingSyncEdits('guest-race')).toBe(1);
+    expect(readPendingMetaPatch('public', 'guest-race')).toEqual({ title: 'Second' });
+
+    await act(async () => {
+      releaseSecond();
+    });
+
+    await waitFor(() => {
+      expect(readPendingMetaPatch('public', 'guest-race')).toBeNull();
+      expect(readPendingSyncEdits('guest-race')).toBe(0);
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
+  it('drops a permanently rejected guest title instead of retrying it', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      refresh: mockRefreshSession,
+    });
+    isPublicLinkDocumentSpy.mockReturnValue(true);
+    updatePublicMetadataSpy.mockRejectedValue(
+      new DocumentServiceApiError('Title is too long', 400)
+    );
+    writePendingMetaPatch('public', 'guest-rejected', { title: 'Rejected' });
+    writePendingSyncEdits('guest-rejected', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('guest-rejected', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(readPendingMetaPatch('public', 'guest-rejected')).toBeNull();
+      expect(result.current.pendingEdits).toBe(0);
+    });
+  });
+
+  it('replays a queued guest title through the public metadata endpoint', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      refresh: mockRefreshSession,
+    });
+    isPublicLinkDocumentSpy.mockReturnValue(true);
+    writePendingMetaPatch('public', 'guest-title', { title: 'Guest rename' });
+    writePendingSyncEdits('guest-title', 1);
+
+    const { result } = renderHook(() => useYjsPersistence('guest-title', ydoc, meta), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(updatePublicMetadataSpy).toHaveBeenCalledWith('guest-title', {
+        title: 'Guest rename',
+      });
+    });
     await waitFor(() => {
       expect(result.current.pendingEdits).toBe(0);
+    });
+    expect(readPendingMetaPatch('public', 'guest-title')).toBeNull();
+  });
+
+  it('does not consume a content marker another tab queued', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Shared device',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      (props: { synced: boolean }) =>
+        useYjsPersistence('shared-markers', ydoc, meta, false, true, 'EDIT', props.synced),
+      { wrapper, initialProps: { synced: false } }
+    );
+
+    // Another tab on this device queues an edit this tab never made. Its content is
+    // not in this tab's copy, so this tab's sync cannot prove it was delivered.
+    act(() => {
+      writePendingSyncEdits('shared-markers', 1);
+    });
+
+    rerender({ synced: true });
+
+    await waitFor(() => {
+      expect(readPendingSyncEdits('shared-markers')).toBe(1);
     });
   });
 
@@ -892,7 +1088,6 @@ describe('useYjsPersistence', () => {
       });
       (useNetworkStatus as jest.Mock).mockImplementation(() => networkState);
       saveDocumentSpy.mockResolvedValue(undefined);
-      saveCloudDocumentSpy.mockResolvedValue(undefined);
       loadDocumentSpy.mockResolvedValue({ ydoc, meta });
 
       window.localStorage.setItem('nextdocs:pending-sync:cloud-id', '1');
@@ -952,6 +1147,39 @@ describe('useYjsPersistence', () => {
       expect(result.current.pendingEdits).toBeGreaterThan(0);
     });
 
+    it('keeps a marker created while the icon replay was in flight', async () => {
+      let releasePatch: () => void = () => {};
+      updateCloudIconCoverSpy.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            releasePatch = resolve;
+          })
+      );
+
+      const { result, goOnline } = setupQueuedPatch();
+
+      goOnline();
+
+      await waitFor(() => {
+        expect(updateCloudIconCoverSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // A new edit lands while the PATCH is still in flight.
+      act(() => {
+        writePendingSyncEdits('cloud-id', 2);
+      });
+
+      releasePatch();
+
+      await waitFor(() => {
+        expect(readPendingIconCoverPatch('cloud-id')).toBeNull();
+      });
+      // Only the marker this flush replayed is acknowledged.
+      await waitFor(() => {
+        expect(result.current.pendingEdits).toBe(1);
+      });
+    });
+
     it('drops a patch the server refuses instead of pinning the document local', async () => {
       updateCloudIconCoverSpy.mockRejectedValue(new DocumentServiceApiError('Forbidden', 403));
 
@@ -976,7 +1204,6 @@ describe('useYjsPersistence', () => {
       accessToken: 'token-1',
     });
     saveDocumentSpy.mockResolvedValue(undefined);
-    saveCloudDocumentSpy.mockResolvedValue(undefined);
 
     const base: DocumentMeta = {
       title: 'Untitled',
@@ -1003,20 +1230,20 @@ describe('useYjsPersistence', () => {
       });
     }
 
-    // Still inside the debounce window: the burst must not have hit the cloud yet.
-    expect(saveCloudDocumentSpy).not.toHaveBeenCalled();
+    // Still inside the debounce window: the burst must not have persisted yet.
+    expect(saveDocumentSpy).not.toHaveBeenCalled();
 
     await act(async () => {
       jest.advanceTimersByTime(500);
     });
 
     await waitFor(() => {
-      expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
-      expect(saveCloudDocumentSpy).toHaveBeenCalledWith(
+      expect(saveDocumentSpy).toHaveBeenCalled();
+      expect(saveDocumentSpy).toHaveBeenCalledWith(
         'title-doc',
         ydoc,
         expect.objectContaining({ title: 'Document' }),
-        'token-1'
+        undefined
       );
     });
     expect(store.getState().document.meta?.title).toBe('Document');
@@ -1027,10 +1254,9 @@ describe('useYjsPersistence', () => {
       isAuthenticated: true,
       accessToken: 'token-1',
     });
-    saveDocumentSpy.mockResolvedValue(undefined);
 
     let releaseSave: () => void = () => {};
-    saveCloudDocumentSpy.mockImplementation(
+    saveDocumentSpy.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           releaseSave = resolve;
@@ -1057,9 +1283,9 @@ describe('useYjsPersistence', () => {
     await act(async () => {
       jest.advanceTimersByTime(500);
     });
-    expect(saveCloudDocumentSpy).toHaveBeenCalledTimes(1);
+    expect(saveDocumentSpy).toHaveBeenCalled();
 
-    // The user keeps typing while that PATCH is still in flight.
+    // The user keeps typing while that save is still in flight.
     const typedMeta: DocumentMeta = { ...base, title: 'Meeting Notes' };
     act(() => {
       store.dispatch(updateMetaAction({ title: typedMeta.title, updatedAt: typedMeta.updatedAt }));
@@ -1077,12 +1303,81 @@ describe('useYjsPersistence', () => {
     // The save's snapshot must not roll the editor back to "Meeting".
     expect(store.getState().document.meta?.title).toBe('Meeting Notes');
 
-    // Drain the follow-up save the last keystroke scheduled, so the unmount
-    // flush does not run it against the real service.
+    // Drain the follow-up save the last keystroke scheduled.
     await act(async () => {
-      saveCloudDocumentSpy.mockResolvedValue(undefined);
+      saveDocumentSpy.mockResolvedValue(undefined);
       jest.advanceTimersByTime(500);
       await Promise.resolve();
+    });
+  });
+
+  it('replays a newer icon queued while the previous PATCH was in flight', async () => {
+    const ydoc = new Y.Doc();
+    const meta: DocumentMeta = {
+      title: 'Original',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+      user: { id: 'user-1' },
+    });
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: true, isOffline: false });
+    saveDocumentSpy.mockResolvedValue(undefined);
+
+    let releaseFirst!: () => void;
+    updateCloudIconCoverSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+
+    const firstIcon = { type: 'emoji' as const, value: '📝' };
+    const secondIcon = { type: 'emoji' as const, value: '🔥' };
+    mergePendingIconCoverPatch('icon-race', { icon: firstIcon });
+    writePendingSyncEdits('icon-race', 1);
+
+    const { result } = renderHook(
+      () => useYjsPersistence('icon-race', ydoc, meta, false, true, 'OWNER', true),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'icon-race',
+        { icon: firstIcon },
+        'token-1'
+      );
+    });
+
+    // A newer icon lands while the first PATCH is still on the wire. It merges
+    // into the same queued patch entry, so the pending counter does not change.
+    await act(async () => {
+      mergePendingIconCoverPatch('icon-race', { icon: secondIcon });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      releaseFirst();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(updateCloudIconCoverSpy).toHaveBeenCalledWith(
+        'icon-race',
+        { icon: secondIcon },
+        'token-1'
+      );
+    });
+    await waitFor(() => {
+      expect(readPendingIconCoverPatch('icon-race')).toBeNull();
+      expect(result.current.pendingEdits).toBe(0);
     });
   });
 });

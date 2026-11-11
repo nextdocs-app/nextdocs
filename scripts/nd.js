@@ -27,7 +27,7 @@ const REQUIRED_JS_BINARIES = [
 
 const REQUIRED_WORKSPACE_PACKAGES = {
   web: ['next', 'react', 'react-dom'],
-  realtime: ['tsx', 'y-websocket'],
+  realtime: ['tsx', '@y/hub'],
 };
 
 const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
@@ -38,6 +38,11 @@ const POSTGRES_PORT = '5433'; // 5432 is typically taken by a local PostgreSQL i
 const POSTGRES_USER = 'nextdocs';
 const POSTGRES_PASSWORD = 'nextdocs';
 const POSTGRES_DB = 'nextdocs';
+const YHUB_DB = 'nextdocs_yhub';
+
+const REDIS_CONTAINER = 'nextdocs-redis';
+const REDIS_IMAGE = 'redis:7-alpine';
+const REDIS_PORT = '6379';
 
 const MAILPIT_CONTAINER = 'nextdocs-mailpit';
 const MAILPIT_IMAGE = 'axllent/mailpit:v1.24';
@@ -48,6 +53,7 @@ const MAILPIT_WEB_PORT = '8025';
 // we may need to find a more generalizable pattern.
 let generatedDevOAuthTokenKey = null;
 let generatedDevJwtSecret = null;
+let generatedDevYhubServiceToken = null;
 
 function getOrCreateDevOAuthTokenEncryptionKey() {
   if (!generatedDevOAuthTokenKey) {
@@ -61,6 +67,15 @@ function getOrCreateDevJwtSecret() {
     generatedDevJwtSecret = randomBytes(32).toString('base64');
   }
   return generatedDevJwtSecret;
+}
+
+// The API rejects the published development token at startup. One session-wide
+// value is shared by the API and realtime children, like the generated JWT secret.
+function getOrCreateDevYhubServiceToken() {
+  if (!generatedDevYhubServiceToken) {
+    generatedDevYhubServiceToken = randomBytes(32).toString('base64url');
+  }
+  return generatedDevYhubServiceToken;
 }
 
 const PLACEHOLDER = 'CHANGE_ME_IN_PRODUCTION';
@@ -77,15 +92,17 @@ function buildApiDevEnv(overrides = {}) {
   if (isKeyEmptyOrPlaceholder(env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64)) {
     env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 = getOrCreateDevOAuthTokenEncryptionKey();
     console.warn(
-      '\x1b[33mWARNING: OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 was not set. Using an ephemeral dev key for this ./nd session.\n'
-      + '  Set OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 for stable token decryption across restarts.\x1b[0m');
+      '\x1b[33mWARNING: OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 was not set. Using an ephemeral dev key for this ./nd session.\n' +
+        '  Set OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 for stable token decryption across restarts.\x1b[0m'
+    );
   }
 
   if (isKeyEmptyOrPlaceholder(env.JWT_SECRET)) {
     env.JWT_SECRET = getOrCreateDevJwtSecret();
     console.warn(
-      '\x1b[33mWARNING: JWT_SECRET was not set. Using an ephemeral dev key for this ./nd session.\n'
-      + '  Set JWT_SECRET for stable token validation across restarts.\x1b[0m');
+      '\x1b[33mWARNING: JWT_SECRET was not set. Using an ephemeral dev key for this ./nd session.\n' +
+        '  Set JWT_SECRET for stable token validation across restarts.\x1b[0m'
+    );
   }
 
   if (isKeyEmptyOrPlaceholder(env.CORS_ALLOWED_ORIGINS)) {
@@ -104,6 +121,47 @@ function buildApiDevEnv(overrides = {}) {
     env.SPRING_MAIL_PORT = MAILPIT_SMTP_PORT;
     env.SPRING_MAIL_SMTP_STARTTLS = 'false';
     env.SPRING_MAIL_SMTP_SSL_CHECK_SERVER_IDENTITY = 'false';
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.YHUB_SERVICE_TOKEN)) {
+    env.YHUB_SERVICE_TOKEN = getOrCreateDevYhubServiceToken();
+    console.warn(
+      '\x1b[33mWARNING: YHUB_SERVICE_TOKEN was not set. Using an ephemeral dev token for this ./nd session.\n' +
+        '  Set YHUB_SERVICE_TOKEN to run the API and realtime service as separate sessions.\x1b[0m'
+    );
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.YHUB_BASE_URL)) {
+    env.YHUB_BASE_URL = 'http://localhost:1234';
+  }
+
+  return env;
+}
+
+function buildRealtimeDevEnv(overrides = {}) {
+  const env = {
+    ...process.env,
+    ...overrides,
+  };
+
+  if (isKeyEmptyOrPlaceholder(env.JWT_SECRET)) {
+    env.JWT_SECRET = getOrCreateDevJwtSecret();
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.YHUB_SERVICE_TOKEN)) {
+    env.YHUB_SERVICE_TOKEN = getOrCreateDevYhubServiceToken();
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.REDIS)) {
+    env.REDIS = `redis://localhost:${REDIS_PORT}`;
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.POSTGRES)) {
+    env.POSTGRES = `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`;
+  }
+
+  if (isKeyEmptyOrPlaceholder(env.API_BASE_URL)) {
+    env.API_BASE_URL = 'http://localhost:8080';
   }
 
   return env;
@@ -186,11 +244,117 @@ function turbo(task, filter, extraArgs = '') {
   return run(`npx turbo run ${task}${filterFlag}${extraArgs}`);
 }
 
-function ensurePostgres() {
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * A freshly started container accepts TCP before Postgres can answer a query, and
+ * `docker start` on an existing volume returns immediately. Checking for the Yhub
+ * database before that point would read as "absent" and then fail to create it.
+ */
+function waitForPostgresReady(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // Force TCP: during init Postgres starts a temporary server on the unix socket
+    // and then restarts; the socket probe succeeds too early and the next step can
+    // still fail on the final server.
+    const ping = runSilent(
+      `docker exec ${POSTGRES_CONTAINER} pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}`
+    );
+    if (ping.status === 0) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    sleepSync(500);
+  }
+}
+
+function ensureYhubDatabase(withSchema = true) {
+  if (!waitForPostgresReady()) {
+    console.error(
+      `\x1b[31m✗ Postgres did not become ready in ${POSTGRES_CONTAINER}; cannot provision ${YHUB_DB}.\x1b[0m`
+    );
+    process.exit(1);
+  }
+
+  const checkDb = runSilent(
+    `docker exec ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -tc "SELECT 1 FROM pg_database WHERE datname = '${YHUB_DB}'"`
+  );
+  // A failed query is not "the database is missing": creating on top of a broken
+  // connection only hides the real problem until the schema step fails.
+  if (checkDb.status !== 0) {
+    console.error(`\x1b[31m✗ Could not check for the ${YHUB_DB} database.\x1b[0m`);
+    console.error((checkDb.stderr || checkDb.stdout || '').toString().trim());
+    process.exit(1);
+  }
+
+  if (checkDb.stdout.toString().trim() !== '1') {
+    console.log(`\x1b[34m> Creating ${YHUB_DB} database...\x1b[0m`);
+    const created = runSilent(
+      `docker exec ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "CREATE DATABASE ${YHUB_DB};"`
+    );
+    if (created.status !== 0) {
+      console.error(`\x1b[31m✗ Could not create the ${YHUB_DB} database.\x1b[0m`);
+      console.error((created.stderr || created.stdout || '').toString().trim());
+      process.exit(1);
+    }
+  }
+
+  if (withSchema && !ensureYhubSchema()) {
+    process.exit(1);
+  }
+}
+
+/** The database the realtime service will actually use. */
+function yhubPostgresUrl() {
+  return isKeyEmptyOrPlaceholder(process.env.POSTGRES)
+    ? `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`
+    : process.env.POSTGRES;
+}
+
+// Yhub never runs DDL on boot; init-db.js is the only supported path and is
+// idempotent, so running it here is what makes `./nd dev` work on a fresh volume.
+function ensureYhubSchema() {
+  // Prefer the initializer from the workspace that declares @y/hub: when npm could
+  // not hoist it (a version split), the root copy is the stale one.
+  const initScript = [
+    path.join(ROOT, 'realtime', 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
+    path.join(ROOT, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
+  ].find((candidate) => fs.existsSync(candidate));
+  if (!initScript) {
+    // Realtime cannot boot without the schema, so skipping it here would only move
+    // the failure to the first connection with a less obvious message.
+    console.error(
+      '\x1b[31m✗ Cannot initialize the Yhub schema: @y/hub is not installed. ' +
+        'Run `npm ci` (or `npm install`) from the repo root, then restart `./nd dev`.\x1b[0m'
+    );
+    return false;
+  }
+  const result = spawnSync(process.execPath, [initScript], {
+    cwd: ROOT,
+    stdio: 'pipe',
+    env: {
+      ...process.env,
+      POSTGRES: yhubPostgresUrl(),
+    },
+  });
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').toString().trim();
+    console.error(`\x1b[31m✗ Could not initialize the Yhub schema. ${detail}\x1b[0m`);
+    return false;
+  }
+  return true;
+}
+
+function ensurePostgres({ yhubSchema = true } = {}) {
   // Check if container is already running
   const check = runSilent(`docker inspect -f "{{.State.Running}}" ${POSTGRES_CONTAINER}`);
   if (check.status === 0 && check.stdout.toString().trim() === 'true') {
     console.log(`\x1b[32m✓ Postgres already running\x1b[0m`);
+    ensureYhubDatabase(yhubSchema);
     return;
   }
 
@@ -199,21 +363,51 @@ function ensurePostgres() {
   if (exists.status === 0) {
     console.log(`\x1b[34m> Starting existing postgres container...\x1b[0m`);
     run(`docker start ${POSTGRES_CONTAINER}`);
+    ensureYhubDatabase(yhubSchema);
     return;
   }
 
   // Create and start a new container
   console.log(`\x1b[34m> Starting postgres...\x1b[0m`);
-  run([
-    'docker run -d',
-    `--name ${POSTGRES_CONTAINER}`,
-    `-p ${POSTGRES_PORT}:5432`,
-    `-e POSTGRES_USER=${POSTGRES_USER}`,
-    `-e POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
-    `-e POSTGRES_DB=${POSTGRES_DB}`,
-    `-v nextdocs_pgdata:/var/lib/postgresql/data`,
-    POSTGRES_IMAGE,
-  ].join(' '));
+  run(
+    [
+      'docker run -d',
+      `--name ${POSTGRES_CONTAINER}`,
+      `-p ${POSTGRES_PORT}:5432`,
+      `-e POSTGRES_USER=${POSTGRES_USER}`,
+      `-e POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
+      `-e POSTGRES_DB=${POSTGRES_DB}`,
+      `-v nextdocs_pgdata:/var/lib/postgresql/data`,
+      POSTGRES_IMAGE,
+    ].join(' ')
+  );
+  ensureYhubDatabase(yhubSchema);
+}
+
+function ensureRedis() {
+  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${REDIS_CONTAINER}`);
+  if (check.status === 0 && check.stdout.toString().trim() === 'true') {
+    console.log(`\x1b[32m✓ Redis already running\x1b[0m`);
+    return;
+  }
+
+  const exists = runSilent(`docker inspect ${REDIS_CONTAINER}`);
+  if (exists.status === 0) {
+    console.log(`\x1b[34m> Starting existing redis container...\x1b[0m`);
+    run(`docker start ${REDIS_CONTAINER}`);
+    return;
+  }
+
+  console.log(`\x1b[34m> Starting redis...\x1b[0m`);
+  run(
+    [
+      'docker run -d',
+      `--name ${REDIS_CONTAINER}`,
+      `-p ${REDIS_PORT}:6379`,
+      REDIS_IMAGE,
+      'redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru',
+    ].join(' ')
+  );
 }
 
 /**
@@ -245,23 +439,29 @@ function ensureMailpit() {
     console.log(`\x1b[34m> Recreating mailpit with loopback-only ports...\x1b[0m`);
     run(`docker rm -f ${MAILPIT_CONTAINER}`);
   } else if (isRunning) {
-    console.log(`\x1b[32m✓ Mailpit already running (Web UI: http://localhost:${MAILPIT_WEB_PORT})\x1b[0m`);
+    console.log(
+      `\x1b[32m✓ Mailpit already running (Web UI: http://localhost:${MAILPIT_WEB_PORT})\x1b[0m`
+    );
     return;
   } else if (exists) {
     console.log(`\x1b[34m> Starting existing mailpit container...\x1b[0m`);
     run(`docker start ${MAILPIT_CONTAINER}`);
-    console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
+    console.log(
+      `\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`
+    );
     return;
   }
 
   console.log(`\x1b[34m> Starting mailpit container...\x1b[0m`);
-  run([
-    'docker run -d',
-    `--name ${MAILPIT_CONTAINER}`,
-    `-p 127.0.0.1:${MAILPIT_SMTP_PORT}:1025`,
-    `-p 127.0.0.1:${MAILPIT_WEB_PORT}:8025`,
-    MAILPIT_IMAGE,
-  ].join(' '));
+  run(
+    [
+      'docker run -d',
+      `--name ${MAILPIT_CONTAINER}`,
+      `-p 127.0.0.1:${MAILPIT_SMTP_PORT}:1025`,
+      `-p 127.0.0.1:${MAILPIT_WEB_PORT}:8025`,
+      MAILPIT_IMAGE,
+    ].join(' ')
+  );
   console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
 }
 
@@ -347,6 +547,9 @@ function runForService(task, svc) {
   }
 
   ensureJsWorkspaceReady(svc);
+  if (svc === 'realtime' && task === 'dev') {
+    Object.assign(process.env, buildRealtimeDevEnv());
+  }
   return turbo(task, svc);
 }
 
@@ -361,7 +564,7 @@ function runForAll(task) {
   ensureJsWorkspaceReady('all');
   let turboTask = task;
   if (task === 'format' && isFix) turboTask = 'format:fix';
-  const turboStatus = turbo(turboTask, null, (task === 'lint' && isFix) ? ' -- --fix' : '');
+  const turboStatus = turbo(turboTask, null, task === 'lint' && isFix ? ' -- --fix' : '');
 
   if (apiStatus !== 0 || turboStatus !== 0) process.exit(1);
 }
@@ -370,8 +573,10 @@ if (!command) usage();
 
 switch (command) {
   case 'dev':
-    // TODO: We will not require postgres to be running for web and realtime.
-    ensurePostgres();
+    // Only a realtime run needs the Yhub schema; API/web-only sessions should not
+    // fail just because @y/hub is missing.
+    ensurePostgres({ yhubSchema: !service || service === 'realtime' });
+    ensureRedis();
     if (devUsesLocalMailpit(service)) {
       ensureMailpit();
       // The all-services branch stops Mailpit from its own exit hook.
@@ -391,16 +596,17 @@ switch (command) {
         env: {
           ...buildApiDevEnv(),
           SPRING_OUTPUT_ANSI_ENABLED: 'ALWAYS',
-        }
+        },
       });
       const turboProc = spawn('npx', ['turbo', 'run', 'dev'], {
         stdio: ['inherit', 'pipe', 'pipe'],
         shell: true,
         cwd: ROOT,
-         env: {
+        env: {
           ...process.env,
+          ...buildRealtimeDevEnv(),
           FORCE_COLOR: '1',
-        }
+        },
       });
 
       // Pipe output manually so Node waits for the actual processes to close pipes
@@ -411,20 +617,20 @@ switch (command) {
 
       let finalCode = 0;
 
-      // Instead of waiting for the wrappers to exit, we wait for their output 
-      // streams to close. This guarantees the actual background grandchild 
+      // Instead of waiting for the wrappers to exit, we wait for their output
+      // streams to close. This guarantees the actual background grandchild
       // processes have gracefully shutdown before the script exits.
       let closedAPI = false;
       let closedTurbo = false;
 
       api.stdout.on('end', () => {
-         closedAPI = true;
-         if (closedTurbo) process.exit(finalCode);
+        closedAPI = true;
+        if (closedTurbo) process.exit(finalCode);
       });
 
       turboProc.stdout.on('end', () => {
-         closedTurbo = true;
-         if (closedAPI) process.exit(finalCode);
+        closedTurbo = true;
+        if (closedAPI) process.exit(finalCode);
       });
 
       api.on('exit', (code) => {
@@ -440,8 +646,12 @@ switch (command) {
           if (api.pid) runSilent(`taskkill /pid ${api.pid} /T /F`);
           if (turboProc.pid) runSilent(`taskkill /pid ${turboProc.pid} /T /F`);
         } else {
-          try { if (api.pid) api.kill('SIGINT'); } catch (_) {}
-          try { if (turboProc.pid) turboProc.kill('SIGINT'); } catch (_) {}
+          try {
+            if (api.pid) api.kill('SIGINT');
+          } catch (_) {}
+          try {
+            if (turboProc.pid) turboProc.kill('SIGINT');
+          } catch (_) {}
         }
         process.exit();
       });
@@ -507,7 +717,7 @@ switch (command) {
     break;
 
   case 'db':
-    ensurePostgres();
+    ensurePostgres({ yhubSchema: false });
     run(`docker exec -it ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB}`);
     break;
 

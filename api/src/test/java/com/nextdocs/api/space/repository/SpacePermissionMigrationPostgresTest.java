@@ -175,6 +175,7 @@ class SpacePermissionMigrationPostgresTest {
     private void insertDoc(
             UUID id, UUID ownerId, UUID parentId, UUID spaceId, String linkMode, String linkLevel, boolean trashed)
             throws SQLException {
+        // These fixtures insert under V30, before V41 removed the last non-Yhub content column.
         String sql = "INSERT INTO documents (id, user_id, parent_id, space_id, title, yjs_state, general_access_mode, "
                 + "link_access_level, sibling_order_key, deleted_at, created_at, updated_at) "
                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())";

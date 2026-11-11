@@ -21,7 +21,6 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -72,7 +71,6 @@ class SpaceRootListingPersistenceTest {
                 .space(space)
                 .workspace(space == null ? null : space.getWorkspace())
                 .title(title)
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
     }
 
@@ -82,7 +80,6 @@ class SpaceRootListingPersistenceTest {
                 .user(owner)
                 .workspace(workspace)
                 .title(title)
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
     }
 
@@ -161,7 +158,6 @@ class SpaceRootListingPersistenceTest {
                 .workspace(workspace)
                 .parent(spaceRoot)
                 .title("Space Child")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         Document directShare = page(owner, null, "Direct Share");
         directShare.setWorkspace(workspace);
@@ -261,7 +257,6 @@ class SpaceRootListingPersistenceTest {
                 .workspace(workspace)
                 .parent(parent)
                 .title("Child")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
         accessGrantRepository.saveAndFlush(AccessGrant.builder()
                 .workspace(workspace)

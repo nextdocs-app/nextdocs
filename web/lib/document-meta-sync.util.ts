@@ -69,6 +69,7 @@ export function persistMetaWrite({
   queuePendingPatch,
   triggerBackoff,
   clearBackoff,
+  onRemoteSuccess,
   rollback,
   refreshSession,
   logScope,
@@ -89,6 +90,11 @@ export function persistMetaWrite({
   queuePendingPatch?: () => void;
   triggerBackoff: () => void;
   clearBackoff: () => void;
+  /**
+   * Runs after a direct PATCH lands, so the caller can reconcile a title queued by
+   * an earlier failure: the saved value is now the durable one.
+   */
+  onRemoteSuccess?: () => void;
   /** Guarded rollback — the caller captures the write seq. */
   rollback: () => void;
   /** Silent re-auth for a 401; the queued write replays with the new token. */
@@ -113,6 +119,7 @@ export function persistMetaWrite({
     .then(() => {
       if (remoteWrite) {
         clearBackoff();
+        onRemoteSuccess?.();
       }
     })
     .catch(async (err) => {

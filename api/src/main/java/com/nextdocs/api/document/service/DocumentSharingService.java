@@ -20,6 +20,7 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
@@ -36,6 +37,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -56,6 +58,7 @@ public class DocumentSharingService {
     private final SpaceMemberRepository spaceMemberRepository;
     private final AccessGrantSyncService accessGrantSyncService;
     private final AccessAuditService auditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -329,6 +332,7 @@ public class DocumentSharingService {
         // Ensure the collaborator has a UserDocumentOrder entry for their Shared
         // section so root documents and floated nested documents can be reordered.
         ensureCollaboratorOrder(doc, targetUser);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(targetUser.getId())));
 
         return new CollaboratorResponse(
                 saved.getUser().getId(),
@@ -397,6 +401,7 @@ public class DocumentSharingService {
         if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
             accessGrantRepository.pruneOrphanedBreakpoints(documentId);
         }
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(collaboratorUserId)));
     }
 
     @Transactional
@@ -426,6 +431,7 @@ public class DocumentSharingService {
 
         reconcileSharedRoots(collaboratorUserId, documentId);
         accessGrantRepository.pruneOrphanedBreakpoints(documentId);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(collaboratorUserId)));
     }
 
     @Transactional
@@ -456,6 +462,7 @@ public class DocumentSharingService {
         // later re-granted access on an ancestor those stale rows would spring back to life.
         reconcileSharedRoots(userId, documentId);
         accessGrantRepository.pruneOrphanedBreakpoints(documentId);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(userId)));
     }
 
     @Transactional(readOnly = true)

@@ -20,7 +20,6 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -105,7 +104,6 @@ class SpaceArchiveConcurrencyTest {
                 .id(UUID.randomUUID())
                 .user(actor)
                 .title("Page")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
     }
 

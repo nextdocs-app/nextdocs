@@ -26,6 +26,11 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.realtime.client.YhubClient;
+import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
+import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.realtime.event.DocumentPurgedEvent;
+import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -43,9 +48,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -72,20 +79,19 @@ public class DocumentService {
     // an unauthenticated caller must not be able to ask for thousands of rows per request.
     static final int MAX_PUBLIC_CHILDREN_PAGE_SIZE = 50;
 
-    // Anonymous saves share a per-IP budget of 20 requests/min, and the realtime
-    // layer refuses payloads above 5 MB, so an unbounded snapshot write can only
-    // burn bandwidth and storage on data that could never sync.
-    static final int MAX_PUBLIC_STATE_BYTES = 5 * 1024 * 1024;
-
     // Mirrors documents.title VARCHAR(255) in V2 and the DTOs' @Size bound.
     static final int MAX_TITLE_LENGTH = 255;
 
-    // Base64 turns 3 bytes into 4 characters, so this bounds what a caller can make the
-    // decoder allocate. Deliberately a little generous (the 3-byte encoding quantum
-    // hides up to two extra bytes) and only a pre-filter: MAX_PUBLIC_STATE_BYTES stays
-    // the exact rule. Rejecting on length first means an unauthenticated caller cannot
-    // make the API materialise an arbitrarily large snapshot before the size check.
-    static final int MAX_PUBLIC_STATE_ENCODED_LENGTH = ((MAX_PUBLIC_STATE_BYTES + 2) / 3) * 4 + 4;
+    /**
+     * The room key the realtime broker accepts, mirrored from its UUID_REGEX.
+     *
+     * The broker keys a room by the exact docid string and admits only versions 1-5
+     * with an RFC 4122 variant. A client-generated v6-v8 id would create a document
+     * whose room can never open a socket, so the create is rejected while the caller
+     * can still retry with a usable id.
+     */
+    private static final Pattern REALTIME_DOCUMENT_ID =
+            Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
 
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
@@ -99,6 +105,15 @@ public class DocumentService {
     private final DocumentIconCoverApplier iconCoverApplier;
     private final WorkspaceService workspaceService;
     private final SpaceAccessService spaceAccessService;
+    private final YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
+    private final YhubClient yhubClient;
+
+    /**
+     * Required, not optional: an instance built without a publisher silently skips the
+     * access-changed and purged events, leaving open sockets authorized until the next
+     * sweep. Constructor injection makes that a startup failure instead.
+     */
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -141,7 +156,7 @@ public class DocumentService {
         if (!isOwner && permissionService.resolveAccess(userId, existing.getId()) == null) {
             throw new ApiException(ErrorCode.CONFLICT, "A document already exists with this ID.");
         }
-        return new CreateDocumentResult(toResponse(existing, true, userId), false);
+        return new CreateDocumentResult(toResponse(existing, userId), false);
     }
 
     @Transactional
@@ -154,8 +169,15 @@ public class DocumentService {
                     "A page cannot be created inside a space and under a parent at once; "
                             + "create it at the space root and nest it there.");
         }
+        if (request.id() != null
+                && !REALTIME_DOCUMENT_ID.matcher(request.id().toString()).matches()) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Document ID must be a UUID version 1 through 5 with an RFC 4122 variant.");
+        }
         User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-        String yjsState = request.yjsState();
+        // Decode before any database work: invalid base64 must not create a row.
+        byte[] initialState = decodeBase64State(request.yjsState());
 
         UUID documentId = request.id() != null ? request.id() : UUID.randomUUID();
 
@@ -163,6 +185,15 @@ public class DocumentService {
             Document existing = documentRepository.findById(documentId).orElse(null);
             if (existing != null) {
                 return existingDocumentForCreate(existing, userId);
+            }
+            // A purge outbox row is the permanent reservation for this id. Yhub keeps a
+            // hard tombstone after a purge, so a room recreated under the same id could
+            // never accept content again. Completed rows are therefore never pruned, and
+            // both a pending and a completed row block reuse with a permanent verdict:
+            // the offline create queue must stop retrying a rejected id.
+            if (yhubPurgeOutboxRepository.existsByDocumentId(documentId)) {
+                throw new ApiException(
+                        ErrorCode.CONFLICT, "This document ID was permanently deleted and cannot be reused.");
             }
         }
 
@@ -206,7 +237,6 @@ public class DocumentService {
                 // In a standalone tree, nested documents inherit the tree's owner.
                 .user(targetSpace != null ? user : (parent != null ? parent.getUser() : user))
                 .title(normalizeTitle(request.title()))
-                .yjsState(decodeBase64State(yjsState))
                 .createdBy(request.createdBy())
                 .parent(parent)
                 .space(space)
@@ -234,7 +264,19 @@ public class DocumentService {
             userDocumentOrderRepository.saveAndFlush(udo);
         }
 
-        return new CreateDocumentResult(toResponse(saved, true, userId), true);
+        // Yhub owns content; applying the initial update is the only content write this
+        // endpoint performs. It runs after every row write so a failed seed rolls back
+        // the whole create and the offline queue can retry its only copy.
+        //
+        // The seed holds this transaction open for the Yhub round trip (up to the
+        // client's 5s timeout), so create throughput is bounded by Yhub's latency and
+        // the document row lock lives for the same window. Accepted: the alternative is
+        // a create that commits a document whose content seed can fail permanently,
+        // which is exactly the state the offline queue cannot repair. Revisit only if
+        // create throughput becomes a measured problem.
+        seedInitialContent(saved.getId(), initialState);
+
+        return new CreateDocumentResult(toResponse(saved, userId), true);
     }
 
     @Transactional(readOnly = true)
@@ -266,7 +308,7 @@ public class DocumentService {
         } else {
             document = permissionService.requireReadAccess(userId, documentId);
         }
-        return toResponse(document, true, userId);
+        return toResponse(document, userId);
     }
 
     @Transactional(readOnly = true)
@@ -282,7 +324,6 @@ public class DocumentService {
 
         return toResponse(
                 document,
-                true,
                 null,
                 publicAccess,
                 workspaceService.findPublicBranding().orElse(null));
@@ -376,12 +417,16 @@ public class DocumentService {
     }
 
     /**
-     * Anonymous snapshot save for share links. Anyone holding a link whose effective
-     * (possibly inherited) access allows editing may persist title/content without
-     * signing in — the link UUID itself is the capability, like polished
-     * self-hostable docs (Docmost/Outline public edit links). Comment-only and
-     * view-only links cannot save snapshots here; comments still sync live over
-     * the realtime channel where per-key write guards apply.
+     * Anonymous metadata save for share links. Anyone holding a link whose effective
+     * (possibly inherited) access allows editing may persist the title without signing
+     * in — the link UUID itself is the capability, like polished self-hostable docs
+     * (Docmost/Outline public edit links). Comment-only and view-only links cannot save
+     * here; comments still sync live over the realtime channel where per-key write
+     * guards apply.
+     *
+     * <p>Content is not written here: Yhub owns the document body, and a REST snapshot
+     * write would race the websocket the guest is editing through, silently replacing
+     * live edits with a stale base64 blob.
      */
     @Transactional
     public DocumentResponse updatePublic(UUID documentId, DocumentUpdateRequest request) {
@@ -401,23 +446,12 @@ public class DocumentService {
             document.setTitle(normalizeTitle(request.title()));
         }
 
-        if (request.yjsState() != null) {
-            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
-                throw publicStateTooLarge();
-            }
-            byte[] state = decodeBase64State(request.yjsState());
-            if (state.length > MAX_PUBLIC_STATE_BYTES) {
-                throw publicStateTooLarge();
-            }
-            document.setYjsState(state);
-        }
-
         iconCoverApplier.applyIcon(document, request.icon());
         iconCoverApplier.applyCover(document, request.cover());
 
         // The EDIT gate above already resolved the public level: reuse it instead
         // of resolving a second time inside toResponse.
-        return toResponse(documentRepository.save(document), true, null, access);
+        return toResponse(documentRepository.save(document), null, access);
     }
 
     @Transactional(readOnly = true)
@@ -613,17 +647,6 @@ public class DocumentService {
             document.setTitle(normalizeTitle(request.title()));
         }
 
-        if (request.yjsState() != null) {
-            if (request.yjsState().length() > MAX_PUBLIC_STATE_ENCODED_LENGTH) {
-                throw publicStateTooLarge();
-            }
-            byte[] state = decodeBase64State(request.yjsState());
-            if (state.length > MAX_PUBLIC_STATE_BYTES) {
-                throw publicStateTooLarge();
-            }
-            document.setYjsState(state);
-        }
-
         if (request.createdBy() != null) {
             document.setCreatedBy(request.createdBy());
         }
@@ -631,7 +654,7 @@ public class DocumentService {
         iconCoverApplier.applyIcon(document, request.icon());
         iconCoverApplier.applyCover(document, request.cover());
 
-        return toResponse(documentRepository.save(document), true, userId);
+        return toResponse(documentRepository.save(document), userId);
     }
 
     @Transactional
@@ -677,6 +700,8 @@ public class DocumentService {
                 documentRepository.save(descendant);
             }
         }
+        // The whole subtree changed state: every descendant socket has to re-authorize.
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(document.getId()));
     }
 
     /**
@@ -700,7 +725,7 @@ public class DocumentService {
         }
         if (document.getSpace() != null) {
             if (document.getSpace().getId().equals(spaceId)) {
-                return toResponse(document, true, userId);
+                return toResponse(document, userId);
             }
             throw new ApiException(ErrorCode.CONFLICT, "The page already belongs to another space.");
         }
@@ -718,7 +743,7 @@ public class DocumentService {
         document.setSpace(space);
         document.setWorkspace(space.getWorkspace());
         document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
-        return toResponse(documentRepository.save(document), true, userId);
+        return toResponse(documentRepository.save(document), userId);
     }
 
     /**
@@ -852,7 +877,9 @@ public class DocumentService {
             }
         }
 
-        return toResponse(savedRoot, true, userId);
+        eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
+
+        return toResponse(savedRoot, userId);
     }
 
     /**
@@ -913,7 +940,7 @@ public class DocumentService {
      * commits.
      *
      * <p>Descendants are walked by id only: loading {@link Document} entities would pull
-     * every descendant's {@code yjsState} (megabytes each) into heap just to delete it.
+     * every descendant row into heap just to delete it.
      * Levels are removed deepest-first, so no row ever loses its children implicitly.
      */
     @Transactional
@@ -954,7 +981,22 @@ public class DocumentService {
         }
         deleteDocumentLevel(roots);
 
+        // Yhub content is deleted by the outbox drain, not inline: a purge must not be
+        // able to leave orphaned content behind when Yhub is unreachable at commit time.
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        List<YhubPurgeOutbox> outbox = allIds.stream()
+                .map(id -> YhubPurgeOutbox.builder()
+                        .id(UUID.randomUUID())
+                        .documentId(id)
+                        .nextAttemptAt(now)
+                        .createdAt(now)
+                        .build())
+                .toList();
+        yhubPurgeOutboxRepository.saveAll(outbox);
+
         attachmentService.deleteStoredFilesAfterCommit(attachmentStorageKeys);
+
+        eventPublisher.publishEvent(new DocumentPurgedEvent(List.copyOf(allIds)));
         return allIds.size();
     }
 
@@ -1005,12 +1047,6 @@ public class DocumentService {
         return null;
     }
 
-    private static ApiException publicStateTooLarge() {
-        return new ApiException(
-                ErrorCode.VALIDATION_FAILED,
-                "yjsState exceeds the maximum size of " + (MAX_PUBLIC_STATE_BYTES / (1024 * 1024)) + " MB.");
-    }
-
     private static ApiException tooDeep() {
         return new ApiException(
                 ErrorCode.VALIDATION_FAILED,
@@ -1029,17 +1065,39 @@ public class DocumentService {
         }
     }
 
-    private DocumentResponse toResponse(Document document, boolean includeState) {
-        return toResponse(document, includeState, null, null);
+    /**
+     * Applies an initial Yjs update to the Yhub room. The bytes never enter Postgres.
+     *
+     * <p>A Yjs v1 update for an empty document is exactly two bytes; seeding it would
+     * create an empty room and make creation depend on Yhub needlessly, so the first
+     * socket connection creates the room instead.
+     *
+     * <p>The call runs inside the create transaction so a rejected seed rolls the whole
+     * create back. The mirror-image window - a seed that succeeds and a commit that then
+     * fails - leaves a Yhub room that no row or outbox entry knows about. That is
+     * accepted: the initial update is idempotent, so the retry recreates the same content
+     * under the same id, and a row that never committed cannot own a purge.
+     */
+    private void seedInitialContent(UUID documentId, byte[] state) {
+        if (state == null || state.length <= 2) {
+            return;
+        }
+        if (!yhubClient.seed(documentId, state)) {
+            throw new ApiException(
+                    ErrorCode.SERVICE_UNAVAILABLE, "Could not store the document content. Please retry.");
+        }
     }
 
-    private DocumentResponse toResponse(Document document, boolean includeState, UUID callerUserId) {
-        return toResponse(document, includeState, callerUserId, null);
+    private DocumentResponse toResponse(Document document) {
+        return toResponse(document, null, null, null);
     }
 
-    private DocumentResponse toResponse(
-            Document document, boolean includeState, UUID callerUserId, DocumentAccessLevel publicAccessHint) {
-        return toResponse(document, includeState, callerUserId, publicAccessHint, null);
+    private DocumentResponse toResponse(Document document, UUID callerUserId) {
+        return toResponse(document, callerUserId, null, null);
+    }
+
+    private DocumentResponse toResponse(Document document, UUID callerUserId, DocumentAccessLevel publicAccessHint) {
+        return toResponse(document, callerUserId, publicAccessHint, null);
     }
 
     /**
@@ -1056,7 +1114,6 @@ public class DocumentService {
      */
     private DocumentResponse toResponse(
             Document document,
-            boolean includeState,
             UUID callerUserId,
             DocumentAccessLevel publicAccessHint,
             WorkspaceBrandingResponse workspaceBranding) {
@@ -1131,11 +1188,6 @@ public class DocumentService {
         return new DocumentResponse(
                 document.getId(),
                 document.getTitle(),
-                includeState
-                        ? (document.getYjsState() != null
-                                ? Base64.getEncoder().encodeToString(document.getYjsState())
-                                : null)
-                        : null,
                 document.getParent() != null ? document.getParent().getId() : null,
                 document.getSpace() != null ? document.getSpace().getId() : null,
                 orderKey,

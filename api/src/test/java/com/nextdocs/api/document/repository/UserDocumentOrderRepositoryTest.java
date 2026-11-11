@@ -6,7 +6,6 @@ import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -37,14 +36,12 @@ class UserDocumentOrderRepositoryTest {
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Active")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
 
         Document trashed = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(user)
                 .title("Trashed")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .deletedAt(OffsetDateTime.now())
                 .build());
 
@@ -74,17 +71,12 @@ class UserDocumentOrderRepositoryTest {
         User other = userRepository.saveAndFlush(
                 User.builder().email("bob@example.com").displayName("Bob").build());
 
-        Document userDoc = documentRepository.saveAndFlush(Document.builder()
-                .id(UUID.randomUUID())
-                .user(user)
-                .title("Doc")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
-                .build());
+        Document userDoc = documentRepository.saveAndFlush(
+                Document.builder().id(UUID.randomUUID()).user(user).title("Doc").build());
         Document otherDoc = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
                 .user(other)
                 .title("Other")
-                .yjsState("seed".getBytes(StandardCharsets.UTF_8))
                 .build());
 
         UUID orderId = userDocumentOrderRepository
