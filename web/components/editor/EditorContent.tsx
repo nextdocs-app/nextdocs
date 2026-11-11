@@ -70,6 +70,8 @@ import { createAlert, getAlertBlockTypeSelectItem, getAlertSlashMenuItem } from 
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
+import { useAppDispatch } from '@/stores/hooks';
+import { addToast } from '@/stores/toasts/toasts.slice';
 import { useIsTouchInput } from '@/hooks/useMediaQuery.hook';
 import { useDocumentToolbarInset } from '@/hooks/useDocumentToolbarInset.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
@@ -376,6 +378,7 @@ export function EditorContent({
   onCommentsThreadStatsChange: (stats: CommentThreadStats) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const dispatch = useAppDispatch();
   const isTouchInput = useIsTouchInput();
   const documentToolbarInset = useDocumentToolbarInset();
   const { isOnline } = useNetworkStatus();
@@ -467,8 +470,17 @@ export function EditorContent({
         awareness: null,
         canRead: () => canCommentRef.current,
         onError: (error) => console.warn('Comment request failed:', error),
+        onAnchorError: () =>
+          dispatch(
+            addToast({
+              message:
+                'Comment posted, but its highlight could not be placed. The comment is saved.',
+              type: 'warning',
+              duration: 6000,
+            })
+          ),
       }),
-    [documentId]
+    [documentId, dispatch]
   );
 
   useEffect(() => {

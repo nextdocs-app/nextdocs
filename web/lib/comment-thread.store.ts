@@ -1,7 +1,10 @@
 import type { CommentData, ThreadData } from '@blocknote/core/comments';
 import { ThreadStore, ThreadStoreAuth } from '@blocknote/core/comments';
 import type { Awareness } from 'y-protocols/awareness';
+import * as Y from 'yjs';
+import { absolutePositionToRelativePosition, ySyncPluginKey } from 'y-prosemirror';
 import { ApiError } from '@/services/api-client';
+import { commentAnchorService } from '@/services/comment-anchor.service';
 import { commentService } from '@/services/comment.service';
 import type {
   ApiComment,
@@ -43,6 +46,11 @@ type ThreadMetadata = {
   resolvedBy: CommentAuthor | null;
 };
 
+/** BlockNote's own add-to-document contract, without repeating its editor generics. */
+type AddThreadToDocumentOptions = NonNullable<
+  Parameters<NonNullable<ThreadStore['addThreadToDocument']>>[0]
+>;
+
 function threadAbilitiesOf(thread: ThreadData): ThreadAbilities | undefined {
   return (thread.metadata as ThreadMetadata | undefined)?.abilities;
 }
@@ -67,11 +75,50 @@ function commentAbilitiesOf(comment: CommentData): CommentAbilities | undefined 
  */
 export class CommentThreadStore extends ThreadStore {
   /**
-   * Deliberately unimplemented: BlockNote's default path writes the comment mark
-   * into the Y.Doc, which is still the right home for the anchor. The store owns
-   * the thread content only.
+   * The comment mark still lives in the Y.Doc, but a COMMENT user cannot write
+   * that document. Turn the editor selection into stable Yjs relative positions
+   * and let the realtime service insert the mark on the user's behalf.
+   *
+   * The thread is already committed to Postgres by the time BlockNote calls this.
+   * A failed anchor must therefore not reject thread creation: the composer
+   * would report an error and a retry would create a duplicate thread. Report it
+   * and keep the thread; the anchor request is idempotent and can be retried.
    */
-  public addThreadToDocument?: ThreadStore['addThreadToDocument'];
+  public addThreadToDocument = async (options: AddThreadToDocumentOptions): Promise<void> => {
+    try {
+      const binding = ySyncPluginKey.getState(options.editor.prosemirrorState)?.binding;
+      if (!binding?.type) {
+        throw new Error('The collaborative binding is not ready');
+      }
+
+      const anchor = absolutePositionToRelativePosition(
+        options.selection.anchor,
+        binding.type,
+        binding.mapping
+      );
+      const head = absolutePositionToRelativePosition(
+        options.selection.head,
+        binding.type,
+        binding.mapping
+      );
+      if (!anchor || !head) {
+        throw new Error('The selection no longer exists in the document');
+      }
+
+      await commentAnchorService.add(
+        this.documentId,
+        this.options.getAccessToken(),
+        options.threadId,
+        {
+          anchor: Y.relativePositionToJSON(anchor),
+          head: Y.relativePositionToJSON(head),
+        }
+      );
+    } catch (error) {
+      this.report(error);
+      this.options.onAnchorError?.(error);
+    }
+  };
 
   private threads = new Map<string, ThreadData>();
   private profiles = new Map<string, CommentProfile>();
@@ -93,6 +140,8 @@ export class CommentThreadStore extends ThreadStore {
       /** Read access is COMMENT+; a VIEW mount keeps the store empty and silent. */
       canRead: () => boolean;
       onError?: (error: unknown) => void;
+      /** Anchor failures are non-fatal; surface them without failing the thread. */
+      onAnchorError?: (error: unknown) => void;
     }
   ) {
     super(options.auth);
@@ -240,11 +289,13 @@ export class CommentThreadStore extends ThreadStore {
       this.upsert(this.toThreadData(thread));
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
-        // Deleted elsewhere (or this was the last comment), so drop the stale card.
+        // Deleted elsewhere (or this was the last comment), so drop the stale card
+        // and clear its now-orphaned comment mark.
         this.mutationEpoch++;
         if (this.threads.delete(threadId)) {
           this.notify();
         }
+        this.removeAnchor(threadId);
         return;
       }
       this.report(error);
@@ -346,6 +397,9 @@ export class CommentThreadStore extends ThreadStore {
     if (this.threads.delete(options.threadId)) {
       this.notify();
     }
+    // The API is the authority on deletion; the anchor endpoint only clears a
+    // mark after it can no longer see the thread.
+    this.removeAnchor(options.threadId);
     this.ping(options.threadId);
   };
 
@@ -400,6 +454,15 @@ export class CommentThreadStore extends ThreadStore {
     await this.refreshThread(options.threadId);
     this.ping(options.threadId);
   };
+
+  // --- anchors ---------------------------------------------------------------
+
+  /** Best-effort cleanup; the thread is already gone from the API's point of view. */
+  private removeAnchor(threadId: string): void {
+    void commentAnchorService
+      .remove(this.documentId, this.options.getAccessToken(), threadId)
+      .catch((error) => this.report(error));
+  }
 
   // --- awareness --------------------------------------------------------------
 
