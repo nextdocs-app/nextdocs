@@ -58,6 +58,7 @@ import {
   locales as diagramLocales,
 } from '@blocknote/diagram-block';
 import 'katex/dist/katex.min.css';
+import '@blocknote/math-block/style.css';
 import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { MobileDraggableBlocksExtension } from './mobileDraggableBlocks';
