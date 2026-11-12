@@ -3,16 +3,19 @@
 import { Suspense, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/sidebar';
+import { SearchDialog } from '@/components/search';
 import { ToastContainer } from '@/components/ToastContainer';
 import { WorkspaceEntry } from '@/components/WorkspaceEntry';
 import { Hamburger } from '@/icons';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { refreshSessionThunk, SILENT_REFRESH_MIN_INTERVAL_MS } from '@/stores/auth/auth.slice';
 import { setCollapsed, setMobileNavOpen, toggleMobileNav } from '@/stores/sidebar/sidebar.slice';
+import { toggleSearchDialog } from '@/stores/ui/ui.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '@/lib/pending-cloud-create.util';
+import { isEditorLinkShortcutTarget, recordRecentDocumentVisit } from '@/lib/search-helpers.util';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
 const emptySubscribe = () => () => {};
@@ -38,6 +41,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const isMobileNavOpen = useAppSelector((state) => state.sidebar.isMobileNavOpen);
   const isSidebarCollapsed = useAppSelector((state) => state.sidebar.isCollapsed);
+  const isSearchDialogOpen = useAppSelector((state) => state.ui.isSearchDialogOpen);
+  const isSettingsDialogOpen = useAppSelector((state) => state.ui.isSettingsDialogOpen);
+  const hasPermanentDeleteTarget = Boolean(
+    useAppSelector((state) => state.ui.permanentDeleteTarget)
+  );
   const isMobileLayout = useIsMobileLayout();
   const isHydrated = useSyncExternalStore(
     emptySubscribe,
@@ -127,6 +135,59 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // a persisted session from changing the tree mid-hydration.
   const isWorkspaceEntry = pathname === '/' && (!isHydrated || isInitializing || !isAuthenticated);
 
+  // Track recently visited pages for the search dialog's empty-query list.
+  useEffect(() => {
+    if (!pathname?.startsWith('/doc/')) {
+      return;
+    }
+    const docId = pathname.slice('/doc/'.length).split('/')[0];
+    if (docId) {
+      recordRecentDocumentVisit(user?.id ?? null, docId);
+    }
+  }, [pathname, user?.id]);
+
+  // Global Cmd+K / Ctrl+K shortcut for Quick Search, active even when the
+  // sidebar is collapsed or on mobile.
+  useEffect(() => {
+    if (isWorkspaceEntry) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isSearchShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'k';
+
+      if (!isSearchShortcut || event.repeat) {
+        return;
+      }
+
+      // BlockNote advertises Mod+K on its link button, so a keystroke over a
+      // non-empty editor selection belongs to the link action, not to search.
+      if (isEditorLinkShortcutTarget(event.target)) {
+        return;
+      }
+
+      if (!isSearchDialogOpen && (isSettingsDialogOpen || hasPermanentDeleteTarget)) {
+        return;
+      }
+
+      event.preventDefault();
+      dispatch(toggleSearchDialog());
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isWorkspaceEntry,
+    isSearchDialogOpen,
+    isSettingsDialogOpen,
+    hasPermanentDeleteTarget,
+    dispatch,
+  ]);
+
   if (isWorkspaceEntry) {
     return <WorkspaceEntry />;
   }
@@ -189,6 +250,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Suspense>{children}</Suspense>
         </div>
       </main>
+      {isSearchDialogOpen && <SearchDialog />}
       <ToastContainer />
     </div>
   );

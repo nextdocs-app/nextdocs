@@ -811,8 +811,61 @@ it('closes the account menu when Escape is pressed', async () => {
   expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
-it('calls showAllDocuments when "show all documents" is clicked', async () => {
+it('opens the full-text search dialog when Search Documents is clicked', async () => {
   const user = userEvent.setup();
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+
+  render(<Sidebar />, store);
+  expect(store.getState().ui.isSearchDialogOpen).toBe(false);
+
+  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
+
+  expect(store.getState().ui.isSearchDialogOpen).toBe(true);
+});
+
+it('opens the private documents panel when "show all documents" is clicked', async () => {
+  const user = userEvent.setup();
+  const manyItems = Array.from({ length: 8 }, (_, index) => ({
+    id: `private-${index + 1}`,
+    title: `Doc ${index + 1}`,
+    parentId: null,
+    orderKey: `a${index}`,
+    hasChildren: false,
+    effectiveAccessLevel: 'OWNER' as const,
+    createdAt: '2024-01-01T10:00:00Z',
+    updatedAt: '2024-01-01T10:00:00Z',
+  }));
+  const manyNodes = Object.fromEntries(
+    manyItems.map((item) => [
+      item.id,
+      { ...item, isExpanded: false, isLoading: false, children: [], childrenLoaded: true },
+    ])
+  );
+  (documentService.listRootTreeNodes as jest.Mock).mockResolvedValue({
+    items: manyItems,
+    hasMore: false,
+    page: 0,
+  });
   (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
@@ -834,14 +887,59 @@ it('calls showAllDocuments when "show all documents" is clicked', async () => {
     loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
   });
 
-  render(<Sidebar />);
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
+  render(
+    <Sidebar />,
+    configureStore({
+      reducer: {
+        sidebar: sidebarReducer,
+        sidebarTree: sidebarTreeReducer,
+        sharedTree: sharedTreeReducer,
+        spaceTree: spaceTreeReducer,
+        auth: authReducer,
+        ui: uiReducer,
+        documentList: documentListReducer,
+      },
+      preloadedState: {
+        auth: signedInAuthState,
+        sidebarTree: {
+          nodes: manyNodes,
+          rootIds: Object.keys(manyNodes),
+          isRootLoading: false,
+          rootHasMore: false,
+          rootPage: 0,
+        },
+      },
+    })
+  );
+  await user.click(screen.getByRole('button', { name: /Show all documents/i }));
 
   expect(mockShowAllDocuments).toHaveBeenCalledTimes(1);
+  expect(await screen.findByRole('dialog', { name: /Private documents/i })).toBeInTheDocument();
 });
 
 it('opens all documents panel with search and closes with back', async () => {
   const user = userEvent.setup();
+  const manyItems = Array.from({ length: 8 }, (_, index) => ({
+    id: `private-${index + 1}`,
+    title: `Doc ${index + 1}`,
+    parentId: null,
+    orderKey: `a${index}`,
+    hasChildren: false,
+    effectiveAccessLevel: 'OWNER' as const,
+    createdAt: '2024-01-01T10:00:00Z',
+    updatedAt: '2024-01-01T10:00:00Z',
+  }));
+  const manyNodes = Object.fromEntries(
+    manyItems.map((item) => [
+      item.id,
+      { ...item, isExpanded: false, isLoading: false, children: [], childrenLoaded: true },
+    ])
+  );
+  (documentService.listRootTreeNodes as jest.Mock).mockResolvedValue({
+    items: manyItems,
+    hasMore: false,
+    page: 0,
+  });
   (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
     sharedDocuments: [],
@@ -863,9 +961,32 @@ it('opens all documents panel with search and closes with back', async () => {
     loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
   });
 
-  render(<Sidebar />);
+  render(
+    <Sidebar />,
+    configureStore({
+      reducer: {
+        sidebar: sidebarReducer,
+        sidebarTree: sidebarTreeReducer,
+        sharedTree: sharedTreeReducer,
+        spaceTree: spaceTreeReducer,
+        auth: authReducer,
+        ui: uiReducer,
+        documentList: documentListReducer,
+      },
+      preloadedState: {
+        auth: signedInAuthState,
+        sidebarTree: {
+          nodes: manyNodes,
+          rootIds: Object.keys(manyNodes),
+          isRootLoading: false,
+          rootHasMore: false,
+          rootPage: 0,
+        },
+      },
+    })
+  );
 
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
+  await user.click(screen.getByRole('button', { name: /Show all documents/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   expect(dialog).toBeInTheDocument();
@@ -879,7 +1000,6 @@ it('opens all documents panel with search and closes with back', async () => {
 });
 
 it('renders skeleton rows instead of a loading badge while loading more in the documents panel', async () => {
-  const user = userEvent.setup();
   (documentService.listRootTreeNodes as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
   (useDocumentList as jest.Mock).mockReturnValue({
     documents: mockDocs,
@@ -919,6 +1039,10 @@ it('renders skeleton rows instead of a loading badge while loading more in the d
         ui: uiReducer,
       },
       preloadedState: {
+        sidebar: {
+          ...sidebarReducer(undefined, { type: '@@init' }),
+          panelMode: 'all' as const,
+        },
         sidebarTree: {
           nodes: mockTreeNodes,
           rootIds: ['id-1', 'id-2'],
@@ -938,8 +1062,6 @@ it('renders skeleton rows instead of a loading badge while loading more in the d
       },
     })
   );
-
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
 
   expect(screen.getByRole('dialog', { name: /Private documents/i })).toBeInTheDocument();
   expect(screen.getByTestId('documents-panel-loading-more-skeleton')).toBeInTheDocument();
@@ -1253,9 +1375,32 @@ it('moves a document to trash from show all documents panel row actions menu', a
   (documentService.moveCloudDocumentToTrash as jest.Mock).mockResolvedValue(undefined);
 
   const user = userEvent.setup();
-  render(<Sidebar />);
-
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebar: {
+        ...sidebarReducer(undefined, { type: '@@init' }),
+        panelMode: 'all' as const,
+      },
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+  render(<Sidebar />, store);
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   await user.click(within(dialog).getByRole('button', { name: /Document actions for Doc 1/i }));
@@ -1312,6 +1457,10 @@ it('renders private panel with hasMore true when there are fewer than 7 private 
     },
     preloadedState: {
       auth: signedInAuthState,
+      sidebar: {
+        ...sidebarReducer(undefined, { type: '@@init' }),
+        panelMode: 'all' as const,
+      },
       sidebarTree: {
         nodes: sparseNodes,
         rootIds: ['sparse-1', 'sparse-2'],
@@ -1399,10 +1548,7 @@ it('renders private panel with hasMore true when there are fewer than 7 private 
     page: 0,
   });
 
-  const user = userEvent.setup();
   render(<Sidebar />, customStore);
-
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   expect(dialog).toBeInTheDocument();
@@ -1972,7 +2118,6 @@ it('excludes shared documents from the private section', async () => {
 });
 
 it('excludes shared documents from the private documents panel', async () => {
-  const user = userEvent.setup();
   (useAuth as jest.Mock).mockReturnValue({
     user: {
       displayName: 'Alice',
@@ -2024,6 +2169,10 @@ it('excludes shared documents from the private documents panel', async () => {
       documentList: documentListReducer,
     },
     preloadedState: {
+      sidebar: {
+        ...sidebarReducer(undefined, { type: '@@init' }),
+        panelMode: 'all' as const,
+      },
       sidebarTree: {
         nodes: mockTreeNodes,
         rootIds: ['id-1', 'id-2'],
@@ -2041,8 +2190,6 @@ it('excludes shared documents from the private documents panel', async () => {
   });
 
   render(<Sidebar />, store);
-
-  await user.click(screen.getByRole('button', { name: /Search Documents/i }));
 
   const dialog = screen.getByRole('dialog', { name: /Private documents/i });
   // "Doc 1" is shared by the owner, so it must not appear in the private panel
