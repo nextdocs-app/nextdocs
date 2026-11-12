@@ -62,8 +62,8 @@ describe('Permissions', () => {
     expect(adminDocumentPermissions.history).toBeUndefined();
   });
 
-  it('grants the service only the org-scoped recheck', () => {
+  it('grants the service only the org-scoped recheck and search reindex', () => {
     expect(serviceOrgPermissions.type).toBe('permissions:org:v1');
-    expect(serviceOrgPermissions.endpoint).toEqual({ recheck: 'c---' });
+    expect(serviceOrgPermissions.endpoint).toEqual({ recheck: 'c---', 'search-reindex': 'c---' });
   });
 });
