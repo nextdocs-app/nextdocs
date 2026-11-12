@@ -2,9 +2,10 @@ package com.nextdocs.api.realtime.service;
 
 import com.nextdocs.api.document.repository.DocumentRepository;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,6 +28,11 @@ import org.springframework.stereotype.Service;
  * <p>The schedule lives here rather than on the controller: a {@code @Scheduled} method on a
  * request handler mixed two lifetimes in one bean, and the throttle state has nothing to do
  * with HTTP.
+ *
+ * <p>The write carries the instant the notification arrived, not the instant the flush ran.
+ * The API indexes the projection with that same instant as {@code document_search.indexed_at};
+ * stamping the flush time instead would place {@code updated_at} after the projection it
+ * belongs to, and the reconcile crawl would then re-extract every edited document.
  */
 @Service
 public class ContentUpdatedThrottle {
@@ -46,7 +52,7 @@ public class ContentUpdatedThrottle {
     private final ConcurrentHashMap<UUID, Long> lastWrittenAt = new ConcurrentHashMap<>();
 
     /** Documents whose notification landed inside the window, awaiting the flush. */
-    private final Set<UUID> deferred = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Instant> deferred = new ConcurrentHashMap<>();
 
     /** One warning per full-cap episode, not one per dropped notification. */
     private final AtomicBoolean capWarned = new AtomicBoolean(false);
@@ -65,16 +71,17 @@ public class ContentUpdatedThrottle {
 
     /**
      * Records a content-updated notification. Returns immediately; the write is either
-     * done now or deferred to {@link #flush()}.
+     * done now or deferred to {@link #flush()}. {@code occurredAt} is the instant the
+     * content landed, and is what the sort key is set to whenever the write happens.
      */
-    public void record(UUID documentId) {
+    public void record(UUID documentId, Instant occurredAt) {
         long now = System.nanoTime();
         Long previous = lastWrittenAt.get(documentId);
         if (previous != null && now - previous < throttleNanos) {
             // Trailing edge: the last compaction of a burst must not be dropped, or the
             // sort key stays stale until the document is edited again.
             if (deferred.size() < maxEntries) {
-                deferred.add(documentId);
+                deferred.put(documentId, occurredAt == null ? Instant.now() : occurredAt);
             } else if (capWarned.compareAndSet(false, true)) {
                 // The cap is a memory bound, not a correctness one: Yhub fires again on the
                 // next compaction, so a dropped entry only delays the sort key. Say so once
@@ -85,7 +92,7 @@ public class ContentUpdatedThrottle {
             }
             return;
         }
-        write(documentId, now);
+        write(documentId, now, occurredAt);
     }
 
     /** Flushes notifications whose window has closed. */
@@ -95,13 +102,14 @@ public class ContentUpdatedThrottle {
     }
 
     void flush(long nowNanos) {
-        for (UUID documentId : deferred) {
+        for (Map.Entry<UUID, Instant> entry : deferred.entrySet()) {
+            UUID documentId = entry.getKey();
             Long previous = lastWrittenAt.get(documentId);
             if (previous != null && nowNanos - previous < throttleNanos) {
                 continue;
             }
             try {
-                write(documentId, nowNanos);
+                write(documentId, nowNanos, entry.getValue());
                 deferred.remove(documentId);
             } catch (RuntimeException e) {
                 // Stay deferred: the next tick retries rather than leaving the sort key
@@ -117,13 +125,14 @@ public class ContentUpdatedThrottle {
         }
     }
 
-    private void write(UUID documentId, long nowNanos) {
+    private void write(UUID documentId, long nowNanos, Instant occurredAt) {
         if (lastWrittenAt.size() >= maxEntries) {
             // Bounded reset rather than an LRU: the map only suppresses redundant writes,
             // so losing it costs one extra UPDATE per document at worst.
             lastWrittenAt.clear();
         }
-        documentRepository.markContentUpdated(documentId, OffsetDateTime.now(ZoneOffset.UTC));
+        Instant stamp = occurredAt == null ? Instant.now() : occurredAt;
+        documentRepository.markContentUpdated(documentId, OffsetDateTime.ofInstant(stamp, ZoneOffset.UTC));
         lastWrittenAt.put(documentId, nowNanos);
     }
 }
