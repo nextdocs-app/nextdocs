@@ -68,6 +68,12 @@ export interface FakeApi {
   url: string;
   setVerdict(token: string, verdict: AccessVerdict): void;
   setAnonymousVerdict(docid: string, verdict: AccessVerdict): void;
+  /**
+   * Register a comment thread the caller may anchor. `token: null` is a guest, so the
+   * same document and thread are answered without an Authorization header; passing
+   * `null` as the thread id removes it, which is how a deleted thread answers 404.
+   */
+  setThread(token: string | null, docid: string, threadId: string | null): void;
   reset(): void;
   close(): Promise<void>;
 }
@@ -80,6 +86,10 @@ export interface FakeApi {
 export async function startFakeApi(): Promise<FakeApi> {
   const byToken = new Map<string, AccessVerdict>();
   const byAnonymous = new Map<string, AccessVerdict>();
+  const threads = new Set<string>();
+
+  const threadKey = (token: string | null, docid: string, threadId: string): string =>
+    `${token ?? 'anonymous'}\u0000${docid}\u0000${threadId}`;
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -109,6 +119,20 @@ export async function startFakeApi(): Promise<FakeApi> {
       return;
     }
 
+    // The thread route the anchor handlers read before touching a Y.Doc. A 404 must
+    // carry the API's error envelope: the handler only reads that as a deletion.
+    const thread = /^\/api\/v1\/documents\/([^/]+)\/threads\/([^/]+)$/.exec(url.pathname);
+    if (thread != null) {
+      const [, docid, threadId] = thread;
+      const token = req.headers.authorization?.replace(/^Bearer\s+/i, '') ?? null;
+      if (threads.has(threadKey(token, docid, threadId))) {
+        json(200, { success: true, data: { id: threadId, documentId: docid } });
+      } else {
+        json(404, { success: false, error: 'NOT_FOUND' });
+      }
+      return;
+    }
+
     json(404, { success: false, error: 'not found' });
   });
 
@@ -119,9 +143,22 @@ export async function startFakeApi(): Promise<FakeApi> {
     url: `http://127.0.0.1:${port}`,
     setVerdict: (token, verdict) => byToken.set(token, verdict),
     setAnonymousVerdict: (docid, verdict) => byAnonymous.set(docid, verdict),
+    setThread: (token, docid, threadId) => {
+      const prefix = `${token ?? 'anonymous'}\u0000${docid}\u0000`;
+      if (threadId == null) {
+        for (const key of threads) {
+          if (key.startsWith(prefix)) {
+            threads.delete(key);
+          }
+        }
+        return;
+      }
+      threads.add(threadKey(token, docid, threadId));
+    },
     reset: () => {
       byToken.clear();
       byAnonymous.clear();
+      threads.clear();
     },
     close: () =>
       new Promise<void>((resolve, reject) =>

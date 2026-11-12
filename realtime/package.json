@@ -34,6 +34,7 @@
   "license": "AGPL-3.0-only",
   "dependencies": {
     "@y/hub": "^0.10.1",
+    "@y/y": "^14.0.0-rc.29",
     "dotenv": "^18.0.9",
     "postgres": "^3.4.9"
   },

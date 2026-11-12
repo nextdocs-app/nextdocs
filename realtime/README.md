@@ -78,24 +78,74 @@ next sweep here. A transient outage never freezes a room: only a 401/403 is perm
 
 Yhub is deny-by-default. `src/permissions.ts` lists the endpoints each role may use:
 
-- `VIEW` reads the Y.Doc and awareness.
-- `COMMENT` reads the Y.Doc, writes awareness (presence and the comment-refresh ping).
-- `EDIT` / `OWNER` read and write both.
+- `VIEW` reads the Y.Doc and awareness. It cannot touch comment anchors.
+- `COMMENT` reads the Y.Doc, writes awareness (presence and the comment-refresh ping),
+  and may call the `anchor` endpoint. That endpoint is the only Y.Doc mutation a
+  commenter can request: the service inserts a mark for a thread the API confirms,
+  never a client-supplied update. The endpoint's `d` bit removes a mark only after
+  the API reports the thread gone (orphan cleanup).
+- `EDIT` / `OWNER` read and write both, and use the same anchor endpoint when the
+  editor creates a thread.
 - The service identity gets explicit document read/write plus `delete: ['soft','hard']`
   and the org-scoped `recheck` endpoint. There is no wildcard grant: a future Yhub
   endpoint stays closed until it is added deliberately.
 
+## Comment anchors
+
+Threads and replies live in the API, but the BlockNote mark that ties a thread to
+a passage is a Yjs format on the `blocknote` fragment. A COMMENT user is read-only
+on that fragment, so the browser never inserts the mark itself. It sends the
+selection as two Yjs relative positions:
+
+```json
+{ "threadId": "<uuid>", "selection": { "anchor": { … }, "head": { … } } }
+```
+
+The handler asks the comment API for that thread (`GET
+/api/v1/documents/{docid}/threads/{threadId}`) with the caller's own credential.
+A 200 proves the thread belongs to this document and that the caller may comment
+on it; a 404/401/403 is permanent, and anything else answers 503 so the client
+can retry. Only then does `agentTask` hydrate the room, resolve the client's
+relative positions against the current CRDT, and apply the `comment` format.
+Relative positions survive edits made between selection and hydration; a range
+that no longer exists is rejected with 409 instead of being applied to the wrong
+text. Repeating the request is safe: formatting an already-marked range is a
+no-op.
+
+`DELETE ...?threadId=<uuid>` removes every format that references the thread.
+It is deliberately allowed for COMMENT users as well: the handler first requires
+the API to report the thread gone, so it can only clear an orphan (for example
+after the author deletes the thread's last comment), never strip a live thread's
+highlight.
+
+`agentTask` forwards the update through Yhub's stream, so connected clients see
+the mark without a second client-generated Yjs update. A 200 means the handler
+ran and the update was queued; it does not by itself prove durable compaction,
+which is why the operation is idempotent and safe to retry.
+
+Anchor requests are limited to 20 mutations per caller and document per minute
+per realtime instance; excess requests answer 429. A share-link guest has no
+identity, so every guest on a document shares one budget. A body over 16 KiB is
+rejected with 413, but that cap bounds what the handler parses, not what the
+process holds: Yhub buffers a request body before any handler runs, so the
+deployment must enforce a request-body limit at the ingress (reverse proxy or
+load balancer) in front of this service. Removing an anchor from an empty
+document succeeds with `removed: 0` so cleanup remains idempotent after all
+content is deleted.
+
 ## Endpoints
 
-| Method   | Path                                      | Scope    | Purpose                                             |
-| -------- | ----------------------------------------- | -------- | --------------------------------------------------- |
-| `GET`    | `/api/ping/v1`                            | global   | Liveness: answers without touching a store          |
-| `GET`    | `/api/health/v1`                          | global   | Readiness: Redis + Postgres, two-second budget each |
-| `POST`   | `/api/recheck/v1/nextdocs`                | org      | Batched re-authorization (service only)             |
-| `PATCH`  | `/api/ydoc/v1/nextdocs/{docid}`           | document | Seed a new document                                 |
-| `GET`    | `/api/ydoc/v1/nextdocs/{docid}`           | document | Read the persisted update                           |
-| `DELETE` | `/api/ydoc/v1/nextdocs/{docid}?hard=true` | document | Purge content                                       |
-| `WS`     | `/api/ws/v1/nextdocs/{docid}`             | document | Collaboration stream                                |
+| Method   | Path                                         | Scope    | Purpose                                             |
+| -------- | -------------------------------------------- | -------- | --------------------------------------------------- |
+| `GET`    | `/api/ping/v1`                               | global   | Liveness: answers without touching a store          |
+| `GET`    | `/api/health/v1`                             | global   | Readiness: Redis + Postgres, two-second budget each |
+| `POST`   | `/api/recheck/v1/nextdocs`                   | org      | Batched re-authorization (service only)             |
+| `POST`   | `/api/anchor/v1/nextdocs/{docid}`            | document | Insert a comment mark (COMMENT+)                    |
+| `DELETE` | `/api/anchor/v1/nextdocs/{docid}?threadId=…` | document | Remove an orphaned comment mark (after deletion)    |
+| `PATCH`  | `/api/ydoc/v1/nextdocs/{docid}`              | document | Seed a new document                                 |
+| `GET`    | `/api/ydoc/v1/nextdocs/{docid}`              | document | Read the persisted update                           |
+| `DELETE` | `/api/ydoc/v1/nextdocs/{docid}?hard=true`    | document | Purge content                                       |
+| `WS`     | `/api/ws/v1/nextdocs/{docid}`                | document | Collaboration stream                                |
 
 `POST /api/recheck/v1/nextdocs` takes `{"docids": ["<uuid>", …], "users": ["<uuid>", …]}`
 (`users` optional). Access is inherited, so the API expands a page change to its subtree

@@ -1,6 +1,9 @@
 import type { CommentData, ThreadData } from '@blocknote/core/comments';
 import type { Awareness } from 'y-protocols/awareness';
+import * as Y from 'yjs';
+import { absolutePositionToRelativePosition, ySyncPluginKey } from 'y-prosemirror';
 import { ApiError } from '../../../services/api-client';
+import { commentAnchorService } from '../../../services/comment-anchor.service';
 import { commentService } from '../../../services/comment.service';
 import {
   ANONYMOUS_COMMENT_USER_ID,
@@ -8,6 +11,13 @@ import {
   CommentThreadStoreAuth,
 } from '../../../lib/comment-thread.store';
 import type { ApiComment, ApiThread } from '../../../types/comment.types';
+
+jest.mock('../../../services/comment-anchor.service', () => ({
+  commentAnchorService: {
+    add: jest.fn(),
+    remove: jest.fn(),
+  },
+}));
 
 jest.mock('../../../services/comment.service', () => ({
   commentService: {
@@ -25,7 +35,13 @@ jest.mock('../../../services/comment.service', () => ({
   },
 }));
 
+jest.mock('y-prosemirror', () => ({
+  absolutePositionToRelativePosition: jest.fn(),
+  ySyncPluginKey: { getState: jest.fn() },
+}));
+
 const service = commentService as jest.Mocked<typeof commentService>;
+const anchorService = commentAnchorService as jest.Mocked<typeof commentAnchorService>;
 
 function abilities(overrides: Partial<ApiComment['abilities']> = {}) {
   return { update: false, delete: false, reactions: true, ...overrides };
@@ -87,6 +103,8 @@ function createStore(
   options: {
     canRead?: boolean | (() => boolean);
     awareness?: Awareness | null;
+    onError?: (error: unknown) => void;
+    onAnchorError?: (error: unknown) => void;
   } = {}
 ) {
   const canReadOption = options.canRead;
@@ -98,6 +116,8 @@ function createStore(
     getAccessToken: () => 'token-1',
     awareness: options.awareness ?? null,
     canRead: canReadFn,
+    onError: options.onError,
+    onAnchorError: options.onAnchorError,
   });
   return { store, auth };
 }
@@ -124,6 +144,10 @@ function blockNoteComment(
 describe('CommentThreadStore', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (absolutePositionToRelativePosition as jest.Mock).mockReset();
+    (ySyncPluginKey.getState as jest.Mock).mockReset();
+    anchorService.add.mockResolvedValue(undefined);
+    anchorService.remove.mockResolvedValue(undefined);
   });
 
   it('maps an API thread into BlockNote thread and comment data', async () => {
@@ -241,6 +265,7 @@ describe('CommentThreadStore', () => {
 
     expect(service.get).toHaveBeenCalledWith('doc-1', 'thread-1', 'token-1');
     expect(store.getThreads().has('thread-1')).toBe(false);
+    expect(anchorService.remove).toHaveBeenCalledWith('doc-1', 'token-1', 'thread-1');
   });
 
   it('discards a stale thread refresh if a mutation happened in flight', async () => {
@@ -259,6 +284,7 @@ describe('CommentThreadStore', () => {
     const refreshPromise = store.refreshThread('thread-1');
     await store.deleteThread({ threadId: 'thread-1' });
     expect(store.getThreads().has('thread-1')).toBe(false);
+    expect(anchorService.remove).toHaveBeenCalledWith('doc-1', 'token-1', 'thread-1');
 
     service.list.mockResolvedValue([]);
     resolveGet(apiThread({ id: 'thread-1' }));
@@ -266,6 +292,90 @@ describe('CommentThreadStore', () => {
     await settled();
 
     expect(store.getThreads().has('thread-1')).toBe(false);
+  });
+
+  it('serializes the editor selection into relative positions for the anchor request', async () => {
+    const relativeDoc = new Y.Doc();
+    const text = relativeDoc.getText('anchor');
+    text.insert(0, 'hello world');
+    const anchor = Y.createRelativePositionFromTypeIndex(text, 1);
+    const head = Y.createRelativePositionFromTypeIndex(text, 4);
+    const binding = { type: {}, mapping: {} };
+    (absolutePositionToRelativePosition as jest.Mock)
+      .mockReturnValueOnce(anchor)
+      .mockReturnValueOnce(head);
+    (ySyncPluginKey.getState as jest.Mock).mockReturnValue({ binding });
+    const { store } = createStore();
+
+    await store.addThreadToDocument({
+      threadId: 'thread-1',
+      selection: { anchor: 1, head: 4 },
+      editor: { prosemirrorState: {} } as never,
+    });
+
+    expect(absolutePositionToRelativePosition).toHaveBeenNthCalledWith(
+      1,
+      1,
+      binding.type,
+      binding.mapping
+    );
+    expect(absolutePositionToRelativePosition).toHaveBeenNthCalledWith(
+      2,
+      4,
+      binding.type,
+      binding.mapping
+    );
+    expect(anchorService.add).toHaveBeenCalledWith('doc-1', 'token-1', 'thread-1', {
+      anchor: Y.relativePositionToJSON(anchor),
+      head: Y.relativePositionToJSON(head),
+    });
+  });
+
+  it('reports an unavailable anchor binding without failing thread creation', async () => {
+    const onError = jest.fn();
+    const onAnchorError = jest.fn();
+    const { store } = createStore({ onError, onAnchorError });
+
+    await expect(
+      store.addThreadToDocument({
+        threadId: 'thread-1',
+        selection: { anchor: 0, head: 5 },
+        editor: { prosemirrorState: {} } as never,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onAnchorError).toHaveBeenCalledWith(expect.any(Error));
+    store.destroy();
+  });
+
+  it('reports a rejected anchor request without failing thread creation', async () => {
+    const relativeDoc = new Y.Doc();
+    const text = relativeDoc.getText('anchor');
+    text.insert(0, 'hello world');
+    (absolutePositionToRelativePosition as jest.Mock)
+      .mockReturnValueOnce(Y.createRelativePositionFromTypeIndex(text, 0))
+      .mockReturnValueOnce(Y.createRelativePositionFromTypeIndex(text, 5));
+    (ySyncPluginKey.getState as jest.Mock).mockReturnValue({
+      binding: { type: {}, mapping: {} },
+    });
+    const error = new ApiError('Anchor service down', 503);
+    anchorService.add.mockRejectedValue(error);
+    const onError = jest.fn();
+    const onAnchorError = jest.fn();
+    const { store } = createStore({ onError, onAnchorError });
+
+    await expect(
+      store.addThreadToDocument({
+        threadId: 'thread-1',
+        selection: { anchor: 0, head: 5 },
+        editor: { prosemirrorState: {} } as never,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(onAnchorError).toHaveBeenCalledWith(error);
+    store.destroy();
   });
 
   it('replaces matching comment in place if already present in addComment', async () => {

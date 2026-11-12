@@ -8,6 +8,8 @@ export type AccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
  * Only the endpoints a browser actually uses are named. Yhub is deny-by-default,
  * so a future built-in endpoint stays closed until it is added here on purpose.
  * Trash is an API concept and history is not exposed yet, so neither is granted.
+ * The `anchor` endpoint is the one deliberate Y.Doc mutation for COMMENT users:
+ * the service inserts a trusted comment mark, never a client-supplied update.
  *
  * An unrecognized level returns null: the level arrives in an HTTP response, and a
  * mapping that fell through to the write branch would turn a malformed answer into
@@ -34,6 +36,10 @@ export function documentPermissions(level: AccessLevel | string): DocumentPermis
       endpoint: {
         ws: '-r--',
         ydoc: '-r--',
+        // COMMENT never writes the Y.Doc; it only asks the server to insert the
+        // mark for a thread it may comment on. `d` is granted for orphan cleanup:
+        // the handler removes an anchor only after the API says the thread is gone.
+        anchor: 'c--d',
       },
     };
   }
@@ -46,6 +52,7 @@ export function documentPermissions(level: AccessLevel | string): DocumentPermis
       endpoint: {
         ws: '-ru-',
         ydoc: '-ru-',
+        anchor: 'c--d',
       },
     };
   }
