@@ -42,6 +42,8 @@ async function responseError(res: Response, action: string): Promise<ApiError> {
   return new ApiError(message, res.status);
 }
 
+export const ANCHOR_REQUEST_TIMEOUT_MS = 10_000;
+
 export const commentAnchorService = {
   /**
    * `selection` is in Yjs relative-position form, so concurrent edits between
@@ -54,18 +56,25 @@ export const commentAnchorService = {
     threadId: string,
     selection: AnchorSelection
   ): Promise<void> {
-    const res = await fetch(anchorUrl(documentId), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...authHeaders(accessToken),
-      },
-      body: JSON.stringify({ threadId, selection } satisfies AnchorCreateRequest),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ANCHOR_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(anchorUrl(documentId), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...authHeaders(accessToken),
+        },
+        body: JSON.stringify({ threadId, selection } satisfies AnchorCreateRequest),
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      throw await responseError(res, 'create');
+      if (!res.ok) {
+        throw await responseError(res, 'create');
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   },
 
@@ -74,16 +83,23 @@ export const commentAnchorService = {
    * reports the thread gone, so the caller cannot use it to strip a live mark.
    */
   async remove(documentId: string, accessToken: string | null, threadId: string): Promise<void> {
-    const res = await fetch(`${anchorUrl(documentId)}?threadId=${encodeURIComponent(threadId)}`, {
-      method: 'DELETE',
-      headers: {
-        Accept: 'application/json',
-        ...authHeaders(accessToken),
-      },
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ANCHOR_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${anchorUrl(documentId)}?threadId=${encodeURIComponent(threadId)}`, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders(accessToken),
+        },
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      throw await responseError(res, 'remove');
+      if (!res.ok) {
+        throw await responseError(res, 'remove');
+      }
+    } finally {
+      clearTimeout(timeout);
     }
   },
 };

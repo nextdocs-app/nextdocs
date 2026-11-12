@@ -1,4 +1,7 @@
-import { commentAnchorService } from '../../../services/comment-anchor.service';
+import {
+  ANCHOR_REQUEST_TIMEOUT_MS,
+  commentAnchorService,
+} from '../../../services/comment-anchor.service';
 
 const originalFetch = global.fetch;
 
@@ -87,6 +90,40 @@ describe('commentAnchorService', () => {
       message: 'Selection no longer exists',
       status: 409,
     });
+  });
+
+  it('aborts a stalled request after the timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      global.fetch = jest.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          })
+      ) as unknown as typeof fetch;
+
+      const pending = commentAnchorService.add('doc-1', 'token-1', 'thread-1', selection);
+      jest.advanceTimersByTime(ANCHOR_REQUEST_TIMEOUT_MS);
+
+      await expect(pending).rejects.toThrow('aborted');
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('clears its timeout once the request settles', async () => {
+    jest.useFakeTimers();
+    try {
+      const fetchMock = jest.fn(async () => reply(200, { status: 'ok' }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      await commentAnchorService.remove('doc-1', 'token-1', 'thread-1');
+
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('falls back to a status message when the body is not JSON', async () => {
