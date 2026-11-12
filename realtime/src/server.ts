@@ -11,8 +11,6 @@ import {
   MAX_RECHECK_DOCS,
   RECHECK_CONCURRENCY,
   SWEEP_INTERVAL_MS,
-  API_BASE_URL,
-  YHUB_SERVICE_TOKEN,
 } from './config.js';
 import {
   verifyAccessToken,
@@ -24,6 +22,9 @@ import { buildAuthCallbacks } from './authorize.js';
 import { handleAnchorCreate, handleAnchorDelete } from './anchor.js';
 import { ActiveRoomTracker, RecheckGate, startRoomSweep } from './sweep.js';
 import { checkStore, describeError, jsonResponse } from './health.js';
+import { notifyContentUpdated, shouldNotifyContentUpdated } from './content-updated.js';
+import { readJsonBody } from './json-body.js';
+import { handleSearchReindex } from './search-reindex.js';
 import { log } from './logger.js';
 
 /** Rooms this instance currently serves, refreshed by every authorize call. */
@@ -96,6 +97,16 @@ const customEndpoints = [
     scope: 'org',
     post: {
       handler: handleRecheck,
+    },
+  }),
+  /**
+   * Batched content re-extraction for the API's search crawl. Service-only, like the
+   * recheck: a browser has no org-scoped endpoint grants at all.
+   */
+  createApiEndpoint('search-reindex', {
+    scope: 'org',
+    post: {
+      handler: handleSearchReindex,
     },
   }),
   /**
@@ -202,88 +213,8 @@ export async function handleRecheck(req: unknown): Promise<{ status: string; rec
   };
 }
 
-async function readJsonBody(req: RecheckRequest): Promise<Record<string, unknown> | null> {
-  try {
-    const raw = await req.bytes();
-    if (!raw || raw.length === 0) {
-      return null;
-    }
-    const parsed = JSON.parse(new TextDecoder().decode(raw));
-    return parsed != null && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Upper bound for one room's recheck before the batch moves on. */
 const RECHECK_TIMEOUT_MS = 10_000;
-
-/** The content-updated callback is limited to this org's main-branch documents. */
-export function shouldNotifyContentUpdated(docRef: {
-  org: string;
-  docid: string;
-  branch: string;
-}): boolean {
-  return docRef.org === ORG && docRef.branch === 'main' && UUID_REGEX.test(docRef.docid);
-}
-
-/** Notification attempts before the sort key is left stale until the next edit. */
-const CONTENT_UPDATED_ATTEMPTS = 3;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Tell the API that Yhub persisted new content for a document.
- *
- * Fires once per compaction that found new content, and the worker already
- * debounces compaction, so the rate is naturally bounded per document. The
- * route moves `updated_at` only: the content already lives in Yhub and is never
- * copied into Postgres, but the timestamp is the sidebar sort key and the API
- * owns it.
- *
- * Ordering: `@y/hub` fires `docUpdate` just before it stores the update, so this
- * notification can reach the API ahead of durable storage. It only moves a sort
- * key, so the one-compaction lead is harmless.
- *
- * Deliberately not awaited by the worker event: a slow API must never hold a
- * compaction. Transient failures are retried with backoff rather than logged
- * and forgotten; a notification that still fails leaves only a stale sort
- * position - the next edit re-sends it - never lost content.
- */
-export async function touchContentUpdated(docid: string): Promise<void> {
-  for (let attempt = 1; attempt <= CONTENT_UPDATED_ATTEMPTS; attempt++) {
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/v1/internal/realtime/content-updated?documentId=${encodeURIComponent(docid)}`,
-        {
-          method: 'POST',
-          headers: { 'X-Yhub-Service': YHUB_SERVICE_TOKEN },
-          signal: AbortSignal.timeout(3000),
-        }
-      );
-      if (res.ok) {
-        return;
-      }
-      // 4xx other than 429 is a contract error (a malformed id, a rejected
-      // credential): retrying cannot succeed.
-      if (res.status < 500 && res.status !== 429) {
-        log.warn(`Realtime content-updated rejected for ${docid}: status ${res.status}`);
-        return;
-      }
-      log.warn(
-        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid}: status ${res.status}`
-      );
-    } catch (err) {
-      log.warn(
-        `Realtime content-updated attempt ${attempt}/${CONTENT_UPDATED_ATTEMPTS} for ${docid} (${describeError(err)})`
-      );
-    }
-
-    if (attempt < CONTENT_UPDATED_ATTEMPTS) {
-      await sleep(250 * 3 ** (attempt - 1));
-    }
-  }
-}
 
 // The return type is explicit: declaration emit cannot name the config generic that
 // createYHub infers. The entrypoint only needs the handle to drain on SIGTERM.
@@ -311,11 +242,22 @@ export async function createServer(): Promise<RunningServer> {
     worker: {
       taskConcurrency: 5,
       events: {
-        docUpdate: ({ docRef }: { docRef: { org: string; docid: string; branch: string } }) => {
+        docUpdate: ({
+          docRef,
+          gcDoc,
+        }: {
+          docRef: { org: string; docid: string; branch: string };
+          gcDoc?: Uint8Array | null;
+        }) => {
           if (!shouldNotifyContentUpdated(docRef)) {
             return;
           }
-          void touchContentUpdated(docRef.docid);
+          // gcDoc is the post-compaction, garbage-collected state. Never nongcDoc: it
+          // can still contain content that was deleted from the current document.
+          // Deferred so the XML walk of a large document starts after the worker's
+          // completion callback returns; the notification already retries in the
+          // background, and compaction must not wait on extraction.
+          setImmediate(() => void notifyContentUpdated(docRef.docid, gcDoc));
         },
       },
     },
