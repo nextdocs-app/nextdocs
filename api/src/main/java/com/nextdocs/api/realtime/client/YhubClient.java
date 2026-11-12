@@ -185,6 +185,95 @@ public class YhubClient {
     }
 
     /**
+     * Ask the realtime service to re-extract text for documents whose search projection
+     * is missing or stale. The API cannot parse Yjs, so it only identifies the ids from
+     * Postgres; extraction stays in the one service that can read the Y.Doc.
+     *
+     * <p>Fire-and-forget like {@link #recheck}: the batch is idempotent, and a scheduled
+     * job must not block a shared scheduler thread on a batch of document reads. The
+     * caller advances its cursor regardless, so a failed batch is retried on a later
+     * pass instead of wedging the queue.
+     *
+     * @param maxBatchSize documents per request; the realtime service rejects a larger
+     *     batch, so this is the same {@code SEARCH_MAX_REINDEX_DOCS} value both services
+     *     bind rather than a constant that can drift from it
+     */
+    public void reindexContent(Collection<UUID> documentIds, int maxBatchSize) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return;
+        }
+        int batchSize = Math.max(1, maxBatchSize);
+        List<UUID> distinct = List.copyOf(new LinkedHashSet<>(documentIds));
+        for (int start = 0; start < distinct.size(); start += batchSize) {
+            List<UUID> batch = distinct.subList(start, Math.min(start + batchSize, distinct.size()));
+            sendReindex(batch);
+        }
+    }
+
+    private void sendReindex(List<UUID> documentIds) {
+        try {
+            String json = objectMapper.writeValueAsString(
+                    Map.of("docids", documentIds.stream().map(UUID::toString).toList()));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/api/search-reindex/v1/nextdocs"))
+                    .header("Authorization", "Bearer " + serviceToken)
+                    .header("Content-Type", "application/json")
+                    // Each id costs one Y.Doc read, and the batch is sequential.
+                    .timeout(Duration.ofSeconds(90))
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+
+            httpClient
+                    // The body answers with the per-document counts, and an accepted batch can
+                    // still have repaired nothing.
+                    .sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenAccept(response -> {
+                        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                            log.warn("Realtime search reindex failed: status {}", response.statusCode());
+                            return;
+                        }
+                        int failed = failedCount(response.body());
+                        if (failed > 0) {
+                            // Without this the only operator-visible line reports a successful
+                            // pass for a batch whose documents all failed to read.
+                            log.warn(
+                                    "Realtime search reindex failed for {} of {} document(s)",
+                                    failed,
+                                    documentIds.size());
+                        }
+                    })
+                    .exceptionally(ex -> {
+                        log.warn(
+                                "Failed async search reindex for {} document(s): {}",
+                                documentIds.size(),
+                                ex.getMessage());
+                        return null;
+                    });
+        } catch (Exception e) {
+            log.warn("Failed to initiate search reindex for {} document(s): {}", documentIds.size(), e.getMessage());
+        }
+    }
+
+    /**
+     * Documents the realtime service could not read in one batch. The endpoint answers 200
+     * with per-id failures, so the status alone cannot distinguish a repaired page from one
+     * that is still stale until the next crawl pass.
+     */
+    int failedCount(String body) {
+        if (body == null || body.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode failed = objectMapper.readTree(body).get("failed");
+            return failed == null ? 0 : failed.asInt(0);
+        } catch (RuntimeException e) {
+            // An unreadable reply is not worth failing the crawl over: the documents stay
+            // stale and the next pass retries them.
+            return 0;
+        }
+    }
+
+    /**
      * Hard-delete a document's content. 404 is success: the goal is that the content is
      * gone, and a retry after a partially applied purge must not stick forever.
      */

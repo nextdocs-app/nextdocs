@@ -31,6 +31,7 @@ import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.realtime.event.DocumentPurgedEvent;
 import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
+import com.nextdocs.api.search.event.DocumentSearchTitleChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -249,6 +250,11 @@ public class DocumentService {
 
         Document saved = documentRepository.saveAndFlush(document);
 
+        // After commit, not here: search is derived, so an index failure must never roll
+        // back a create. The listener also gives a brand-new page a searchable title
+        // before its first compaction.
+        eventPublisher.publishEvent(new DocumentSearchTitleChangedEvent(saved.getId()));
+
         if (parent == null) {
             // A space page's sidebar position comes from the shared key above. Its personal
             // row only matters if the page is later detached, so it is placed at the top of
@@ -442,18 +448,33 @@ public class DocumentService {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
 
+        boolean titleChanged = false;
         if (request.title() != null) {
-            document.setTitle(normalizeTitle(request.title()));
+            String title = normalizeTitle(request.title());
+            titleChanged = !title.equals(document.getTitle());
+            document.setTitle(title);
         }
 
         iconCoverApplier.applyIcon(document, request.icon());
         iconCoverApplier.applyCover(document, request.cover());
 
+        Document saved = documentRepository.save(document);
+        // An icon or cover save is not a title change; rebuilding the tsvector over the
+        // whole body for a colour would be pure amplification.
+        if (titleChanged) {
+            eventPublisher.publishEvent(new DocumentSearchTitleChangedEvent(saved.getId()));
+        }
         // The EDIT gate above already resolved the public level: reuse it instead
         // of resolving a second time inside toResponse.
-        return toResponse(documentRepository.save(document), null, access);
+        return toResponse(saved, null, access);
     }
 
+    /**
+     * Ancestors the caller may see, stopping at the first denied node.
+     *
+     * <p>Search needs the same rule for a page of hits in one query; if this walk changes,
+     * {@code DocumentSearchRepository.BREADCRUMB_SQL} has to change with it.
+     */
     @Transactional(readOnly = true)
     public List<DocumentBreadcrumbResponse> getBreadcrumbs(UUID userId, UUID documentId) {
         Document target =
@@ -643,8 +664,11 @@ public class DocumentService {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
 
+        boolean titleChanged = false;
         if (request.title() != null) {
-            document.setTitle(normalizeTitle(request.title()));
+            String title = normalizeTitle(request.title());
+            titleChanged = !title.equals(document.getTitle());
+            document.setTitle(title);
         }
 
         if (request.createdBy() != null) {
@@ -654,7 +678,13 @@ public class DocumentService {
         iconCoverApplier.applyIcon(document, request.icon());
         iconCoverApplier.applyCover(document, request.cover());
 
-        return toResponse(documentRepository.save(document), userId);
+        Document saved = documentRepository.save(document);
+        // Only a real rename needs the title vector rebuilt; icon, cover and createdBy
+        // saves must not re-index the body.
+        if (titleChanged) {
+            eventPublisher.publishEvent(new DocumentSearchTitleChangedEvent(saved.getId()));
+        }
+        return toResponse(saved, userId);
     }
 
     @Transactional

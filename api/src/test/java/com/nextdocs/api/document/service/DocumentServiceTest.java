@@ -38,12 +38,14 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.realtime.event.DocumentPurgedEvent;
 import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
+import com.nextdocs.api.search.event.DocumentSearchTitleChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -820,6 +822,66 @@ class DocumentServiceTest {
                 documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null, null));
 
         assertEquals("Untitled", response.title());
+    }
+
+    @Test
+    void create_publishesTheNewTitleForSearch() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder()
+                .id(userId)
+                .email("alice@example.com")
+                .displayName("Alice")
+                .build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
+        when(userDocumentOrderRepository.findMinOrderKeyByUserId(userId, documentId))
+                .thenReturn(Optional.empty());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.create(userId, request);
+
+        // A new page has to be findable by title before its first compaction.
+        verify(eventPublisher).publishEvent(any(DocumentSearchTitleChangedEvent.class));
+    }
+
+    @Test
+    void update_publishesTheSearchTitleOnlyForARealRename() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Re-saving the same title must not rebuild the body vector.
+        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Shared doc", null, null, null));
+        verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
+
+        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Renamed", null, null, null));
+        verify(eventPublisher).publishEvent(any(DocumentSearchTitleChangedEvent.class));
+    }
+
+    @Test
+    void update_anIconOnlySaveDoesNotReindexTheBody() {
+        UUID requesterId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document document = createSharedDocument(documentId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.update(
+                requesterId,
+                documentId,
+                new DocumentUpdateRequest(null, null, new PageIconRequest("EMOJI", "🔐"), null));
+
+        verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
     }
 
     @Test
@@ -2585,6 +2647,25 @@ class DocumentServiceTest {
         assertEquals("Guest edit", response.title());
         // Guest creator labels are not adopted for public saves.
         assertNull(doc.getCreatedBy());
+    }
+
+    @Test
+    void updatePublic_publishesTheSearchTitleOnlyForARealRename() {
+        UUID docId = UUID.randomUUID();
+        Document doc = createSharedDocument(docId, DocumentAccessLevel.EDIT);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolvePublicAccess(docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.save(doc)).thenReturn(doc);
+        when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
+
+        // Re-saving the current title must not rebuild the body vector...
+        documentService.updatePublic(docId, new DocumentUpdateRequest("Shared doc", null, null, null));
+        verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
+
+        // ...but a guest rename has to reach the projection before the crawl does.
+        documentService.updatePublic(docId, new DocumentUpdateRequest("Guest rename", null, null, null));
+        verify(eventPublisher).publishEvent(any(DocumentSearchTitleChangedEvent.class));
     }
 
     @Test

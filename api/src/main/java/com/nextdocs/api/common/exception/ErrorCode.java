@@ -32,6 +32,7 @@ public enum ErrorCode {
     CONFLICT(HttpStatus.CONFLICT, "The request conflicts with the current state of the resource."),
     SERVICE_UNAVAILABLE(
             HttpStatus.SERVICE_UNAVAILABLE, "Collaboration is temporarily unavailable. Please retry in a moment."),
+    SEARCH_TIMEOUT(HttpStatus.SERVICE_UNAVAILABLE, "Search took too long. Try a more specific query."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred."),
     RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "Too many requests. Please try again later.");
 
