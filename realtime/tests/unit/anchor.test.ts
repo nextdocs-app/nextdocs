@@ -136,18 +136,23 @@ describe('applyAnchorMark', () => {
     expect(marked.map((op) => op.insert)).toEqual(['world']);
   });
 
-  it('applies a full-block selection that starts on block boundaries', () => {
-    const { ydoc, paragraphs } = buildDocument(['block one', 'block two']);
+  it.each([false, true])(
+    'applies a full-block selection on block boundaries (backward: %s)',
+    (backward) => {
+      const { ydoc, paragraphs } = buildDocument(['block one', 'block two']);
+      const start = relative(paragraphs[0], 0);
+      const end = relative(paragraphs[1], 1);
 
-    applyAnchorMark(
-      ydoc,
-      { anchor: relative(paragraphs[0], 0), head: relative(paragraphs[1], 1) },
-      threadId
-    );
+      applyAnchorMark(
+        ydoc,
+        backward ? { anchor: end, head: start } : { anchor: start, head: end },
+        threadId
+      );
 
-    const marked = textOps(ydoc).filter((op) => Object.keys(commentFormats(op)).length > 0);
-    expect(marked.map((op) => op.insert)).toEqual(['block one', 'block two']);
-  });
+      const marked = textOps(ydoc).filter((op) => Object.keys(commentFormats(op)).length > 0);
+      expect(marked.map((op) => op.insert)).toEqual(['block one', 'block two']);
+    }
+  );
 
   it('is idempotent when the same request is retried', () => {
     const { ydoc, texts } = buildDocument(['hello world']);
@@ -312,6 +317,18 @@ describe('anchor handlers', () => {
       )
     ).rejects.toThrow('too large');
     expect(bytes).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized body that arrives without a declared length', async () => {
+    const { ydoc } = buildDocument(['hello world']);
+
+    await expect(
+      handleAnchorCreate(
+        httpRequest(ydoc, {
+          bytes: async () => new TextEncoder().encode('x'.repeat(16 * 1024 + 1)),
+        })
+      )
+    ).rejects.toThrow('too large');
   });
 
   it('limits repeated anchor requests per user and document', async () => {

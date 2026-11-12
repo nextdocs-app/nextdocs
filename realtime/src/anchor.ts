@@ -276,25 +276,22 @@ export function parseAnchorRequest(body: unknown): AnchorCreateRequest {
 export function applyAnchorMark(ydoc: Y.Doc, selection: AnchorSelection, threadId: string): void {
   const root = rootOf(ydoc);
   const tree = indexTree(root);
-  const startAbsolute = absoluteOf(ydoc, selection.anchor);
-  const endAbsolute = absoluteOf(ydoc, selection.head);
-  if (!startAbsolute || !endAbsolute) {
+  let startAbsolute = absoluteOf(ydoc, selection.anchor);
+  let endAbsolute = absoluteOf(ydoc, selection.head);
+  const startPath = startAbsolute && tree.paths.get(startAbsolute.type);
+  const endPath = endAbsolute && tree.paths.get(endAbsolute.type);
+  if (!startAbsolute || !endAbsolute || !startPath || !endPath) {
     throw apiError(409, 'Selection no longer exists');
   }
 
-  const start = resolveEndpoint(startAbsolute, 'start', tree);
-  const end = resolveEndpoint(endAbsolute, 'end', tree);
-  if (!start || !end) {
-    throw apiError(409, 'Selection no longer exists');
+  // Order the positions before applying the direction-specific block boundary rules.
+  if (comparePaths([...startPath, startAbsolute.index], [...endPath, endAbsolute.index]) > 0) {
+    [startAbsolute, endAbsolute] = [endAbsolute, startAbsolute];
   }
-
-  let from = start;
-  let to = end;
-  if (
-    from.textIndex > to.textIndex ||
-    (from.textIndex === to.textIndex && from.offset > to.offset)
-  ) {
-    [from, to] = [to, from];
+  const from = resolveEndpoint(startAbsolute, 'start', tree);
+  const to = resolveEndpoint(endAbsolute, 'end', tree);
+  if (!from || !to) {
+    throw apiError(409, 'Selection no longer exists');
   }
   if (from.textIndex === to.textIndex && from.offset === to.offset) {
     throw apiError(400, 'Selection is empty');
