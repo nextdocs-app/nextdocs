@@ -439,6 +439,10 @@ function attributionOf(req: AnchorRequest): string | undefined {
 }
 
 async function readJsonBody(req: AnchorRequest): Promise<unknown> {
+  // Yhub buffers the whole body before a handler runs, so this cap only bounds
+  // what is parsed, not what the process holds. The deployment must reject an
+  // oversized upload at the ingress (reverse proxy / load balancer) with a
+  // request-body limit; this check is the in-process backstop.
   const declaredLength = req.headers['content-length'] ?? req.headers['Content-Length'];
   if (declaredLength !== undefined) {
     const length = Number(declaredLength);

@@ -127,10 +127,11 @@ Anchor requests are limited to 20 mutations per caller and document per minute
 per realtime instance; excess requests answer 429. A share-link guest has no
 identity, so every guest on a document shares one budget. A body over 16 KiB is
 rejected with 413, but that cap bounds what the handler parses, not what the
-process holds: Yhub buffers a request body before any handler runs, so an
-oversized body is still a reverse proxy's job to refuse. Removing an anchor from
-an empty document succeeds with `removed: 0` so cleanup remains idempotent after
-all content is deleted.
+process holds: Yhub buffers a request body before any handler runs, so the
+deployment must enforce a request-body limit at the ingress (reverse proxy or
+load balancer) in front of this service. Removing an anchor from an empty
+document succeeds with `removed: 0` so cleanup remains idempotent after all
+content is deleted.
 
 ## Endpoints
 
