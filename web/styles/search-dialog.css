@@ -1,0 +1,97 @@
+/* Notion-style Quick Find / Full-Text Search modal (<dialog> top-layer). */
+
+dialog.nd-search-dialog {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  max-width: none;
+  max-height: none;
+}
+
+dialog.nd-search-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  width: min(46rem, calc(100vw - 1rem));
+  height: min(40rem, calc(100dvh - 1.5rem));
+  margin: 0.75rem auto auto;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 24px 48px -12px rgba(0, 0, 0, 0.22),
+    0 4px 16px -4px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  animation: nd-search-dialog-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (min-width: 640px) {
+  dialog.nd-search-dialog[open] {
+    width: min(46rem, calc(100vw - 3rem));
+    height: auto;
+    max-height: min(40rem, calc(100dvh - 8rem));
+    margin: min(10vh, 5rem) auto auto;
+  }
+}
+
+/* Mandatory scroll containment so scrolling over the backdrop or inside the
+   dialog never chains to the document underneath. */
+dialog.nd-search-dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog.nd-search-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  animation: nd-search-backdrop-in 0.16s ease-out;
+}
+
+.dark dialog.nd-search-dialog[open] {
+  box-shadow:
+    0 24px 56px -12px rgba(0, 0, 0, 0.62),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.nd-search-mark {
+  background-color: rgba(231, 143, 128, 0.28);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+.dark .nd-search-mark {
+  background-color: rgba(231, 143, 128, 0.3);
+  color: #ffffff;
+}
+
+@keyframes nd-search-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nd-search-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog.nd-search-dialog[open],
+  dialog.nd-search-dialog::backdrop {
+    animation: none;
+  }
+}
