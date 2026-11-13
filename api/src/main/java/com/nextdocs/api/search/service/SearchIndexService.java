@@ -8,6 +8,8 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Write path for the search projection.
@@ -23,6 +25,12 @@ public class SearchIndexService {
     private final SearchProperties properties;
     private final DocumentSearchRepository repository;
 
+    /**
+     * Runs in its own transaction: the only caller is an {@code AFTER_COMMIT} listener, whose
+     * surrounding transaction has already completed. Joining it would tie this upsert to a
+     * finished transaction, so it needs a new one that commits on its own.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void indexTitle(UUID documentId) {
         if (!properties.isEnabled()) {
             return;
