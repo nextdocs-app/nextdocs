@@ -113,6 +113,7 @@ describe('search-helpers.util', () => {
               title: 'Renamed page',
               createdAt: '2026-01-01T00:00:00Z',
               updatedAt: '2026-03-01T00:00:00Z',
+              icon: { type: 'emoji', value: '🆕' },
             },
           },
         ],
@@ -130,6 +131,7 @@ describe('search-helpers.util', () => {
             childrenLoaded: true,
             createdAt: '2026-01-01T00:00:00Z',
             updatedAt: '2026-02-01T00:00:00Z',
+            icon: { type: 'emoji', value: '🕰️' },
           },
         },
         query: 'page',
@@ -140,6 +142,8 @@ describe('search-helpers.util', () => {
       expect(hits.map((hit) => hit.title.map((segment) => segment.text).join(''))).toEqual([
         'Renamed page',
       ]);
+      // Presence is not recency: the stale copy carries an icon the newer entry replaced.
+      expect(hits[0].icon).toMatchObject({ type: 'emoji', value: '🆕' });
     });
 
     it('excludes cached documents whose own metadata is already trashed', () => {

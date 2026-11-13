@@ -66,7 +66,8 @@ function createTestStore(
       },
     },
   ],
-  preloadedSharedDocuments: SharedDocumentEntry[] = []
+  preloadedSharedDocuments: SharedDocumentEntry[] = [],
+  preloadedLocalAllDocs: LocalDocumentEntry[] = []
 ) {
   const docListInit = documentListReducer(undefined, { type: '@@init' });
   const uiInit = uiReducer(undefined, { type: '@@init' });
@@ -89,6 +90,7 @@ function createTestStore(
         ...docListInit,
         documents: preloadedDocuments,
         sharedWithMeDocuments: preloadedSharedDocuments,
+        localAllDocs: preloadedLocalAllDocs,
       },
     },
   });
@@ -233,6 +235,34 @@ describe('SearchDialog', () => {
 
     const privateOption = screen.getByRole('option', { name: /Quarterly Planning/i });
     expect(within(privateOption).getByText('Private')).toBeInTheDocument();
+  });
+
+  it('marks a cached private root as Private when offline search uses the cached set', () => {
+    (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: false });
+    const store = createTestStore(
+      [],
+      [],
+      [
+        {
+          id: 'cached-private',
+          meta: {
+            title: 'Cached Page',
+            createdAt: '2026-10-01T10:00:00Z',
+            updatedAt: '2026-10-10T10:00:00Z',
+          },
+        },
+      ]
+    );
+    renderDialog(store);
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Search documents and content/i }), {
+      target: { value: 'Cached' },
+    });
+
+    // Offline search reads localAllDocs; the Private label must come from the same set,
+    // or a cached root outside the loaded listing loses its location.
+    const option = screen.getByRole('option', { name: /Cached Page/i });
+    expect(within(option).getByText('Private')).toBeInTheDocument();
   });
 
   it('stops loading when remote search becomes unavailable mid-query', async () => {

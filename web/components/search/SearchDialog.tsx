@@ -101,20 +101,31 @@ export function SearchDialog() {
     retry,
   } = useSearchResults({ query, accessToken, isAuthenticated, isOnline });
 
+  const sharedDocumentIds = useMemo(
+    () => new Set(sharedDocuments.map((doc) => doc.id)),
+    [sharedDocuments]
+  );
+
+  // The listing pages `documents`, while `localAllDocs` keeps the whole cached set for a
+  // degraded listing. Offline title search must see every cached page, not just the first
+  // one; shared rows stay out because they arrive through `sharedDocuments`.
+  const localSearchDocuments = useMemo(
+    () =>
+      mode === 'offline' && localAllDocs.length > 0
+        ? localAllDocs.filter((doc) => !sharedDocumentIds.has(doc.id))
+        : documents,
+    [mode, localAllDocs, sharedDocumentIds, documents]
+  );
+
   // "Private" is a claim about where a document lives, so it needs positive
   // proof. Absence of a space and breadcrumb is not proof: a document shared
   // with the caller has no readable ancestors (the API stops the walk at the
   // first denied one), and one shared from someone else's tree has no space
-  // either. Only the caller's own root documents — the listing behind the
-  // Private section — qualify.
+  // either. Only the caller's own root documents — the set searched here —
+  // qualify.
   const privateRootIds = useMemo(
-    () => new Set(documents.filter((doc) => doc.parentId == null).map((doc) => doc.id)),
-    [documents]
-  );
-
-  const sharedDocumentIds = useMemo(
-    () => new Set(sharedDocuments.map((doc) => doc.id)),
-    [sharedDocuments]
+    () => new Set(localSearchDocuments.filter((doc) => doc.parentId == null).map((doc) => doc.id)),
+    [localSearchDocuments]
   );
 
   // Only the recent/offline/guest views render local hits. A signed-in search does not, so
@@ -124,15 +135,8 @@ export function SearchDialog() {
     if (!needsLocalHits) {
       return [];
     }
-    // The listing pages `documents`, while `localAllDocs` keeps the whole cached set for a
-    // degraded listing. Offline title search must see every cached page, not just the
-    // first one; shared rows stay out because they arrive through `sharedDocuments`.
-    const localDocuments =
-      mode === 'offline' && localAllDocs.length > 0
-        ? localAllDocs.filter((doc) => !sharedDocumentIds.has(doc.id))
-        : documents;
     return buildLocalSearchHits({
-      documents: localDocuments,
+      documents: localSearchDocuments,
       sharedDocuments,
       trashedDocuments,
       sidebarNodes,
@@ -145,10 +149,7 @@ export function SearchDialog() {
     });
   }, [
     needsLocalHits,
-    mode,
-    documents,
-    localAllDocs,
-    sharedDocumentIds,
+    localSearchDocuments,
     sharedDocuments,
     trashedDocuments,
     sidebarNodes,
