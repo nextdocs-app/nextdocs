@@ -3,6 +3,7 @@ package com.nextdocs.api.realtime.controller;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -272,6 +273,18 @@ class InternalRealtimeControllerTest {
         verify(searchIndexService)
                 .indexContent(eq(docId), eq("hello"), eq(true), eq(Instant.parse("2026-01-01T00:00:00Z")), any());
         verify(documentRepository).markContentUpdated(eq(docId), any());
+    }
+
+    @Test
+    void contentUpdatedWithoutTextStillAdvancesTheContentVersion() {
+        UUID docId = UUID.randomUUID();
+
+        // A failed extraction and an older realtime build both send no text. The version
+        // must still advance, or the crawl would wait for the age sweep to repair it.
+        controller.contentUpdated(docId, null, SERVICE_TOKEN);
+
+        verify(searchIndexService).recordContentVersion(eq(docId), any());
+        verify(searchIndexService, never()).indexContent(any(), any(), anyBoolean(), any(), any());
     }
 
     @Test

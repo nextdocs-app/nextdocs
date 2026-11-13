@@ -24,6 +24,9 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -172,10 +175,15 @@ class SearchReconcileBackendE2ETest {
             job(properties).reconcile();
 
             assertThat(CALLS.poll(5, TimeUnit.SECONDS)).isNotNull();
-            assertThat(searchRepository.selectStaleAfter(null, 10_000)).containsAll(created);
+            assertThat(searchRepository.selectStaleAfter(null, staleBefore(), 10_000))
+                    .containsAll(created);
         } finally {
             FAIL_EVERY_CALL.set(false);
         }
+    }
+
+    private static OffsetDateTime staleBefore() {
+        return OffsetDateTime.now(ZoneOffset.UTC).minus(Duration.ofHours(24));
     }
 
     private DocumentSearchReconcileJob job(SearchProperties properties) {
