@@ -58,6 +58,22 @@ describe('extractDocumentText', () => {
     );
   });
 
+  it('indexes formatted text without Yjs markup or link targets', () => {
+    const update = encode((fragment) => {
+      const formatted = new Y.XmlText();
+      formatted.insert(0, 'See the ');
+      formatted.insert(8, 'runbook', {
+        link: { href: 'https://example.com/api/v1/attachments/secret?sig=abc' },
+      });
+      formatted.insert(15, ' now', { bold: true });
+      fragment.insert(0, [element('paragraph', formatted)]);
+    });
+
+    // XmlText.toString() renders <bold><link href="…">…</link></bold>: indexing it would
+    // leak attribute names and signed URLs into the projection and its snippets.
+    expect(extractDocumentText(update).text).toBe('See the runbook now');
+  });
+
   it('keeps text from an unknown custom block instead of dropping it', () => {
     const update = encode((fragment) => {
       fragment.insert(0, [element('customWidget', text('Quarterly numbers'))]);
