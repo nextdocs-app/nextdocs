@@ -36,16 +36,23 @@ export type ContentUpdatedPayload = {
  *
  * <p>If extraction fails the call is still sent without text: the timestamp must move,
  * and sending empty text would erase a good projection entry. The API's reconcile job
- * retries from the Y.Doc.
+ * retries from the Y.Doc. A reindex has no timestamp to move, so the same failure rejects
+ * instead: the caller counts that document as failed rather than indexed.
  *
- * <p>Deliberately not awaited by the worker event: a slow API must never hold a
- * compaction. Transient failures retry with backoff; a notification that still fails
- * leaves only a stale projection, never lost content.
+ * <p>Rejects only when `reindex` is true and the projection was not written. A live
+ * compaction must never throw: it is deliberately not awaited by the worker event, since
+ * a slow API must never hold a compaction. Transient failures retry with backoff; a
+ * notification that still fails leaves only a stale projection, never lost content.
+ *
+ * @param producedAt when the content was read. A reindex passes the instant captured
+ *     before its read, so a live compaction that landed while the read was in flight
+ *     stays the newer write (the API orders both by this value).
  */
 export async function notifyContentUpdated(
   docid: string,
   update?: Uint8Array | null,
-  reindex = false
+  reindex = false,
+  producedAt?: string
 ): Promise<void> {
   const payload: ContentUpdatedPayload = { documentId: docid };
   if (reindex) {
@@ -57,9 +64,13 @@ export async function notifyContentUpdated(
       const extracted = extractDocumentText(update);
       payload.text = extracted.text;
       payload.truncated = extracted.truncated;
-      payload.producedAt = new Date().toISOString();
+      payload.producedAt = producedAt ?? new Date().toISOString();
     } catch (err) {
       log.warn(`Realtime text extraction failed for ${docid} (${describeError(err)})`);
+      // A reindex exists to repair the projection; without text there is nothing to write.
+      if (reindex) {
+        throw new Error(`Realtime text extraction failed for ${docid}`, { cause: err });
+      }
     }
   }
 
@@ -74,6 +85,7 @@ export async function notifyContentUpdated(
   }
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    let retry = true;
     try {
       const res = await fetch(
         `${API_BASE_URL}/api/v1/internal/realtime/content-updated?documentId=${encodeURIComponent(docid)}`,
@@ -91,19 +103,29 @@ export async function notifyContentUpdated(
       // retrying cannot succeed.
       if (res.status < 500 && res.status !== 429) {
         log.warn(`Realtime content-updated rejected for ${docid}: status ${res.status}`);
-        return;
+        retry = false;
+      } else {
+        log.warn(
+          `Realtime content-updated attempt ${attempt}/${ATTEMPTS} for ${docid}: status ${res.status}`
+        );
       }
-      log.warn(
-        `Realtime content-updated attempt ${attempt}/${ATTEMPTS} for ${docid}: status ${res.status}`
-      );
     } catch (err) {
       log.warn(
         `Realtime content-updated attempt ${attempt}/${ATTEMPTS} for ${docid} (${describeError(err)})`
       );
     }
 
+    if (!retry) {
+      break;
+    }
     if (attempt < ATTEMPTS) {
       await sleep(250 * 3 ** (attempt - 1));
     }
+  }
+
+  if (reindex) {
+    // The batch answer must reflect reality: a document whose projection was never
+    // written is a failure, not an indexed page.
+    throw new Error(`Realtime content-updated failed for ${docid}`);
   }
 }
