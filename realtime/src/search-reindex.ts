@@ -23,6 +23,14 @@ export type SearchReindexDeps = {
 const READ_TIMEOUT_MS = 10_000;
 
 /**
+ * Wall-clock budget for one batch. The API's client waits 90 s, while a worst-case document
+ * costs ~20 s (a 10 s read plus three notify attempts and their backoff). Stopping at 60 s
+ * leaves room for the document already in flight and answers before the caller gives up;
+ * unprocessed ids stay stale and the next crawl pass retries them.
+ */
+export const REINDEX_BUDGET_MS = 60_000;
+
+/**
  * Re-extracts content for documents the API identified as missing or stale.
  *
  * <p>The API cannot parse Yjs, so the crawl only picks ids from Postgres and this service
@@ -32,7 +40,8 @@ const READ_TIMEOUT_MS = 10_000;
  */
 export async function handleSearchReindex(
   req: SearchReindexRequest,
-  deps: SearchReindexDeps = defaultDeps
+  deps: SearchReindexDeps = defaultDeps,
+  budgetMs = REINDEX_BUDGET_MS
 ): Promise<{ status: string; indexed: number; failed: number }> {
   const body = await readJsonBody(req);
   const docids = Array.isArray(body?.docids) ? body.docids : [];
@@ -46,9 +55,16 @@ export async function handleSearchReindex(
     }
   }
 
+  const deadline = Date.now() + Math.max(0, budgetMs);
   let indexed = 0;
   let failed = 0;
   for (const docid of docids) {
+    if (Date.now() >= deadline) {
+      // Do not start a document that cannot finish before the caller's timeout. Counting
+      // it as failed keeps the row stale, which is the truthful answer; the crawl retries.
+      failed++;
+      continue;
+    }
     try {
       // Stamped before the read, not after it: a compaction that lands while the read is
       // in flight is newer than this value, and the API orders the two writes by it.
