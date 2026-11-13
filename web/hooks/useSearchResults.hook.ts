@@ -133,6 +133,11 @@ export function useSearchResults({
           setResultsQuery(trimmedQuery);
           setHasMore(response.hasMore);
           setNextOffset(response.nextOffset);
+          // A message produced for an earlier attempt at this same query must not outlive
+          // its success: the fallback mode would keep the fresh hits off the screen, and a
+          // stale error would leave the failure panel up over them.
+          setError(null);
+          setFallback(null);
         } catch (requestError) {
           if (requestSeqRef.current !== requestId) {
             return;
@@ -195,6 +200,11 @@ export function useSearchResults({
     const requestId = requestSeqRef.current;
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    let timedOut = false;
+    const timeoutTimer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, SEARCH_TIMEOUT_MS);
     setIsLoadingMore(true);
 
     try {
@@ -215,6 +225,15 @@ export function useSearchResults({
       setNextOffset(response.nextOffset);
       setLoadMoreError(null);
     } catch (requestError) {
+      // Checked before the abort below: the timeout aborts the same controller, and a
+      // silent return would leave the paging control waiting forever.
+      if (timedOut) {
+        setLoadMoreError({
+          query: trimmedQuery,
+          message: 'Loading more results is taking too long. Try again.',
+        });
+        return;
+      }
       if (controller.signal.aborted || requestSeqRef.current !== requestId) {
         return;
       }
@@ -231,7 +250,8 @@ export function useSearchResults({
             : 'Unable to load more search results.',
       });
     } finally {
-      // Always settle: an aborted page has no other owner to clear the flag.
+      // Always settle: an aborted or timed-out page has no other owner to clear the flag.
+      window.clearTimeout(timeoutTimer);
       setIsLoadingMore(false);
     }
   }, [
@@ -252,7 +272,10 @@ export function useSearchResults({
   }, []);
 
   return {
-    hits,
+    // Another query's rows are not this query's results: rendering them would show stale
+    // hits under the new query, so the honest answer is an empty list until the new one
+    // settles.
+    hits: resultsAreCurrent ? hits : [],
     hasMore: resultsAreCurrent ? hasMore : false,
     isLoading,
     isLoadingMore,
