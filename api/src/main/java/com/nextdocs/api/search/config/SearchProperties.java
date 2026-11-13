@@ -1,5 +1,6 @@
 package com.nextdocs.api.search.config;
 
+import java.time.Duration;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -40,6 +41,15 @@ public class SearchProperties {
 
     /** Per-query Postgres timeout, so a pathological query cannot hold a request thread. */
     private int statementTimeoutMs = 3000;
+
+    /**
+     * How long a projection is trusted before the crawl confirms it against the Y.Doc.
+     * This is the repair window for a content notification that never reached the API:
+     * a lost notification moves no timestamp of its own, so only age can expose it. Must
+     * stay well above the crawl's cycle (5 batches x 50 documents every 10 minutes covers
+     * ~36k documents a day).
+     */
+    private Duration maxVerificationAge = Duration.ofHours(24);
 
     /**
      * Documents per reindex request, and therefore the crawl's batch size. The realtime

@@ -26,7 +26,9 @@ import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
@@ -152,7 +154,8 @@ class SearchBackendE2ETest {
         // stamped later (or the sort key earlier), every edit would look stale and the
         // crawl would re-extract pages that were just indexed.
         assertThat(indexedAt(documentId)).isAfterOrEqualTo(updatedAt(documentId));
-        assertThat(searchRepository.selectStaleAfter(null, 10_000)).doesNotContain(documentId);
+        assertThat(searchRepository.selectStaleAfter(null, staleBefore(), 10_000))
+                .doesNotContain(documentId);
     }
 
     @Test
@@ -162,7 +165,8 @@ class SearchBackendE2ETest {
 
         // A compaction that produced no text: the sort key moves, the body does not.
         contentUpdated(documentId, null, false);
-        assertThat(searchRepository.selectStaleAfter(null, 10_000)).contains(documentId);
+        assertThat(searchRepository.selectStaleAfter(null, staleBefore(), 10_000))
+                .contains(documentId);
 
         OffsetDateTime sortKeyBeforeReindex = updatedAt(documentId);
 
@@ -172,7 +176,8 @@ class SearchBackendE2ETest {
 
         assertThat(updatedAt(documentId)).isEqualTo(sortKeyBeforeReindex);
         assertThat(indexedAt(documentId)).isAfterOrEqualTo(sortKeyBeforeReindex);
-        assertThat(searchRepository.selectStaleAfter(null, 10_000)).doesNotContain(documentId);
+        assertThat(searchRepository.selectStaleAfter(null, staleBefore(), 10_000))
+                .doesNotContain(documentId);
     }
 
     @Test
@@ -200,6 +205,11 @@ class SearchBackendE2ETest {
         mockMvc.perform(get("/api/v1/search").param("q", "budgets").header("Authorization", bearer(owner)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].documentId").value(documentId.toString()));
+
+        // A rename rebuilds the title vector from the stored body. It is not a content
+        // change, so the row's fresh verification must survive the metadata write.
+        assertThat(searchRepository.selectStaleAfter(null, staleBefore(), 10_000))
+                .doesNotContain(documentId);
     }
 
     @Test
@@ -315,6 +325,10 @@ class SearchBackendE2ETest {
         mockMvc.perform(get("/api/v1/search").param("q", query).header("Authorization", bearer(actor)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items").isEmpty());
+    }
+
+    private static OffsetDateTime staleBefore() {
+        return OffsetDateTime.now(ZoneOffset.UTC).minus(Duration.ofHours(24));
     }
 
     private OffsetDateTime indexedAt(UUID documentId) {

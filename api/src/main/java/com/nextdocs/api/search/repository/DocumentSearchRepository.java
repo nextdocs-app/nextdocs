@@ -54,8 +54,8 @@ public class DocumentSearchRepository {
      * from overwriting a newer projection.
      */
     static final String CONTENT_UPSERT_SQL = "INSERT INTO document_search"
-            + " (document_id, content, truncated, source_produced_at, indexed_at, tsv)"
-            + " SELECT d.id, :content, :truncated, LEAST(:producedAt, now()), :indexedAt,"
+            + " (document_id, content, truncated, source_produced_at, indexed_at, content_version, verified_at, tsv)"
+            + " SELECT d.id, :content, :truncated, LEAST(:producedAt, now()), :indexedAt, :indexedAt, now(),"
             + " setweight(to_tsvector(CAST(:language AS regconfig), unaccent('unaccent', d.title)), 'A')"
             + " || setweight(to_tsvector(CAST(:language AS regconfig), unaccent('unaccent', :content)), 'B')"
             + " FROM documents d WHERE d.id = :documentId"
@@ -65,9 +65,29 @@ public class DocumentSearchRepository {
             // The version this projection reflects, not the wall clock: the content-updated
             // request records the same instant as documents.updated_at, so the reconcile
             // crawl does not select a document that was indexed by that very request.
-            + " indexed_at = EXCLUDED.indexed_at, tsv = EXCLUDED.tsv"
+            + " indexed_at = EXCLUDED.indexed_at, content_version = EXCLUDED.content_version,"
+            // The crawl's own clock, not the document version: ageing this is how a lost
+            // notification is found. An older retry must not claim a fresh verification,
+            // so this sits behind the same source_produced_at guard as the text.
+            + " verified_at = now(), tsv = EXCLUDED.tsv"
             + " WHERE document_search.source_produced_at IS NULL"
             + " OR EXCLUDED.source_produced_at >= document_search.source_produced_at";
+
+    /**
+     * Records that content moved without carrying text: extraction failed, or an older
+     * realtime build sent only the timestamp. The row is immediately selectable by the
+     * crawl because {@code indexed_at < content_version}, while the existing body and its
+     * ordering guard stay untouched.
+     */
+    static final String CONTENT_VERSION_UPSERT_SQL = "INSERT INTO document_search"
+            + " (document_id, content, truncated, source_produced_at, indexed_at, content_version, verified_at, tsv)"
+            + " SELECT d.id, '', FALSE, NULL, NULL, LEAST(:version, now()), NULL,"
+            + " setweight(to_tsvector(CAST(:language AS regconfig), unaccent('unaccent', d.title)), 'A')"
+            + " FROM documents d WHERE d.id = :documentId"
+            + " ON CONFLICT (document_id) DO UPDATE"
+            + " SET content_version = GREATEST("
+            + " COALESCE(document_search.content_version, EXCLUDED.content_version),"
+            + " EXCLUDED.content_version)";
 
     /**
      * Ranking runs before headlines: computing {@code ts_headline} for every match and
@@ -241,13 +261,25 @@ public class DocumentSearchRepository {
     static final String SPACE_NAMES_SQL = "SELECT id, name FROM spaces WHERE id IN (:ids)";
 
     /**
-     * A row without {@code indexed_at} has a title only; its body has never been read from
-     * Yhub, so it is stale however recently the title row was written.
+     * Documents the crawl should re-read. {@code documents.updated_at} is deliberately not
+     * part of this predicate: it is Hibernate's row version, so an icon, cover, move or
+     * restore bumps it without changing content. Three independent facts select a row:
+     *
+     * <ul>
+     *   <li>never verified: a title-only row, or one written before V43;
+     *   <li>a text-less content notification: {@code content_version} moved past the text
+     *       actually projected, which is immediate rather than waiting for the age sweep;
+     *   <li>age: {@code verified_at} is older than the configured window. This is the only
+     *       signal a lost notification leaves behind, because it moves no column itself.
+     * </ul>
      */
     static final String STALE_SQL = "SELECT d.id FROM documents d"
             + " LEFT JOIN document_search s ON s.document_id = d.id"
             + " WHERE d.deleted_at IS NULL"
-            + " AND (s.indexed_at IS NULL OR s.indexed_at < d.updated_at)"
+            + " AND (s.verified_at IS NULL"
+            + " OR s.verified_at < :verifiedBefore"
+            + " OR (s.content_version IS NOT NULL"
+            + " AND (s.indexed_at IS NULL OR s.indexed_at < s.content_version)))"
             + " AND (CAST(:cursor AS uuid) IS NULL OR d.id > CAST(:cursor AS uuid))"
             + " ORDER BY d.id LIMIT :limit";
 
@@ -307,6 +339,16 @@ public class DocumentSearchRepository {
                         .addValue("truncated", truncated)
                         .addValue("producedAt", producedAt)
                         .addValue("indexedAt", indexedAt)
+                        .addValue("language", properties.getLanguage()));
+    }
+
+    /** Advances the content version without touching the projected text or its guards. */
+    public void upsertContentVersion(UUID documentId, OffsetDateTime version) {
+        jdbc.update(
+                CONTENT_VERSION_UPSERT_SQL,
+                new MapSqlParameterSource()
+                        .addValue("documentId", documentId)
+                        .addValue("version", version)
                         .addValue("language", properties.getLanguage()));
     }
 
@@ -459,10 +501,13 @@ public class DocumentSearchRepository {
      * advances past a batch even when some documents fail, so a permanently failing
      * document cannot starve everything ordered after it.
      */
-    public List<UUID> selectStaleAfter(UUID cursor, int limit) {
+    public List<UUID> selectStaleAfter(UUID cursor, OffsetDateTime verifiedBefore, int limit) {
         return jdbc.query(
                 STALE_SQL,
-                new MapSqlParameterSource().addValue("cursor", cursor).addValue("limit", limit),
+                new MapSqlParameterSource()
+                        .addValue("cursor", cursor)
+                        .addValue("verifiedBefore", verifiedBefore)
+                        .addValue("limit", limit),
                 (rs, rowNum) -> rs.getObject("id", UUID.class));
     }
 

@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -263,6 +264,14 @@ class DocumentSearchPostgresTest {
         repository.upsertContent(documentId, "older words", false, instant("2020-01-01T00:00:00Z"), now());
 
         assertThat(storedContent(documentId)).isEqualTo("newest words");
+        // An older retry must not claim a fresh verification either: the text and its
+        // timestamps are behind the same guard.
+        jdbc.update(
+                "UPDATE document_search SET verified_at = :verified WHERE document_id = :id",
+                new MapSqlParameterSource(Map.of("verified", instant("2020-01-03T00:00:00Z"), "id", documentId)));
+        repository.upsertContent(documentId, "stale words", false, instant("2020-01-01T00:00:00Z"), now());
+        assertThat(storedContent(documentId)).isEqualTo("newest words");
+        assertThat(storedVerifiedAt(documentId)).isEqualTo(instant("2020-01-03T00:00:00Z"));
     }
 
     @Test
@@ -349,20 +358,31 @@ class DocumentSearchPostgresTest {
     }
 
     @Test
-    void staleSelectionFindsMissingAndOutdatedRows() throws Exception {
+    void staleSelectionUsesVerificationAgeNotTheSortKey() throws Exception {
         UUID documentId = insertDocument(ownerId, "Stale page");
-        assertThat(repository.selectStaleAfter(null, 10)).contains(documentId);
+        // No projection yet: a title-only row is selectable immediately.
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
 
         repository.upsertContent(documentId, "", false, now(), now());
-        assertThat(repository.selectStaleAfter(null, 10)).doesNotContain(documentId);
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).doesNotContain(documentId);
 
+        // Hibernate's @UpdateTimestamp moves this on any metadata save (icon, cover, move,
+        // restore). That is not a content change and must not schedule a Y.Doc re-read.
         jdbc.update(
                 "UPDATE documents SET updated_at = now() + interval '1 minute' WHERE id = :id",
                 new MapSqlParameterSource("id", documentId));
-        assertThat(repository.selectStaleAfter(null, 10)).contains(documentId);
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).doesNotContain(documentId);
+
+        // A lost notification moves no timestamp at all; only the age sweep exposes it.
+        jdbc.update(
+                "UPDATE document_search SET verified_at = now() - interval '2 days' WHERE document_id = :id",
+                new MapSqlParameterSource("id", documentId));
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
+
         // The cursor skips everything at or before it, so a failed document is retried
         // on the next wrap rather than blocking the batch.
-        assertThat(repository.selectStaleAfter(documentId, 10)).doesNotContain(documentId);
+        assertThat(repository.selectStaleAfter(documentId, verifiedBefore(), 10))
+                .doesNotContain(documentId);
     }
 
     @Test
@@ -373,16 +393,52 @@ class DocumentSearchPostgresTest {
 
         // A rename must not make a never-crawled document look current: the body has
         // never been read from Yhub, and the crawl is the only thing that can read it.
-        assertThat(repository.selectStaleAfter(null, 10)).contains(documentId);
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
     }
 
     @Test
-    void aContentWriteBehindTheSortKeyIsStale() throws Exception {
-        UUID documentId = insertDocument(ownerId, "Edited page");
-        repository.upsertContent(documentId, "body", false, now(), now().minusMinutes(1));
+    void aTextLessContentNotificationMakesTheProjectionStale() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Extraction gap");
+        repository.upsertContent(documentId, "old body", false, now(), now());
 
-        // The edit landed after the projection: the crawl has to re-read it.
-        assertThat(repository.selectStaleAfter(null, 10)).contains(documentId);
+        // A compaction whose extraction failed still reports that content moved. The known
+        // version advances, the projected text does not, and the crawl must re-read now.
+        repository.upsertContentVersion(documentId, now().plusSeconds(1));
+
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
+        assertThat(storedContent(documentId)).isEqualTo("old body");
+
+        // An out-of-order notification must not move the known version backwards.
+        repository.upsertContentVersion(documentId, now().minusDays(1));
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
+
+        repository.upsertContent(documentId, "recovered body", false, now(), now().plusSeconds(2));
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).doesNotContain(documentId);
+    }
+
+    @Test
+    void aTextLessNotificationCreatesATitleOnlyStaleRow() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Never indexed");
+
+        // No title event ran for this row, so the version upsert must insert it and leave
+        // it selectable: the body still has never been read.
+        repository.upsertContentVersion(documentId, now());
+
+        assertThat(storedContent(documentId)).isEmpty();
+        assertThat(storedVerifiedAt(documentId)).isNull();
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).contains(documentId);
+    }
+
+    @Test
+    void aContentWriteIsNotStaleJustBecauseTheSortKeyMoved() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Edited page");
+        repository.upsertContent(documentId, "body", false, now(), now().minusDays(1));
+        jdbc.update(
+                "UPDATE documents SET updated_at = now() + interval '1 minute' WHERE id = :id",
+                new MapSqlParameterSource("id", documentId));
+
+        // indexed_at may trail documents.updated_at; verified_at is what the crawl trusts.
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).doesNotContain(documentId);
     }
 
     @Test
@@ -392,7 +448,7 @@ class DocumentSearchPostgresTest {
 
         // The shape of a content-updated request: the projection carries the same instant
         // as documents.updated_at, so the crawl must skip it.
-        assertThat(repository.selectStaleAfter(null, 10)).doesNotContain(documentId);
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 10)).doesNotContain(documentId);
     }
 
     @Test
@@ -420,6 +476,17 @@ class DocumentSearchPostgresTest {
                 "SELECT content FROM document_search WHERE document_id = :id",
                 new MapSqlParameterSource("id", documentId),
                 String.class);
+    }
+
+    private OffsetDateTime storedVerifiedAt(UUID documentId) {
+        return jdbc.queryForObject(
+                "SELECT verified_at FROM document_search WHERE document_id = :id",
+                new MapSqlParameterSource("id", documentId),
+                (rs, rowNum) -> rs.getObject("verified_at", OffsetDateTime.class));
+    }
+
+    private static OffsetDateTime verifiedBefore() {
+        return OffsetDateTime.now(ZoneOffset.UTC).minus(Duration.ofHours(24));
     }
 
     private static OffsetDateTime now() {

@@ -39,6 +39,21 @@ public class SearchIndexService {
     }
 
     /**
+     * Records that content moved without carrying text: extraction failed, or an older
+     * realtime build sent only the timestamp. The crawl can then re-read the document
+     * immediately instead of waiting for the age sweep, and the existing body is kept.
+     */
+    public void recordContentVersion(UUID documentId, Instant version) {
+        if (!properties.isEnabled()) {
+            return;
+        }
+        OffsetDateTime at = version == null
+                ? OffsetDateTime.now(ZoneOffset.UTC)
+                : OffsetDateTime.ofInstant(version, ZoneOffset.UTC);
+        repository.upsertContentVersion(documentId, at);
+    }
+
+    /**
      * @param text the extracted plain text; empty is a legitimate clear of the body
      * @param producedAt when the realtime service produced the text, used to reject an
      *     older retry that arrives after a newer projection

@@ -196,6 +196,11 @@ public class InternalRealtimeController {
                 truncated = true;
             }
             searchIndexService.indexContent(documentId, text, truncated, parseProducedAt(body.producedAt()), now);
+        } else {
+            // Content moved without carrying text: extraction failed, or an older realtime
+            // build sent only the timestamp. Advancing the known content version makes the
+            // crawl re-read this document immediately, without waiting for the age sweep.
+            searchIndexService.recordContentVersion(documentId, now);
         }
 
         // A reindex reads existing content; it is not an edit. Recording it would move the
