@@ -14,14 +14,18 @@ class YhubClientTest {
         // The endpoint answers 200 even when individual documents could not be read, so the
         // count in the body is the only signal that a batch repaired nothing.
         assertThat(client.failedCount("{\"status\":\"ok\",\"indexed\":1,\"failed\":2}"))
-                .isEqualTo(2);
+                .hasValue(2);
     }
 
     @Test
-    void treatsAMissingOrUnreadableReplyAsNoFailures() {
-        assertThat(client.failedCount(null)).isZero();
-        assertThat(client.failedCount("")).isZero();
-        assertThat(client.failedCount("not-json")).isZero();
-        assertThat(client.failedCount("{\"status\":\"ok\"}")).isZero();
+    void reportsAnUnstatedFailureCountAsUnknownRatherThanZero() {
+        // A malformed or contract-changed reply must not read as a clean pass.
+        assertThat(client.failedCount(null)).isEmpty();
+        assertThat(client.failedCount("")).isEmpty();
+        assertThat(client.failedCount("not-json")).isEmpty();
+        assertThat(client.failedCount("{\"status\":\"ok\"}")).isEmpty();
+        assertThat(client.failedCount("{\"status\":\"ok\",\"failed\":\"two\"}")).isEmpty();
+        assertThat(client.failedCount("{\"status\":\"ok\",\"failed\":2.5}")).isEmpty();
+        assertThat(client.failedCount("{\"status\":\"ok\",\"failed\":-1}")).isEmpty();
     }
 }
