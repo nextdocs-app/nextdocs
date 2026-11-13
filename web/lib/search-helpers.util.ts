@@ -237,7 +237,8 @@ export function buildLocalSearchHits({
       id: entry.id,
       title: entryIsNewer ? entry.title || existing.title : existing.title || entry.title,
       parentId: entry.parentId ?? existing.parentId,
-      icon: entry.icon ?? existing.icon,
+      // Recency, not presence: a newer entry with no icon means the icon was removed.
+      icon: entryIsNewer ? entry.icon : existing.icon,
       updatedAt: entryIsNewer ? (entry.updatedAt ?? existing.updatedAt) : existing.updatedAt,
       space: entry.space ?? existing.space,
     });
