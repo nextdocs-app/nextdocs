@@ -104,6 +104,72 @@ describe('search-helpers.util', () => {
       expect(hits.map((hit) => hit.documentId)).toEqual(['doc-old', 'doc-new']);
     });
 
+    it('keeps the newer title when a stale sidebar copy is merged last', () => {
+      const hits = buildLocalSearchHits({
+        documents: [
+          {
+            id: 'doc-1',
+            meta: {
+              title: 'Renamed page',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-03-01T00:00:00Z',
+            },
+          },
+        ],
+        sidebarNodes: {
+          'doc-1': {
+            id: 'doc-1',
+            title: 'Old title',
+            parentId: null,
+            orderKey: 'a0',
+            hasChildren: false,
+            effectiveAccessLevel: 'EDIT',
+            isExpanded: false,
+            isLoading: false,
+            children: [],
+            childrenLoaded: true,
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-02-01T00:00:00Z',
+          },
+        },
+        query: 'page',
+      });
+
+      // The sidebar node is processed after the listing, but it is the stale copy: the
+      // merge must not let arrival order rename the row back.
+      expect(hits.map((hit) => hit.title.map((segment) => segment.text).join(''))).toEqual([
+        'Renamed page',
+      ]);
+    });
+
+    it('excludes cached documents whose own metadata is already trashed', () => {
+      const hits = buildLocalSearchHits({
+        documents: [
+          {
+            id: 'doc-deleted',
+            meta: {
+              title: 'Deleted page',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-04-01T00:00:00Z',
+              deletedAt: '2026-04-01T00:00:00Z',
+            },
+          },
+          {
+            id: 'doc-active',
+            meta: {
+              title: 'Active page',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-03-01T00:00:00Z',
+            },
+          },
+        ],
+        query: 'page',
+      });
+
+      // The trash listing was not refreshed, but the cached metadata already knows.
+      expect(hits.map((hit) => hit.documentId)).toEqual(['doc-active']);
+    });
+
     it('resolves space and breadcrumb ancestors and ranks prefix matches first', () => {
       const hits = buildLocalSearchHits({
         documents: [],

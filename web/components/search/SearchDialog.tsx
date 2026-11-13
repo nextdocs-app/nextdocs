@@ -49,6 +49,7 @@ export function SearchDialog() {
   const { user, isAuthenticated, accessToken } = useAuth();
 
   const documents = useAppSelector((state) => state.documentList?.documents ?? EMPTY_DOCS);
+  const localAllDocs = useAppSelector((state) => state.documentList?.localAllDocs ?? EMPTY_DOCS);
   const sharedWithMeDocuments = useAppSelector(
     (state) => state.documentList?.sharedWithMeDocuments ?? EMPTY_SHARED_DOCS
   );
@@ -111,28 +112,27 @@ export function SearchDialog() {
     [documents]
   );
 
+  const sharedDocumentIds = useMemo(
+    () => new Set(sharedDocuments.map((doc) => doc.id)),
+    [sharedDocuments]
+  );
+
   // Only the recent/offline/guest views render local hits. A signed-in search does not, so
   // building them there would be a workspace-sized walk on every keystroke.
   const needsLocalHits = !trimmedQuery || mode !== 'search';
-  const localHits = useMemo(
-    () =>
-      needsLocalHits
-        ? buildLocalSearchHits({
-            documents,
-            sharedDocuments,
-            trashedDocuments,
-            sidebarNodes,
-            sharedNodes,
-            spaceTrees,
-            spaces,
-            recentIds,
-            query: trimmedQuery,
-            limit: trimmedQuery ? 20 : 8,
-          })
-        : [],
-    [
-      needsLocalHits,
-      documents,
+  const localHits = useMemo(() => {
+    if (!needsLocalHits) {
+      return [];
+    }
+    // The listing pages `documents`, while `localAllDocs` keeps the whole cached set for a
+    // degraded listing. Offline title search must see every cached page, not just the
+    // first one; shared rows stay out because they arrive through `sharedDocuments`.
+    const localDocuments =
+      mode === 'offline' && localAllDocs.length > 0
+        ? localAllDocs.filter((doc) => !sharedDocumentIds.has(doc.id))
+        : documents;
+    return buildLocalSearchHits({
+      documents: localDocuments,
       sharedDocuments,
       trashedDocuments,
       sidebarNodes,
@@ -140,9 +140,24 @@ export function SearchDialog() {
       spaceTrees,
       spaces,
       recentIds,
-      trimmedQuery,
-    ]
-  );
+      query: trimmedQuery,
+      limit: trimmedQuery ? 20 : 8,
+    });
+  }, [
+    needsLocalHits,
+    mode,
+    documents,
+    localAllDocs,
+    sharedDocumentIds,
+    sharedDocuments,
+    trashedDocuments,
+    sidebarNodes,
+    sharedNodes,
+    spaceTrees,
+    spaces,
+    recentIds,
+    trimmedQuery,
+  ]);
 
   const displayedHits = useMemo(() => {
     if (trimmedQuery && mode !== 'offline' && mode !== 'guest') {
@@ -281,7 +296,7 @@ export function SearchDialog() {
 
   // Infinite scroll when scrolled near the bottom of paginated results.
   useEffect(() => {
-    if (!hasMore || isLoading || isLoadingMore || mode !== 'search') {
+    if (!hasMore || isLoading || isLoadingMore || loadMoreError || mode !== 'search') {
       return;
     }
     if (typeof IntersectionObserver === 'undefined') {
@@ -303,7 +318,7 @@ export function SearchDialog() {
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [hasMore, isLoading, isLoadingMore, mode, loadMore]);
+  }, [hasMore, isLoading, isLoadingMore, loadMoreError, mode, loadMore]);
 
   // Keep the highlighted keyboard option visible inside the scroll container.
   useEffect(() => {
