@@ -93,6 +93,26 @@ describe('handleSearchReindex', () => {
     }
   });
 
+  it('stops at the batch budget and reports the rest as failed', async () => {
+    const read: string[] = [];
+
+    const result = await handleSearchReindex(
+      request({ docids: [documentId, secondDocumentId] }),
+      {
+        readUpdate: async (docid) => {
+          read.push(docid);
+          return null;
+        },
+        index: async () => {},
+      },
+      0
+    );
+
+    // The API's client would already have given up; both ids stay stale for the next pass.
+    expect(result).toEqual({ status: 'ok', indexed: 0, failed: 2 });
+    expect(read).toEqual([]);
+  });
+
   it('indexes a missing room as empty content instead of skipping it', async () => {
     let seen: Uint8Array | undefined;
 

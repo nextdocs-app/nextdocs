@@ -219,7 +219,9 @@ public class YhubClient {
                     .uri(URI.create(baseUrl + "/api/search-reindex/v1/nextdocs"))
                     .header("Authorization", "Bearer " + serviceToken)
                     .header("Content-Type", "application/json")
-                    // Each id costs one Y.Doc read, and the batch is sequential.
+                    // Each id costs one Y.Doc read, and the batch is sequential. The endpoint
+                    // stops starting new reads at 60 s, so this leaves room for the one in
+                    // flight; ids it did not reach stay stale for the next crawl pass.
                     .timeout(Duration.ofSeconds(90))
                     .POST(HttpRequest.BodyPublishers.ofString(json))
                     .build();
