@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -232,13 +233,19 @@ public class YhubClient {
                             log.warn("Realtime search reindex failed: status {}", response.statusCode());
                             return;
                         }
-                        int failed = failedCount(response.body());
-                        if (failed > 0) {
+                        OptionalInt failed = failedCount(response.body());
+                        if (failed.isEmpty()) {
+                            // A 200 whose body does not state the outcome cannot confirm the
+                            // batch; silence here would read as "nothing failed".
+                            log.warn(
+                                    "Realtime search reindex answered without a failure count for {} document(s)",
+                                    documentIds.size());
+                        } else if (failed.getAsInt() > 0) {
                             // Without this the only operator-visible line reports a successful
                             // pass for a batch whose documents all failed to read.
                             log.warn(
                                     "Realtime search reindex failed for {} of {} document(s)",
-                                    failed,
+                                    failed.getAsInt(),
                                     documentIds.size());
                         }
                     })
@@ -258,18 +265,25 @@ public class YhubClient {
      * Documents the realtime service could not read in one batch. The endpoint answers 200
      * with per-id failures, so the status alone cannot distinguish a repaired page from one
      * that is still stale until the next crawl pass.
+     *
+     * <p>Empty when the reply does not state a count. Treating that as zero would report a
+     * malformed or contract-changed response as a clean pass; the caller warns instead, while
+     * the documents stay stale and the next crawl pass retries them.
      */
-    int failedCount(String body) {
+    OptionalInt failedCount(String body) {
         if (body == null || body.isBlank()) {
-            return 0;
+            return OptionalInt.empty();
         }
         try {
             JsonNode failed = objectMapper.readTree(body).get("failed");
-            return failed == null ? 0 : failed.asInt(0);
+            // A non-numeric value would read as 0 through asInt's default.
+            if (failed == null || !failed.isIntegralNumber()) {
+                return OptionalInt.empty();
+            }
+            int count = failed.asInt();
+            return count < 0 ? OptionalInt.empty() : OptionalInt.of(count);
         } catch (RuntimeException e) {
-            // An unreadable reply is not worth failing the crawl over: the documents stay
-            // stale and the next pass retries them.
-            return 0;
+            return OptionalInt.empty();
         }
     }
 
