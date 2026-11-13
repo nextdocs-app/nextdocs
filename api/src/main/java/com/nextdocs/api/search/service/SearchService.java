@@ -74,8 +74,11 @@ public class SearchService {
         // One extra row answers hasMore without a COUNT over every match.
         List<SearchRow> rows =
                 withSearchTimeout(() -> repository.search(workspaceId, userId, query, prefix, pageSize + 1, start));
-        boolean hasMore = rows.size() > pageSize;
-        List<SearchRow> page = hasMore ? rows.subList(0, pageSize) : rows;
+        boolean pageFilled = rows.size() > pageSize;
+        List<SearchRow> page = pageFilled ? rows.subList(0, pageSize) : rows;
+        // A next page past the offset ceiling cannot be requested, so advertising it would
+        // offer a control whose only possible answer is a validation error.
+        boolean hasMore = pageFilled && start + pageSize <= MAX_OFFSET;
 
         Enrichment enrichment = withSearchTimeout(() -> enrich(page, userId));
         List<SearchHitResponse> items =

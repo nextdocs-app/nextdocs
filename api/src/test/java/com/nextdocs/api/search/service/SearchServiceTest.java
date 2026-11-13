@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -200,6 +201,20 @@ class SearchServiceTest {
     }
 
     @Test
+    void doesNotAdvertiseANextPagePastTheOffsetCeiling() {
+        memberOfWorkspace();
+        when(repository.search(eq(workspaceId), eq(userId), eq("auth"), eq("auth:*"), eq(21), eq(1000)))
+                .thenReturn(rows(21));
+
+        // The next offset (1020) could never be requested, so a paging control that offers
+        // it would only be able to answer with a validation error.
+        SearchResponse response = searchService.search(userId, "auth", 20, 1000);
+
+        assertThat(response.items()).hasSize(20);
+        assertThat(response.hasMore()).isFalse();
+    }
+
+    @Test
     void rejectsAnOffsetPastTheCeiling() {
         // Clamping would serve the same last page forever, so a paging client would never
         // see the result set end.
@@ -237,5 +252,9 @@ class SearchServiceTest {
 
     private static SearchRow row(String title) {
         return new SearchRow(UUID.randomUUID(), title, title, "snippet", null, null, null, OffsetDateTime.now());
+    }
+
+    private static List<SearchRow> rows(int count) {
+        return IntStream.range(0, count).mapToObj(index -> row("Doc " + index)).toList();
     }
 }
