@@ -316,9 +316,22 @@ public class DocumentSearchRepository {
      * connection into an unrelated query.
      */
     public void applyStatementTimeout() {
+        setStatementTimeout(properties.getStatementTimeoutMs());
+    }
+
+    /**
+     * Gives one statement only what is left of the request's search budget. The fixed
+     * timeout bounds a single statement; without this, a pass that starts just inside the
+     * budget could run to its own timeout and hold the request well past the deadline.
+     */
+    private void applyRemainingBudget(long deadline) {
+        setStatementTimeout((deadline - System.nanoTime()) / 1_000_000);
+    }
+
+    private void setStatementTimeout(long milliseconds) {
         jdbc.queryForObject(
                 "SELECT set_config('statement_timeout', :timeout, true)",
-                new MapSqlParameterSource().addValue("timeout", String.valueOf(properties.getStatementTimeoutMs())),
+                new MapSqlParameterSource().addValue("timeout", String.valueOf(Math.max(1, milliseconds))),
                 String.class);
     }
 
@@ -326,6 +339,7 @@ public class DocumentSearchRepository {
         long deadline = expansionDeadline();
         int window = limit + offset + RESOLVE_WINDOW_SLACK;
         while (true) {
+            applyRemainingBudget(deadline);
             SearchPage page = querySearch(workspaceId, userId, query, prefix, limit, offset, window);
             if (page.rows().size() >= limit || !page.windowFilled(window)) {
                 return page.rows();
@@ -341,6 +355,7 @@ public class DocumentSearchRepository {
         long deadline = expansionDeadline();
         int window = limit + RESOLVE_WINDOW_SLACK;
         while (true) {
+            applyRemainingBudget(deadline);
             SearchPage page = querySuggest(workspaceId, userId, query, limit, window);
             if (page.rows().size() >= limit || !page.windowFilled(window)) {
                 return page.rows();
