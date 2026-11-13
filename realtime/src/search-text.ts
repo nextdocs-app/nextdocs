@@ -81,7 +81,14 @@ export function extractDocumentText(
 
 function walk(node: Y.XmlElement | Y.XmlText | Y.XmlHook, out: string[]): void {
   if (node instanceof Y.XmlText) {
-    out.push(node.toString());
+    // toString() renders Yjs formatting as markup ("<bold><link href=\"…\">text</link></bold>")
+    // and embeds as object strings. Only the string inserts are document text; attribute
+    // names, formatting, and, importantly, link targets must never reach the index.
+    for (const op of node.toDelta()) {
+      if (typeof op.insert === 'string') {
+        out.push(op.insert);
+      }
+    }
     return;
   }
   if (!(node instanceof Y.XmlElement)) {
