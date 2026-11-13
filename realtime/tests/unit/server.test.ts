@@ -150,6 +150,35 @@ describe('notifyContentUpdated', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a reindex that never succeeds so the batch counts it as failed', async () => {
+    global.fetch = jest.fn(async () => reply(503)) as unknown as typeof fetch;
+
+    await expect(notifyContentUpdated(documentId, null, true)).rejects.toThrow(
+      /content-updated failed/
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects a reindex rejected by the contract without retrying it', async () => {
+    global.fetch = jest.fn(async () => reply(400)) as unknown as typeof fetch;
+
+    await expect(notifyContentUpdated(documentId, null, true)).rejects.toThrow(
+      /content-updated failed/
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reindex whose text extraction fails', async () => {
+    global.fetch = jest.fn(async () => reply(200)) as unknown as typeof fetch;
+
+    // An unparseable Yjs update has no text to project: counting it as indexed would tell
+    // the API the projection was repaired when nothing was written.
+    await expect(
+      notifyContentUpdated(documentId, new Uint8Array([255, 255]), true)
+    ).rejects.toThrow(/extraction failed/);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('retries a 429 and a network error', async () => {
     let call = 0;
     global.fetch = jest.fn(async () => {

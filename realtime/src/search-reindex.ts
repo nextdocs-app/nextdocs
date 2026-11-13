@@ -10,8 +10,13 @@ export type SearchReindexRequest = JsonBodyRequest & { org: string };
 export type SearchReindexDeps = {
   /** The document's current Yjs update, or null when no room exists yet. */
   readUpdate(docid: string): Promise<Uint8Array | null>;
-  /** Extracts and forwards the text. Reused so the API sees one payload contract. */
-  index(docid: string, update: Uint8Array | null): Promise<void>;
+  /**
+   * Extracts and forwards the text. Reused so the API sees one payload contract.
+   *
+   * @param producedAt the instant captured before the read; the API rejects a projection
+   *     older than a live update that was indexed while this read was in flight
+   */
+  index(docid: string, update: Uint8Array | null, producedAt: string): Promise<void>;
 };
 
 /** One document read must not hold the batch; the API retries the batch next pass. */
@@ -45,10 +50,13 @@ export async function handleSearchReindex(
   let failed = 0;
   for (const docid of docids) {
     try {
+      // Stamped before the read, not after it: a compaction that lands while the read is
+      // in flight is newer than this value, and the API orders the two writes by it.
+      const readStartedAt = new Date().toISOString();
       const update = await deps.readUpdate(docid);
       // An absent room is empty content, not a failure to read: indexing it records the
       // projection and lets the crawl move past the document instead of retrying forever.
-      await deps.index(docid, update ?? new Uint8Array(0));
+      await deps.index(docid, update ?? new Uint8Array(0), readStartedAt);
       indexed++;
     } catch (err) {
       failed++;
@@ -61,7 +69,7 @@ export async function handleSearchReindex(
 
 const defaultDeps: SearchReindexDeps = {
   readUpdate: readDocumentUpdate,
-  index: (docid, update) => notifyContentUpdated(docid, update, true),
+  index: (docid, update, producedAt) => notifyContentUpdated(docid, update, true, producedAt),
 };
 
 /**

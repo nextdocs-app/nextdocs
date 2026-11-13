@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { MAX_REINDEX_DOCS } from '../../src/config.js';
 import { handleSearchReindex } from '../../src/search-reindex.js';
 
@@ -55,6 +55,42 @@ describe('handleSearchReindex', () => {
 
     expect(result).toEqual({ status: 'ok', indexed: 1, failed: 1 });
     expect(indexed).toEqual([documentId]);
+  });
+
+  it('counts a rejected index write as a failed document', async () => {
+    const result = await handleSearchReindex(request({ docids: [documentId] }), {
+      readUpdate: async () => new Uint8Array([1]),
+      index: async () => {
+        throw new Error('content-updated failed');
+      },
+    });
+
+    // The index dep only rejects when the projection was not written, so this document
+    // must not be reported as repaired.
+    expect(result).toEqual({ status: 'ok', indexed: 0, failed: 1 });
+  });
+
+  it('stamps the index write with the instant before the document is read', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      let producedAt: string | undefined;
+
+      await handleSearchReindex(request({ docids: [documentId] }), {
+        readUpdate: async () => {
+          // A slow read: a live compaction would stamp a newer producedAt in this window.
+          jest.setSystemTime(new Date('2026-01-01T00:00:05.000Z'));
+          return new Uint8Array([1]);
+        },
+        index: async (_docid, _update, stamp) => {
+          producedAt = stamp;
+        },
+      });
+
+      expect(producedAt).toBe('2026-01-01T00:00:00.000Z');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('indexes a missing room as empty content instead of skipping it', async () => {
