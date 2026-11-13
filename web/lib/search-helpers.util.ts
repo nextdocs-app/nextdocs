@@ -211,7 +211,13 @@ export function buildLocalSearchHits({
   query,
   limit = 10,
 }: BuildLocalSearchHitsInput): SearchHit[] {
-  const trashedIds = new Set(trashedDocuments.map((doc) => doc.id));
+  const trashedIds = new Set([
+    ...trashedDocuments.map((doc) => doc.id),
+    // A cached listing can predate the trash refresh: its own metadata already says the
+    // document is gone, so it must not surface as an active result.
+    ...documents.filter((doc) => Boolean(doc.meta.deletedAt)).map((doc) => doc.id),
+    ...sharedDocuments.filter((doc) => Boolean(doc.meta.deletedAt)).map((doc) => doc.id),
+  ]);
   const candidates = new Map<string, CandidateDocument>();
 
   const upsert = (entry: CandidateDocument) => {
@@ -223,15 +229,16 @@ export function buildLocalSearchHits({
       candidates.set(entry.id, entry);
       return;
     }
+    // Whichever entry is newer owns the title: sources are merged in arrival order, so a
+    // stale sidebar copy must not rename a row a fresh listing just updated.
+    const entryIsNewer =
+      toSortableTimestamp(entry.updatedAt) >= toSortableTimestamp(existing.updatedAt);
     candidates.set(entry.id, {
       id: entry.id,
-      title: entry.title || existing.title,
+      title: entryIsNewer ? entry.title || existing.title : existing.title || entry.title,
       parentId: entry.parentId ?? existing.parentId,
       icon: entry.icon ?? existing.icon,
-      updatedAt:
-        toSortableTimestamp(entry.updatedAt) >= toSortableTimestamp(existing.updatedAt)
-          ? (entry.updatedAt ?? existing.updatedAt)
-          : existing.updatedAt,
+      updatedAt: entryIsNewer ? (entry.updatedAt ?? existing.updatedAt) : existing.updatedAt,
       space: entry.space ?? existing.space,
     });
   };
