@@ -5,12 +5,15 @@ import com.nextdocs.api.search.service.SearchQueries;
 import com.nextdocs.api.search.service.TextSegments;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -77,9 +80,10 @@ public class DocumentSearchRepository {
      *
      * <p>How far past the requested page the ranking is allowed to reach before access is
      * resolved. Without a bound the resolver runs once per lexical match, which measured
-     * at ~9.6 s for 20k documents in one workspace; with it, a request resolves at most
-     * this many extra rows. A caller who cannot see more than this many top-ranked rows
-     * gets a shorter page rather than a request that exceeds the statement timeout.
+     * at ~9.6 s for 20k documents in one workspace; with it, the first statement resolves
+     * at most this many extra rows. A window that cannot fill the page is widened and
+     * re-run (see {@link #search}), so rows the caller cannot see can delay a page but
+     * never truncate it.
      */
     static final int RESOLVE_WINDOW_SLACK = 100;
 
@@ -141,12 +145,21 @@ public class DocumentSearchRepository {
             // keeps the per-row PL/pgSQL access check proportional to a page instead of
             // to every document the query happens to match.
             + " SELECT * FROM ranked WHERE sort_rank <= :resolveWindow"
-            + ")"
+            // The window size travels with the page so the caller can tell an exhausted
+            // ranking from one the access bound cut short. The count sits in a one-row FROM
+            // and the page is a lateral, so an empty page still answers with its size.
+            + "), window_size AS MATERIALIZED (SELECT count(*) AS size FROM resolve_window)"
+            + " SELECT (SELECT size FROM window_size) AS window_size,"
+            + " p.document_id, p.title, p.updated_at, p.icon_type, p.icon_value, p.icon_color,"
+            + " p.title_headline, p.snippet"
+            + " FROM window_size w"
+            + " LEFT JOIN LATERAL ("
             + " SELECT r.document_id, d.title, d.updated_at, d.icon_type, d.icon_value, d.icon_color,"
             + " ts_headline(CAST(:language AS regconfig), d.title,"
             + " COALESCE(CASE WHEN s.tsv @@ q.web THEN q.web END, q.prefix, q.web), :titleOptions) AS title_headline,"
             + " ts_headline(CAST(:language AS regconfig), s.content,"
-            + " COALESCE(CASE WHEN s.tsv @@ q.web THEN q.web END, q.prefix, q.web), :snippetOptions) AS snippet"
+            + " COALESCE(CASE WHEN s.tsv @@ q.web THEN q.web END, q.prefix, q.web), :snippetOptions) AS snippet,"
+            + " r.sort_rank"
             + " FROM resolve_window r"
             + " LEFT JOIN document_search s ON s.document_id = r.document_id"
             + " JOIN documents d ON d.id = r.document_id"
@@ -154,7 +167,9 @@ public class DocumentSearchRepository {
             + " WHERE resolve_identity_access(:userId, r.document_id, 'ACTIVE')"
             + " IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER')"
             + " ORDER BY r.sort_rank"
-            + " LIMIT :limit OFFSET :offset";
+            + " LIMIT :limit OFFSET :offset"
+            + ") p ON TRUE"
+            + " ORDER BY p.sort_rank";
 
     /**
      * Title suggestions run against {@code documents} so a brand-new page is findable
@@ -184,14 +199,22 @@ public class DocumentSearchRepository {
             + " FROM candidates c"
             + "), resolve_window AS MATERIALIZED ("
             + " SELECT * FROM ranked WHERE sort_rank <= :resolveWindow"
-            + ")"
-            + " SELECT w.document_id, w.title, w.updated_at, w.icon_type, w.icon_value, w.icon_color,"
-            + " NULL AS title_headline, NULL AS snippet"
-            + " FROM resolve_window w"
-            + " WHERE resolve_identity_access(:userId, w.document_id, 'ACTIVE')"
+            + "), window_size AS MATERIALIZED (SELECT count(*) AS size FROM resolve_window)"
+            + " SELECT (SELECT size FROM window_size) AS window_size,"
+            + " p.document_id, p.title, p.updated_at, p.icon_type, p.icon_value, p.icon_color,"
+            + " p.title_headline, p.snippet"
+            + " FROM window_size w"
+            + " LEFT JOIN LATERAL ("
+            + " SELECT r.document_id, r.title, r.updated_at, r.icon_type, r.icon_value, r.icon_color,"
+            + " CAST(NULL AS text) AS title_headline, CAST(NULL AS text) AS snippet,"
+            + " r.sort_rank"
+            + " FROM resolve_window r"
+            + " WHERE resolve_identity_access(:userId, r.document_id, 'ACTIVE')"
             + " IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER')"
-            + " ORDER BY w.sort_rank"
-            + " LIMIT :limit";
+            + " ORDER BY r.sort_rank"
+            + " LIMIT :limit"
+            + ") p ON TRUE"
+            + " ORDER BY p.sort_rank";
 
     /**
      * Ancestor chains for a page of hits, stopping at the first ancestor the caller cannot
@@ -256,6 +279,16 @@ public class DocumentSearchRepository {
     /** One link of an ancestor chain: the page it belongs to, the ancestor, and its depth. */
     public record BreadcrumbRow(UUID startId, UUID id, String title, UUID spaceId, int depth) {}
 
+    /**
+     * One statement's rows plus how many ranked rows the access window covered. A window
+     * smaller than the bound asked for means the ranking ran out, not that access hid rows.
+     */
+    private record SearchPage(List<SearchRow> rows, long windowSize) {
+        boolean windowFilled(int window) {
+            return windowSize >= window;
+        }
+    }
+
     public void upsertTitle(UUID documentId) {
         jdbc.update(
                 TITLE_UPSERT_SQL,
@@ -290,6 +323,56 @@ public class DocumentSearchRepository {
     }
 
     public List<SearchRow> search(UUID workspaceId, UUID userId, String query, String prefix, int limit, int offset) {
+        long deadline = expansionDeadline();
+        int window = limit + offset + RESOLVE_WINDOW_SLACK;
+        while (true) {
+            SearchPage page = querySearch(workspaceId, userId, query, prefix, limit, offset, window);
+            if (page.rows().size() >= limit || !page.windowFilled(window)) {
+                return page.rows();
+            }
+            // Every row in the window was resolved and the page is still short: higher-
+            // ranked rows the caller cannot see are what stopped it. A short page here
+            // would report invisible rows as the end of the results.
+            window = widen(window, deadline);
+        }
+    }
+
+    public List<SearchRow> suggest(UUID workspaceId, UUID userId, String query, int limit) {
+        long deadline = expansionDeadline();
+        int window = limit + RESOLVE_WINDOW_SLACK;
+        while (true) {
+            SearchPage page = querySuggest(workspaceId, userId, query, limit, window);
+            if (page.rows().size() >= limit || !page.windowFilled(window)) {
+                return page.rows();
+            }
+            // Same as search: a suggestion list cut short by invisible rows must not read
+            // as "these are all the pages that match".
+            window = widen(window, deadline);
+        }
+    }
+
+    /**
+     * Doubles the resolve window after a page the access bound cut short. Widening instead
+     * of resolving the whole ranking at once keeps the extra resolver work proportional to
+     * what the page needs; the shared deadline stops the loop before it holds a request
+     * thread longer than one statement is allowed to run.
+     */
+    private static int widen(int window, long deadline) {
+        if (System.nanoTime() - deadline >= 0) {
+            // Answering with the short page would report incomplete results as complete.
+            throw new QueryTimeoutException("Search candidate expansion exceeded its time budget.");
+        }
+        return window > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : window * 2;
+    }
+
+    /** The budget the caller also gives each statement, spent across every expansion pass. */
+    private long expansionDeadline() {
+        long budgetMs = Math.max(1, properties.getStatementTimeoutMs());
+        return System.nanoTime() + Duration.ofMillis(budgetMs).toNanos();
+    }
+
+    private SearchPage querySearch(
+            UUID workspaceId, UUID userId, String query, String prefix, int limit, int offset, int resolveWindow) {
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("workspaceId", workspaceId)
                 .addValue("userId", userId)
@@ -300,22 +383,22 @@ public class DocumentSearchRepository {
                 // Clamped by the service; LIMIT is parameterized, never concatenated.
                 .addValue("limit", limit)
                 .addValue("offset", offset)
-                .addValue("resolveWindow", limit + offset + RESOLVE_WINDOW_SLACK)
+                .addValue("resolveWindow", resolveWindow)
                 .addValue("language", properties.getLanguage())
                 .addValue("titleOptions", TextSegments.titleOptions())
                 .addValue("snippetOptions", TextSegments.snippetOptions());
-        return jdbc.query(SEARCH_SQL, parameters, DocumentSearchRepository::mapSearchRow);
+        return jdbc.query(SEARCH_SQL, parameters, DocumentSearchRepository::mapSearchPage);
     }
 
-    public List<SearchRow> suggest(UUID workspaceId, UUID userId, String query, int limit) {
+    private SearchPage querySuggest(UUID workspaceId, UUID userId, String query, int limit, int resolveWindow) {
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("workspaceId", workspaceId)
                 .addValue("userId", userId)
                 .addValue("query", query)
                 .addValue("titlePrefix", SearchQueries.likePrefix(query))
-                .addValue("resolveWindow", limit + RESOLVE_WINDOW_SLACK)
+                .addValue("resolveWindow", resolveWindow)
                 .addValue("limit", limit);
-        return jdbc.query(SUGGEST_SQL, parameters, DocumentSearchRepository::mapSearchRow);
+        return jdbc.query(SUGGEST_SQL, parameters, DocumentSearchRepository::mapSearchPage);
     }
 
     /**
@@ -378,15 +461,29 @@ public class DocumentSearchRepository {
         jdbc.update(WRITE_CURSOR_SQL, new MapSqlParameterSource("cursor", cursor));
     }
 
-    private static SearchRow mapSearchRow(ResultSet rs, int rowNum) throws SQLException {
-        return new SearchRow(
-                rs.getObject("document_id", UUID.class),
-                rs.getString("title"),
-                rs.getString("title_headline"),
-                rs.getString("snippet"),
-                rs.getString("icon_type"),
-                rs.getString("icon_value"),
-                rs.getString("icon_color"),
-                rs.getObject("updated_at", OffsetDateTime.class));
+    /**
+     * The page row is always present (it carries the window size), so a null document id is
+     * the placeholder for "no row in this window is visible", not a malformed result.
+     */
+    private static SearchPage mapSearchPage(ResultSet rs) throws SQLException {
+        List<SearchRow> rows = new ArrayList<>();
+        long windowSize = 0;
+        while (rs.next()) {
+            windowSize = rs.getLong("window_size");
+            UUID documentId = rs.getObject("document_id", UUID.class);
+            if (documentId == null) {
+                continue;
+            }
+            rows.add(new SearchRow(
+                    documentId,
+                    rs.getString("title"),
+                    rs.getString("title_headline"),
+                    rs.getString("snippet"),
+                    rs.getString("icon_type"),
+                    rs.getString("icon_value"),
+                    rs.getString("icon_color"),
+                    rs.getObject("updated_at", OffsetDateTime.class)));
+        }
+        return new SearchPage(rows, windowSize);
     }
 }

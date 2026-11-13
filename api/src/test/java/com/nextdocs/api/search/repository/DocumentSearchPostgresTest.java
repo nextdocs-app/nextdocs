@@ -303,6 +303,32 @@ class DocumentSearchPostgresTest {
     }
 
     @Test
+    void fillsThePageWhenInvisibleRowsConsumeTheResolveWindow() throws Exception {
+        // More top-ranked matches than the bounded window can hold, all owned by someone
+        // else, with the one readable page ranked last. The window alone would answer an
+        // empty page and call it the end of the results.
+        int invisible = DocumentSearchRepository.RESOLVE_WINDOW_SLACK + 20;
+        for (int index = 0; index < invisible; index++) {
+            UUID id = insertDocument(ownerId, "Quarterly plan " + index);
+            repository.upsertContent(id, "", false, now(), now());
+        }
+        UUID shared = insertDocument(ownerId, "Quarterly plan shared");
+        repository.upsertContent(shared, "", false, now(), now());
+        jdbc.update(
+                "UPDATE documents SET updated_at = now() - interval '1 day' WHERE id = :id",
+                new MapSqlParameterSource("id", shared));
+        grant(shared, readerId, "VIEW");
+
+        assertThat(repository.search(workspaceId, readerId, "quarterly", "quarterly:*", 10, 0))
+                .extracting(DocumentSearchRepository.SearchRow::documentId)
+                .containsExactly(shared);
+        // Suggestions use the same bounded window and must expand the same way.
+        assertThat(repository.suggest(workspaceId, readerId, "quarterly", 10))
+                .extracting(DocumentSearchRepository.SearchRow::documentId)
+                .containsExactly(shared);
+    }
+
+    @Test
     void breadcrumbsStopAtTheFirstInaccessibleAncestor() throws Exception {
         UUID root = insertDocument(ownerId, "Restricted root");
         UUID middle = insertDocument(ownerId, "Restricted middle");
