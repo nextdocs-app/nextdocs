@@ -58,7 +58,7 @@ public class DocumentSearchRepository {
             + " SELECT d.id, :content, :truncated, LEAST(:producedAt, now()), :indexedAt, :indexedAt, now(),"
             + " setweight(to_tsvector(CAST(:language AS regconfig), unaccent('unaccent', d.title)), 'A')"
             + " || setweight(to_tsvector(CAST(:language AS regconfig), unaccent('unaccent', :content)), 'B')"
-            + " FROM documents d WHERE d.id = :documentId"
+            + " FROM documents d WHERE d.id = :documentId FOR SHARE"
             + " ON CONFLICT (document_id) DO UPDATE"
             + " SET content = EXCLUDED.content, truncated = EXCLUDED.truncated,"
             + " source_produced_at = EXCLUDED.source_produced_at,"
@@ -79,6 +79,7 @@ public class DocumentSearchRepository {
             // notification leaves that column untouched. Refusing the write keeps
             // indexed_at behind the pending version, so the page stays selected.
             + " AND (document_search.content_version IS NULL"
+            + " OR document_search.indexed_at >= document_search.content_version"
             + " OR EXCLUDED.source_produced_at >= document_search.content_version)";
 
     /**

@@ -1,6 +1,7 @@
 package com.nextdocs.api.search.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nextdocs.api.PostgresTestSupport;
 import com.nextdocs.api.search.config.SearchProperties;
@@ -289,6 +290,54 @@ class DocumentSearchPostgresTest {
         assertThat(storedContent(documentId)).isEqualTo("indexed words");
         // Still selectable: the pending version outranks the text this crawl read.
         assertThat(repository.selectStaleAfter(null, now(), 100)).contains(documentId);
+    }
+
+    @Test
+    void newerExtractionCanReplaceAnAlreadyIndexedVersion() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Ordering");
+        repository.upsertContent(
+                documentId, "first body", false, instant("2020-01-01T00:00:00Z"), instant("2020-01-03T00:00:00Z"));
+
+        // The later extraction follows the first, even though both were produced before
+        // the API's indexed version timestamp.
+        repository.upsertContent(
+                documentId, "newer body", false, instant("2020-01-02T00:00:00Z"), instant("2020-01-04T00:00:00Z"));
+
+        assertThat(storedContent(documentId)).isEqualTo("newer body");
+        assertThat(repository.selectStaleAfter(null, verifiedBefore(), 100)).doesNotContain(documentId);
+    }
+
+    @Test
+    void contentUpsertHoldsTheDocumentRowAgainstRename() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Old title");
+        repository.upsertTitle(documentId);
+        connection.setAutoCommit(false);
+        try (Connection other = PostgresTestSupport.connect(url, username, password);
+                Statement stmt = other.createStatement()) {
+            stmt.execute("SET search_path TO " + schema + ", public");
+            stmt.execute("SET lock_timeout = '200ms'");
+            repository.upsertContent(documentId, "body text", false, now(), now());
+
+            assertThatThrownBy(() -> stmt.executeUpdate(
+                            "UPDATE documents SET title = 'Renamed page' WHERE id = '" + documentId + "'"))
+                    .isInstanceOf(SQLException.class)
+                    .extracting(e -> ((SQLException) e).getSQLState())
+                    .isEqualTo("55P03");
+            connection.commit();
+            stmt.executeUpdate("UPDATE documents SET title = 'Renamed page' WHERE id = '" + documentId + "'");
+            repository.upsertTitle(documentId);
+            connection.commit();
+
+            assertThat(storedContent(documentId)).isEqualTo("body text");
+            assertThat(repository.search(workspaceId, ownerId, "renamed", "renamed:*", 10, 0))
+                    .extracting(DocumentSearchRepository.SearchRow::documentId)
+                    .containsExactly(documentId);
+            assertThat(repository.search(workspaceId, ownerId, "old title", null, 10, 0))
+                    .isEmpty();
+        } finally {
+            connection.rollback();
+            connection.setAutoCommit(true);
+        }
     }
 
     @Test

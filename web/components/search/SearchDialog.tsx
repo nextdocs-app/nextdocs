@@ -418,7 +418,10 @@ export function SearchDialog() {
         ) {
           return;
         }
-        const selected = clampedActiveIndex >= 0 ? displayedHits[clampedActiveIndex] : undefined;
+        const selected =
+          isListboxVisible && clampedActiveIndex >= 0
+            ? displayedHits[clampedActiveIndex]
+            : undefined;
         if (!selected) {
           return;
         }
@@ -426,7 +429,7 @@ export function SearchDialog() {
         handleSelectHit(selected, event.metaKey || event.ctrlKey);
       }
     },
-    [displayedHits, clampedActiveIndex, handleSelectHit]
+    [displayedHits, clampedActiveIndex, isListboxVisible, handleSelectHit]
   );
 
   const sectionHeading = useMemo(() => {

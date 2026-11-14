@@ -333,6 +333,46 @@ describe('SearchDialog', () => {
     expect(mockPush).toHaveBeenCalledWith('/doc/recent-2');
   });
 
+  it('does not select retained results hidden by a refresh error', async () => {
+    const user = userEvent.setup();
+    (searchService.search as jest.Mock)
+      .mockResolvedValueOnce({
+        query: 'sync',
+        hasMore: false,
+        nextOffset: 1,
+        items: [
+          {
+            documentId: 'hit-1',
+            title: [{ text: 'Sync One', match: true }],
+            snippet: [],
+            breadcrumb: [],
+            space: null,
+            icon: null,
+            updatedAt: null,
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new ApiError('Internal Server Error', 500));
+    const { rerenderDialog, store } = renderDialog();
+    const input = screen.getByRole('combobox', { name: /Search documents and content/i });
+    await user.type(input, 'sync');
+    expect(await screen.findByText('Sync One')).toBeInTheDocument();
+
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      isAuthenticated: true,
+      accessToken: 'refreshed-token',
+    });
+    rerenderDialog();
+    expect(await screen.findByText('Search failed')).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+
+    await user.keyboard('{Enter}');
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(store.getState().ui.isSearchDialogOpen).toBe(true);
+  });
+
   it.each(['a', 'sync'])('loads additional paginated results for "%s"', async (query) => {
     const user = userEvent.setup();
     (searchService.search as jest.Mock)
