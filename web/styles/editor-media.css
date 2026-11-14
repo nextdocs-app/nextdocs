@@ -1,12 +1,5 @@
 /* Media and file blocks, including the file upload/embed panel. */
 
-/* Media blocks (image/video/audio/file) — data-file-block sits on the
-   .bn-block-content element itself (BlockNote sets both attributes on one
-   node), so no :has() descendant lookup and no per-type list needed. */
-.bn-block-content[data-file-block] {
-  padding-block: 9px !important;
-}
-
 /* File block hover / selection color */
 .bn-editor[contenteditable='true'] [data-file-block] .bn-file-name-with-icon:hover,
 .ProseMirror-selectednode .bn-file-name-with-icon {

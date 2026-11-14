@@ -177,19 +177,16 @@ html:has(.nd-app-scroll) {
   /* ── Editor gutters ── */
   /* `.bn-editor` reserves 54px per side for the block handles; on a phone that
      is more than half the screen once the title container adds it too. Kept to
-     8px so a narrow phone gives the text most of the width. */
-  .bn-editor {
-    padding-inline: 12px !important;
+     12px (shared via `--nd-editor-gutter` with `.document-title-container`) so
+     a narrow phone gives the text most of the width. */
+  :root {
+    --nd-editor-gutter: 12px;
   }
 
   /* Comment composers are already edge-to-edge inside the threads sidebar. */
   .bn-comment-editor.bn-editor,
   .bn-comment-editor .bn-editor {
     padding-inline: 0 !important;
-  }
-
-  .document-title-container {
-    padding-inline: 12px;
   }
 
   /* ── BlockNote docked formatting toolbar ── */

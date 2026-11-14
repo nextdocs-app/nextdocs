@@ -1,6 +1,19 @@
 /* Document title and the editor page shell (surface colours, gutters). */
 
 @layer components {
+  :root {
+    --nd-editor-gutter: 54px;
+    --nd-block-padding-inline: 4px;
+    --nd-block-padding-block: 4px;
+    --nd-block-radius: 4px;
+    --nd-list-padding-inline-start: 8px;
+    --nd-bullet-padding: 8px;
+    /* One marker column for bullets, numbers and checkboxes, then one gap after it, so every
+       list item's text starts at the same x. */
+    --nd-list-marker-width: 20px;
+    --nd-list-marker-padding-end: 10px;
+  }
+
   .document-title-input {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -20,9 +33,10 @@
     box-sizing: border-box;
   }
 
-  /* BlockNote aligns its content 54px from the edges for handles */
+  /* BlockNote aligns its content 54px from the edges for handles; add --nd-block-padding-inline
+     so the title and page icon share the exact same vertical line as padded block content. */
   .document-title-container {
-    padding-inline: 54px;
+    padding-inline: calc(var(--nd-editor-gutter) + var(--nd-block-padding-inline));
     padding-top: 0;
     padding-bottom: 12px;
     width: 100%;
@@ -314,41 +328,153 @@
     font-size: 16px !important;
     line-height: 1.5;
   }
+
+  /* Block geometry: vertical inter-block spacing lives on .bn-block-outer margins (per block type);
+     horizontal and inner vertical padding live uniformly on .bn-block-content so every block's
+     content aligns to the document-title column while .bn-block keeps BlockNote's 54px side-menu
+     gutter intact and block backgrounds get clean equal padding and rounded corners.
+     Comment editors keep their own zero-gutter layout. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) {
+    padding-inline: var(--nd-editor-gutter) !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) .bn-block-content {
+    padding-block: var(--nd-block-padding-block) !important;
+    padding-inline: var(--nd-block-padding-inline) !important;
+  }
+
+  /* List items (numbered / checklist) get extra padding on the left for visual hierarchy */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content:is(
+      [data-content-type='numberedListItem'],
+      [data-content-type='checkListItem']
+    ) {
+    padding-inline: var(--nd-list-padding-inline-start, 8px) var(--nd-block-padding-inline) !important;
+  }
+
+  /* Bullet list item: markers share the numbered/checklist left inset, and the gap to the
+     text lives on the marker's right padding so no extra block padding is needed. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content[data-content-type='bulletListItem'] {
+    padding-inline: var(--nd-bullet-padding, 8px) var(--nd-block-padding-inline) !important;
+  }
+
+  /* Neutralize BlockNote's built-in heading top padding on toggle heading frames */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-frame:has(
+      > .bn-toggle-slot > .bn-block-content[data-content-type='heading'],
+      > .bn-toggle-slot > :not(.bn-block-group) .bn-block-content[data-content-type='heading']
+    ) {
+    padding-top: 0 !important;
+  }
+
+  /* Align toggle chevrons with list item markers.
+     The Material triangle SVG has ~7px of left viewBox whitespace inside its 21px button, so pulling
+     4px left aligns the visible glyph with other list markers. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-frame
+    > .bn-toggle-button {
+    margin-inline-start: calc(var(--nd-bullet-padding, 8px) - 4px) !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-slot
+    > .bn-block-content {
+    padding-inline-start: 0 !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-add-block-button {
+    margin-inline-start: calc(22px + var(--nd-bullet-padding, 8px)) !important;
+  }
+
   .bn-editor [data-content-type='heading'],
   [data-content-type='heading'] {
     --level: 1.85em !important;
     font-weight: 600 !important;
-    padding-block: 26px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='2'],
   [data-content-type='heading'][data-level='2'] {
     --level: 1.6em !important;
     font-weight: 600 !important;
-    padding-block: 23px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='3'],
   [data-content-type='heading'][data-level='3'] {
     --level: 1.3em !important;
     font-weight: 600 !important;
-    padding-block: 20px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='4'],
   [data-content-type='heading'][data-level='4'] {
     --level: 1.15em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='5'],
   [data-content-type='heading'][data-level='5'] {
     --level: 1.05em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='6'],
   [data-content-type='heading'][data-level='6'] {
     --level: 0.95em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
+  }
+
+  /* Heading vertical spacing via margin on .bn-block-outer */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading']:not([data-level]),
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='1'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading']:not([data-level]),
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='1']
+    ) {
+    margin-block: 26px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='2'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='2']
+    ) {
+    margin-block: 23px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='3'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='3']
+    ) {
+    margin-block: 20px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='4'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='4']
+    ) {
+    margin-block: 17px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block
+        > .bn-block-content[data-content-type='heading']:is([data-level='5'], [data-level='6']),
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading']:is([data-level='5'], [data-level='6'])
+    ) {
+    margin-block: 17px 6px;
   }
 
   /* Override BlockNote colors — keep defaults but force editor bg to --background (#1A1A18 in dark) */

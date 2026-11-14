@@ -3,15 +3,14 @@
 @layer components {
   /* Code Block Background & Text — Light Mode */
   .bn-block-content[data-content-type='codeBlock'] {
-    background-color: #f7f7f6 !important;
+    background-color: transparent !important;
+    border-radius: 0 !important;
     color: #24292e !important;
-    /* By default, the code block has very less gap between it's neighboring blocks.
-    To make it look clean, we are adding some gap using margin. */
-    margin-block: 12px !important;
   }
 
   .bn-block-content[data-content-type='codeBlock'] > pre {
-    background-color: transparent !important;
+    background-color: #f7f7f6 !important;
+    border-radius: 8px !important;
     white-space: pre !important;
     overflow-x: auto !important;
     scrollbar-width: thin;
@@ -78,8 +77,14 @@
   .dark .bn-block-content[data-content-type='codeBlock'],
   .bn-root[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'],
   .bn-container[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] {
-    background-color: #21211f !important;
+    background-color: transparent !important;
     color: #e1e4e8 !important;
+  }
+
+  .dark .bn-block-content[data-content-type='codeBlock'] > pre,
+  .bn-root[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] > pre,
+  .bn-container[data-color-scheme='dark'] .bn-block-content[data-content-type='codeBlock'] > pre {
+    background-color: #21211f !important;
   }
 
   /* Shiki Syntax Highlighting — Dark Mode */
@@ -92,8 +97,9 @@
   /* Code Block Language Picker */
   .bn-block-content[data-content-type='codeBlock'] > div > select {
     position: absolute !important;
+    top: calc(var(--nd-block-padding-block, 4px) + 8px) !important;
     left: auto !important;
-    right: 12px !important;
+    right: calc(var(--nd-block-padding-inline, 4px) + 12px) !important;
     field-sizing: content;
     z-index: 2;
     appearance: none !important;
