@@ -111,6 +111,16 @@ export const CORS_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 
+/**
+ * UTF-8 byte cap for one document's search projection. The API reads the same variable
+ * (SEARCH_MAX_CONTENT_BYTES) for its own clamp, so the two services cannot disagree.
+ */
+export const MAX_TEXT_BYTES = readPositiveInt(
+  'SEARCH_MAX_CONTENT_BYTES',
+  process.env.SEARCH_MAX_CONTENT_BYTES,
+  256 * 1024
+);
+
 /** Same ceiling the plan set: far below Yhub's 500 MB default, which is a memory hazard. */
 export const MAX_DOC_SIZE_BYTES = readPositiveInt(
   'MAX_DOC_SIZE_BYTES',
@@ -131,6 +141,27 @@ export const MAX_RECHECK_DOCS = readPositiveInt(
   process.env.MAX_RECHECK_DOCS,
   5000
 );
+
+/**
+ * Upper bound for one content-reindex batch. Each id costs a Y.Doc read and an
+ * extraction, so this is deliberately much smaller than the recheck batch. The API
+ * reads the same variable for its own crawl batch, so one setting bounds both sides.
+ */
+export const MAX_REINDEX_DOCS = readPositiveInt(
+  'SEARCH_MAX_REINDEX_DOCS',
+  process.env.SEARCH_MAX_REINDEX_DOCS,
+  50
+);
+
+/**
+ * Base URL for the service's own HTTP calls, currently the Y.Doc read behind a search
+ * reindex. Defaults to the local listener; override it when Yhub's HTTP channel is reached
+ * through a different host, port, or TLS terminator. Trailing slashes are dropped so a
+ * configured value composes with a path the same way the default does.
+ */
+export const INTERNAL_HTTP_URL = (
+  process.env.YHUB_INTERNAL_HTTP_URL?.trim() || `http://127.0.0.1:${PORT}`
+).replace(/\/+$/, '');
 
 /**
  * Rooms rechecked in parallel by the sweep and the batch endpoint. A sweep over a

@@ -2,7 +2,8 @@
 
 import { useContext, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactReduxContext } from 'react-redux';
-import { ChevronRight, DocumentText, Layers, Lock } from '@/icons';
+import { ChevronRight, Layers, Lock } from '@/icons';
+import { DocumentGlyph } from '@/components/page/DocumentGlyph';
 import { PageIcon } from '@/components/page/PageIcon';
 import { workspaceIconTileStyle } from '@/components/workspace/WorkspaceIconTile';
 import type {
@@ -111,16 +112,7 @@ function GroupSourceIcon({
   }
 
   if (kind === 'document') {
-    const isMedia = icon?.type === 'upload' || icon?.type === 'link';
-    return (
-      <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center select-none text-muted-foreground">
-        {icon ? (
-          <PageIcon icon={icon} size={isMedia ? 24 : 20} accessToken={accessToken ?? undefined} />
-        ) : (
-          <DocumentText size={20} strokeWidth={1.75} className="opacity-80" />
-        )}
-      </span>
-    );
+    return <DocumentGlyph icon={icon} accessToken={accessToken} />;
   }
 
   return (
