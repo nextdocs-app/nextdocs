@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { MAX_RECHECK_DOCS } from '../../src/config.js';
-import {
-  handleRecheck,
-  shouldNotifyContentUpdated,
-  touchContentUpdated,
-} from '../../src/server.js';
+import { notifyContentUpdated, shouldNotifyContentUpdated } from '../../src/content-updated.js';
+import { handleRecheck } from '../../src/server.js';
 
 const documentId = '11111111-1111-4111-8111-111111111111';
 const otherDocumentId = '22222222-2222-4222-8222-222222222222';
@@ -125,7 +122,7 @@ describe('handleRecheck', () => {
   });
 });
 
-describe('touchContentUpdated', () => {
+describe('notifyContentUpdated', () => {
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -140,7 +137,7 @@ describe('touchContentUpdated', () => {
     const statuses = [503, 200];
     global.fetch = jest.fn(async () => reply(statuses.shift() ?? 200)) as unknown as typeof fetch;
 
-    await touchContentUpdated(documentId);
+    await notifyContentUpdated(documentId);
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
@@ -148,9 +145,38 @@ describe('touchContentUpdated', () => {
   it('does not retry a contract error', async () => {
     global.fetch = jest.fn(async () => reply(400)) as unknown as typeof fetch;
 
-    await touchContentUpdated(documentId);
+    await notifyContentUpdated(documentId);
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reindex that never succeeds so the batch counts it as failed', async () => {
+    global.fetch = jest.fn(async () => reply(503)) as unknown as typeof fetch;
+
+    await expect(notifyContentUpdated(documentId, null, true)).rejects.toThrow(
+      /content-updated failed/
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects a reindex rejected by the contract without retrying it', async () => {
+    global.fetch = jest.fn(async () => reply(400)) as unknown as typeof fetch;
+
+    await expect(notifyContentUpdated(documentId, null, true)).rejects.toThrow(
+      /content-updated failed/
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reindex whose text extraction fails', async () => {
+    global.fetch = jest.fn(async () => reply(200)) as unknown as typeof fetch;
+
+    // An unparseable Yjs update has no text to project: counting it as indexed would tell
+    // the API the projection was repaired when nothing was written.
+    await expect(
+      notifyContentUpdated(documentId, new Uint8Array([255, 255]), true)
+    ).rejects.toThrow(/extraction failed/);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('retries a 429 and a network error', async () => {
@@ -163,7 +189,7 @@ describe('touchContentUpdated', () => {
       return reply(call === 2 ? 429 : 200);
     }) as unknown as typeof fetch;
 
-    await touchContentUpdated(documentId);
+    await notifyContentUpdated(documentId);
 
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });

@@ -1,16 +1,23 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppShell } from '../../../components/AppShell';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '../../../hooks/usePendingCloudDocumentCreates.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '../../../lib/pending-cloud-create.util';
 import { setCollapsed, toggleMobileNav } from '../../../stores/sidebar/sidebar.slice';
+import { toggleSearchDialog } from '../../../stores/ui/ui.slice';
 import { addToast } from '../../../stores/toasts/toasts.slice';
 
 let mockIsMobileLayout = false;
 const mockSidebarState = { isMobileNavOpen: false, isCollapsed: false };
+const mockUiState = {
+  isSearchDialogOpen: false,
+  isSettingsDialogOpen: false,
+  permanentDeleteTarget: null as { id: string; title: string } | null,
+};
 
 jest.mock('../../../components/sidebar', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../components/search', () => ({ SearchDialog: () => null }));
 jest.mock('../../../components/ToastContainer', () => ({ ToastContainer: () => null }));
 jest.mock('../../../components/WorkspaceEntry', () => ({
   WorkspaceEntry: () => <div>workspace-entry</div>,
@@ -25,8 +32,9 @@ jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
 const mockDispatch = jest.fn();
 jest.mock('../../../stores/hooks', () => ({
   useAppDispatch: () => mockDispatch,
-  useAppSelector: (selector: (state: { sidebar: typeof mockSidebarState }) => unknown) =>
-    selector({ sidebar: mockSidebarState }),
+  useAppSelector: (
+    selector: (state: { sidebar: typeof mockSidebarState; ui: typeof mockUiState }) => unknown
+  ) => selector({ sidebar: mockSidebarState, ui: mockUiState }),
 }));
 
 const mockReplace = jest.fn();
@@ -231,5 +239,77 @@ describe('AppShell', () => {
     );
 
     expect(screen.queryByRole('button', { name: 'Open sidebar' })).not.toBeInTheDocument();
+  });
+
+  it('toggles the search dialog on Cmd/Ctrl+K', async () => {
+    const user = userEvent.setup();
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    await user.keyboard('{Control>}k{/Control}');
+
+    expect(mockDispatch).toHaveBeenCalledWith(toggleSearchDialog());
+  });
+
+  it('ignores auto-repeat while the shortcut key is held down', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true, repeat: true });
+
+    expect(mockDispatch).not.toHaveBeenCalledWith(toggleSearchDialog());
+  });
+
+  it('leaves Mod+K to the editor when text is selected for a link', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+    mockDispatch.mockClear();
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    const text = document.createElement('span');
+    text.textContent = 'selected text';
+    editable.appendChild(text);
+    document.body.appendChild(editable);
+    const selection = jest
+      .spyOn(window, 'getSelection')
+      .mockReturnValue({ isCollapsed: false } as Selection);
+
+    try {
+      render(
+        <AppShell>
+          <div>content</div>
+        </AppShell>
+      );
+
+      fireEvent.keyDown(text, { key: 'k', ctrlKey: true });
+
+      expect(mockDispatch).not.toHaveBeenCalledWith(toggleSearchDialog());
+    } finally {
+      selection.mockRestore();
+      editable.remove();
+    }
   });
 });

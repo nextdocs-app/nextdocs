@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -181,6 +182,110 @@ public class YhubClient {
                     });
         } catch (Exception e) {
             log.warn("Failed to initiate recheck for {} document(s): {}", documentIds.size(), e.getMessage());
+        }
+    }
+
+    /**
+     * Ask the realtime service to re-extract text for documents whose search projection
+     * is missing or stale. The API cannot parse Yjs, so it only identifies the ids from
+     * Postgres; extraction stays in the one service that can read the Y.Doc.
+     *
+     * <p>Fire-and-forget like {@link #recheck}: the batch is idempotent, and a scheduled
+     * job must not block a shared scheduler thread on a batch of document reads. The
+     * caller advances its cursor regardless, so a failed batch is retried on a later
+     * pass instead of wedging the queue.
+     *
+     * @param maxBatchSize documents per request; the realtime service rejects a larger
+     *     batch, so this is the same {@code SEARCH_MAX_REINDEX_DOCS} value both services
+     *     bind rather than a constant that can drift from it
+     */
+    public void reindexContent(Collection<UUID> documentIds, int maxBatchSize) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return;
+        }
+        int batchSize = Math.max(1, maxBatchSize);
+        List<UUID> distinct = List.copyOf(new LinkedHashSet<>(documentIds));
+        for (int start = 0; start < distinct.size(); start += batchSize) {
+            List<UUID> batch = distinct.subList(start, Math.min(start + batchSize, distinct.size()));
+            sendReindex(batch);
+        }
+    }
+
+    private void sendReindex(List<UUID> documentIds) {
+        try {
+            String json = objectMapper.writeValueAsString(
+                    Map.of("docids", documentIds.stream().map(UUID::toString).toList()));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/api/search-reindex/v1/nextdocs"))
+                    .header("Authorization", "Bearer " + serviceToken)
+                    .header("Content-Type", "application/json")
+                    // Each id costs one Y.Doc read, and the batch is sequential. The endpoint
+                    // stops starting new reads at 60 s, so this leaves room for the one in
+                    // flight; ids it did not reach stay stale for the next crawl pass.
+                    .timeout(Duration.ofSeconds(90))
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+
+            httpClient
+                    // The body answers with the per-document counts, and an accepted batch can
+                    // still have repaired nothing.
+                    .sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenAccept(response -> {
+                        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                            log.warn("Realtime search reindex failed: status {}", response.statusCode());
+                            return;
+                        }
+                        OptionalInt failed = failedCount(response.body());
+                        if (failed.isEmpty()) {
+                            // A 200 whose body does not state the outcome cannot confirm the
+                            // batch; silence here would read as "nothing failed".
+                            log.warn(
+                                    "Realtime search reindex answered without a failure count for {} document(s)",
+                                    documentIds.size());
+                        } else if (failed.getAsInt() > 0) {
+                            // Without this the only operator-visible line reports a successful
+                            // pass for a batch whose documents all failed to read.
+                            log.warn(
+                                    "Realtime search reindex failed for {} of {} document(s)",
+                                    failed.getAsInt(),
+                                    documentIds.size());
+                        }
+                    })
+                    .exceptionally(ex -> {
+                        log.warn(
+                                "Failed async search reindex for {} document(s): {}",
+                                documentIds.size(),
+                                ex.getMessage());
+                        return null;
+                    });
+        } catch (Exception e) {
+            log.warn("Failed to initiate search reindex for {} document(s): {}", documentIds.size(), e.getMessage());
+        }
+    }
+
+    /**
+     * Documents the realtime service could not read in one batch. The endpoint answers 200
+     * with per-id failures, so the status alone cannot distinguish a repaired page from one
+     * that is still stale until the next crawl pass.
+     *
+     * <p>Empty when the reply does not state a count. Treating that as zero would report a
+     * malformed or contract-changed response as a clean pass; the caller warns instead, while
+     * the documents stay stale and the next crawl pass retries them.
+     */
+    OptionalInt failedCount(String body) {
+        if (body == null || body.isBlank()) {
+            return OptionalInt.empty();
+        }
+        try {
+            JsonNode failed = objectMapper.readTree(body).get("failed");
+            // A non-numeric value would read as 0 through asInt's default.
+            if (failed == null || !failed.isIntegralNumber()) {
+                return OptionalInt.empty();
+            }
+            int count = failed.asInt();
+            return count < 0 ? OptionalInt.empty() : OptionalInt.of(count);
+        } catch (RuntimeException e) {
+            return OptionalInt.empty();
         }
     }
 

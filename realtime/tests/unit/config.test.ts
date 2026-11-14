@@ -21,6 +21,7 @@ describe('Config', () => {
     delete process.env.CORS_ORIGIN;
     delete process.env.CORS_ALLOWED_ORIGINS;
     delete process.env.CORS_ORIGINS;
+    delete process.env.YHUB_INTERNAL_HTTP_URL;
   });
 
   afterEach(() => {
@@ -42,6 +43,18 @@ describe('Config', () => {
     expect(config.SWEEP_INTERVAL_MS).toBe(30_000);
     expect(config.RECHECK_CONCURRENCY).toBe(8);
     expect(config.LOG_LEVEL).toBe('info');
+    expect(config.INTERNAL_HTTP_URL).toBe('http://127.0.0.1:1234');
+  });
+
+  it('points internal HTTP reads at the loopback listener unless overridden', async () => {
+    const config = await import('../../src/config.js');
+    expect(config.INTERNAL_HTTP_URL).toBe('http://127.0.0.1:1234');
+
+    jest.resetModules();
+    // A trailing slash must not produce a double slash when a path is appended.
+    process.env.YHUB_INTERNAL_HTTP_URL = 'https://yhub.internal:1234/';
+    const overridden = await import('../../src/config.js');
+    expect(overridden.INTERNAL_HTTP_URL).toBe('https://yhub.internal:1234');
   });
 
   it('reads a log level and rejects an unknown one', async () => {

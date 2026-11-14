@@ -8,6 +8,7 @@ export interface UiState {
   isSettingsDialogOpen: boolean;
   settingsDialogEntryId: SettingsEntryId | null;
   settingsDialogSource: SettingsDialogSource | null;
+  isSearchDialogOpen: boolean;
   isAccountMenuOpen: boolean;
   isWorkspaceMenuOpen: boolean;
 
@@ -22,6 +23,7 @@ const initialState: UiState = {
   isSettingsDialogOpen: false,
   settingsDialogEntryId: null,
   settingsDialogSource: null,
+  isSearchDialogOpen: false,
   isAccountMenuOpen: false,
   isWorkspaceMenuOpen: false,
   permanentDeleteTarget: null,
@@ -44,6 +46,15 @@ const uiSlice = createSlice({
       state.settingsDialogEntryId = null;
       state.settingsDialogSource = null;
     },
+    openSearchDialog(state) {
+      state.isSearchDialogOpen = true;
+    },
+    closeSearchDialog(state) {
+      state.isSearchDialogOpen = false;
+    },
+    toggleSearchDialog(state) {
+      state.isSearchDialogOpen = !state.isSearchDialogOpen;
+    },
     setAccountMenuOpen(state, action: PayloadAction<boolean>) {
       state.isAccountMenuOpen = action.payload;
     },
@@ -59,6 +70,9 @@ const uiSlice = createSlice({
 export const {
   openSettingsDialog,
   closeSettingsDialog,
+  openSearchDialog,
+  closeSearchDialog,
+  toggleSearchDialog,
   setAccountMenuOpen,
   setWorkspaceMenuOpen,
   setPermanentDeleteTarget,

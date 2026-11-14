@@ -76,10 +76,11 @@ export const adminDocumentPermissions: DocumentPermissionsV1 = {
 };
 
 /**
- * Org-scoped service permissions: the batched recheck used after an access
- * change. Service-only; a browser's org answer is null.
+ * Org-scoped service permissions: the batched recheck used after an access change, and
+ * the batched content reindex used by the search crawl. Service-only; a browser's org
+ * answer is null.
  */
 export const serviceOrgPermissions: OrgPermissionsV1 = {
   type: 'permissions:org:v1',
-  endpoint: { recheck: 'c---' },
+  endpoint: { recheck: 'c---', 'search-reindex': 'c---' },
 };

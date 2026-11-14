@@ -23,6 +23,7 @@ import {
 } from '@/stores/sidebar/sidebar.slice';
 import {
   closeSettingsDialog,
+  openSearchDialog,
   openSettingsDialog,
   setAccountMenuOpen,
   setWorkspaceMenuOpen,
@@ -33,11 +34,11 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 import { NewDocument, Search, ChevronDown, Close, CloseSidebar, UserCircle } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
-import { PageIcon } from '@/components/page/PageIcon';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useWorkspace } from '@/hooks/useWorkspace.hook';
 import { useOfflineDocumentSelect } from '@/hooks/useOfflineDocumentSelect.hook';
+import { useIsMac } from '@/hooks/useIsMac.hook';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { generateDocumentId } from '@/lib/document-id.util';
 import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
@@ -181,6 +182,7 @@ function Sidebar() {
   // Mobile renders the same rail as an off-canvas drawer, which has no collapsed
   // state: it is either covering the page or hidden off-screen.
   const isMobileLayout = useIsMobileLayout();
+  const isMac = useIsMac();
   const closeMobileNav = useCallback(() => dispatch(setMobileNavOpen(false)), [dispatch]);
 
   const [offlineSelectedDocumentId, setOfflineSelectedDocumentId] = useState<string | null>(null);
@@ -1205,13 +1207,23 @@ function Sidebar() {
       <div className="flex items-center gap-2 px-2 pt-5 pb-4">
         <button
           type="button"
-          onClick={openAllDocumentsPanel}
+          onClick={() => dispatch(openSearchDialog())}
           aria-label="Search Documents"
-          title="Search Documents"
-          className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-sm border border-sidebar-border bg-sidebar-accent/40 px-2.5 text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring md:h-8"
+          // The platform label differs from the server snapshot on non-Mac clients.
+          suppressHydrationWarning
+          title={isMac ? 'Search Documents (⌘K)' : 'Search Documents (Ctrl+K)'}
+          className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 rounded-sm border border-sidebar-border bg-sidebar-accent/40 px-2.5 text-left text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring md:h-8"
         >
-          <Search size={16} className="flex-shrink-0 opacity-80" />
-          <span className="truncate text-[13.5px] text-sidebar-foreground/70">Search</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <Search size={16} className="flex-shrink-0 opacity-80" />
+            <span className="truncate text-[13.5px] text-sidebar-foreground/70">Search</span>
+          </span>
+          <kbd
+            suppressHydrationWarning
+            className="hidden h-5 flex-shrink-0 select-none items-center rounded-[5px] bg-sidebar-foreground/[0.06] px-1.5 font-sans text-[10.5px] font-medium leading-none text-sidebar-foreground/60 sm:inline-flex"
+          >
+            {isMac ? '⌘K' : 'Ctrl+K'}
+          </kbd>
         </button>
         <button
           type="button"

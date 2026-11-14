@@ -54,6 +54,18 @@ services:
       - SPRING_MAIL_SMTP_STARTTLS=${SPRING_MAIL_SMTP_STARTTLS:-true}
       - SPRING_MAIL_SMTP_SSL_CHECK_SERVER_IDENTITY=${SPRING_MAIL_SMTP_SSL_CHECK_SERVER_IDENTITY:-true}
       - APP_MAIL_FROM=${APP_MAIL_FROM:-NextDocs <no-reply@localhost>}
+      # Full-text search. The content and reindex caps are forwarded to both services so
+      # one value bounds the extractor and the crawl; the rest tune the API read path.
+      - SEARCH_ENABLED=${SEARCH_ENABLED:-true}
+      - SEARCH_LANGUAGE=${SEARCH_LANGUAGE:-english}
+      - SEARCH_MAX_CONTENT_BYTES=${SEARCH_MAX_CONTENT_BYTES:-262144}
+      - SEARCH_MAX_QUERY_LENGTH=${SEARCH_MAX_QUERY_LENGTH:-200}
+      - SEARCH_MAX_PAGE_SIZE=${SEARCH_MAX_PAGE_SIZE:-50}
+      - SEARCH_STATEMENT_TIMEOUT_MS=${SEARCH_STATEMENT_TIMEOUT_MS:-3000}
+      - SEARCH_MAX_VERIFICATION_AGE=${SEARCH_MAX_VERIFICATION_AGE:-24h}
+      - SEARCH_RECONCILE_INTERVAL_MS=${SEARCH_RECONCILE_INTERVAL_MS:-600000}
+      - SEARCH_RECONCILE_INITIAL_DELAY_MS=${SEARCH_RECONCILE_INITIAL_DELAY_MS:-30000}
+      - SEARCH_MAX_REINDEX_DOCS=${SEARCH_MAX_REINDEX_DOCS:-50}
     volumes:
       - ./api:/app
       - /app/target
@@ -100,6 +112,10 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set to the same value for api and realtime}
       - YHUB_SERVICE_TOKEN=${YHUB_SERVICE_TOKEN:?YHUB_SERVICE_TOKEN must be set (openssl rand -base64 32)}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      # Keep these two identical to the API's values: they bound the extractor and the
+      # crawl batch the API sends.
+      - SEARCH_MAX_CONTENT_BYTES=${SEARCH_MAX_CONTENT_BYTES:-262144}
+      - SEARCH_MAX_REINDEX_DOCS=${SEARCH_MAX_REINDEX_DOCS:-50}
     volumes:
       - ./realtime:/app/realtime
       - ./tsconfig.base.json:/app/tsconfig.base.json

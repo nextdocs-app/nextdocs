@@ -358,10 +358,14 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     /**
      * Moves the sidebar sort key after Yhub persisted new content. Content lives in
      * Yhub; only the timestamp the user can see is written here.
+     *
+     * <p>Never backwards: a deferred notification that flushes after a newer one must not
+     * move a document back down a recency sort.
      */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("UPDATE Document d SET d.updatedAt = :now WHERE d.id = :id AND d.deletedAt IS NULL")
+    @Query("UPDATE Document d SET d.updatedAt = CASE WHEN d.updatedAt > :now THEN d.updatedAt ELSE :now END"
+            + " WHERE d.id = :id AND d.deletedAt IS NULL")
     int markContentUpdated(@Param("id") UUID id, @Param("now") OffsetDateTime now);
 
     /**
