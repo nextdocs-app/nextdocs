@@ -7,7 +7,9 @@
 // - Row/column handles are pinned to the table wrapper's visible edge so a
 //   horizontally scrolled table cannot push them into the sidebar.
 // - Column-handle visibility follows the wrapper's scroll position instead of
-//   the stale rect captured when the extension state last changed.
+//   the stale rect captured when the extension state last changed, and its
+//   anchor is clipped to the wrapper so a partially scrolled-out column keeps
+//   its handle inside the gutter.
 // - The cell handle is kept, but its menu contains only SplitButton so the
 //   cell background/text-color menu cannot duplicate the toolbar picker.
 //
@@ -40,7 +42,7 @@ import {
   useComponentsContext,
   useExtensionState,
 } from '@blocknote/react';
-import { type FC, useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import { type FC, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 const SplitOnlyCellMenu = () => {
   const Components = useComponentsContext()!;
@@ -58,6 +60,17 @@ export function isCellWithinWrapper(
   wrapperRect: Pick<DOMRect, 'left' | 'right'>
 ): boolean {
   return cellRect.right >= wrapperRect.left && cellRect.left <= wrapperRect.right;
+}
+
+/** Horizontal span of `rect` that still overlaps `wrapperRect`, clamped at zero. */
+export function getVisibleHorizontalSpan(
+  rect: Pick<DOMRect, 'left' | 'right'>,
+  wrapperRect: Pick<DOMRect, 'left' | 'right'>
+): { left: number; width: number } {
+  const left = Math.max(rect.left, wrapperRect.left);
+  const right = Math.min(rect.right, wrapperRect.right);
+
+  return { left, width: Math.max(0, right - left) };
 }
 
 type TableReferences = {
@@ -115,12 +128,9 @@ export const CustomTableHandlesController = <
         element: tableNode,
         getBoundingClientRect: () => {
           const tableRect = tableNode.getBoundingClientRect();
-          const wrapperRect = getWrapperRect();
-          const visibleLeft = Math.max(tableRect.left, wrapperRect.left);
-          const visibleRight = Math.min(tableRect.right, wrapperRect.right);
-          const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+          const { left, width } = getVisibleHorizontalSpan(tableRect, getWrapperRect());
 
-          return new DOMRect(visibleLeft, tableRect.top, visibleWidth, tableRect.height);
+          return new DOMRect(left, tableRect.top, width, tableRect.height);
         },
       },
     };
@@ -173,14 +183,22 @@ export const CustomTableHandlesController = <
         const tableRect = tableNode.getBoundingClientRect();
         const currentCellRect = cellNode.getBoundingClientRect();
 
-        return new DOMRect(
-          state.draggingState && state.draggingState.draggedCellOrientation === 'col'
-            ? state.draggingState.mousePos - currentCellRect.width / 2
-            : currentCellRect.left,
-          tableRect.top,
-          currentCellRect.width,
-          tableRect.height
-        );
+        // Dragging follows the pointer, not the cell, so leave it untouched.
+        if (state.draggingState && state.draggingState.draggedCellOrientation === 'col') {
+          return new DOMRect(
+            state.draggingState.mousePos - currentCellRect.width / 2,
+            tableRect.top,
+            currentCellRect.width,
+            tableRect.height
+          );
+        }
+
+        // Anchor on the part of the column that is actually scrolled into view,
+        // so floating-ui centers the handle in the gutter instead of over the
+        // sidebar when the cell is only partly visible.
+        const { left, width } = getVisibleHorizontalSpan(currentCellRect, getWrapperRect());
+
+        return new DOMRect(left, tableRect.top, width, tableRect.height);
       },
     };
 
@@ -257,6 +275,29 @@ export const CustomTableHandlesController = <
     editor.settings.tables.splitCells &&
     (getRowspan(cellToSplit) > 1 || getColspan(cellToSplit) > 1)
   );
+
+  const isColumnHandleShown =
+    Boolean(state) &&
+    Boolean(state?.show) &&
+    state?.colIndex !== undefined &&
+    isCellVisible &&
+    (!onlyShownElement || onlyShownElement === 'columnTableHandle');
+  const isColumnMenuOpen = isColumnHandleShown && onlyShownElement === 'columnTableHandle';
+
+  // A scroll can unmount the column handle while its menu is open, which skips
+  // the menu's `onOpenChange(false)` and leaves the extension frozen with every
+  // other element hidden. Release only the state this handle owns, so an open
+  // row menu keeps its own freeze.
+  useEffect(() => {
+    if (!isColumnMenuOpen) {
+      return;
+    }
+
+    return () => {
+      setOnlyShownElement((current) => (current === 'columnTableHandle' ? undefined : current));
+      editor.getExtension(TableHandlesExtension)?.unfreezeHandles();
+    };
+  }, [editor, isColumnMenuOpen]);
 
   const floatingUIOptions = useMemo(() => {
     if (!state) {
