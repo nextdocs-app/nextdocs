@@ -157,6 +157,16 @@
     opacity: 0.95 !important;
   }
 
+  /* Table add-column / add-row strips.
+     The add-column strip is as tall as the table and its thickness comes from the floating
+     wrapper's max-content width, which lands on 24px, while the add-row strip is the
+     button's own 18px icon plus its 1px borders (20px). Pin the column strip to the same
+     20px so both edges read as one control. */
+  :is(.bn-extend-button-add-remove-columns, .bn-shadcn .bn-extend-button-add-remove-columns) {
+    width: 20px !important;
+    min-width: 20px !important;
+  }
+
   /* Handle cursors & drag states */
   :is(.bn-side-menu, .bn-shadcn .bn-side-menu) .bn-button:not([draggable='true']) {
     cursor: pointer !important;

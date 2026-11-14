@@ -63,6 +63,7 @@ import { codeBlockOptions } from '@blocknote/code-block';
 import { syntaxHighlighter } from './codeBlockHighlighter';
 import { MobileDraggableBlocksExtension } from './mobileDraggableBlocks';
 import { CustomSideMenu, SIDE_MENU_FLOATING_OPTIONS } from './SideMenu';
+import { CustomTableHandlesController } from './TableHandlesController';
 import { MobileFormattingToolbarController } from './MobileFormattingToolbar';
 import { MobileAddBlockButton } from './MobileAddBlockButton';
 import { MobileDeleteBlockButton } from './MobileDeleteBlockButton';
@@ -204,7 +205,8 @@ export function resolveNativeButton(target: unknown, explicitNativeButton?: bool
 // BlockNote 0.55 dropped `null` as a portal target (it used to mean
 // `document.body`), so the CSS selector keeps floating UI portalled to the
 // body, clear of the editor's stacking context and fixed panels like the
-// comments sidebar.
+// comments sidebar. Table handles are rendered by CustomTableHandlesController,
+// which uses the editor container's ambient portal element.
 const DEFAULT_PORTAL_ELEMENTS = { default: 'body' } as const;
 
 export const customShadCNComponents: Partial<ShadCNComponents> = {
@@ -973,7 +975,7 @@ export function EditorContent({
             slashMenu={false}
             sideMenu={false}
             filePanel={!isViewer}
-            tableHandles={!isViewer}
+            tableHandles={false}
             emojiPicker={!isViewer}
             // BlockNote's default comments UI is off so that the thread card can
             // be given its own floating options (see below); the two controllers
@@ -1018,6 +1020,7 @@ export function EditorContent({
                 sideMenu={CustomSideMenu}
               />
             )}
+            {!isViewer && <CustomTableHandlesController />}
             {/*
               The thread card is the one piece of floating comments UI that
               needs placement rules of its own: it is the tallest thing anchored

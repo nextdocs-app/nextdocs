@@ -14,6 +14,21 @@
   scrollbar-gutter: stable both-edges;
 }
 
+/* Floating editor chrome (table add-column/add-row handles, toolbars) is portalled to
+   <body> and positioned in document coordinates. A table add-column handle is as tall as
+   its table, so when half the table sits below the fold the handle reaches past the
+   viewport, grows the document, and pops the window scrollbar for as long as it is
+   hovered — the whole shell shifts by the scrollbar's width, which is the jump felt when
+   hovering a half-visible table. The shell owns scrolling (.nd-app-scroll), so the
+   document itself must never become scrollable.
+   `clip` rather than `hidden`: hidden still allows programmatic scrolling, so a
+   `scrollIntoView` on something outside the shell (a focused table cell, a handle) could
+   shift the whole document sideways and leave the shell cut off with dead space beside
+   it, with no scrollbar to undo it. `clip` refuses to scroll at all. */
+html:has(.nd-app-scroll) {
+  overflow: clip;
+}
+
 .nd-doc-toolbar {
   transition: right 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
