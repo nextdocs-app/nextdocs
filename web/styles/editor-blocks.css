@@ -406,23 +406,29 @@
   .bn-editor [data-content-type='table'] table,
   [data-content-type='table'] table {
     border-collapse: collapse !important;
-    border: 1px solid var(--editor-divider-color) !important;
+    border: 1px solid var(--editor-table-border, var(--editor-divider-color)) !important;
   }
 
   .bn-editor [data-content-type='table'] th,
   .bn-editor [data-content-type='table'] td,
   [data-content-type='table'] th,
   [data-content-type='table'] td {
-    border: 1px solid var(--editor-divider-color) !important;
+    border: 1px solid var(--editor-table-border-inner, var(--editor-divider-color)) !important;
     padding: 7px 12px !important;
     transition:
       border-color 0.15s ease,
       background-color 0.15s ease !important;
   }
 
+  .bn-editor [data-content-type='table'] th:not([data-background-color]),
+  .bn-editor [data-content-type='table'] th[data-background-color='default'],
+  [data-content-type='table'] th:not([data-background-color]),
+  [data-content-type='table'] th[data-background-color='default'] {
+    background-color: var(--editor-table-header-bg) !important;
+  }
+
   .bn-editor [data-content-type='table'] th,
   [data-content-type='table'] th {
-    background-color: var(--editor-table-header-bg) !important;
     font-weight: 600 !important;
   }
 

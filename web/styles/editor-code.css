@@ -193,13 +193,16 @@
   }
 
   /* When custom colors are applied via toolbar color picker, respect them */
-  .bn-inline-content code:has([style*='color']) {
+  .bn-inline-content code:has([style*='color']),
+  .bn-inline-content code:has([data-style-type='textColor']) {
     color: inherit !important;
   }
-  .bn-inline-content [style*='color'] > code {
+  .bn-inline-content [style*='color'] > code,
+  .bn-inline-content [data-style-type='textColor'] > code {
     color: inherit !important;
   }
-  .bn-inline-content [style*='background'] > code {
+  .bn-inline-content [style*='background'] > code,
+  .bn-inline-content [data-style-type='backgroundColor'] > code {
     background-color: transparent !important;
     border-color: transparent !important;
   }
