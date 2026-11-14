@@ -70,9 +70,11 @@ export function useSearchResults({
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestSeqRef = useRef(0);
 
-  const errorMessage = error && error.query === trimmedQuery ? error.message : null;
-  const loadMoreErrorMessage =
-    loadMoreError && loadMoreError.query === trimmedQuery ? loadMoreError.message : null;
+  // True from the moment a first-page request is scheduled until it settles. An
+  // accessToken refresh refetches without changing the query, so `resultsAreCurrent`
+  // cannot stand in for this: the refresh would be invisible and paging could race it.
+  const [isFirstPagePending, setIsFirstPagePending] = useState(false);
+
   const fallbackNotice = fallback && fallback.query === trimmedQuery ? fallback.message : null;
 
   const mode: SearchMode = !trimmedQuery
@@ -83,8 +85,16 @@ export function useSearchResults({
         ? 'offline'
         : 'search';
 
+  // A remote failure is only this view's problem while remote search is the mode. In the
+  // offline fallback the cached matches are the answer, so an error must not hide them.
+  const errorMessage =
+    mode === 'search' && error && error.query === trimmedQuery ? error.message : null;
+  const loadMoreErrorMessage =
+    loadMoreError && loadMoreError.query === trimmedQuery ? loadMoreError.message : null;
+
   const resultsAreCurrent = resultsQuery === trimmedQuery;
-  const isLoading = mode === 'search' && !resultsAreCurrent && !errorMessage;
+  const isLoading =
+    mode === 'search' && !errorMessage && (isFirstPagePending || !resultsAreCurrent);
 
   const settleWithFallback = useCallback(
     (message: string) => {
@@ -100,10 +110,12 @@ export function useSearchResults({
     abortControllerRef.current?.abort();
 
     if (!trimmedQuery || !canUseRemoteSearch || !accessToken) {
+      setIsFirstPagePending(false);
       return;
     }
 
     const requestId = ++requestSeqRef.current;
+    setIsFirstPagePending(true);
 
     const timer = window.setTimeout(() => {
       const controller = new AbortController();
@@ -172,6 +184,11 @@ export function useSearchResults({
           });
         } finally {
           window.clearTimeout(timeoutTimer);
+          // A newer request owns the flag; only the request still holding the sequence may
+          // report that the first page settled.
+          if (requestSeqRef.current === requestId) {
+            setIsFirstPagePending(false);
+          }
         }
       };
 
@@ -191,6 +208,7 @@ export function useSearchResults({
       !trimmedQuery ||
       !hasMore ||
       isLoading ||
+      isFirstPagePending ||
       isLoadingMore ||
       !resultsAreCurrent
     ) {
@@ -260,6 +278,7 @@ export function useSearchResults({
     trimmedQuery,
     hasMore,
     isLoading,
+    isFirstPagePending,
     isLoadingMore,
     resultsAreCurrent,
     nextOffset,

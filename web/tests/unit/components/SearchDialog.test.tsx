@@ -51,6 +51,8 @@ function createTestStore(
   preloadedDocuments: LocalDocumentEntry[] = [
     {
       id: 'recent-1',
+      parentId: null,
+      accessLevel: 'OWNER',
       meta: {
         title: 'Quarterly Planning',
         createdAt: '2026-10-01T10:00:00Z',
@@ -59,6 +61,8 @@ function createTestStore(
     },
     {
       id: 'recent-2',
+      parentId: null,
+      accessLevel: 'OWNER',
       meta: {
         title: 'Design System',
         createdAt: '2026-10-01T10:00:00Z',
@@ -237,7 +241,7 @@ describe('SearchDialog', () => {
     expect(within(privateOption).getByText('Private')).toBeInTheDocument();
   });
 
-  it('marks a cached private root as Private when offline search uses the cached set', () => {
+  it('does not mark a cached document whose location and ownership are unknown as Private', () => {
     (useNetworkStatus as jest.Mock).mockReturnValue({ isOnline: false });
     const store = createTestStore(
       [],
@@ -259,10 +263,11 @@ describe('SearchDialog', () => {
       target: { value: 'Cached' },
     });
 
-    // Offline search reads localAllDocs; the Private label must come from the same set,
-    // or a cached root outside the loaded listing loses its location.
+    // Offline search reads localAllDocs, which stores neither a parent link nor an access
+    // level. A missing parent is unknown, not root-level, so the cache cannot prove the
+    // page is private and the label must stay off.
     const option = screen.getByRole('option', { name: /Cached Page/i });
-    expect(within(option).getByText('Private')).toBeInTheDocument();
+    expect(within(option).queryByText('Private')).not.toBeInTheDocument();
   });
 
   it('stops loading when remote search becomes unavailable mid-query', async () => {

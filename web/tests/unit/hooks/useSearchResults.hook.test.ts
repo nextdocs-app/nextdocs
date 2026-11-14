@@ -21,16 +21,16 @@ const hit = (documentId: string) => ({
   updatedAt: null,
 });
 
-function setup(query: string) {
+function setup(query: string, accessToken: string | null = 'token-1') {
   return renderHook(
-    ({ currentQuery }: { currentQuery: string }) =>
+    ({ currentQuery, token }: { currentQuery: string; token: string | null }) =>
       useSearchResults({
         query: currentQuery,
-        accessToken: 'token-1',
-        isAuthenticated: true,
+        accessToken: token,
+        isAuthenticated: token !== null,
         isOnline: true,
       }),
-    { initialProps: { currentQuery: query } }
+    { initialProps: { currentQuery: query, token: accessToken } }
   );
 }
 
@@ -54,7 +54,7 @@ describe('useSearchResults', () => {
     const { result, rerender } = setup('a');
     await waitFor(() => expect(result.current.hits).toHaveLength(1));
 
-    rerender({ currentQuery: 'ab' });
+    rerender({ currentQuery: 'ab', token: 'token-1' });
 
     expect(result.current.hits).toEqual([]);
     expect(result.current.hasMore).toBe(false);
@@ -82,6 +82,54 @@ describe('useSearchResults', () => {
     await waitFor(() => expect(result.current.mode).toBe('search'));
     expect(result.current.hits).toEqual([hit('docs-1')]);
     expect(result.current.fallbackNotice).toBeNull();
+  });
+
+  it('keeps the offline fallback visible when a retry fails again', async () => {
+    (searchService.search as jest.Mock)
+      .mockRejectedValueOnce(new ApiError('Not Found', 404))
+      .mockRejectedValueOnce(new ApiError('Server Error', 500));
+
+    const { result } = setup('docs');
+    await waitFor(() => expect(result.current.mode).toBe('offline'));
+
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(searchService.search).toHaveBeenCalledTimes(2));
+    // The fallback is still the answer, so its cached matches must not be hidden by an
+    // error that only the remote mode owns.
+    expect(result.current.mode).toBe('offline');
+    expect(result.current.fallbackNotice).toMatch(/unavailable/i);
+    expect(result.current.errorMessage).toBeNull();
+  });
+
+  it('holds pagination while a token refresh reloads the first page', async () => {
+    (searchService.search as jest.Mock)
+      .mockResolvedValueOnce({
+        query: 'sync',
+        items: [hit('sync-1')],
+        hasMore: true,
+        nextOffset: 1,
+      })
+      .mockReturnValueOnce(new Promise(() => {}));
+
+    const { result, rerender } = setup('sync');
+    await waitFor(() => expect(result.current.hits).toHaveLength(1));
+    expect(result.current.isLoading).toBe(false);
+
+    rerender({ currentQuery: 'sync', token: 'token-2' });
+
+    // The query still matches its results, but the refresh owns the list: paging must wait
+    // for it instead of racing it with a second request at the old offset.
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    // The refresh is the only request that runs, and it starts at offset 0. A paging call
+    // that raced it would be the second call, at the old offset.
+    await waitFor(() => expect(searchService.search).toHaveBeenCalledTimes(2));
+    expect((searchService.search as jest.Mock).mock.calls[1][2]).toMatchObject({ offset: 0 });
+    expect(result.current.isLoadingMore).toBe(false);
   });
 
   it('fails a load-more that never settles and allows another attempt', async () => {

@@ -146,6 +146,57 @@ describe('search-helpers.util', () => {
       expect(hits[0].icon).toMatchObject({ type: 'emoji', value: '🆕' });
     });
 
+    it('takes the fresher entry’s explicit root over a stale parent link', () => {
+      const hits = buildLocalSearchHits({
+        documents: [
+          {
+            id: 'doc-1',
+            parentId: null,
+            meta: {
+              title: 'Moved to root',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-03-01T00:00:00Z',
+            },
+          },
+        ],
+        sidebarNodes: {
+          'doc-1': {
+            id: 'doc-1',
+            title: 'Moved to root',
+            parentId: 'parent-1',
+            orderKey: 'a0',
+            hasChildren: false,
+            effectiveAccessLevel: 'OWNER',
+            isExpanded: false,
+            isLoading: false,
+            children: [],
+            childrenLoaded: true,
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-02-01T00:00:00Z',
+          },
+          'parent-1': {
+            id: 'parent-1',
+            title: 'Old parent',
+            parentId: null,
+            orderKey: 'a0',
+            hasChildren: true,
+            effectiveAccessLevel: 'OWNER',
+            isExpanded: true,
+            isLoading: false,
+            children: ['doc-1'],
+            childrenLoaded: true,
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-02-01T00:00:00Z',
+          },
+        },
+        query: 'moved',
+      });
+
+      // The newer listing says the page is root-level; the stale sidebar copy still points
+      // at the tree it was moved out of. An explicit null is a location, not a missing value.
+      expect(hits[0].breadcrumb).toEqual([]);
+    });
+
     it('excludes cached documents whose own metadata is already trashed', () => {
       const hits = buildLocalSearchHits({
         documents: [

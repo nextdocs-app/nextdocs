@@ -149,7 +149,8 @@ export function formatRelativeSearchTime(value: string | null | undefined): stri
 interface CandidateDocument {
   id: string;
   title: string;
-  parentId: string | null;
+  /** A missing value is unknown, which is not the same claim as an explicit root. */
+  parentId: string | null | undefined;
   icon: SearchHit['icon'];
   updatedAt: string | null;
   space: SearchSpace | null;
@@ -233,13 +234,17 @@ export function buildLocalSearchHits({
     // stale sidebar copy must not rename a row a fresh listing just updated.
     const entryIsNewer =
       toSortableTimestamp(entry.updatedAt) >= toSortableTimestamp(existing.updatedAt);
+    const fresher = entryIsNewer ? entry : existing;
+    const older = entryIsNewer ? existing : entry;
     candidates.set(entry.id, {
       id: entry.id,
       title: entryIsNewer ? entry.title || existing.title : existing.title || entry.title,
-      parentId: entry.parentId ?? existing.parentId,
+      // The fresher entry's location wins when it states one, including an explicit null
+      // for a root; only an unknown parent inherits the older entry's location.
+      parentId: fresher.parentId !== undefined ? fresher.parentId : older.parentId,
       // Recency, not presence: a newer entry with no icon means the icon was removed.
-      icon: entryIsNewer ? entry.icon : existing.icon,
-      updatedAt: entryIsNewer ? (entry.updatedAt ?? existing.updatedAt) : existing.updatedAt,
+      icon: fresher.icon,
+      updatedAt: fresher.updatedAt ?? older.updatedAt,
       space: entry.space ?? existing.space,
     });
   };
@@ -248,7 +253,7 @@ export function buildLocalSearchHits({
     upsert({
       id: doc.id,
       title: doc.meta.title || 'Untitled',
-      parentId: doc.parentId ?? null,
+      parentId: doc.parentId,
       icon: sanitizeDocumentIcon(doc.meta.icon) ?? null,
       updatedAt: doc.meta.updatedAt ?? null,
       space: null,
@@ -259,7 +264,7 @@ export function buildLocalSearchHits({
     upsert({
       id: doc.id,
       title: doc.meta.title || 'Untitled',
-      parentId: doc.parentId ?? null,
+      parentId: doc.parentId,
       icon: sanitizeDocumentIcon(doc.meta.icon) ?? null,
       updatedAt: doc.meta.updatedAt ?? null,
       space: null,
@@ -270,7 +275,7 @@ export function buildLocalSearchHits({
     upsert({
       id: node.id,
       title: node.title || 'Untitled',
-      parentId: node.parentId ?? null,
+      parentId: node.parentId,
       icon: sanitizeDocumentIcon(node.icon) ?? null,
       updatedAt: node.updatedAt ?? null,
       space: null,
@@ -281,7 +286,7 @@ export function buildLocalSearchHits({
     upsert({
       id: node.id,
       title: node.title || 'Untitled',
-      parentId: node.parentId ?? null,
+      parentId: node.parentId,
       icon: sanitizeDocumentIcon(node.icon) ?? null,
       updatedAt: node.updatedAt ?? null,
       space: null,
@@ -299,7 +304,7 @@ export function buildLocalSearchHits({
       upsert({
         id: node.id,
         title: node.title || 'Untitled',
-        parentId: node.parentId ?? null,
+        parentId: node.parentId,
         icon: sanitizeDocumentIcon(node.icon) ?? null,
         updatedAt: node.updatedAt ?? null,
         space: spaceSummary,
@@ -344,7 +349,7 @@ export function buildLocalSearchHits({
     documentId: doc.id,
     title: needle ? buildMatchSegments(doc.title, trimmed) : [{ text: doc.title, match: false }],
     snippet: [],
-    breadcrumb: resolveTreeBreadcrumbs(doc.parentId, nodeMaps),
+    breadcrumb: resolveTreeBreadcrumbs(doc.parentId ?? null, nodeMaps),
     space: doc.space,
     icon: doc.icon,
     updatedAt: doc.updatedAt,

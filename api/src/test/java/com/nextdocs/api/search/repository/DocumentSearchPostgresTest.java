@@ -272,6 +272,26 @@ class DocumentSearchPostgresTest {
     }
 
     @Test
+    void aReindexReadBeforeAPendingVersionLeavesTheRowForTheCrawl() throws Exception {
+        UUID documentId = insertDocument(ownerId, "Ordering");
+        repository.upsertContent(
+                documentId, "indexed words", false, instant("2020-01-01T00:00:00Z"), instant("2020-01-01T00:00:00Z"));
+
+        // A newer edit carried no text: its version is pending, with no body to match it.
+        repository.upsertContentVersion(documentId, instant("2020-01-02T00:00:00Z"));
+        assertThat(repository.selectStaleAfter(null, now(), 100)).contains(documentId);
+
+        // A crawl that read before that edit arrives afterwards, stamped with its own arrival
+        // time. Applying it would claim the pending version was indexed and lose the edit.
+        repository.upsertContent(
+                documentId, "stale read", false, instant("2020-01-01T12:00:00Z"), instant("2020-01-03T00:00:00Z"));
+
+        assertThat(storedContent(documentId)).isEqualTo("indexed words");
+        // Still selectable: the pending version outranks the text this crawl read.
+        assertThat(repository.selectStaleAfter(null, now(), 100)).contains(documentId);
+    }
+
+    @Test
     void aTitleWriteKeepsTheIndexedBody() throws Exception {
         UUID documentId = insertDocument(ownerId, "Old title");
         repository.upsertContent(documentId, "body text", false, now(), now());

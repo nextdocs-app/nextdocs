@@ -250,7 +250,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Suspense>{children}</Suspense>
         </div>
       </main>
-      {isSearchDialogOpen && <SearchDialog />}
+      {/* Keyed by identity: a different account must not inherit the previous
+          session's retained results. */}
+      {isSearchDialogOpen && <SearchDialog key={user?.id ?? 'guest'} />}
       <ToastContainer />
     </div>
   );

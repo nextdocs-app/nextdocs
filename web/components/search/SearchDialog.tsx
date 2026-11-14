@@ -76,7 +76,7 @@ export function SearchDialog() {
 
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const loadMoreSentinelRef = useRef<HTMLLIElement>(null);
   const requestedPathIds = useRef(new Set<string>());
 
@@ -121,10 +121,17 @@ export function SearchDialog() {
   // proof. Absence of a space and breadcrumb is not proof: a document shared
   // with the caller has no readable ancestors (the API stops the walk at the
   // first denied one), and one shared from someone else's tree has no space
-  // either. Only the caller's own root documents — the set searched here —
-  // qualify.
+  // either. Ownership must say the page is the caller's own, and a missing
+  // parent is unknown rather than root-level: a cached nested page whose
+  // ancestors were never loaded has no parentId, and calling that Private
+  // would claim a location the cache cannot prove.
   const privateRootIds = useMemo(
-    () => new Set(localSearchDocuments.filter((doc) => doc.parentId == null).map((doc) => doc.id)),
+    () =>
+      new Set(
+        localSearchDocuments
+          .filter((doc) => doc.parentId === null && doc.accessLevel === 'OWNER')
+          .map((doc) => doc.id)
+      ),
     [localSearchDocuments]
   );
 
@@ -303,7 +310,10 @@ export function SearchDialog() {
     if (typeof IntersectionObserver === 'undefined') {
       return;
     }
-    const root = listRef.current?.parentElement ?? null;
+    // The overflow container is the observer root: the list's parent is a content
+    // wrapper that never scrolls, so using it would request the next page as soon as
+    // the sentinel was rendered rather than when it reached the scrollport.
+    const root = scrollContainerRef.current;
     const target = loadMoreSentinelRef.current;
     if (!root || !target) {
       return;
@@ -494,7 +504,10 @@ export function SearchDialog() {
       </div>
 
       {/* Scrollable results body */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
+      <div
+        ref={scrollContainerRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2"
+      >
         {(fallbackNotice || (!isOnline && trimmedQuery)) && (
           <div className="mx-3.5 mb-2 rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-[12px] text-muted-foreground">
             {fallbackNotice ?? 'Offline — searching document titles cached on this device.'}
@@ -546,7 +559,6 @@ export function SearchDialog() {
             </div>
 
             <ul
-              ref={listRef}
               id={listboxId}
               role="listbox"
               aria-label={sectionHeading}

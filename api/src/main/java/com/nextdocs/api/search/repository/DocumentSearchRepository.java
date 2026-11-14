@@ -70,8 +70,16 @@ public class DocumentSearchRepository {
             // notification is found. An older retry must not claim a fresh verification,
             // so this sits behind the same source_produced_at guard as the text.
             + " verified_at = now(), tsv = EXCLUDED.tsv"
-            + " WHERE document_search.source_produced_at IS NULL"
-            + " OR EXCLUDED.source_produced_at >= document_search.source_produced_at";
+            + " WHERE (document_search.source_produced_at IS NULL"
+            + " OR EXCLUDED.source_produced_at >= document_search.source_produced_at)"
+            // A crawl reads before it sends, so an older reindex can arrive after a newer
+            // edit that carried no text. Overwriting content_version with this row's
+            // arrival time would claim that edit was indexed and drop the page out of the
+            // crawl; the source_produced_at guard alone cannot see it, because a text-less
+            // notification leaves that column untouched. Refusing the write keeps
+            // indexed_at behind the pending version, so the page stays selected.
+            + " AND (document_search.content_version IS NULL"
+            + " OR EXCLUDED.source_produced_at >= document_search.content_version)";
 
     /**
      * Records that content moved without carrying text: extraction failed, or an older
