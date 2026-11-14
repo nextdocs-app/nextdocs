@@ -4,17 +4,13 @@
   /*
      BlockNote Source-With-Preview Blocks (Math, Diagram, etc.)
      Shared styling for blocks with live previews and edit popups.
-     - Spacing: 8px vertical block margins
+     - Vertical spacing lives on .bn-block-outer margins (below)
      - Outlines only on hover / selection (no thick overlays or solid fills)
      - Empty-state placeholder with dashed border and centered label
      - Themed OK button for source code editor popup
      To support a new source-with-preview block, add its data-content-type
      to the selector list below.
   */
-  /* Block-level source-with-preview block spacing */
-  .bn-block-content:is([data-content-type='mathBlock'], [data-content-type='diagram']) {
-    margin-block: 8px !important;
-  }
 
   /* Reset popup wrapper padding */
   :is(
@@ -213,27 +209,88 @@
     padding: 1px 4px;
   }
 
-  /* Paragraph Spacing */
-  .bn-block-content[data-content-type='paragraph'],
-  .bn-block-content[data-content-type='quote'],
-  .bn-block-content[data-content-type='alert'] {
-    padding-block: 8px !important;
+  /* Per-block vertical spacing via margin on .bn-block-outer (horizontal padding
+     lives uniformly on .bn-block-content in editor-page.css). Covers direct
+     .bn-block-content, React NodeViews (.bn-react-node-view-renderer), and toggles. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type='paragraph']) {
+    margin-block: 8px;
   }
 
-  /* List items stay a little tighter than paragraphs: the marker/checkbox
-     column already adds air, so BlockNote's 3px default only needs a nudge. */
-  .bn-block-content[data-content-type='bulletListItem'],
-  .bn-block-content[data-content-type='numberedListItem'] {
-    padding-block: 4px !important;
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type='quote']) {
+    margin-block: 8px;
   }
 
-  /* BlockNote Divider / Separator Line */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-react-node-view-renderer > .bn-block-content[data-content-type='alert'],
+      > .bn-block > .bn-block-content[data-content-type='alert']
+    ) {
+    margin-block: 12px;
+  }
+
+  /* List items stay tighter than paragraphs */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block
+        > .bn-block-content:is(
+          [data-content-type='bulletListItem'],
+          [data-content-type='numberedListItem'],
+          [data-content-type='checkListItem']
+        ),
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='toggleListItem']
+    ) {
+    margin-block: 2px;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-react-node-view-renderer > .bn-block-content[data-file-block],
+      > .bn-block > .bn-block-content[data-file-block]
+    ) {
+    margin-block: 10px;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block
+        > :is(.bn-block-content, .bn-react-node-view-renderer > .bn-block-content):is(
+          [data-content-type='mathBlock'],
+          [data-content-type='diagram']
+        )
+    ) {
+    margin-block: 11px;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block
+        > .bn-block-content:is(
+          [data-content-type='codeBlock'],
+          [data-content-type='table'],
+          [data-content-type='pageBreak']
+        )
+    ) {
+    margin-block: 14px;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type='divider']) {
+    margin-block: 4px;
+  }
+
+  /* BlockNote Divider / Separator Line.
+     The line itself is 1px; the 24px content box keeps the block easy to
+     target without depending on the surrounding 8px block margins. */
   .bn-block-content[data-content-type='divider'] {
     display: flex !important;
     align-items: center !important;
     width: 100% !important;
-    padding-block: 12px !important;
-    min-height: 17px !important;
+    min-height: 24px !important;
     cursor: default !important;
     user-select: none !important;
   }
@@ -253,36 +310,125 @@
       opacity 0.15s ease !important;
   }
 
-  /* BlockNote Nested Block Group — Indentation */
+  /* BlockNote Nested Block Group — Remove indentation guideline line */
   .bn-block-group
     .bn-block:not(:has(.bn-toggle-wrapper))
     .bn-block-group
-    .bn-block-outer:not([data-prev-depth-changed]):before {
-    border-left: 1px solid var(--editor-divider-color) !important;
-    transition: border-color 0.15s ease !important;
+    .bn-block-outer:not([data-prev-depth-changed]):before,
+  .bn-block-group .bn-block-group .bn-block-outer:before {
+    display: none !important;
+    border-left: none !important;
+    content: none !important;
   }
 
-  /* BlockNote Table */
+  /* List markers (bullet, number, checkbox) share one 20px marker column plus the 14px gap,
+     so every item's text starts at the same x no matter which marker type or how many digits the
+     number has. The markers are centred in that column; the box is content-box so the fixed
+     width is the column and the padding is the gap after it. */
+
+  /* Bullet marker: refined size, perfectly centred vertically with text. The marker is a flex
+     item inside .bn-block-content (display: flex), so it must not shrink: letting flexbox shrink
+     it against the paragraph's intrinsic width made the marker width (and therefore the disc x
+     and the text start) depend on how long each item's text is. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content[data-content-type='bulletListItem']::before {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: center !important;
+    align-self: flex-start !important;
+    box-sizing: content-box !important;
+    height: 24px !important;
+    width: var(--nd-list-marker-width, 20px) !important;
+    min-width: 0 !important;
+    line-height: 1 !important;
+    padding: 0 var(--nd-list-marker-padding-end, 10px) 0 0 !important;
+    margin: 0 !important;
+    font-size: 1.25em !important;
+  }
+
+  /* Numbered list item marker — same column as the bullet, so its text starts at the same x.
+     Tabular figures are required: Inter's default digits are proportional ("1" is 833 units
+     wide, "4" is 1323), which made "1." narrower than the rest and shifted that item's text
+     ~2px left of its siblings. A number wider than the column ("10." and up) overflows into
+     the gap instead of pushing the text. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content[data-content-type='numberedListItem']::before {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: center !important;
+    align-self: flex-start !important;
+    box-sizing: content-box !important;
+    height: 24px !important;
+    width: var(--nd-list-marker-width, 20px) !important;
+    min-width: 0 !important;
+    line-height: 1 !important;
+    font-variant-numeric: tabular-nums !important;
+    padding: 0 var(--nd-list-marker-padding-end, 10px) 0 0 !important;
+    margin: 0 !important;
+  }
+
+  /* BlockNote Table.
+     BlockNote's table keeps its column widths: it carries a width when every column is fixed and
+     a min-width otherwise. Let the wrapper hug that table (never narrower than the reading
+     column) so a table wider than the column grows into the free space beside it, and cap it at
+     the page boundary the column publishes; past that the wrapper's horizontal scroll takes over
+     instead of squeezing every column back into the reading column. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    [data-content-type='table']
+    .tableWrapper {
+    padding-top: 0 !important;
+    padding-inline-start: 0 !important;
+    width: max-content !important;
+    min-width: 100% !important;
+    max-width: var(--nd-wide-block-max-width, 100%) !important;
+    flex: 0 0 auto !important;
+  }
+
+  /* BlockNote overrides the table's inline width with `auto`, which would shrink fixed columns
+     into the capped wrapper. Keep the table on its column widths so the cap scrolls instead.
+     Tables with no fixed column keep BlockNote's content width but fill the reading column
+     rather than collapsing to their intrinsic minimum; mixed tables keep BlockNote's inline
+     min-width, so a resized column still widens the table past the column. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    [data-content-type='table']
+    table:has(col[style*='width']):not(:has(col:not([style*='width']))) {
+    width: max-content !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    [data-content-type='table']
+    table:not(:has(col[style*='width'])) {
+    min-width: 100% !important;
+  }
+
   .bn-editor [data-content-type='table'] table,
   [data-content-type='table'] table {
     border-collapse: collapse !important;
-    border: 1px solid var(--editor-divider-color) !important;
+    border: 1px solid var(--editor-table-border, var(--editor-divider-color)) !important;
   }
 
   .bn-editor [data-content-type='table'] th,
   .bn-editor [data-content-type='table'] td,
   [data-content-type='table'] th,
   [data-content-type='table'] td {
-    border: 1px solid var(--editor-divider-color) !important;
+    border: 1px solid var(--editor-table-border-inner, var(--editor-divider-color)) !important;
     padding: 7px 12px !important;
     transition:
       border-color 0.15s ease,
       background-color 0.15s ease !important;
   }
 
+  .bn-editor [data-content-type='table'] th:not([data-background-color]),
+  .bn-editor [data-content-type='table'] th[data-background-color='default'],
+  [data-content-type='table'] th:not([data-background-color]),
+  [data-content-type='table'] th[data-background-color='default'] {
+    background-color: var(--editor-table-header-bg) !important;
+  }
+
   .bn-editor [data-content-type='table'] th,
   [data-content-type='table'] th {
-    background-color: var(--editor-table-header-bg) !important;
     font-weight: 600 !important;
   }
 
@@ -326,18 +472,19 @@
   /* BlockNote Checklist Item — Modern Style */
   .bn-block-content[data-content-type='checkListItem'] {
     align-items: flex-start !important;
-    padding-block: 4px !important;
   }
 
-  /* Checkbox container alignment */
+  /* Checkbox container — shares the marker column and gap with the bullet and number markers,
+     so the task text starts at the same x as every other list item. */
   .bn-block-content[data-content-type='checkListItem']
     > :is(div[contenteditable='false'], div:has(> input)) {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
-    width: 24px !important;
+    box-sizing: content-box !important;
+    width: var(--nd-list-marker-width, 20px) !important;
     height: 24px !important;
-    margin-right: 4px !important;
+    padding: 0 var(--nd-list-marker-padding-end, 10px) 0 0 !important;
     flex-shrink: 0 !important;
     user-select: none !important;
   }

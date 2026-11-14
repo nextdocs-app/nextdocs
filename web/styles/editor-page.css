@@ -1,6 +1,19 @@
 /* Document title and the editor page shell (surface colours, gutters). */
 
 @layer components {
+  :root {
+    --nd-editor-gutter: 54px;
+    --nd-block-padding-inline: 4px;
+    --nd-block-padding-block: 4px;
+    --nd-block-radius: 4px;
+    --nd-list-padding-inline-start: 8px;
+    --nd-bullet-padding: 8px;
+    /* One marker column for bullets, numbers and checkboxes, then one gap after it, so every
+       list item's text starts at the same x. */
+    --nd-list-marker-width: 20px;
+    --nd-list-marker-padding-end: 10px;
+  }
+
   .document-title-input {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -20,9 +33,10 @@
     box-sizing: border-box;
   }
 
-  /* BlockNote aligns its content 54px from the edges for handles */
+  /* BlockNote aligns its content 54px from the edges for handles; add --nd-block-padding-inline
+     so the title and page icon share the exact same vertical line as padded block content. */
   .document-title-container {
-    padding-inline: 54px;
+    padding-inline: calc(var(--nd-editor-gutter) + var(--nd-block-padding-inline));
     padding-top: 0;
     padding-bottom: 12px;
     width: 100%;
@@ -314,53 +328,340 @@
     font-size: 16px !important;
     line-height: 1.5;
   }
+
+  /* Block geometry: vertical inter-block spacing lives on .bn-block-outer margins (per block type);
+     horizontal and inner vertical padding live uniformly on .bn-block-content so every block's
+     content aligns to the document-title column while .bn-block keeps BlockNote's 54px side-menu
+     gutter intact and block backgrounds get clean equal padding and rounded corners.
+     Comment editors keep their own zero-gutter layout. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) {
+    padding-inline: var(--nd-editor-gutter) !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) .bn-block-content {
+    padding-block: var(--nd-block-padding-block) !important;
+    padding-inline: var(--nd-block-padding-inline) !important;
+  }
+
+  /* List items (numbered / checklist) get extra padding on the left for visual hierarchy */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content:is(
+      [data-content-type='numberedListItem'],
+      [data-content-type='checkListItem']
+    ) {
+    padding-inline: var(--nd-list-padding-inline-start, 8px) var(--nd-block-padding-inline) !important;
+  }
+
+  /* Bullet list item: markers share the numbered/checklist left inset, and the gap to the
+     text lives on the marker's right padding so no extra block padding is needed. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-content[data-content-type='bulletListItem'] {
+    padding-inline: var(--nd-bullet-padding, 8px) var(--nd-block-padding-inline) !important;
+  }
+
+  /* Neutralize BlockNote's built-in heading top padding on toggle heading frames */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-frame:has(
+      > .bn-toggle-slot > .bn-block-content[data-content-type='heading'],
+      > .bn-toggle-slot > :not(.bn-block-group) .bn-block-content[data-content-type='heading']
+    ) {
+    padding-top: 0 !important;
+  }
+
+  /* Align toggle chevrons with list item markers.
+     The Material triangle SVG has ~7px of left viewBox whitespace inside its 21px button, so pulling
+     4px left aligns the visible glyph with other list markers. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-frame
+    > .bn-toggle-button {
+    margin-inline-start: calc(var(--nd-bullet-padding, 8px) - 4px) !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-slot
+    > .bn-block-content {
+    padding-inline-start: 0 !important;
+  }
+
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-toggle-add-block-button {
+    margin-inline-start: calc(22px + var(--nd-bullet-padding, 8px)) !important;
+  }
+
   .bn-editor [data-content-type='heading'],
   [data-content-type='heading'] {
     --level: 1.85em !important;
     font-weight: 600 !important;
-    padding-block: 26px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='2'],
   [data-content-type='heading'][data-level='2'] {
     --level: 1.6em !important;
     font-weight: 600 !important;
-    padding-block: 23px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='3'],
   [data-content-type='heading'][data-level='3'] {
     --level: 1.3em !important;
     font-weight: 600 !important;
-    padding-block: 20px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='4'],
   [data-content-type='heading'][data-level='4'] {
     --level: 1.15em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='5'],
   [data-content-type='heading'][data-level='5'] {
     --level: 1.05em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
   }
   .bn-editor [data-content-type='heading'][data-level='6'],
   [data-content-type='heading'][data-level='6'] {
     --level: 0.95em !important;
     font-weight: 600 !important;
-    padding-block: 17px 6px !important;
   }
 
-  /* Override BlockNote colors — keep defaults but force editor bg to --background (#1A1A18 in dark) */
+  /* Heading vertical spacing via margin on .bn-block-outer */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading']:not([data-level]),
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='1'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading']:not([data-level]),
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='1']
+    ) {
+    margin-block: 26px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='2'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='2']
+    ) {
+    margin-block: 23px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='3'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='3']
+    ) {
+    margin-block: 20px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block > .bn-block-content[data-content-type='heading'][data-level='4'],
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading'][data-level='4']
+    ) {
+    margin-block: 17px 6px;
+  }
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor)
+    .bn-block-outer:has(
+      > .bn-block
+        > .bn-block-content[data-content-type='heading']:is([data-level='5'], [data-level='6']),
+      > .bn-block
+        > .bn-toggle-frame
+        > .bn-toggle-slot
+        > .bn-block-content[data-content-type='heading']:is([data-level='5'], [data-level='6'])
+    ) {
+    margin-block: 17px 6px;
+  }
+
+  /* Override BlockNote colors — force editor bg to --background (#ffffff light / #171615 dark)
+     and replace BlockNote's default highlight palette with a refined, WCAG-AA-verified palette. */
+  .bn-root,
+  .bn-container {
+    --nd-hl-light-gray-text: #6a6964;
+    --nd-hl-light-gray-bg: #eeedeb;
+    --nd-hl-light-brown-text: #7d4e35;
+    --nd-hl-light-brown-bg: #f2e7e0;
+    --nd-hl-light-red-text: #c52d2d;
+    --nd-hl-light-red-bg: #fde7e7;
+    --nd-hl-light-orange-text: #ad4e00;
+    --nd-hl-light-orange-bg: #fdeee0;
+    --nd-hl-light-yellow-text: #8f6800;
+    --nd-hl-light-yellow-bg: #fdf4d2;
+    --nd-hl-light-green-text: #17784c;
+    --nd-hl-light-green-bg: #e1f3ea;
+    --nd-hl-light-blue-text: #0e689d;
+    --nd-hl-light-blue-bg: #e1f0fb;
+    --nd-hl-light-purple-text: #6e3ec2;
+    --nd-hl-light-purple-bg: #eee7fb;
+    --nd-hl-light-pink-text: #b42171;
+    --nd-hl-light-pink-bg: #fce7f2;
+
+    --nd-hl-dark-gray-text: #a19f9a;
+    --nd-hl-dark-gray-bg: #302f2c;
+    --nd-hl-dark-brown-text: #c69a80;
+    --nd-hl-dark-brown-bg: #3d2e26;
+    --nd-hl-dark-red-text: #f87575;
+    --nd-hl-dark-red-bg: #472525;
+    --nd-hl-dark-orange-text: #fa9d46;
+    --nd-hl-dark-orange-bg: #452d1b;
+    --nd-hl-dark-yellow-text: #f1c649;
+    --nd-hl-dark-yellow-bg: #403519;
+    --nd-hl-dark-green-text: #50c28e;
+    --nd-hl-dark-green-bg: #1f392e;
+    --nd-hl-dark-blue-text: #60b2ec;
+    --nd-hl-dark-blue-bg: #1f3448;
+    --nd-hl-dark-purple-text: #b48bf6;
+    --nd-hl-dark-purple-bg: #34284c;
+    --nd-hl-dark-pink-text: #ef71b2;
+    --nd-hl-dark-pink-bg: #452538;
+
+    --nd-hl-gray-text: var(--nd-hl-light-gray-text);
+    --nd-hl-gray-bg: var(--nd-hl-light-gray-bg);
+    --nd-hl-brown-text: var(--nd-hl-light-brown-text);
+    --nd-hl-brown-bg: var(--nd-hl-light-brown-bg);
+    --nd-hl-red-text: var(--nd-hl-light-red-text);
+    --nd-hl-red-bg: var(--nd-hl-light-red-bg);
+    --nd-hl-orange-text: var(--nd-hl-light-orange-text);
+    --nd-hl-orange-bg: var(--nd-hl-light-orange-bg);
+    --nd-hl-yellow-text: var(--nd-hl-light-yellow-text);
+    --nd-hl-yellow-bg: var(--nd-hl-light-yellow-bg);
+    --nd-hl-green-text: var(--nd-hl-light-green-text);
+    --nd-hl-green-bg: var(--nd-hl-light-green-bg);
+    --nd-hl-blue-text: var(--nd-hl-light-blue-text);
+    --nd-hl-blue-bg: var(--nd-hl-light-blue-bg);
+    --nd-hl-purple-text: var(--nd-hl-light-purple-text);
+    --nd-hl-purple-bg: var(--nd-hl-light-purple-bg);
+    --nd-hl-pink-text: var(--nd-hl-light-pink-text);
+    --nd-hl-pink-bg: var(--nd-hl-light-pink-bg);
+
+    --bn-colors-editor-text: #121212 !important;
+    --bn-colors-editor-background: var(--background) !important;
+    --bn-colors-highlights-gray-text: var(--nd-hl-gray-text) !important;
+    --bn-colors-highlights-gray-background: var(--nd-hl-gray-bg) !important;
+    --bn-colors-highlights-brown-text: var(--nd-hl-brown-text) !important;
+    --bn-colors-highlights-brown-background: var(--nd-hl-brown-bg) !important;
+    --bn-colors-highlights-red-text: var(--nd-hl-red-text) !important;
+    --bn-colors-highlights-red-background: var(--nd-hl-red-bg) !important;
+    --bn-colors-highlights-orange-text: var(--nd-hl-orange-text) !important;
+    --bn-colors-highlights-orange-background: var(--nd-hl-orange-bg) !important;
+    --bn-colors-highlights-yellow-text: var(--nd-hl-yellow-text) !important;
+    --bn-colors-highlights-yellow-background: var(--nd-hl-yellow-bg) !important;
+    --bn-colors-highlights-green-text: var(--nd-hl-green-text) !important;
+    --bn-colors-highlights-green-background: var(--nd-hl-green-bg) !important;
+    --bn-colors-highlights-blue-text: var(--nd-hl-blue-text) !important;
+    --bn-colors-highlights-blue-background: var(--nd-hl-blue-bg) !important;
+    --bn-colors-highlights-purple-text: var(--nd-hl-purple-text) !important;
+    --bn-colors-highlights-purple-background: var(--nd-hl-purple-bg) !important;
+    --bn-colors-highlights-pink-text: var(--nd-hl-pink-text) !important;
+    --bn-colors-highlights-pink-background: var(--nd-hl-pink-bg) !important;
+  }
+
+  .bn-editor [data-style-type='backgroundColor'] {
+    border-radius: 3px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* Apply curved corners to both .bn-block and .bn-block-content so BlockNote's
+     [data-background-color] fill on .bn-block-content never paints square corners over .bn-block. */
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) .bn-block,
+  .bn-editor:not(.bn-comment-editor):not(.bn-comment-editor .bn-editor) .bn-block-content {
+    border-radius: var(--nd-block-radius, 4px);
+  }
+
+  /* BlockNote only propagates block background to .bn-block for direct > .bn-block-content
+     children, leaving toggle chevrons uncolored; extend the same tokens to toggle blocks. */
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='gray']
+    ) {
+    background-color: var(--bn-colors-highlights-gray-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='brown']
+    ) {
+    background-color: var(--bn-colors-highlights-brown-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='red']
+    ) {
+    background-color: var(--bn-colors-highlights-red-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='orange']
+    ) {
+    background-color: var(--bn-colors-highlights-orange-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='yellow']
+    ) {
+    background-color: var(--bn-colors-highlights-yellow-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='green']
+    ) {
+    background-color: var(--bn-colors-highlights-green-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='blue']
+    ) {
+    background-color: var(--bn-colors-highlights-blue-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='purple']
+    ) {
+    background-color: var(--bn-colors-highlights-purple-background);
+  }
+  .bn-editor
+    .bn-block:has(
+      > .bn-toggle-frame > .bn-toggle-slot > .bn-block-content[data-background-color='pink']
+    ) {
+    background-color: var(--bn-colors-highlights-pink-background);
+  }
+  .bn-editor .bn-toggle-slot > .bn-block-content[data-background-color] {
+    background-color: transparent;
+  }
+
   .dark .bn-root,
   .dark .bn-container,
   .bn-root[data-color-scheme='dark'],
   .bn-container[data-color-scheme='dark'] {
     --bn-colors-editor-text: #f2f2f2 !important;
     --bn-colors-editor-background: var(--background) !important;
+    --nd-hl-gray-text: var(--nd-hl-dark-gray-text);
+    --nd-hl-gray-bg: var(--nd-hl-dark-gray-bg);
+    --nd-hl-brown-text: var(--nd-hl-dark-brown-text);
+    --nd-hl-brown-bg: var(--nd-hl-dark-brown-bg);
+    --nd-hl-red-text: var(--nd-hl-dark-red-text);
+    --nd-hl-red-bg: var(--nd-hl-dark-red-bg);
+    --nd-hl-orange-text: var(--nd-hl-dark-orange-text);
+    --nd-hl-orange-bg: var(--nd-hl-dark-orange-bg);
+    --nd-hl-yellow-text: var(--nd-hl-dark-yellow-text);
+    --nd-hl-yellow-bg: var(--nd-hl-dark-yellow-bg);
+    --nd-hl-green-text: var(--nd-hl-dark-green-text);
+    --nd-hl-green-bg: var(--nd-hl-dark-green-bg);
+    --nd-hl-blue-text: var(--nd-hl-dark-blue-text);
+    --nd-hl-blue-bg: var(--nd-hl-dark-blue-bg);
+    --nd-hl-purple-text: var(--nd-hl-dark-purple-text);
+    --nd-hl-purple-bg: var(--nd-hl-dark-purple-bg);
+    --nd-hl-pink-text: var(--nd-hl-dark-pink-text);
+    --nd-hl-pink-bg: var(--nd-hl-dark-pink-bg);
     --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+    --editor-table-border: rgba(255, 250, 244, 0.14) !important;
+    --editor-table-border-inner: rgba(255, 250, 244, 0.1) !important;
     --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
     --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
     --checkbox-checked-bg: #3b82f6 !important;
@@ -381,9 +682,29 @@
     html:not([data-theme='light']):not([data-theme='dark']) .bn-container {
       --bn-colors-editor-text: #f2f2f2 !important;
       --bn-colors-editor-background: var(--background) !important;
+      --nd-hl-gray-text: var(--nd-hl-dark-gray-text);
+      --nd-hl-gray-bg: var(--nd-hl-dark-gray-bg);
+      --nd-hl-brown-text: var(--nd-hl-dark-brown-text);
+      --nd-hl-brown-bg: var(--nd-hl-dark-brown-bg);
+      --nd-hl-red-text: var(--nd-hl-dark-red-text);
+      --nd-hl-red-bg: var(--nd-hl-dark-red-bg);
+      --nd-hl-orange-text: var(--nd-hl-dark-orange-text);
+      --nd-hl-orange-bg: var(--nd-hl-dark-orange-bg);
+      --nd-hl-yellow-text: var(--nd-hl-dark-yellow-text);
+      --nd-hl-yellow-bg: var(--nd-hl-dark-yellow-bg);
+      --nd-hl-green-text: var(--nd-hl-dark-green-text);
+      --nd-hl-green-bg: var(--nd-hl-dark-green-bg);
+      --nd-hl-blue-text: var(--nd-hl-dark-blue-text);
+      --nd-hl-blue-bg: var(--nd-hl-dark-blue-bg);
+      --nd-hl-purple-text: var(--nd-hl-dark-purple-text);
+      --nd-hl-purple-bg: var(--nd-hl-dark-purple-bg);
+      --nd-hl-pink-text: var(--nd-hl-dark-pink-text);
+      --nd-hl-pink-bg: var(--nd-hl-dark-pink-bg);
       --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
       --code-language-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
       --editor-divider-color: rgba(255, 255, 255, 0.12) !important;
+      --editor-table-border: rgba(255, 250, 244, 0.14) !important;
+      --editor-table-border-inner: rgba(255, 250, 244, 0.1) !important;
       --editor-table-header-bg: rgba(255, 255, 255, 0.04) !important;
       --checkbox-hover-bg: rgba(255, 255, 255, 0.08) !important;
       --checkbox-checked-bg: #3b82f6 !important;
@@ -405,9 +726,29 @@
   html[data-theme='light'] .bn-container {
     --bn-colors-editor-text: #121212 !important;
     --bn-colors-editor-background: var(--background) !important;
+    --nd-hl-gray-text: var(--nd-hl-light-gray-text);
+    --nd-hl-gray-bg: var(--nd-hl-light-gray-bg);
+    --nd-hl-brown-text: var(--nd-hl-light-brown-text);
+    --nd-hl-brown-bg: var(--nd-hl-light-brown-bg);
+    --nd-hl-red-text: var(--nd-hl-light-red-text);
+    --nd-hl-red-bg: var(--nd-hl-light-red-bg);
+    --nd-hl-orange-text: var(--nd-hl-light-orange-text);
+    --nd-hl-orange-bg: var(--nd-hl-light-orange-bg);
+    --nd-hl-yellow-text: var(--nd-hl-light-yellow-text);
+    --nd-hl-yellow-bg: var(--nd-hl-light-yellow-bg);
+    --nd-hl-green-text: var(--nd-hl-light-green-text);
+    --nd-hl-green-bg: var(--nd-hl-light-green-bg);
+    --nd-hl-blue-text: var(--nd-hl-light-blue-text);
+    --nd-hl-blue-bg: var(--nd-hl-light-blue-bg);
+    --nd-hl-purple-text: var(--nd-hl-light-purple-text);
+    --nd-hl-purple-bg: var(--nd-hl-light-purple-bg);
+    --nd-hl-pink-text: var(--nd-hl-light-pink-text);
+    --nd-hl-pink-bg: var(--nd-hl-light-pink-bg);
     --code-language-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     --code-language-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
     --editor-divider-color: rgba(55, 53, 47, 0.14) !important;
+    --editor-table-border: rgba(55, 53, 47, 0.14) !important;
+    --editor-table-border-inner: rgba(55, 53, 47, 0.14) !important;
     --editor-table-header-bg: rgba(55, 53, 47, 0.035) !important;
     --checkbox-hover-bg: rgba(55, 53, 47, 0.08) !important;
     --checkbox-checked-bg: #2563eb !important;

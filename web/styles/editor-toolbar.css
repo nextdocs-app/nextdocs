@@ -136,6 +136,21 @@
   color: inherit !important;
 }
 
+/* Color indicator badge inside the toolbar's Colors button */
+.bn-toolbar .bn-color-icon {
+  border-radius: 4px !important;
+  border: 1px solid transparent !important;
+}
+
+.bn-toolbar .bn-color-icon:not([data-background-color='default']) {
+  border-color: var(--sidebar-border) !important;
+}
+
+.bn-toolbar [data-test='colors']:has(.bn-color-icon:not([data-text-color='default'])),
+.bn-toolbar [data-test='colors']:has(.bn-color-icon:not([data-background-color='default'])) {
+  opacity: 1 !important;
+}
+
 /* Disabled buttons */
 .bn-toolbar .bn-button:disabled,
 .bn-toolbar [data-slot='button']:disabled,
