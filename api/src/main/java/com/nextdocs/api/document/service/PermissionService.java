@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Supplier;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -33,6 +33,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class PermissionService {
+
+    // The native batch queries turn the id set into one string_to_array expression.
+    // Keeping a request under this bound avoids a multi-megabyte parameter and lets the
+    // planner use an index lookup per chunk instead of one giant unnest.
+    private static final int MAX_BATCH_SIZE = 1000;
 
     /**
      * A document plus the comment-capable level that granted access to it. Comment
@@ -130,10 +135,7 @@ public class PermissionService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, DocumentAccessLevel> resolveAccessBatch(UUID userId, Collection<UUID> documentIds) {
-        return resolveBatch(documentIds, () -> {
-            String joined = joinIds(documentIds);
-            return joined == null ? List.of() : documentRepository.resolveEffectiveAccessBatch(userId, joined);
-        });
+        return resolveBatch(documentIds, ids -> documentRepository.resolveEffectiveAccessBatch(userId, joinIds(ids)));
     }
 
     /**
@@ -143,10 +145,7 @@ public class PermissionService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, DocumentAccessLevel> resolveIdentityAccessBatch(UUID userId, Collection<UUID> documentIds) {
-        return resolveBatch(documentIds, () -> {
-            String joined = joinIds(documentIds);
-            return joined == null ? List.of() : documentRepository.resolveIdentityAccessBatch(userId, joined);
-        });
+        return resolveBatch(documentIds, ids -> documentRepository.resolveIdentityAccessBatch(userId, joinIds(ids)));
     }
 
     /**
@@ -154,10 +153,7 @@ public class PermissionService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, DocumentAccessLevel> resolvePublicAccessBatch(Collection<UUID> documentIds) {
-        return resolveBatch(documentIds, () -> {
-            String joined = joinIds(documentIds);
-            return joined == null ? List.of() : documentRepository.resolvePublicAccessBatch(joined);
-        });
+        return resolveBatch(documentIds, ids -> documentRepository.resolvePublicAccessBatch(joinIds(ids)));
     }
 
     /**
@@ -194,32 +190,38 @@ public class PermissionService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, DocumentAccessLevel> resolveTrashAccessBatch(UUID userId, Collection<UUID> documentIds) {
-        return resolveBatch(documentIds, () -> {
-            String joined = joinIds(documentIds);
-            return joined == null ? List.of() : documentRepository.resolveTrashAccessBatch(userId, joined);
-        });
+        return resolveBatch(documentIds, ids -> documentRepository.resolveTrashAccessBatch(userId, joinIds(ids)));
     }
 
     /**
-     * Shared batch loop: one bad entry must not deny the whole batch, and the
+     * Shared batch loop: one bad entry must not deny the whole batch, the
      * allowsRead gate must stay in one place so a future edit cannot drop it
-     * on a single path and leak NO_ACCESS/BLOCKED as a level.
+     * on a single path and leak NO_ACCESS/BLOCKED as a level, and a large id
+     * set must be split before it becomes one huge query parameter.
      */
-    private Map<UUID, DocumentAccessLevel> resolveBatch(Collection<UUID> documentIds, Supplier<List<Object[]>> query) {
+    private Map<UUID, DocumentAccessLevel> resolveBatch(
+            Collection<UUID> documentIds, Function<List<UUID>, List<Object[]>> query) {
         if (documentIds == null || documentIds.isEmpty()) {
             return Map.of();
         }
-        // The native batch query joins ids into a comma-separated string and casts each
-        // token with ::uuid; a single null element would either NPE the join or abort the
-        // whole batch cast. Skip nulls so one bad caller entry cannot deny every document.
-        List<Object[]> rows = query.get();
+        // A single null element would NPE the join or abort the whole batch cast.
+        // Skip nulls so one bad caller entry cannot deny every document.
+        List<UUID> ids =
+                documentIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+
         Map<UUID, DocumentAccessLevel> result = new HashMap<>();
-        for (Object[] row : rows) {
-            if (row[0] != null && row[1] != null) {
-                UUID docId = toUuid(row[0]);
-                DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
-                if (level.allowsRead()) {
-                    result.put(docId, level);
+        for (int start = 0; start < ids.size(); start += MAX_BATCH_SIZE) {
+            List<UUID> chunk = ids.subList(start, Math.min(start + MAX_BATCH_SIZE, ids.size()));
+            for (Object[] row : query.apply(chunk)) {
+                if (row[0] != null && row[1] != null) {
+                    UUID docId = toUuid(row[0]);
+                    DocumentAccessLevel level = DocumentAccessLevel.valueOf(row[1].toString());
+                    if (level.allowsRead()) {
+                        result.put(docId, level);
+                    }
                 }
             }
         }
