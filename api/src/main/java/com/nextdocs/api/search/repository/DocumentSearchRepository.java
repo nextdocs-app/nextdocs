@@ -9,9 +9,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -222,8 +220,6 @@ public class DocumentSearchRepository {
             + ") SELECT start_id, id, title, space_id, depth FROM chain WHERE visible"
             + " ORDER BY start_id, depth DESC";
 
-    static final String SPACE_NAMES_SQL = "SELECT id, name FROM spaces WHERE id IN (:ids)";
-
     /**
      * Documents the crawl should re-read. {@code documents.updated_at} is deliberately not
      * part of this predicate: it is Hibernate's row version, so an icon, cover, move or
@@ -421,17 +417,6 @@ public class DocumentSearchRepository {
                         rs.getString("title"),
                         rs.getObject("space_id", UUID.class),
                         rs.getInt("depth")));
-    }
-
-    public Map<UUID, String> findSpaceNames(Collection<UUID> spaceIds) {
-        if (spaceIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, String> names = new HashMap<>();
-        jdbc.query(SPACE_NAMES_SQL, new MapSqlParameterSource("ids", spaceIds), rs -> {
-            names.put(rs.getObject("id", UUID.class), rs.getString("name"));
-        });
-        return names;
     }
 
     /**

@@ -18,6 +18,7 @@ import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +74,20 @@ class SpaceAccessServiceTest {
                 .thenReturn(new WorkspaceAccessService.Membership(workspace, workspaceMember));
         when(spaceRepository.findByIdAndWorkspace_Id(space.getId(), workspace.getId()))
                 .thenReturn(Optional.of(space));
+    }
+
+    private void callerViewingSpaces(WorkspaceRole role) {
+        workspaceMember.setRole(role);
+        when(workspaceAccessService.findMember(userId))
+                .thenReturn(Optional.of(new WorkspaceAccessService.Membership(workspace, workspaceMember)));
+    }
+
+    private SpaceMember memberOf(Space joined, DocumentAccessLevel level) {
+        return SpaceMember.builder()
+                .space(joined)
+                .user(workspaceMember.getUser())
+                .accessLevel(level)
+                .build();
     }
 
     private void memberWithLevel(DocumentAccessLevel level) {
@@ -282,5 +297,69 @@ class SpaceAccessServiceTest {
         assertThatThrownBy(() -> accessService.requireRoster(userId, space.getId()))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    @Test
+    void visibleSpaceIds_includesMembershipsAndPublicSpacesButNotStrangersCustomSpaces() {
+        callerViewingSpaces(WorkspaceRole.MEMBER);
+        Space publicSpace = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Handbook")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+        Space joined = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Design")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build();
+        Space someoneElses = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(workspace)
+                .name("Executive")
+                .accessMode(SpaceAccessMode.CUSTOM)
+                .build();
+        when(memberRepository.findAllByUser_Id(userId)).thenReturn(List.of(memberOf(joined, DocumentAccessLevel.VIEW)));
+
+        assertThat(accessService.visibleSpaceIds(userId, List.of(space, publicSpace, joined, someoneElses)))
+                .containsExactlyInAnyOrder(publicSpace.getId(), joined.getId());
+    }
+
+    @Test
+    void visibleSpaceIds_admitsAWorkspaceAdminToASpaceTheyNeverJoined() {
+        authorize(WorkspaceRole.ADMIN);
+        callerViewingSpaces(WorkspaceRole.ADMIN);
+
+        // The space list already shows an admin every space, so naming one in a
+        // breadcrumb discloses nothing they cannot navigate to. Naming a space is not
+        // reading it: the content gate still has no level for a non-member admin.
+        assertThat(accessService.visibleSpaceIds(userId, List.of(space))).containsExactly(space.getId());
+        assertThatThrownBy(() -> accessService.requireContentRead(userId, space.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    @Test
+    void visibleSpaceIds_hidesASpaceOfAnotherWorkspaceEvenFromAnAdmin() {
+        callerViewingSpaces(WorkspaceRole.OWNER);
+        Space foreign = Space.builder()
+                .id(UUID.randomUUID())
+                .workspace(
+                        Workspace.builder().id(UUID.randomUUID()).name("Other").build())
+                .name("Other Workspace Space")
+                .accessMode(SpaceAccessMode.PUBLIC)
+                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
+                .build();
+
+        assertThat(accessService.visibleSpaceIds(userId, List.of(foreign))).isEmpty();
+    }
+
+    @Test
+    void visibleSpaceIds_isEmptyWithoutAWorkspaceMembership() {
+        when(workspaceAccessService.findMember(userId)).thenReturn(Optional.empty());
+
+        assertThat(accessService.visibleSpaceIds(userId, List.of(space))).isEmpty();
     }
 }
