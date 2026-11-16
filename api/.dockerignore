@@ -1,0 +1,6 @@
+# Keep the API build context small. The Maven build runs inside the image, so
+# local build output and attachment data must never be sent to the daemon.
+target/
+data/
+.idea/
+*.iml

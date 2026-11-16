@@ -1,4 +1,5 @@
-FROM node:26.13.1-alpine AS base
+# Keep the Node line in sync with .nvmrc; `npm run check:runtime-versions` fails otherwise.
+FROM node:24.14.1-alpine AS base
 
 FROM base AS deps
 WORKDIR /app
@@ -22,30 +23,29 @@ RUN npm run build
 
 FROM base AS runner
 WORKDIR /app/web
-ENV NODE_ENV production
-
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # We create a non-root user for security.
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/web/public ./public
+# Next writes the monorepo standalone output as ./web/server.js because the
+# workspace root is /app. Keep that layout so server.js can resolve the hoisted
+# node_modules at /app/web/node_modules.
+COPY --from=builder /app/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/web/.next/static ./web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/web/public ./web/public
 
-# We need to ensure the non-root user has permissions for the prerender cache.
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# We copy the standalone build to reduce image size.
-COPY --from=builder --chown=nextjs:nodejs /app/web/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/web/.next/static ./.next/static
+# Next needs a writable cache directory; everything else can stay read-only.
+RUN mkdir -p web/.next/cache && chown -R nextjs:nodejs web
 
 USER nextjs
 
 EXPOSE 3000
 
-ENV PORT 3000
+ENV PORT=3000
 # We set the hostname to listen on all interfaces.
-ENV HOSTNAME "0.0.0.0"
+ENV HOSTNAME=0.0.0.0
 
-CMD ["node", "server.js"]
+CMD ["node", "web/server.js"]

@@ -32,6 +32,8 @@ All from the repo root:
 ./nd format --fix     # prettier for web/realtime + spotless:apply for api
 ./nd db               # psql into the container (postgres is published on host port 5433)
 npm run verify        # git-hook checks (format/lint/test) against the branch diff
+npm run verify:all    # force every service, like a push to main (needs local Postgres)
+npm run check:runtime-versions  # .nvmrc / .java-version / Dockerfile drift guard
 ```
 
 `./nd --help` prints usage but also "Unknown command" and exits 1.
@@ -50,11 +52,13 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 
 ## CI and verification gotchas
 
-- CI is per service and path-filtered (`web/**`, `realtime/**`, `api/**`); each runs format/lint → test → build, and the `api` and `realtime` workflows additionally build a Docker image. Root config files (`turbo.json`, `tsconfig.base.json`, `.prettierrc`, `package-lock.json`) trigger the JS workflows only.
-- Java formatting is **not** checked by `mvn test`: `spotless:check` is bound to the `verify` phase, and CI runs it in a separate lint job. Run `./nd lint api` (or `./nd format api --fix`, Spotless + palantirJavaFormat) before pushing; do not hand-format Java.
-- Flyway migrations in `api/src/main/resources/db/migration` are never applied by tests (test properties disable Flyway; `ddl-auto` is `none` locally / `validate` in Docker). Exercise new SQL against the `./nd` Postgres container. Hibernate must not manage the schema — every schema change needs a migration file.
+- CI is one `CI` workflow that calls the reusable per-service workflows. Pull requests stay path-filtered (`web/**`, `realtime/**`, `api/**`, plus shared JS/realtime types and root config), but every push to `main`, merge-queue batch, manual run, and nightly schedule runs the full suite. The only status branch protection should require is `CI / Required checks`; path-filtered workflows do not report a status when they are skipped.
+- Each service pipeline runs code checks and Docker image checks in separate parallel jobs. Web smoke-tests the image over HTTP; API starts the image against Postgres with Flyway and `ddl-auto=validate`; realtime runs the image-level integration tests. Dockerfiles must match `.nvmrc` / `.java-version`; `npm run check:runtime-versions` (part of CI) fails on drift.
+- Java formatting is **not** checked by `mvn test`: `spotless:check` is bound to `verify`, which CI runs in the API checks job. Run `./nd lint api` (or `./nd format api --fix`, Spotless + palantirJavaFormat) before pushing; do not hand-format Java.
+- Flyway migrations in `api/src/main/resources/db/migration` are never applied by the H2 tests (test properties disable Flyway; the local suite uses Hibernate `create-drop`). The PostgreSQL-backed migration suites in CI do apply Flyway, and the API Docker job boots the real image with `ddl-auto=validate`, so a migration/entity mismatch fails CI. Exercise new SQL against the `./nd` Postgres container too. Hibernate must not manage the schema — every schema change needs a migration file.
 - API tests run on H2 locally, while CI starts a Postgres service with `SPRING_DATASOURCE_*` overrides for the same suite — avoid H2-only SQL in repositories.
 - Web Jest runs through `next/jest`; if it logs `jest-haste-map: Haste module naming collision: web`, a standalone build left `web/.next/standalone` behind. Tests still pass.
+- Coverage goes to Codecov, never to a local gate: each workflow uploads under its own flag (`web`, `realtime`, `api`) and a failed upload does not fail CI. Jest reports paths relative to the workspace, so `scripts/coverage-paths.js` rebases them to the repo root before upload; JaCoCo keys files by package, which `fixes` in `codecov.yml` maps onto `api/src/main/java`. The JaCoCo report is bound to `verify`, so `./nd test api` spends no time on it.
 
 ## Conventions
 
