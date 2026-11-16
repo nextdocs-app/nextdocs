@@ -2103,7 +2103,7 @@ it('excludes shared documents from the private section', async () => {
       },
       documentList: {
         ...documentListInitialState,
-        ownerSharedDocuments: [
+        sharedWithMeDocuments: [
           { id: 'id-1', relationship: 'owner' as const, parentId: null, meta: mockDocs[0].meta },
         ],
       },
@@ -2182,7 +2182,7 @@ it('excludes shared documents from the private documents panel', async () => {
       },
       documentList: {
         ...documentListInitialState,
-        ownerSharedDocuments: [
+        sharedWithMeDocuments: [
           { id: 'id-1', relationship: 'owner' as const, parentId: null, meta: mockDocs[0].meta },
         ],
       },
@@ -2285,21 +2285,9 @@ it('keeps nested owner-shared documents in the private section under their paren
         rootHasMore: false,
         rootPage: 0,
       },
-      documentList: {
-        ...documentListInitialState,
-        ownerSharedDocuments: [
-          {
-            id: 'id-3',
-            relationship: 'owner' as const,
-            parentId: 'id-1',
-            meta: {
-              title: 'Nested Shared Doc',
-              updatedAt: '2024-01-01T11:00:00Z',
-              createdAt: '2024-01-01T10:00:00Z',
-            },
-          },
-        ],
-      },
+      // A nested page with collaborators is not a Shared-section entry: the
+      // server keeps it in the owner's private tree.
+      documentList: documentListInitialState,
     },
   });
 

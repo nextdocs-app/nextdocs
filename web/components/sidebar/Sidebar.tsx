@@ -7,10 +7,7 @@ import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { useGuestSharedTree } from '@/hooks/useGuestSharedTree.hook';
 import { documentService } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
-import {
-  selectRootLevelOwnerSharedDocumentIds,
-  selectSharedWithMeDocumentIds,
-} from '@/stores/documentList/documentList.selectors';
+import { selectSharedWithMeDocumentIds } from '@/stores/documentList/documentList.selectors';
 import {
   setCollapsed,
   setMobileNavOpen,
@@ -71,6 +68,7 @@ import {
   fetchChildrenThunk as fetchSharedChildrenThunk,
   fetchPublicChildrenThunk,
   syncSharedRoots,
+  insertSharedNode,
   removeNode as sharedRemoveNode,
   toggleExpanded as sharedToggleExpanded,
   moveDocumentThunk as sharedMoveDocumentThunk,
@@ -175,7 +173,6 @@ function Sidebar() {
   const sharedTreeNodes = useAppSelector((state) => state.sharedTree?.nodes ?? {});
   const sharedTreeRootIds = useAppSelector((state) => state.sharedTree?.rootIds ?? []);
   const sharedWithMeDocumentIds = useAppSelector(selectSharedWithMeDocumentIds);
-  const rootLevelOwnerSharedDocumentIds = useAppSelector(selectRootLevelOwnerSharedDocumentIds);
 
   const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
 
@@ -297,27 +294,24 @@ function Sidebar() {
       ? isSharedLoading && panelTreeApi?.rootIds.length === 0
       : privateRootLoading && panelTreeApi?.rootIds.length === 0;
 
-  // Documents that live in the Shared section (shared with me, or root-level
-  // documents shared by me) must not be listed in the Private section's tree or
-  // "show more" panel. Nested documents that were shared stay under their
-  // actual parent in the Private tree.
-  // Stabilized by content key: documentList refreshes replace the id arrays
-  // with new references even when the ids are unchanged; without this the
+  // Every document in the Shared section must stay out of the Private section's tree
+  // and "show more" panel. One list is the whole section now: the server's Shared
+  // listing already includes roots the caller owns with an audience, so a second
+  // owner-shared set would only repeat ids that are already here.
+  // Stabilized by content key: documentList refreshes replace the id array
+  // with a new reference even when the ids are unchanged; without this the
   // unified DnD context (`sidebarTreeApi`) gets a new identity and re-renders
   // both sections on every background refresh.
   const excludedNodeIdsKey = useMemo(() => {
-    const ids = [...sharedWithMeDocumentIds, ...rootLevelOwnerSharedDocumentIds];
+    const ids = [...sharedWithMeDocumentIds];
     ids.sort();
     return ids.join(',');
-  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
-  const excludedNodeIds = useMemo(() => {
-    const excluded = new Set<string>(sharedWithMeDocumentIds);
-    for (const id of rootLevelOwnerSharedDocumentIds) {
-      excluded.add(id);
-    }
-    return excluded;
+  }, [sharedWithMeDocumentIds]);
+  const excludedNodeIds = useMemo(
+    () => new Set<string>(sharedWithMeDocumentIds),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [excludedNodeIdsKey]);
+    [excludedNodeIdsKey]
+  );
 
   const isPrivatePanel = !isTrashPanel && !isSharedPanel;
 
@@ -384,12 +378,13 @@ function Sidebar() {
       if (route.kind === 'shared-nest-adopt') {
         void (async () => {
           try {
-            const result = await dispatch(sharedMoveDocumentThunk(args));
-            if (!sharedMoveDocumentThunk.fulfilled.match(result)) {
-              throw new Error('Move request failed');
-            }
+            // A cross-tree adoption is a real move, not a Shared-section reorder: it
+            // records the document under its new parent, so it takes the private move
+            // path instead of the shared thunk that tags the drop as navigation.
+            const { updatedNode } = await dispatch(privateMoveDocumentThunk(args)).unwrap();
             // The document left the private tree: drop it from that store and
             // refresh roots so section membership stays accurate.
+            dispatch(insertSharedNode(updatedNode));
             clearLocalDocumentParent(args.documentId);
             dispatch(removeNode(args.documentId));
             await dispatch(fetchRootNodesThunk());

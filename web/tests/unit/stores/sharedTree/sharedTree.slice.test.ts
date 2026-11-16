@@ -1,7 +1,10 @@
+import { configureStore } from '@reduxjs/toolkit';
 import { documentService, type DocumentAccessLevel } from '@/services/document.service';
 import type { RootState } from '@/stores/store';
 import sharedTreeReducer, {
   fetchPublicChildrenThunk,
+  insertSharedNode,
+  moveDocumentThunk,
   syncSharedRoots,
   syncPublicRoots,
   updateNodeMeta,
@@ -21,6 +24,58 @@ const entry = (
   parentId,
   accessLevel,
   meta: { title, updatedAt: '2024-01-01T11:00:00Z', createdAt: '2024-01-01T10:00:00Z' },
+});
+
+describe('sharedTree.slice insertSharedNode', () => {
+  const initialState: SharedTreeState = { nodes: {}, rootIds: [] };
+
+  it('adds an adopted page under an already-loaded Shared parent', () => {
+    const withParent = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([entry('shared-parent', 'collaborator', null)])
+    );
+
+    const state = sharedTreeReducer(
+      withParent,
+      insertSharedNode({
+        id: 'adopted',
+        title: 'Adopted',
+        parentId: 'shared-parent',
+        orderKey: 'a1',
+        hasChildren: false,
+        effectiveAccessLevel: 'EDIT',
+        createdAt: '2024-01-01T10:00:00Z',
+        updatedAt: '2024-01-01T11:00:00Z',
+      })
+    );
+
+    expect(state.rootIds).toEqual(['shared-parent']);
+    expect(state.nodes['adopted']).toMatchObject({ parentId: 'shared-parent' });
+    expect(state.nodes['shared-parent']).toMatchObject({
+      children: ['adopted'],
+      hasChildren: true,
+      isExpanded: true,
+    });
+  });
+
+  it('ignores a page whose Shared parent is not loaded', () => {
+    const state = sharedTreeReducer(
+      initialState,
+      insertSharedNode({
+        id: 'adopted',
+        title: 'Adopted',
+        parentId: 'unloaded-parent',
+        orderKey: 'a1',
+        hasChildren: false,
+        effectiveAccessLevel: 'EDIT',
+        createdAt: '2024-01-01T10:00:00Z',
+        updatedAt: '2024-01-01T11:00:00Z',
+      })
+    );
+
+    expect(state.nodes['adopted']).toBeUndefined();
+    expect(state.rootIds).toEqual([]);
+  });
 });
 
 describe('sharedTree.slice syncSharedRoots', () => {
@@ -122,6 +177,23 @@ describe('sharedTree.slice syncSharedRoots', () => {
     expect(state.nodes['shared-child']).toMatchObject({ parentId: 'shared-parent' });
   });
 
+  it('keeps a collaborator holding OWNER in the Shared tree when its parent is unreadable', () => {
+    // The relationship comes from ownership, so an OWNER-level grant is a collaborator
+    // page: dropping it as "the caller's own nested page" would hide it from Shared.
+    const state = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([
+        entry('granted-owner', 'collaborator', 'unreadable-parent', 'Granted', 'OWNER'),
+      ])
+    );
+
+    expect(state.rootIds).toEqual(['granted-owner']);
+    expect(state.nodes['granted-owner']).toMatchObject({
+      parentId: null,
+      effectiveAccessLevel: 'OWNER',
+    });
+  });
+
   it('floats a shared-with-me document at the root when its parent is not shared with me', () => {
     const state = sharedTreeReducer(
       initialState,
@@ -186,6 +258,78 @@ describe('sharedTree.slice syncSharedRoots', () => {
     expect(state.nodes['a-first']).toMatchObject({ orderKey: 'a0' });
     expect(state.nodes['m-mid']).toMatchObject({ orderKey: 'a1' });
     expect(state.nodes['z-last']).toMatchObject({ orderKey: 'a2' });
+  });
+
+  it('keeps keyless roots after the keyed ones instead of interleaving them', () => {
+    const build = (
+      id: string,
+      orderKey: string | undefined,
+      createdAt: string
+    ): SharedDocumentEntry => ({
+      id,
+      relationship: 'collaborator',
+      parentId: null,
+      orderKey,
+      meta: { title: id, updatedAt: createdAt, createdAt },
+    });
+
+    const state = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([
+        build('keyed-b', 'a1', '2024-01-01T10:00:00Z'),
+        build('fallback-later', undefined, '2024-01-03T10:00:00Z'),
+        build('keyed-a', 'a0', '2024-01-01T10:00:00Z'),
+        build('fallback-earlier', undefined, '2024-01-02T10:00:00Z'),
+      ])
+    );
+
+    // A keyless entry sort compares as neither before nor after a keyed one, so the roots
+    // must still land in one total order: keys first, then the `shared:` fallbacks by
+    // creation time, which is the order the server lists them in.
+    expect(state.rootIds).toEqual(['keyed-a', 'keyed-b', 'fallback-earlier', 'fallback-later']);
+  });
+
+  it('orders keyless roots by creation instant rather than by timestamp text', () => {
+    const build = (id: string, createdAt: string): SharedDocumentEntry => ({
+      id,
+      relationship: 'collaborator',
+      parentId: null,
+      meta: { title: id, updatedAt: createdAt, createdAt },
+    });
+
+    const state = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([
+        // 10:30Z, but lexicographically after the next entry's "12:00".
+        build('fallback-utc', '2024-01-02T10:30:00Z'),
+        // 10:00Z, written with a +02:00 offset.
+        build('fallback-offset', '2024-01-02T12:00:00+02:00'),
+      ])
+    );
+
+    expect(state.rootIds).toEqual(['fallback-offset', 'fallback-utc']);
+  });
+
+  it('falls back to the id for equal or unparseable creation times', () => {
+    const build = (id: string, createdAt: string): SharedDocumentEntry => ({
+      id,
+      relationship: 'collaborator',
+      parentId: null,
+      meta: { title: id, updatedAt: createdAt, createdAt },
+    });
+
+    const state = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([
+        build('fallback-b', 'not-a-date'),
+        build('fallback-d', '2024-01-02T10:00:00Z'),
+        build('fallback-c', '2024-01-02T10:00:00Z'),
+        build('fallback-a', 'not-a-date'),
+      ])
+    );
+
+    // Unparseable times sort after the parseable ones; within each group the id decides.
+    expect(state.rootIds).toEqual(['fallback-c', 'fallback-d', 'fallback-a', 'fallback-b']);
   });
 
   it('updates order key and resort roots when server navigation order changes', () => {
@@ -580,6 +724,59 @@ describe('sharedTree.slice moveDocumentThunk.fulfilled', () => {
 
     expect(state.rootIds).toEqual(['doc-s1', 'doc-stm', 'doc-s2']);
     expect(state.nodes['doc-stm'].orderKey).toBe('a1');
+  });
+
+  it('keeps keyed roots before keyless ones instead of sorting the synthetic keys', () => {
+    const node = (
+      id: string,
+      orderKey: string,
+      createdAt: string
+    ): SharedTreeState['nodes'][string] => ({
+      id,
+      title: id,
+      parentId: null,
+      orderKey,
+      hasChildren: false,
+      effectiveAccessLevel: 'VIEW',
+      isExpanded: false,
+      isLoading: false,
+      children: [],
+      childrenLoaded: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const state = sharedTreeReducer(
+      {
+        nodes: {
+          // 'zz0' sorts after 'shared:…', so key-only ordering would sink this root.
+          'doc-keyed': node('doc-keyed', 'zz0', '2024-01-05T10:00:00Z'),
+          'fallback-late': node('fallback-late', 'shared:fallback-late', '2024-01-09T10:00:00Z'),
+          'fallback-early': node('fallback-early', 'shared:fallback-early', '2024-01-02T10:00:00Z'),
+        },
+        rootIds: ['fallback-late', 'doc-keyed', 'fallback-early'],
+      },
+      {
+        type: 'sharedTree/moveDocument/fulfilled',
+        payload: {
+          updatedNode: {
+            id: 'doc-keyed',
+            title: 'doc-keyed',
+            parentId: null,
+            orderKey: 'zz0',
+            hasChildren: false,
+            effectiveAccessLevel: 'VIEW',
+            createdAt: '2024-01-05T10:00:00Z',
+            updatedAt: '2024-01-05T10:00:00Z',
+          },
+          prevSiblingId: null,
+          nextSiblingId: null,
+        },
+      }
+    );
+
+    // Moving a root must not reorder the tree differently from the server's listing.
+    expect(state.rootIds).toEqual(['doc-keyed', 'fallback-early', 'fallback-late']);
   });
 
   it('correctly floats and reorders a nested shared document whose parent is not in the shared tree', () => {
@@ -1017,5 +1214,40 @@ describe('sharedTree.slice syncPublicRoots (guest share links)', () => {
     );
 
     expect(second.nodes['child-1'].childrenTruncated).toBe(true);
+  });
+});
+
+describe('sharedTree.slice moveDocumentThunk', () => {
+  it('sends section SHARED so a space page is never routed through the space mover', async () => {
+    const moveSpy = jest
+      .spyOn(documentService, 'moveDocument')
+      .mockResolvedValue({ id: 'space-page', parentId: null, orderKey: 'a1' } as never);
+    const store = configureStore({
+      reducer: {
+        auth: (state = { accessToken: 'token-1' }) => state,
+        sharedTree: sharedTreeReducer,
+      },
+    });
+
+    await (store.dispatch as (action: unknown) => Promise<unknown>)(
+      moveDocumentThunk({
+        documentId: 'space-page',
+        newParentId: null,
+        prevSiblingId: 'other-root',
+        nextSiblingId: null,
+      })
+    );
+
+    expect(moveSpy).toHaveBeenCalledWith(
+      'space-page',
+      {
+        newParentId: null,
+        prevSiblingId: 'other-root',
+        nextSiblingId: null,
+        section: 'SHARED',
+      },
+      'token-1'
+    );
+    moveSpy.mockRestore();
   });
 });
