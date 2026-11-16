@@ -25,6 +25,7 @@ import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
@@ -53,6 +54,12 @@ class DocumentSpaceServiceTest {
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
+
+    @Mock
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private UserRepository userRepository;
@@ -100,6 +107,8 @@ class DocumentSpaceServiceTest {
                 documentRepository,
                 accessGrantRepository,
                 userDocumentOrderRepository,
+                userSharedOrderRepository,
+                sharedSectionService,
                 userRepository,
                 properties,
                 permissionService,

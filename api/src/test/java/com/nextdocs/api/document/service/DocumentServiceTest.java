@@ -33,10 +33,12 @@ import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
+import com.nextdocs.api.document.entity.DocumentOrderSection;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
@@ -57,6 +59,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,6 +87,12 @@ class DocumentServiceTest {
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
+
+    @Mock
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private PermissionService permissionService;
@@ -127,6 +136,8 @@ class DocumentServiceTest {
                 documentRepository,
                 accessGrantRepository,
                 userDocumentOrderRepository,
+                userSharedOrderRepository,
+                sharedSectionService,
                 userRepository,
                 documentProperties,
                 permissionService,
@@ -546,7 +557,10 @@ class DocumentServiceTest {
                 .thenReturn(Optional.of("a5"), Optional.of("a4"));
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_user_document_orders_user_order_key\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         DocumentService.CreateDocumentResult result = documentService.create(userId, request);
@@ -593,6 +607,38 @@ class DocumentServiceTest {
     }
 
     @Test
+    void restore_rethrowsNonRetryableDataIntegrityViolationWithoutRetrying() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User user = User.builder().id(userId).build();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .user(user)
+                .title("Trashed")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireTrashEditAccess(userId, documentId)).thenReturn(trashed);
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, documentId))
+                .thenReturn(Optional.empty());
+        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, documentId))
+                .thenReturn(Optional.empty());
+        // A NOT NULL failure cannot be fixed by rebuilding a position, so it must surface
+        // as itself instead of a stale-position conflict after three attempts.
+        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: null value in column \"order_key\" of relation "
+                                + "\"user_document_orders\" violates not-null constraint")));
+
+        DataIntegrityViolationException ex =
+                assertThrows(DataIntegrityViolationException.class, () -> documentService.restore(userId, documentId));
+
+        assertTrue(ex.getMessage().contains("could not execute statement"));
+        verify(userDocumentOrderRepository, times(1)).saveAndFlush(any(UserDocumentOrder.class));
+    }
+
+    @Test
     void get_allowsGeneralAccessWhenActiveLinkExists() {
         UUID requesterId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
@@ -633,7 +679,7 @@ class DocumentServiceTest {
     }
 
     @Test
-    void get_floatedSharedDocument_returnsUserDocumentOrderKey() {
+    void get_floatedSharedDocument_returnsSharedOrderKey() {
         UUID requesterId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
@@ -652,19 +698,73 @@ class DocumentServiceTest {
                 .build();
 
         when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
-        // Parent is inaccessible to requester
-        when(permissionService.resolveAccess(requesterId, privateParentId)).thenReturn(null);
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
-                .thenReturn(Optional.of("user-order-key-1"));
+        when(sharedSectionService.isInSection(requesterId, documentId)).thenReturn(true);
+        when(userSharedOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
+                .thenReturn(Optional.of("shared-order-key-1"));
 
         var response = documentService.get(requesterId, documentId, false);
 
         assertEquals(documentId, response.id());
-        assertEquals("user-order-key-1", response.orderKey());
+        assertEquals("shared-order-key-1", response.orderKey());
+        assertEquals(DocumentOrderSection.SHARED, response.section());
+        verify(userDocumentOrderRepository, never()).findOrderKeyByUserIdAndDocumentId(any(), any());
     }
 
     @Test
-    void get_floatedSharedDocument_withoutUserDocumentOrder_returnsNullOrderKey() {
+    void get_rootSharedDocument_returnsSharedOrderKey() {
+        UUID requesterId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Root Shared Doc")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
+        when(sharedSectionService.isInSection(requesterId, documentId)).thenReturn(true);
+        when(userSharedOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
+                .thenReturn(Optional.of("shared-order-key-2"));
+
+        var response = documentService.get(requesterId, documentId, false);
+
+        assertEquals("shared-order-key-2", response.orderKey());
+        assertEquals(DocumentOrderSection.SHARED, response.section());
+        verify(userDocumentOrderRepository, never()).findOrderKeyByUserIdAndDocumentId(any(), any());
+    }
+
+    @Test
+    void get_ownedSharedRoot_returnsSharedOrderKeyAndSection() {
+        UUID ownerId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        Document document = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Owned Shared Root")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(permissionService.requireReadAccess(ownerId, documentId)).thenReturn(document);
+        when(sharedSectionService.isInSection(ownerId, documentId)).thenReturn(true);
+        when(userSharedOrderRepository.findOrderKeyByUserIdAndDocumentId(ownerId, documentId))
+                .thenReturn(Optional.of("shared-owner-key"));
+
+        var response = documentService.get(ownerId, documentId, false);
+
+        assertEquals("shared-owner-key", response.orderKey());
+        assertEquals(DocumentOrderSection.SHARED, response.section());
+        // V44 deliberately keeps the Private row for an unshare, so reading it here would
+        // return the wrong position while the page is listed in Shared.
+        verify(userDocumentOrderRepository, never()).findOrderKeyByUserIdAndDocumentId(any(), any());
+    }
+
+    @Test
+    void get_floatedSharedDocument_withoutSharedOrder_returnsNullOrderKey() {
         UUID requesterId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
@@ -683,15 +783,15 @@ class DocumentServiceTest {
                 .build();
 
         when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
-        // Parent is inaccessible to requester
-        when(permissionService.resolveAccess(requesterId, privateParentId)).thenReturn(null);
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
+        when(sharedSectionService.isInSection(requesterId, documentId)).thenReturn(true);
+        when(userSharedOrderRepository.findOrderKeyByUserIdAndDocumentId(requesterId, documentId))
                 .thenReturn(Optional.empty());
 
         var response = documentService.get(requesterId, documentId, false);
 
         assertEquals(documentId, response.id());
         assertNull(response.orderKey());
+        assertEquals(DocumentOrderSection.SHARED, response.section());
     }
 
     @Test
@@ -1004,6 +1104,7 @@ class DocumentServiceTest {
         documentService.delete(ownerId, documentId, true);
 
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(documentId));
+        verify(userSharedOrderRepository).deleteByDocument_IdIn(List.of(documentId));
         verify(documentRepository).deleteByIdIn(List.of(documentId));
     }
 
@@ -1296,10 +1397,12 @@ class DocumentServiceTest {
 
         verify(accessGrantRepository).deleteGrantsByDocumentIdIn(List.of(childDocId));
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(childDocId));
+        verify(userSharedOrderRepository).deleteByDocument_IdIn(List.of(childDocId));
         verify(documentRepository).deleteByIdIn(List.of(childDocId));
 
         verify(accessGrantRepository).deleteGrantsByDocumentIdIn(List.of(parentDocId));
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(parentDocId));
+        verify(userSharedOrderRepository).deleteByDocument_IdIn(List.of(parentDocId));
         verify(documentRepository).deleteByIdIn(List.of(parentDocId));
 
         ArgumentCaptor<List<YhubPurgeOutbox>> outbox = ArgumentCaptor.forClass(List.class);
@@ -1506,7 +1609,10 @@ class DocumentServiceTest {
 
         // First attempt throws DataIntegrityViolationException on saveAndFlush
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenThrow(new DataIntegrityViolationException("unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_user_document_orders_user_order_key\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // Because transaction rolled back, findById returns empty, allowing retry
@@ -1580,22 +1686,65 @@ class DocumentServiceTest {
                 .thenReturn(Optional.of("a0"));
         when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
                 .thenReturn(List.of(collaborator));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(editorId, documentId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(editorId, documentId))
-                .thenReturn(Optional.of("z9"));
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         DocumentResponse response = documentService.restoreAndPersist(editorId, documentId, false);
 
         assertNull(response.deletedAt());
+        // Only the owner has a Private row; the collaborator's restore slot is Shared.
         ArgumentCaptor<UserDocumentOrder> udoCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository, times(2)).saveAndFlush(udoCaptor.capture());
-        List<UserDocumentOrder> savedUdos = udoCaptor.getAllValues();
-        assertEquals(ownerId, savedUdos.get(0).getUser().getId());
-        assertTrue(savedUdos.get(0).getOrderKey().compareTo("a0") > 0);
-        assertEquals(editorId, savedUdos.get(1).getUser().getId());
-        assertTrue(savedUdos.get(1).getOrderKey().compareTo("z9") < 0);
+        verify(userDocumentOrderRepository).saveAndFlush(udoCaptor.capture());
+        assertEquals(ownerId, udoCaptor.getValue().getUser().getId());
+        assertTrue(udoCaptor.getValue().getOrderKey().compareTo("a0") > 0);
+        verify(sharedSectionService).ensureOrderRows(editor, List.of(trashed));
+    }
+
+    @Test
+    void restore_visitsCollaboratorOrderRowsInAscendingUserIdOrder() {
+        UUID ownerId = UUID.randomUUID();
+        UUID editorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).build();
+        // ensureOrderRows locks one collaborator's namespace at a time, so the visit order has
+        // to be the same in every transaction: two restores sharing collaborators would
+        // otherwise be able to take those locks in opposite orders.
+        UUID firstCollaboratorId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID secondCollaboratorId = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        User secondCollaborator = User.builder().id(secondCollaboratorId).build();
+        User firstCollaborator = User.builder().id(firstCollaboratorId).build();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .user(owner)
+                .title("Shared Trashed")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        AccessGrant secondGrant = AccessGrant.builder()
+                .document(trashed)
+                .user(secondCollaborator)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .effect(AccessGrantEffect.ALLOW)
+                .build();
+        AccessGrant firstGrant = AccessGrant.builder()
+                .document(trashed)
+                .user(firstCollaborator)
+                .accessLevel(DocumentAccessLevel.VIEW)
+                .effect(AccessGrantEffect.ALLOW)
+                .build();
+
+        when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId))
+                .thenReturn(Optional.empty());
+        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, documentId))
+                .thenReturn(Optional.empty());
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(secondGrant, firstGrant));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.restoreAndPersist(editorId, documentId, false);
+
+        InOrder order = inOrder(sharedSectionService);
+        order.verify(sharedSectionService).ensureOrderRows(firstCollaborator, List.of(trashed));
+        order.verify(sharedSectionService).ensureOrderRows(secondCollaborator, List.of(trashed));
     }
 
     @Test
@@ -1668,9 +1817,10 @@ class DocumentServiceTest {
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
+        User collaboratorUser = User.builder().id(collaboratorId).build();
         AccessGrant collaborator = AccessGrant.builder()
                 .document(childDoc)
-                .user(User.builder().id(collaboratorId).build())
+                .user(collaboratorUser)
                 .effect(AccessGrantEffect.ALLOW)
                 .build();
 
@@ -1686,21 +1836,15 @@ class DocumentServiceTest {
         when(documentRepository.findAllByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
         when(accessGrantRepository.findPositiveUserGrantsByDocumentId(childDocId))
                 .thenReturn(List.of(collaborator));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, childDocId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(collaboratorId, childDocId))
-                .thenReturn(Optional.empty());
 
         documentService.restoreAndPersist(ownerId, parentDocId, false);
 
         assertNull(childDoc.getDeletedAt());
         ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository, times(2)).saveAndFlush(captor.capture());
-        List<UserDocumentOrder> saved = captor.getAllValues();
-        assertEquals(ownerId, saved.get(0).getUser().getId());
-        assertEquals(parentDocId, saved.get(0).getDocument().getId());
-        assertEquals(collaboratorId, saved.get(1).getUser().getId());
-        assertEquals(childDocId, saved.get(1).getDocument().getId());
+        verify(userDocumentOrderRepository).saveAndFlush(captor.capture());
+        assertEquals(ownerId, captor.getValue().getUser().getId());
+        assertEquals(parentDocId, captor.getValue().getDocument().getId());
+        verify(sharedSectionService).ensureOrderRows(collaboratorUser, List.of(childDoc));
     }
 
     @Test
@@ -1720,6 +1864,7 @@ class DocumentServiceTest {
         documentService.delete(editorId, documentId, true);
 
         verify(userDocumentOrderRepository).deleteByDocument_IdIn(List.of(documentId));
+        verify(userSharedOrderRepository).deleteByDocument_IdIn(List.of(documentId));
         verify(documentRepository).deleteByIdIn(List.of(documentId));
     }
 
@@ -1994,6 +2139,7 @@ class DocumentServiceTest {
                         root.getId(), DocumentAccessLevel.OWNER));
         when(permissionService.resolveTrashAccessBatch(ownerId, List.of(child.getId(), root.getId())))
                 .thenReturn(Map.of());
+        when(spaceAccessService.visibleSpaceIds(ownerId, List.of(space))).thenReturn(Set.of(space.getId()));
 
         List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(ownerId, child.getId());
 
@@ -2010,6 +2156,52 @@ class DocumentServiceTest {
         assertNotNull(crumbs.get(1).space());
         assertEquals(space.getId(), crumbs.get(1).space().id());
         assertEquals("Engineering", crumbs.get(1).space().name());
+    }
+
+    @Test
+    void getBreadcrumbs_spaceTheCallerCannotSee_isNeverNamed() {
+        UUID viewerId = UUID.randomUUID();
+        User owner =
+                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+        Space space = Space.builder()
+                .id(UUID.randomUUID())
+                .name("Internal Secret Space")
+                .iconType(PageIconType.BUILTIN)
+                .iconValue("shield")
+                .iconColor("red")
+                .build();
+
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Space Root")
+                .parent(null)
+                .space(space)
+                .build();
+
+        Document sharedChild = Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .title("Shared Page")
+                .parent(root)
+                .build();
+
+        when(documentRepository.findById(sharedChild.getId())).thenReturn(Optional.of(sharedChild));
+        when(permissionService.resolveAccess(viewerId, sharedChild.getId())).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.findAncestorChainIds(sharedChild.getId())).thenReturn(List.of(root.getId()));
+        when(documentRepository.findAllById(List.of(sharedChild.getId(), root.getId())))
+                .thenReturn(List.of(sharedChild, root));
+        when(permissionService.resolveAccessBatch(viewerId, List.of(sharedChild.getId(), root.getId())))
+                .thenReturn(Map.of(sharedChild.getId(), DocumentAccessLevel.VIEW));
+        when(permissionService.resolveTrashAccessBatch(viewerId, List.of(sharedChild.getId(), root.getId())))
+                .thenReturn(Map.of());
+        when(spaceAccessService.visibleSpaceIds(viewerId, List.of(space))).thenReturn(Set.of());
+
+        List<DocumentBreadcrumbResponse> crumbs = documentService.getBreadcrumbs(viewerId, sharedChild.getId());
+
+        assertEquals(1, crumbs.size());
+        assertEquals("Shared Page", crumbs.get(0).title());
+        assertNull(crumbs.get(0).space());
     }
 
     @Test
@@ -2223,7 +2415,7 @@ class DocumentServiceTest {
     }
 
     @Test
-    void getPublicBreadcrumbs_publicDocWithPublicParentInSpace_includesSpaceMetadata() {
+    void getPublicBreadcrumbs_publicDocWithPublicParentInSpace_neverNamesTheSpace() {
         Space space = Space.builder()
                 .id(UUID.randomUUID())
                 .name("Public Space")
@@ -2261,11 +2453,11 @@ class DocumentServiceTest {
 
         assertEquals(2, crumbs.size());
         assertEquals("Public Root", crumbs.get(0).title());
-        assertNotNull(crumbs.get(0).space());
-        assertEquals("Public Space", crumbs.get(0).space().name());
         assertEquals("Public Child", crumbs.get(1).title());
-        assertNotNull(crumbs.get(1).space());
-        assertEquals("Public Space", crumbs.get(1).space().name());
+        // An anonymous viewer holds no workspace identity: every space is one they
+        // cannot open, so the share link must not name the container.
+        assertNull(crumbs.get(0).space());
+        assertNull(crumbs.get(1).space());
     }
 
     @Test

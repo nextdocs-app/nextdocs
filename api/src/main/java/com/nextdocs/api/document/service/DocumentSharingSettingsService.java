@@ -35,6 +35,7 @@ public class DocumentSharingSettingsService {
     private final DocumentRepository documentRepository;
     private final PermissionService permissionService;
     private final AccessAuditService auditService;
+    private final SharedSectionService sharedSectionService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
@@ -295,6 +296,19 @@ public class DocumentSharingSettingsService {
     }
 
     /**
+     * A standalone root with an audience is listed in the owner's Shared section. Giving
+     * it a Shared position up front keeps it at the top of that section, like a root
+     * shared with a person through a grant; without a row it sorts below every keyed entry
+     * until the owner drags it there. The row is never removed when the audience goes away,
+     * so re-sharing returns the page to the position it had.
+     */
+    private void ensureOwnerSharedPosition(Document doc) {
+        if (doc.getParent() == null && doc.getSpace() == null) {
+            sharedSectionService.ensureOrderRow(doc.getUser(), doc);
+        }
+    }
+
+    /**
      * Applies the workspace-audience half of a sharing update. Mode, level, and block
      * are validated together here because only the loaded document knows whether a
      * level or block is meaningful for the current mode.
@@ -310,6 +324,7 @@ public class DocumentSharingSettingsService {
             doc.setWorkspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS);
             doc.setWorkspaceAccessLevel(normalizeWorkspaceAccess(request.workspaceAccessLevel()));
             doc.setWorkspaceInheritBlocked(false);
+            ensureOwnerSharedPosition(doc);
         } else if (requestedMode == DocumentWorkspaceAccessMode.RESTRICTED) {
             if (request.workspaceAccessLevel() != null) {
                 throw new ApiException(

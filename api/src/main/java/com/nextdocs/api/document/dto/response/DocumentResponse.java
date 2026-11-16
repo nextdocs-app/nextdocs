@@ -1,6 +1,7 @@
 package com.nextdocs.api.document.dto.response;
 
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.entity.DocumentOrderSection;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.OffsetDateTime;
@@ -15,11 +16,18 @@ public record DocumentResponse(
         UUID parentId,
 
         @Schema(
-                description = "Space this root page is filed into; null for Private and Shared pages. "
+                description = "Space this root page is filed into; null outside a space. "
                         + "Nested pages do not repeat the space: walk to the root.")
         UUID spaceId,
 
         @Schema(description = "Fractional ordering key") String orderKey,
+
+        @Schema(
+                description = "Section whose personal order key this response carries: SHARED on a "
+                        + "Shared-section entry. Null from the tree and list endpoints, whose orderKey is "
+                        + "the projection's own order (a parent's sibling order, a space's order, or the "
+                        + "caller's Private root order).")
+        DocumentOrderSection section,
 
         @Schema(description = "Whether this document has active non-trashed children")
         boolean hasChildren,
@@ -29,6 +37,12 @@ public record DocumentResponse(
 
         @Schema(description = "Effective access level of the requesting user")
         DocumentAccessLevel accessLevel,
+
+        @Schema(
+                description = "Whether the requesting user owns this document; an OWNER-level grant to a "
+                        + "collaborator reports accessLevel=OWNER with owner=false. Only Shared-section "
+                        + "responses populate it, so it is absent from the other listings.")
+        Boolean owner,
 
         @Schema(description = "Creator label") String createdBy,
         @Schema(description = "Creation timestamp") OffsetDateTime createdAt,
@@ -108,15 +122,97 @@ public record DocumentResponse(
             DocumentIconResponse icon,
             DocumentCoverResponse cover,
             UUID spaceId) {
+        return withoutBranding(
+                id,
+                title,
+                parentId,
+                orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
+                createdBy,
+                createdAt,
+                updatedAt,
+                deletedAt,
+                purgeAt,
+                icon,
+                cover,
+                spaceId,
+                null);
+    }
+
+    /** As above, naming the personal order namespace the key belongs to. */
+    public static DocumentResponse withoutBranding(
+            UUID id,
+            String title,
+            UUID parentId,
+            String orderKey,
+            boolean hasChildren,
+            boolean hasCollaborators,
+            DocumentAccessLevel accessLevel,
+            String createdBy,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            OffsetDateTime deletedAt,
+            OffsetDateTime purgeAt,
+            DocumentIconResponse icon,
+            DocumentCoverResponse cover,
+            UUID spaceId,
+            DocumentOrderSection section) {
+        return withoutBranding(
+                id,
+                title,
+                parentId,
+                orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
+                createdBy,
+                createdAt,
+                updatedAt,
+                deletedAt,
+                purgeAt,
+                icon,
+                cover,
+                spaceId,
+                section,
+                null);
+    }
+
+    /**
+     * As above, reporting direct ownership. Only the Shared section answers it, because
+     * classifying an entry as the caller's own page versus a shared one is the one
+     * question an access level cannot answer: a collaborator may hold OWNER.
+     */
+    public static DocumentResponse withoutBranding(
+            UUID id,
+            String title,
+            UUID parentId,
+            String orderKey,
+            boolean hasChildren,
+            boolean hasCollaborators,
+            DocumentAccessLevel accessLevel,
+            String createdBy,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            OffsetDateTime deletedAt,
+            OffsetDateTime purgeAt,
+            DocumentIconResponse icon,
+            DocumentCoverResponse cover,
+            UUID spaceId,
+            DocumentOrderSection section,
+            Boolean owner) {
         return new DocumentResponse(
                 id,
                 title,
                 parentId,
                 spaceId,
                 orderKey,
+                section,
                 hasChildren,
                 hasCollaborators,
                 accessLevel,
+                owner,
                 createdBy,
                 createdAt,
                 updatedAt,

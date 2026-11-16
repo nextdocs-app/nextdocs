@@ -2,6 +2,7 @@ package com.nextdocs.api.document.dto.response;
 
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.entity.DocumentOrderSection;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -49,6 +50,41 @@ public final class DocumentResponses {
                 DocumentIconCoverMapper.toIconResponse(document),
                 DocumentIconCoverMapper.toCoverResponse(document),
                 spaceIdOf(document));
+    }
+
+    /**
+     * A Shared-section entry: the page plus the space it is filed into, if any.
+     *
+     * <p>{@code owner} stays separate from {@code accessLevel}: a section entry can be the
+     * caller's own page, or someone else's page shared at any level up to OWNER.
+     */
+    public static DocumentResponse shared(
+            Document document,
+            UUID parentId,
+            String orderKey,
+            boolean hasChildren,
+            boolean hasCollaborators,
+            DocumentAccessLevel accessLevel,
+            UUID spaceId,
+            boolean owner) {
+        return DocumentResponse.withoutBranding(
+                document.getId(),
+                document.getTitle(),
+                parentId,
+                orderKey,
+                hasChildren,
+                hasCollaborators,
+                accessLevel,
+                document.getCreatedBy(),
+                document.getCreatedAt(),
+                document.getUpdatedAt(),
+                null,
+                null,
+                DocumentIconCoverMapper.toIconResponse(document),
+                DocumentIconCoverMapper.toCoverResponse(document),
+                spaceId,
+                DocumentOrderSection.SHARED,
+                owner);
     }
 
     /**

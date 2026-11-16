@@ -30,6 +30,7 @@ import com.nextdocs.api.document.entity.DocumentCoverType;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
@@ -68,6 +69,12 @@ class DocumentServiceIconCoverTest {
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
+
+    @Mock
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private PermissionService permissionService;
@@ -116,6 +123,8 @@ class DocumentServiceIconCoverTest {
                 documentRepository,
                 accessGrantRepository,
                 userDocumentOrderRepository,
+                userSharedOrderRepository,
+                sharedSectionService,
                 userRepository,
                 documentProperties,
                 permissionService,

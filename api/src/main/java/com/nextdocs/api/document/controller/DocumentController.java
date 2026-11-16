@@ -68,7 +68,10 @@ public class DocumentController {
                     + "Use parentId=root for root-level documents, or parentId=<UUID> for direct children. "
                     + "Use scope=private for unshared owned documents, scope=shared for shared documents, "
                     + "scope=space together with spaceId for the root pages of one space, "
-                    + "or scope=all for all owned documents. Use trashed=true for trash.",
+                    + "or scope=all for all owned documents. With parentId=root, scope=shared "
+                    + "returns the caller's Shared section in their own drag order, so sort is "
+                    + "ignored; without parentId it is the flat shared view (nested pages "
+                    + "included) and sort applies. Use trashed=true for trash.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
@@ -138,7 +141,8 @@ public class DocumentController {
 
     @Operation(
             summary = "Get document breadcrumbs hierarchy",
-            description = "Returns the ancestor hierarchy path from the root document down to the specified document.",
+            description = "Returns the ancestor hierarchy path from the root document down to the specified document. "
+                    + "The space is included only when the caller can see that space.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
@@ -158,7 +162,8 @@ public class DocumentController {
 
     @Operation(
             summary = "Get public document breadcrumbs hierarchy",
-            description = "Returns the ancestor hierarchy path for a publicly accessible document.",
+            description = "Returns the ancestor hierarchy path for a publicly accessible document. "
+                    + "Never names the containing space: an anonymous viewer cannot open any space.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

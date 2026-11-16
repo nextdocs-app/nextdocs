@@ -19,7 +19,7 @@ public record DocumentBreadcrumbResponse(
         @Schema(description = "Created timestamp") OffsetDateTime createdAt,
         @Schema(description = "Updated timestamp") OffsetDateTime updatedAt,
 
-        @Schema(description = "Space containing this document hierarchy, or null")
+        @Schema(description = "Space containing this document hierarchy, null when the caller cannot see it")
         BreadcrumbSpaceResponse space) {
 
     public DocumentBreadcrumbResponse(UUID id, String title, DocumentIconResponse icon, UUID parentId) {

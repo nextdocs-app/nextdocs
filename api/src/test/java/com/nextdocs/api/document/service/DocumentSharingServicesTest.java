@@ -35,10 +35,9 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
-import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.realtime.service.RealtimeAccessScopeResolver;
@@ -62,6 +61,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -75,7 +75,10 @@ class DocumentSharingServicesTest {
     private AccessGrantRepository accessGrantRepository;
 
     @Mock
-    private UserDocumentOrderRepository userDocumentOrderRepository;
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private UserRepository userRepository;
@@ -106,7 +109,8 @@ class DocumentSharingServicesTest {
         sharingService = new DocumentSharingService(
                 documentRepository,
                 accessGrantRepository,
-                userDocumentOrderRepository,
+                userSharedOrderRepository,
+                sharedSectionService,
                 userRepository,
                 permissionService,
                 spaceAccessService,
@@ -115,7 +119,7 @@ class DocumentSharingServicesTest {
                 auditService,
                 publishedEvents::add);
         settingsService = new DocumentSharingSettingsService(
-                documentRepository, permissionService, auditService, publishedEvents::add);
+                documentRepository, permissionService, auditService, sharedSectionService, publishedEvents::add);
 
         org.mockito.Mockito.lenient()
                 .when(accessGrantSyncService.upsertUserGrant(any(), any(), any(), any()))
@@ -280,7 +284,7 @@ class DocumentSharingServicesTest {
         sharingService.removeCollaborator(ownerId, documentId, collaboratorUserId);
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
     }
 
     @Test
@@ -404,7 +408,7 @@ class DocumentSharingServicesTest {
     }
 
     @Test
-    void upsertCollaborator_createsUserDocumentOrderForRootDocument() {
+    void upsertCollaborator_givesTheRootAndOwnerASharedOrderRow() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
 
@@ -432,66 +436,19 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
-                .thenReturn(Optional.of("a5"));
-
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
 
-        ArgumentCaptor<UserDocumentOrder> orderCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository).saveAndFlush(orderCaptor.capture());
-        assertTrue(orderCaptor.getValue().getOrderKey().compareTo("a5") < 0);
+        // A root share creates two Shared entries: the collaborator's and the owner's.
+        verify(sharedSectionService).ensureOrderRow(targetUser, document);
+        verify(sharedSectionService).ensureOrderRow(owner, document);
 
         assertEquals(targetUser.getId(), response.userId());
         assertNotNull(response.addedAt());
     }
 
     @Test
-    void upsertCollaborator_retriesWhenOrderRowInsertCollides() {
-        UUID ownerId = UUID.randomUUID();
-        UUID documentId = UUID.randomUUID();
-
-        User owner = User.builder()
-                .id(ownerId)
-                .email("owner@example.com")
-                .displayName("Owner")
-                .build();
-
-        Document document = Document.builder()
-                .id(documentId)
-                .user(owner)
-                .title("Shared doc")
-                .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
-                .build();
-
-        User targetUser = User.builder()
-                .id(UUID.randomUUID())
-                .email("alice@example.com")
-                .displayName("Alice")
-                .build();
-
-        when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
-                .thenReturn(Optional.of("a5"));
-
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        sharingService.upsertCollaborator(
-                ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
-
-        verify(userDocumentOrderRepository, times(2)).saveAndFlush(any(UserDocumentOrder.class));
-    }
-
-    @Test
-    void removeCollaborator_deletesCollaboratorAndUserDocumentOrder() {
+    void removeCollaborator_deletesTheCollaboratorsSharedOrderRow() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID collaboratorId = UUID.randomUUID();
@@ -507,7 +464,7 @@ class DocumentSharingServicesTest {
         sharingService.removeCollaborator(ownerId, documentId, collaboratorId);
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, collaboratorId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(collaboratorId, documentId);
 
         assertEquals(1, publishedEvents.size());
         DocumentAccessChangedEvent event = (DocumentAccessChangedEvent) publishedEvents.get(0);
@@ -550,7 +507,7 @@ class DocumentSharingServicesTest {
     }
 
     @Test
-    void upsertCollaborator_createsUserDocumentOrderForNestedDocument() {
+    void upsertCollaborator_givesOnlyTheCollaboratorASharedOrderRow() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
 
@@ -582,17 +539,54 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(targetUser));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(targetUser.getId(), documentId))
-                .thenReturn(Optional.of("a5"));
-
         sharingService.upsertCollaborator(
                 ownerId, documentId, new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT));
 
-        ArgumentCaptor<UserDocumentOrder> orderCaptor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository).saveAndFlush(orderCaptor.capture());
-        assertTrue(orderCaptor.getValue().getOrderKey().compareTo("a5") < 0);
+        // A nested page has no owner Shared entry; only the collaborator floats.
+        verify(sharedSectionService).ensureOrderRow(targetUser, document);
+    }
+
+    @Test
+    void upsertCollaborator_retriesADuplicatePositionFailure() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        CollaboratorUpsertRequest request =
+                new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT);
+        CollaboratorResponse response = new CollaboratorResponse(
+                UUID.randomUUID(), "alice@example.com", "Alice", DocumentAccessLevel.EDIT, OffsetDateTime.now(), false);
+
+        DocumentSharingService spy = Mockito.spy(sharingService);
+        doThrow(
+                        new DataIntegrityViolationException(
+                                "could not execute statement",
+                                new RuntimeException(
+                                        "ERROR: duplicate key value violates unique constraint \"idx_user_document_orders_user_order_key\"")))
+                .doReturn(response)
+                .when(spy)
+                .upsertCollaboratorAndPersist(actorId, documentId, request);
+
+        assertEquals(response, spy.upsertCollaborator(actorId, documentId, request));
+        verify(spy, times(2)).upsertCollaboratorAndPersist(actorId, documentId, request);
+    }
+
+    @Test
+    void upsertCollaborator_doesNotRetryANonPositionFailure() {
+        UUID actorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        CollaboratorUpsertRequest request =
+                new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT);
+
+        DocumentSharingService spy = Mockito.spy(sharingService);
+        doThrow(
+                        new DataIntegrityViolationException(
+                                "could not execute statement",
+                                new RuntimeException(
+                                        "ERROR: null value in column \"order_key\" of relation \"user_shared_document_orders\" violates not-null constraint")))
+                .when(spy)
+                .upsertCollaboratorAndPersist(actorId, documentId, request);
+
+        assertThrows(DataIntegrityViolationException.class, () -> spy.upsertCollaborator(actorId, documentId, request));
+        verify(spy, times(1)).upsertCollaboratorAndPersist(actorId, documentId, request);
     }
 
     @Test
@@ -608,9 +602,6 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("fullaccess@example.com")).thenReturn(Optional.of(targetUser));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
-                .thenReturn(true);
-
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 ownerId,
                 documentId,
@@ -634,8 +625,6 @@ class DocumentSharingServicesTest {
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("newbie@example.com")).thenReturn(Optional.of(targetUser));
         when(userRepository.findById(actorId)).thenReturn(Optional.of(actor));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), documentId))
-                .thenReturn(true);
 
         CollaboratorResponse response = sharingService.upsertCollaborator(
                 actorId, documentId, new CollaboratorUpsertRequest("newbie@example.com", DocumentAccessLevel.VIEW));
@@ -706,8 +695,6 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("ancestor@example.com")).thenReturn(Optional.of(ancestorOwner));
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwner.getId(), documentId))
-                .thenReturn(Optional.empty());
 
         sharingService.upsertCollaborator(
                 actorId, documentId, new CollaboratorUpsertRequest("ancestor@example.com", DocumentAccessLevel.VIEW));
@@ -1950,7 +1937,7 @@ class DocumentSharingServicesTest {
         sharingService.removeCollaborator(ownerId, documentId, bobId);
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
     }
 
     @Test
@@ -1974,8 +1961,6 @@ class DocumentSharingServicesTest {
         when(accessGrantRepository.findByDocument_IdAndUser_Id(documentId, ancestorOwnerId))
                 .thenReturn(Optional.empty());
         when(userRepository.findById(ancestorOwnerId)).thenReturn(Optional.of(ancestorOwner));
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(ancestorOwnerId, documentId))
-                .thenReturn(Optional.empty());
         when(documentRepository.findSubtreeDocumentIds(documentId)).thenReturn(List.of());
 
         sharingService.updateCollaboratorAccess(
@@ -2036,7 +2021,7 @@ class DocumentSharingServicesTest {
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
         verify(accessGrantSyncService).upsertUserGrant(any(), any(), eq(DocumentAccessLevel.NO_ACCESS), any());
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
         verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
@@ -2067,7 +2052,7 @@ class DocumentSharingServicesTest {
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
         verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
@@ -2105,7 +2090,7 @@ class DocumentSharingServicesTest {
                 ownerId, documentId, bobId, new CollaboratorAccessUpdateRequest(DocumentAccessLevel.NO_ACCESS));
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, bobId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(bobId, documentId);
 
         verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
@@ -2156,7 +2141,7 @@ class DocumentSharingServicesTest {
         sharingService.removeCollaborator(actorId, documentId, ancestorOwnerId);
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, ancestorOwnerId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(ancestorOwnerId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(ancestorOwnerId, documentId);
         verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
@@ -2183,7 +2168,7 @@ class DocumentSharingServicesTest {
         sharingService.leaveSharedDocument(userId, documentId);
 
         verify(accessGrantRepository).deleteByDocument_IdAndUser_Id(documentId, userId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(userId, documentId);
+        verify(userSharedOrderRepository).deleteByUser_IdAndDocument_Id(userId, documentId);
         verify(accessGrantRepository).pruneOrphanedBreakpoints(documentId);
     }
 
@@ -2244,8 +2229,8 @@ class DocumentSharingServicesTest {
 
         verify(permissionService).resolveIdentityAccessBatch(eq(userId), any());
         verify(permissionService, never()).resolveAccessBatch(eq(userId), any());
-        verify(userDocumentOrderRepository, times(2)).deleteByUser_IdAndDocument_Id(userId, documentId);
-        verify(userDocumentOrderRepository, never()).findMinOrderKeyByUserId(userId, documentId);
+        verify(userSharedOrderRepository, times(2)).deleteByUser_IdAndDocument_Id(userId, documentId);
+        verify(userSharedOrderRepository, never()).findMinOrderKeyByUserId(userId, documentId);
     }
 
     @Test

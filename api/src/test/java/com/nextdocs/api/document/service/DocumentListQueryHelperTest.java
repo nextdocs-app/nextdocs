@@ -12,13 +12,14 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.SharedEntry;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.SharedDocumentCandidate;
-import com.nextdocs.api.document.repository.SharedRootCandidate;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -46,6 +47,12 @@ class DocumentListQueryHelperTest {
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
+
+    @Mock
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private DocumentProperties documentProperties;
@@ -120,28 +127,31 @@ class DocumentListQueryHelperTest {
                 .build();
 
         PageRequest pageable = PageRequest.of(0, 50);
-        List<SharedRootCandidate> candidates = List.of(
-                new SharedRootCandidate(
-                        sharedWithMe.getId(),
-                        otherOwner.getId(),
-                        "Shared with me",
-                        sharedWithMe.getCreatedAt(),
-                        sharedWithMe.getUpdatedAt(),
-                        "a0"),
-                new SharedRootCandidate(
-                        ownerShared.getId(),
-                        user.getId(),
-                        "Shared by me",
-                        ownerShared.getCreatedAt(),
-                        ownerShared.getUpdatedAt(),
-                        "a1"));
-
-        when(documentRepository.findSharedRootDocuments(userId)).thenReturn(candidates);
+        when(sharedSectionService.list(userId))
+                .thenReturn(List.of(
+                        new SharedEntry(
+                                sharedWithMe.getId(),
+                                null,
+                                null,
+                                "Shared with me",
+                                sharedWithMe.getCreatedAt(),
+                                sharedWithMe.getUpdatedAt(),
+                                "a0",
+                                DocumentAccessLevel.EDIT,
+                                false),
+                        new SharedEntry(
+                                ownerShared.getId(),
+                                null,
+                                null,
+                                "Shared by me",
+                                ownerShared.getCreatedAt(),
+                                ownerShared.getUpdatedAt(),
+                                "a1",
+                                DocumentAccessLevel.OWNER,
+                                true)));
         when(documentRepository.findAllById(any())).thenReturn(List.of(sharedWithMe, ownerShared));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of(ownerShared.getId()));
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(sharedWithMe.getId(), DocumentAccessLevel.EDIT));
 
         Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, null, pageable);
 
@@ -151,12 +161,46 @@ class DocumentListQueryHelperTest {
         assertEquals("a0", doc1.orderKey());
         assertFalse(doc1.hasCollaborators());
         assertEquals(DocumentAccessLevel.EDIT, doc1.accessLevel());
+        assertFalse(doc1.owner());
 
         DocumentResponse doc2 = result.getContent().get(1);
         assertEquals("Shared by me", doc2.title());
         assertEquals("a1", doc2.orderKey());
         assertTrue(doc2.hasCollaborators());
         assertEquals(DocumentAccessLevel.OWNER, doc2.accessLevel());
+        assertTrue(doc2.owner());
+    }
+
+    @Test
+    void list_rootShared_reportsAnOwnerLevelGrantAsNotOwned() {
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+        UUID unreadableParentId = UUID.randomUUID();
+        Document ownerLevelGrant = Document.builder()
+                .id(UUID.randomUUID())
+                .user(otherOwner)
+                .parent(Document.builder()
+                        .id(unreadableParentId)
+                        .user(otherOwner)
+                        .build())
+                .title("Granted at OWNER")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(sharedSectionService.list(userId))
+                .thenReturn(List.of(sharedEntry(ownerLevelGrant, "a0", DocumentAccessLevel.OWNER, false)));
+        when(documentRepository.findAllById(any())).thenReturn(List.of(ownerLevelGrant));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
+
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, null, PageRequest.of(0, 20));
+
+        // The level says what the caller may do; only ownership says whose page this is.
+        assertEquals(1, result.getContent().size());
+        DocumentResponse granted = result.getContent().get(0);
+        assertEquals(DocumentAccessLevel.OWNER, granted.accessLevel());
+        assertFalse(granted.owner());
+        assertEquals(unreadableParentId, granted.parentId());
     }
 
     @Test
@@ -194,7 +238,7 @@ class DocumentListQueryHelperTest {
         // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
         when(permissionService.resolveAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "user-order-1"}));
 
         Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
@@ -243,7 +287,7 @@ class DocumentListQueryHelperTest {
         // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
         when(permissionService.resolveAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.of());
 
         Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
@@ -252,7 +296,7 @@ class DocumentListQueryHelperTest {
         DocumentResponse doc = result.getContent().get(0);
         assertEquals("Floated Child", doc.title());
         assertEquals(privateParentId, doc.parentId());
-        // Should return null (not the owner's siblingOrderKey) when no personal UserDocumentOrder exists
+        // Should return null (not the owner's siblingOrderKey) when no personal Shared order exists
         assertNull(doc.orderKey());
         assertEquals(DocumentAccessLevel.VIEW, doc.accessLevel());
     }
@@ -462,20 +506,31 @@ class DocumentListQueryHelperTest {
         assertTrue(ex.getMessage().contains("scope=private is only supported for root documents"));
     }
 
+    private static SharedEntry sharedEntry(Document document, String orderKey, DocumentAccessLevel accessLevel) {
+        return sharedEntry(document, orderKey, accessLevel, false);
+    }
+
+    private static SharedEntry sharedEntry(
+            Document document, String orderKey, DocumentAccessLevel accessLevel, boolean owner) {
+        return new SharedEntry(
+                document.getId(),
+                document.getParent() != null ? document.getParent().getId() : null,
+                null,
+                document.getTitle(),
+                document.getCreatedAt(),
+                document.getUpdatedAt(),
+                orderKey,
+                accessLevel,
+                owner);
+    }
+
     @Test
-    void list_sharedScope_filtersDeniedCandidatesAndComputesExactStableTotal() {
+    void list_sharedScope_paginatesServiceEntriesAndLoadsOnlyThePage() {
         User otherOwner = User.builder().id(UUID.randomUUID()).build();
         Document allowedDoc1 = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)
                 .title("Allowed 1")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-        Document deniedDoc = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Denied")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
@@ -487,43 +542,21 @@ class DocumentListQueryHelperTest {
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
-        List<SharedRootCandidate> candidates = List.of(
-                new SharedRootCandidate(
-                        allowedDoc1.getId(),
-                        otherOwner.getId(),
-                        "Allowed 1",
-                        allowedDoc1.getCreatedAt(),
-                        allowedDoc1.getUpdatedAt(),
-                        "a0"),
-                new SharedRootCandidate(
-                        deniedDoc.getId(),
-                        otherOwner.getId(),
-                        "Denied",
-                        deniedDoc.getCreatedAt(),
-                        deniedDoc.getUpdatedAt(),
-                        "a1"),
-                new SharedRootCandidate(
-                        allowedDoc2.getId(),
-                        otherOwner.getId(),
-                        "Allowed 2",
-                        allowedDoc2.getCreatedAt(),
-                        allowedDoc2.getUpdatedAt(),
-                        "a2"));
-
-        when(documentRepository.findSharedRootDocuments(userId)).thenReturn(candidates);
-        when(documentRepository.findAllById(any())).thenReturn(List.of(allowedDoc1, deniedDoc, allowedDoc2));
+        // Access filtering and the space/container rule live in SharedSectionService;
+        // this helper must trust its list and only page it.
+        when(sharedSectionService.list(userId))
+                .thenReturn(List.of(
+                        sharedEntry(allowedDoc1, "a0", DocumentAccessLevel.VIEW),
+                        sharedEntry(allowedDoc2, "a1", DocumentAccessLevel.EDIT)));
+        when(documentRepository.findAllById(any())).thenReturn(List.of(allowedDoc1, allowedDoc2));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(
-                        allowedDoc1.getId(), DocumentAccessLevel.VIEW,
-                        allowedDoc2.getId(), DocumentAccessLevel.EDIT));
 
         Page<DocumentResponse> page0 = queryHelper.list(userId, "root", "shared", null, null, PageRequest.of(0, 1));
         assertEquals(1, page0.getContent().size());
         assertEquals("Allowed 1", page0.getContent().get(0).title());
+        assertEquals("a0", page0.getContent().get(0).orderKey());
         assertEquals(2, page0.getTotalElements());
-        // The denied candidate must never reach the entity loader on either page.
         verify(documentRepository).findAllById(List.of(allowedDoc1.getId()));
 
         Page<DocumentResponse> page1 = queryHelper.list(userId, "root", "shared", null, null, PageRequest.of(1, 1));
@@ -534,7 +567,7 @@ class DocumentListQueryHelperTest {
     }
 
     @Test
-    void list_sharedScope_appliesSortOrderToFilteredCandidates() {
+    void list_sharedScope_keepsPersonalOrderRegardlessOfRequestedSort() {
         User otherOwner = User.builder().id(UUID.randomUUID()).build();
         Document docB = Document.builder()
                 .id(UUID.randomUUID())
@@ -551,27 +584,21 @@ class DocumentListQueryHelperTest {
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
-        List<SharedRootCandidate> candidates = List.of(
-                new SharedRootCandidate(
-                        docB.getId(), otherOwner.getId(), "Bravo", docB.getCreatedAt(), docB.getUpdatedAt(), "b0"),
-                new SharedRootCandidate(
-                        docA.getId(), otherOwner.getId(), "Alpha", docA.getCreatedAt(), docA.getUpdatedAt(), "a0"));
-
-        when(documentRepository.findSharedRootDocuments(userId)).thenReturn(candidates);
+        when(sharedSectionService.list(userId))
+                .thenReturn(List.of(
+                        sharedEntry(docB, "a0", DocumentAccessLevel.VIEW),
+                        sharedEntry(docA, "a1", DocumentAccessLevel.VIEW)));
         when(documentRepository.findAllById(any())).thenReturn(List.of(docB, docA));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(
-                        docB.getId(), DocumentAccessLevel.VIEW,
-                        docA.getId(), DocumentAccessLevel.VIEW));
 
         Page<DocumentResponse> result = queryHelper.list(
                 userId, "root", "shared", null, null, PageRequest.of(0, 10, Sort.by(Sort.Order.asc("title"))));
 
+        // A Shared drag order is user data, not a sort option to override per request.
         assertEquals(2, result.getContent().size());
-        assertEquals("Alpha", result.getContent().get(0).title());
-        assertEquals("Bravo", result.getContent().get(1).title());
+        assertEquals("Bravo", result.getContent().get(0).title());
+        assertEquals("Alpha", result.getContent().get(1).title());
     }
 
     @Test
@@ -641,7 +668,7 @@ class DocumentListQueryHelperTest {
         when(permissionService.resolveAccessBatch(eq(userId), any()))
                 .thenReturn(java.util.Map.of(
                         newest.getId(), DocumentAccessLevel.VIEW, older.getId(), DocumentAccessLevel.VIEW));
-        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
+        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
                 .thenReturn(List.of());
         when(documentRepository.findAllById(any())).thenReturn(List.of(newest, older));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
@@ -657,26 +684,8 @@ class DocumentListQueryHelperTest {
     }
 
     @Test
-    void list_sharedScope_allCandidatesDenied_returnsEmptyPage() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        Document deniedDoc = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Denied")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        List<SharedRootCandidate> candidates = List.of(new SharedRootCandidate(
-                deniedDoc.getId(),
-                otherOwner.getId(),
-                "Denied",
-                deniedDoc.getCreatedAt(),
-                deniedDoc.getUpdatedAt(),
-                "a0"));
-
-        when(documentRepository.findSharedRootDocuments(userId)).thenReturn(candidates);
-        when(permissionService.resolveAccessBatch(eq(userId), any())).thenReturn(java.util.Map.of());
+    void list_sharedScope_emptySection_returnsEmptyPage() {
+        when(sharedSectionService.list(userId)).thenReturn(List.of());
 
         Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, null, PageRequest.of(0, 20));
 

@@ -8,10 +8,10 @@ import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.SharedDocumentCandidate;
-import com.nextdocs.api.document.repository.SharedRootCandidate;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
@@ -112,14 +112,49 @@ class SpaceRootListingPersistenceTest {
                         .toList();
         assertThat(allRootIds).containsExactly(privatePage.getId());
 
-        List<UUID> sharedIds = documentRepository.findSharedRootDocuments(owner.getId()).stream()
-                .map(SharedRootCandidate::id)
-                .toList();
-        assertThat(sharedIds).isEmpty();
-
-        // The space's own listing runs resolve_effective_access, so it is pinned against
-        // PostgreSQL in SpacePermissionMigrationPostgresTest; the count is plain SQL.
+        // The Shared-section candidate query is pinned against PostgreSQL in
+        // SharedSectionCandidatePostgresTest: it runs resolve_effective_access, which H2
+        // cannot execute. The space's own listing is pinned there for the same reason;
+        // the count below is plain SQL.
         assertThat(documentRepository.countBySpace_Id(space.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void workspaceSharedRoot_isListedOnceInSharedAndNeverInThePrivateList() {
+        User owner = userRepository.saveAndFlush(User.builder()
+                .email("workspace-audience-" + UUID.randomUUID() + "@example.com")
+                .displayName("Owner")
+                .build());
+        Workspace workspace = workspaceRepository.saveAndFlush(
+                Workspace.builder().name("NextDocs").build());
+        // The audience is the workspace itself, so there is no AccessGrant row to see.
+        // That is what made the web-side single-home filter keep this root in the flat
+        // listing while the server listed it in Shared: two homes, one document.
+        Document workspaceShared = documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .workspace(workspace)
+                .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
+                .title("Handbook")
+                .build());
+        Document privateRoot = documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .user(owner)
+                .workspace(workspace)
+                .title("Notes")
+                .build());
+
+        assertThat(accessGrantRepository.findDocumentIdsWithPositiveGrants(List.of(workspaceShared.getId())))
+                .isEmpty();
+
+        List<UUID> privateIds =
+                documentRepository.findPrivateRootDocuments(owner.getId(), PageRequest.of(0, 50)).getContent().stream()
+                        .map(row -> ((Document) row[0]).getId())
+                        .toList();
+        assertThat(privateIds).containsExactly(privateRoot.getId());
+
+        // The Shared-section candidate query needs the PostgreSQL resolver, so
+        // SharedSectionCandidatePostgresTest pins that this root is listed once.
     }
 
     @Test
@@ -173,12 +208,8 @@ class SpaceRootListingPersistenceTest {
         List<UUID> flatSharedIds = documentRepository.findSharedWithUserId(viewer.getId()).stream()
                 .map(SharedDocumentCandidate::id)
                 .toList();
-        List<UUID> sharedRootIds = documentRepository.findSharedRootDocuments(viewer.getId()).stream()
-                .map(SharedRootCandidate::id)
-                .toList();
 
         assertThat(flatSharedIds).containsExactly(directShare.getId());
-        assertThat(sharedRootIds).containsExactly(directShare.getId());
         assertThat(flatSharedIds).doesNotContain(spaceRoot.getId(), spaceChild.getId());
     }
 
