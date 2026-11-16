@@ -20,11 +20,14 @@ import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.entity.DocumentOrderSection;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.document.util.OrderPositionConflict;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.entity.YhubPurgeOutbox;
@@ -97,6 +100,8 @@ public class DocumentService {
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
+    private final UserSharedOrderRepository userSharedOrderRepository;
+    private final SharedSectionService sharedSectionService;
     private final UserRepository userRepository;
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
@@ -132,6 +137,12 @@ public class DocumentService {
                     if (existing != null) {
                         return existingDocumentForCreate(existing, userId);
                     }
+                }
+                // Retrying only helps a duplicate position. A NOT NULL or foreign-key
+                // failure fails the same way three times and then surfaces as a stale
+                // position, which points the caller at the wrong problem.
+                if (!OrderPositionConflict.isRetryable(ex)) {
+                    throw ex;
                 }
                 attempt++;
                 if (attempt >= MAX_CREATE_ATTEMPTS) {
@@ -498,7 +509,7 @@ public class DocumentService {
         }
         Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveAccessBatch(userId, allIds);
         Map<UUID, DocumentAccessLevel> trashAccessById = permissionService.resolveTrashAccessBatch(userId, allIds);
-        BreadcrumbSpaceResponse space = resolveBreadcrumbSpace(docsById.values());
+        BreadcrumbSpaceResponse space = resolveBreadcrumbSpace(userId, docsById.values());
 
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         List<UUID> orderedIds = new ArrayList<>(allIds);
@@ -555,6 +566,13 @@ public class DocumentService {
         return path;
     }
 
+    /**
+     * Breadcrumbs for an anonymous share-link viewer.
+     *
+     * <p>The space is never named here: the viewer holds no workspace identity, so every
+     * space is one they cannot open. A public page published out of a space must not
+     * disclose that space's name or icon to whoever has the link.
+     */
     @Transactional(readOnly = true)
     public List<DocumentBreadcrumbResponse> getPublicBreadcrumbs(UUID documentId) {
         Document target = documentRepository
@@ -578,7 +596,6 @@ public class DocumentService {
         }
         Map<UUID, DocumentAccessLevel> publicAccessById = permissionService.resolvePublicAccessBatch(allIds);
 
-        List<Document> visibleDocs = new ArrayList<>();
         List<DocumentBreadcrumbResponse> path = new ArrayList<>();
         int depth = 0;
         for (int i = 0; i < allIds.size(); i++) {
@@ -594,7 +611,6 @@ public class DocumentService {
             if (level == null) {
                 break;
             }
-            visibleDocs.add(current);
             UUID parentId = null;
             int currentIndex = i;
             if (currentIndex + 1 < allIds.size()) {
@@ -621,23 +637,6 @@ public class DocumentService {
             depth++;
         }
 
-        BreadcrumbSpaceResponse space = resolveBreadcrumbSpace(visibleDocs);
-        if (space != null) {
-            List<DocumentBreadcrumbResponse> withSpace = new ArrayList<>(path.size());
-            for (DocumentBreadcrumbResponse item : path) {
-                withSpace.add(new DocumentBreadcrumbResponse(
-                        item.id(),
-                        item.title(),
-                        item.icon(),
-                        item.parentId(),
-                        item.orderKey(),
-                        item.accessLevel(),
-                        item.createdAt(),
-                        item.updatedAt(),
-                        space));
-            }
-            path = withSpace;
-        }
         Collections.reverse(path);
         return path;
     }
@@ -810,6 +809,12 @@ public class DocumentService {
                         ? selfProxy.restoreAndPersist(userId, documentId, attempt > 0)
                         : restoreAndPersist(userId, documentId, attempt > 0);
             } catch (DataIntegrityViolationException ex) {
+                // Only a duplicate position can be rebuilt and retried. A NOT NULL or
+                // foreign-key failure would fail the same way and then report a position
+                // conflict, pointing the caller at the wrong problem.
+                if (!OrderPositionConflict.isRetryable(ex)) {
+                    throw ex;
+                }
                 attempt++;
                 if (attempt >= MAX_RESTORE_ATTEMPTS) {
                     throw new ApiException(
@@ -833,6 +838,11 @@ public class DocumentService {
         }
 
         document.setDeletedAt(null);
+
+        // Collaborator rows are collected across the whole subtree and written in one batch
+        // per user: each page used to take the page lock and the account lock on its own.
+        Map<UUID, User> sharedOrderUsers = new HashMap<>();
+        Map<UUID, List<Document>> sharedOrderDocuments = new HashMap<>();
 
         if (document.getParent() != null) {
             if (forceRegenerate || !FractionalIndex.isValidOrderKey(document.getSiblingOrderKey())) {
@@ -879,7 +889,7 @@ public class DocumentService {
             }
 
             for (AccessGrant grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId)) {
-                ensureCollaboratorOrderRow(document, grant);
+                collectCollaboratorOrderRow(sharedOrderUsers, sharedOrderDocuments, document, grant);
             }
         }
 
@@ -899,13 +909,22 @@ public class DocumentService {
                 }
                 documentRepository.saveAndFlush(descendant);
 
-                // Soft delete wiped every user's ordering rows; give collaborators of
-                // restored descendants back a row so their Shared-section placement survives.
+                // Soft delete removes the subtree's Private order rows only; a
+                // collaborator's Shared row survives it. Re-ensuring is idempotent and keeps
+                // a restore from depending on every grant writer having seeded its row.
                 for (AccessGrant grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(descendant.getId())) {
-                    ensureCollaboratorOrderRow(descendant, grant);
+                    collectCollaboratorOrderRow(sharedOrderUsers, sharedOrderDocuments, descendant, grant);
                 }
             }
         }
+
+        // ensureOrderRows locks one collaborator's order namespace, so the collaborators are
+        // visited in a fixed id order: a HashMap's iteration order would let two concurrent
+        // restores that share collaborators take those locks in opposite orders and deadlock.
+        sharedOrderDocuments.keySet().stream()
+                .sorted()
+                .forEach(collaboratorId -> sharedSectionService.ensureOrderRows(
+                        sharedOrderUsers.get(collaboratorId), sharedOrderDocuments.get(collaboratorId)));
 
         eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId));
 
@@ -1040,6 +1059,7 @@ public class DocumentService {
         // migration's cascade (H2 in tests).
         commentCleanup.deleteForDocuments(documentIds);
         userDocumentOrderRepository.deleteByDocument_IdIn(documentIds);
+        userSharedOrderRepository.deleteByDocument_IdIn(documentIds);
         documentRepository.deleteByIdIn(documentIds);
     }
 
@@ -1064,10 +1084,18 @@ public class DocumentService {
         return (title == null || title.isBlank()) ? "Untitled" : title.strip();
     }
 
-    private static BreadcrumbSpaceResponse resolveBreadcrumbSpace(Collection<Document> documents) {
+    /**
+     * The space a breadcrumb anchors at, or null when the caller cannot see that space.
+     * A page can be shared directly out of a Custom space the viewer is not a member of;
+     * naming the space would confirm a container they can neither open nor find.
+     */
+    private BreadcrumbSpaceResponse resolveBreadcrumbSpace(UUID userId, Collection<Document> documents) {
         for (Document doc : documents) {
             if (doc != null && doc.getSpace() != null) {
                 Space space = doc.getSpace();
+                if (!spaceAccessService.visibleSpaceIds(userId, List.of(space)).contains(space.getId())) {
+                    return null;
+                }
                 return new BreadcrumbSpaceResponse(
                         space.getId(),
                         space.getName(),
@@ -1154,7 +1182,17 @@ public class DocumentService {
         }
 
         String orderKey;
-        if (document.getParent() == null && document.getSpace() != null) {
+        DocumentOrderSection section = null;
+        // Resolve the section once, up front: it decides which table owns the personal
+        // key, and a shape check alone cannot tell an owned shared root from a private one.
+        boolean inSharedSection =
+                callerUserId != null && sharedSectionService.isInSection(callerUserId, document.getId());
+        if (inSharedSection) {
+            orderKey = userSharedOrderRepository
+                    .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
+                    .orElse(null);
+            section = DocumentOrderSection.SHARED;
+        } else if (document.getParent() == null && document.getSpace() != null) {
             // Space pages are shared content: the space's key wins for every caller,
             // including the owner and collaborators who also carry a personal row.
             orderKey = document.getSiblingOrderKey();
@@ -1172,9 +1210,12 @@ public class DocumentService {
                 isFloatedOrRoot = (parentAccess == null);
             }
             if (isFloatedOrRoot) {
-                orderKey = userDocumentOrderRepository
+                // A collaborator's entry lives in their Shared section, so its personal
+                // position comes from the Shared table, never the Private one.
+                orderKey = userSharedOrderRepository
                         .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
                         .orElse(null);
+                section = DocumentOrderSection.SHARED;
             } else {
                 orderKey = document.getSiblingOrderKey();
             }
@@ -1184,6 +1225,7 @@ public class DocumentService {
             orderKey = userDocumentOrderRepository
                     .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
                     .orElse(null);
+            section = DocumentOrderSection.PRIVATE;
         } else {
             orderKey = null;
         }
@@ -1221,9 +1263,13 @@ public class DocumentService {
                 document.getParent() != null ? document.getParent().getId() : null,
                 document.getSpace() != null ? document.getSpace().getId() : null,
                 orderKey,
+                section,
                 hasChildren,
                 hasCollaborators,
                 accessLevel,
+                // Ownership is classified on the Shared listing, which is the only response
+                // that has to tell the caller's own page from a shared one.
+                null,
                 document.getCreatedBy(),
                 document.getCreatedAt(),
                 document.getUpdatedAt(),
@@ -1255,11 +1301,16 @@ public class DocumentService {
         return allDescendants;
     }
 
-    private void ensureCollaboratorOrderRow(Document document, AccessGrant grant) {
+    private void collectCollaboratorOrderRow(
+            Map<UUID, User> users, Map<UUID, List<Document>> documents, Document document, AccessGrant grant) {
         if (grant.getEffect() != AccessGrantEffect.ALLOW) {
             return;
         }
-        ensurePersonalOrderRow(grant.getUser(), document);
+        // A collaborator's position is a Shared-section position, never Private: the
+        // two namespaces are separate so a personal drag cannot reindex the other.
+        User collaborator = grant.getUser();
+        users.putIfAbsent(collaborator.getId(), collaborator);
+        documents.computeIfAbsent(collaborator.getId(), id -> new ArrayList<>()).add(document);
     }
 
     /** Gives a user without a personal navigation row a fresh position at the top. */

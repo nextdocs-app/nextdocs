@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useCloudBackoff } from '@/hooks/useCloudBackoff.hook';
-import { combineSharedDocuments } from '@/stores/documentList/documentList.utils';
 import type {
   LocalDocumentEntry,
   SharedDocumentEntry,
@@ -40,7 +39,6 @@ export function useDocumentList() {
   const {
     documents,
     sharedWithMeDocuments,
-    ownerSharedDocuments,
     trashedDocuments,
     isLoading,
     isLoadingMore,
@@ -50,16 +48,14 @@ export function useDocumentList() {
     isSharedLoading,
     isSharedLoadingMore,
     sharedWithMeHasMore,
-    ownerSharedHasMore,
     isShowingAllShared,
     isTrashLoadingMore,
     trashHasMore,
   } = useAppSelector((state) => state.documentList);
 
-  const sharedDocuments = useMemo(
-    () => combineSharedDocuments(sharedWithMeDocuments, ownerSharedDocuments),
-    [sharedWithMeDocuments, ownerSharedDocuments]
-  );
+  // The server's Shared listing already includes roots the caller owns with an
+  // audience, so one list is the whole section.
+  const sharedDocuments = sharedWithMeDocuments;
 
   useEffect(() => {
     if (isInitializing) {
@@ -325,40 +321,20 @@ export function useDocumentList() {
   }, [dispatch, isInBackoff, triggerCloudBackoff, clearCloudBackoff]);
 
   const loadMoreSharedDocuments = useCallback(async () => {
-    const isCloudUnavailable = isInBackoff();
-    if (sharedWithMeHasMore) {
-      const res = await dispatch(
-        loadMoreSharedDocumentsThunk({
-          isCloudUnavailable,
-          cacheSyncInFlight: cacheSyncInFlightRef.current,
-        })
-      );
-      if (loadMoreSharedDocumentsThunk.fulfilled.match(res)) {
-        if (res.payload.errorType === 'connectivity_error') {
-          triggerCloudBackoff();
-        } else {
-          clearCloudBackoff();
-        }
+    const res = await dispatch(
+      loadMoreSharedDocumentsThunk({
+        isCloudUnavailable: isInBackoff(),
+        cacheSyncInFlight: cacheSyncInFlightRef.current,
+      })
+    );
+    if (loadMoreSharedDocumentsThunk.fulfilled.match(res)) {
+      if (res.payload.errorType === 'connectivity_error') {
+        triggerCloudBackoff();
+      } else {
+        clearCloudBackoff();
       }
     }
-
-    if (ownerSharedHasMore) {
-      if (!isShowingAll) {
-        showAllDocuments();
-      }
-      await loadMore();
-    }
-  }, [
-    dispatch,
-    sharedWithMeHasMore,
-    ownerSharedHasMore,
-    isShowingAll,
-    showAllDocuments,
-    loadMore,
-    isInBackoff,
-    triggerCloudBackoff,
-    clearCloudBackoff,
-  ]);
+  }, [dispatch, isInBackoff, triggerCloudBackoff, clearCloudBackoff]);
 
   const loadMoreTrashDocuments = useCallback(async () => {
     const res = await dispatch(
@@ -409,7 +385,7 @@ export function useDocumentList() {
     isTrashLoading,
     isSharedLoading,
     isSharedLoadingMore,
-    sharedHasMore: sharedWithMeHasMore || ownerSharedHasMore,
+    sharedHasMore: sharedWithMeHasMore,
     isShowingAllShared,
     isTrashLoadingMore,
     trashHasMore,

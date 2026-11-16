@@ -11,10 +11,10 @@ import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.UserDocumentOrder;
+import com.nextdocs.api.document.entity.UserSharedOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import jakarta.persistence.EntityManager;
@@ -46,7 +46,7 @@ class DocumentSharingReconcilePersistenceTest {
     private UserRepository userRepository;
 
     @Autowired
-    private UserDocumentOrderRepository userDocumentOrderRepository;
+    private UserSharedOrderRepository userSharedOrderRepository;
 
     @Autowired
     private WorkspaceRepository workspaceRepository;
@@ -100,7 +100,7 @@ class DocumentSharingReconcilePersistenceTest {
         // Bob floated the child earlier; overriding his access on the root has to drop that row
         // (he reaches the child through the root) while floating the root (its parent is not
         // accessible to him).
-        userDocumentOrderRepository.saveAndFlush(UserDocumentOrder.builder()
+        userSharedOrderRepository.saveAndFlush(UserSharedOrder.builder()
                 .user(bob)
                 .document(child)
                 .orderKey("b0")
@@ -153,9 +153,9 @@ class DocumentSharingReconcilePersistenceTest {
                 bob.getId(),
                 new CollaboratorAccessUpdateRequest(DocumentAccessLevel.EDIT));
 
-        assertThat(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(bob.getId(), root.getId()))
+        assertThat(userSharedOrderRepository.existsByUser_IdAndDocument_Id(bob.getId(), root.getId()))
                 .isTrue();
-        assertThat(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(bob.getId(), child.getId()))
+        assertThat(userSharedOrderRepository.existsByUser_IdAndDocument_Id(bob.getId(), child.getId()))
                 .isFalse();
     }
 }

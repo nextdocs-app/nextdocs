@@ -8,6 +8,7 @@ import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -51,6 +52,16 @@ public class WorkspaceAccessService {
         WorkspaceMember member =
                 memberRepository.findByUserId(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
         return new Membership(member.getWorkspace(), member);
+    }
+
+    /**
+     * The caller's membership, or empty instead of 404. Used where a missing
+     * membership is an ordinary "nothing to see" answer rather than an error, so
+     * the caller must not mark an enclosing transaction rollback-only by catching.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Membership> findMember(UUID userId) {
+        return memberRepository.findByUserId(userId).map(member -> new Membership(member.getWorkspace(), member));
     }
 
     /** Admin or owner. */

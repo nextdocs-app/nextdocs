@@ -78,6 +78,8 @@ interface ApiDocument {
   hasChildren?: boolean;
   hasCollaborators?: boolean;
   accessLevel?: DocumentAccessLevel | null;
+  /** Direct ownership by the caller; an OWNER-level grant to a collaborator is not this. */
+  owner?: boolean | null;
   createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -249,6 +251,8 @@ export interface CloudDocumentsPage {
     hasChildren?: boolean;
     hasCollaborators?: boolean;
     accessLevel?: DocumentAccessLevel | null;
+    /** Direct ownership by the caller. Only the Shared-section listing answers it. */
+    owner?: boolean;
   }[];
   page: number;
   size: number;
@@ -593,6 +597,9 @@ class DocumentService {
       hasChildren: doc.hasChildren ?? false,
       hasCollaborators: doc.hasCollaborators ?? false,
       accessLevel: sanitizeNullableAccessLevel(doc.accessLevel),
+      // Defaulting an omitted flag would claim a private page is not the caller's own:
+      // only the Shared listing reports ownership, so absence stays absence.
+      owner: doc.owner ?? undefined,
     }));
 
     return {
@@ -945,7 +952,10 @@ class DocumentService {
     page = 0,
     size = 20
   ): Promise<CloudDocumentsPage> {
+    // The server owns the Shared section rule (including space roots the caller
+    // cannot browse). The flat scope is a search/cache view, not this section.
     return this.listCloudDocuments(accessToken, page, size, {
+      parentId: 'root',
       scope: 'shared',
     });
   }

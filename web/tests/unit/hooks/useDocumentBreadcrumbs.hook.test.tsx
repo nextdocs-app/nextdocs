@@ -139,4 +139,59 @@ describe('useDocumentBreadcrumbs', () => {
       expect(result.current.breadcrumbs[0].title).toBe('Remote Doc');
     });
   });
+
+  it('refetches when a move changes the local placement without changing the id', async () => {
+    let parentId = 'root';
+    (useAppSelector as unknown as jest.Mock).mockImplementation(
+      (selector: (state: unknown) => unknown) =>
+        selector({
+          sidebarTree: {
+            nodes: {
+              root: { id: 'root', title: 'Root', icon: null, parentId: null },
+              'second-root': {
+                id: 'second-root',
+                title: 'Second Root',
+                icon: null,
+                parentId: null,
+              },
+              leaf: { id: 'leaf', title: 'Leaf', icon: storedIcon, parentId },
+            },
+          },
+          sharedTree: { nodes: {} },
+          spaceTree: { trees: {}, spaces: {} },
+          auth: { accessToken: null },
+        })
+    );
+
+    const { rerender } = renderHook(() => useDocumentBreadcrumbs('leaf', 'Leaf', null));
+
+    await waitFor(() => expect(breadcrumbsSpy).toHaveBeenCalledTimes(1));
+
+    parentId = 'second-root';
+    rerender();
+
+    await waitFor(() => expect(breadcrumbsSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not restore a locally known space the server withheld', async () => {
+    // The API omits the space when the viewer cannot see it. The local tree may still
+    // hold an older placement for this page, so its absence must win once served.
+    breadcrumbsSpy.mockResolvedValue([
+      {
+        id: 'space-child',
+        title: 'Space Child',
+        parentId: null,
+        space: null,
+      },
+    ]);
+
+    const { result } = renderHook(() => useDocumentBreadcrumbs('space-child', 'Space Child', null));
+
+    await waitFor(() => {
+      expect(result.current.breadcrumbs[0].title).toBe('Space Child');
+    });
+
+    expect(result.current.space).toBeNull();
+    expect(result.current.breadcrumbs[0].space).toBeNull();
+  });
 });

@@ -120,6 +120,30 @@ class PermissionServiceTest {
     }
 
     @Test
+    void resolveAccessBatch_splitsLargeIdSetsIntoChunks() {
+        UUID userId = UUID.randomUUID();
+        List<UUID> documentIds = java.util.stream.IntStream.range(0, 1001)
+                .mapToObj(index -> UUID.randomUUID())
+                .toList();
+        when(documentRepository.resolveEffectiveAccessBatch(eq(userId), anyString()))
+                .thenAnswer(invocation -> {
+                    String joined = invocation.getArgument(1);
+                    return List.<Object[]>of(new Object[] {UUID.fromString(joined.substring(0, 36)), "VIEW"});
+                });
+
+        java.util.Map<UUID, DocumentAccessLevel> levels = permissionService.resolveAccessBatch(userId, documentIds);
+
+        org.mockito.ArgumentCaptor<String> batches = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(documentRepository, times(2)).resolveEffectiveAccessBatch(eq(userId), batches.capture());
+        // One giant parameter would exceed the driver/planner comfort zone, and one
+        // recursive CTE over 1000+ ids is the shape this chunking exists to avoid.
+        assertEquals(1000, batches.getAllValues().get(0).split(",").length);
+        assertEquals(1, batches.getAllValues().get(1).split(",").length);
+        // Both chunks contribute; a chunked loop that dropped a result would lose one.
+        assertEquals(java.util.Set.of(documentIds.get(0), documentIds.get(1000)), levels.keySet());
+    }
+
+    @Test
     void resolveAccessBatch_dropsLevelsTheCallerMayNotRead() {
         UUID userId = UUID.randomUUID();
         UUID readableId = UUID.randomUUID();

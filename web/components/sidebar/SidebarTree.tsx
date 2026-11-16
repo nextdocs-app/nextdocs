@@ -9,10 +9,7 @@ import {
   moveDocumentThunk,
   updateNodeMeta,
 } from '@/stores/sidebarTree/sidebarTree.slice';
-import {
-  selectRootLevelOwnerSharedDocumentIds,
-  selectSharedWithMeDocumentIds,
-} from '@/stores/documentList/documentList.selectors';
+import { selectSharedWithMeDocumentIds } from '@/stores/documentList/documentList.selectors';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { useTreeMetaSync } from '@/hooks/useTreeMetaSync.hook';
 import { Plus } from '@/icons';
@@ -63,27 +60,22 @@ export function SidebarTree({
   const rootIds = useAppSelector((state) => state.sidebarTree?.rootIds ?? []);
   const isRootLoading = useAppSelector((state) => state.sidebarTree?.isRootLoading ?? false);
   const sharedWithMeDocumentIds = useAppSelector(selectSharedWithMeDocumentIds);
-  const rootLevelOwnerSharedDocumentIds = useAppSelector(selectRootLevelOwnerSharedDocumentIds);
 
-  // Documents that live in the Shared section must not render in the Private
-  // tree: everything shared with the user, plus root-level documents the user
-  // shared with others. Nested documents that were shared (real parentId set)
-  // stay in the Private tree under their actual parent.
+  // Documents in the Shared section must not render in the Private tree. The server's
+  // Shared listing owns that rule, so one id list covers collaborator entries and roots
+  // the caller owns with an audience alike.
   // Stabilized by content key so background documentList refreshes with
   // unchanged ids don't churn the Set identity and re-render the tree.
   const fallbackExcludedNodeIdsKey = useMemo(() => {
-    const ids = [...sharedWithMeDocumentIds, ...rootLevelOwnerSharedDocumentIds];
+    const ids = [...sharedWithMeDocumentIds];
     ids.sort();
     return ids.join(',');
-  }, [sharedWithMeDocumentIds, rootLevelOwnerSharedDocumentIds]);
-  const fallbackExcludedNodeIds = useMemo(() => {
-    const excluded = new Set<string>(sharedWithMeDocumentIds);
-    for (const id of rootLevelOwnerSharedDocumentIds) {
-      excluded.add(id);
-    }
-    return excluded;
+  }, [sharedWithMeDocumentIds]);
+  const fallbackExcludedNodeIds = useMemo(
+    () => new Set<string>(sharedWithMeDocumentIds),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackExcludedNodeIdsKey]);
+    [fallbackExcludedNodeIdsKey]
+  );
 
   const excludedNodeIds = propExcludedNodeIds ?? fallbackExcludedNodeIds;
 

@@ -15,11 +15,10 @@ import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
-import com.nextdocs.api.document.entity.UserDocumentOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
-import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
+import com.nextdocs.api.document.util.OrderPositionConflict;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
@@ -51,7 +50,8 @@ public class DocumentSharingService {
 
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
-    private final UserDocumentOrderRepository userDocumentOrderRepository;
+    private final UserSharedOrderRepository userSharedOrderRepository;
+    private final SharedSectionService sharedSectionService;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
@@ -283,6 +283,9 @@ public class DocumentSharingService {
                         ? selfProxy.upsertCollaboratorAndPersist(actorId, documentId, request)
                         : upsertCollaboratorAndPersist(actorId, documentId, request);
             } catch (DataIntegrityViolationException ex) {
+                if (!OrderPositionConflict.isRetryable(ex)) {
+                    throw ex;
+                }
                 attempt++;
                 if (attempt >= MAX_ORDER_UPSERT_ATTEMPTS) {
                     throw ex;
@@ -329,9 +332,16 @@ public class DocumentSharingService {
                 targetUser.getId(),
                 "level=" + requestedLevel);
 
-        // Ensure the collaborator has a UserDocumentOrder entry for their Shared
-        // section so root documents and floated nested documents can be reordered.
-        ensureCollaboratorOrder(doc, targetUser);
+        // Ensure the viewer has a Shared-section order row so root documents and
+        // floated nested documents can be reordered.
+        ensureSharedOrderRow(doc, targetUser);
+        // A standalone root gains an owner Shared entry; a space root is browsed
+        // through its space, so an owner row there would describe a listing that
+        // never renders. The Private row is deliberately kept either way:
+        // unsharing returns the page to it.
+        if (doc.getParent() == null && doc.getSpace() == null) {
+            ensureSharedOrderRow(doc, doc.getUser());
+        }
         eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(targetUser.getId())));
 
         return new CollaboratorResponse(
@@ -380,14 +390,14 @@ public class DocumentSharingService {
             // something positive exists to shadow; otherwise the direct grant is removed.
             if (!hasIdentityGrant) {
                 accessGrantRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
-                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+                userSharedOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
             } else {
                 accessGrantSyncService.upsertUserGrant(doc, targetUser, DocumentAccessLevel.NO_ACCESS, actor);
-                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+                userSharedOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
             }
         } else {
             accessGrantSyncService.upsertUserGrant(doc, targetUser, requestedLevel, actor);
-            ensureCollaboratorOrder(doc, targetUser);
+            ensureSharedOrderRow(doc, targetUser);
         }
 
         auditService.recordDocument(
@@ -425,7 +435,7 @@ public class DocumentSharingService {
         }
 
         accessGrantRepository.deleteByDocument_IdAndUser_Id(documentId, collaboratorUserId);
-        userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
+        userSharedOrderRepository.deleteByUser_IdAndDocument_Id(collaboratorUserId, documentId);
         auditService.recordDocument(
                 doc, actorId, AccessAuditAction.COLLABORATOR_REMOVE, "USER", collaboratorUserId, null);
 
@@ -455,7 +465,7 @@ public class DocumentSharingService {
         }
 
         accessGrantRepository.deleteByDocument_IdAndUser_Id(documentId, userId);
-        userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(userId, documentId);
+        userSharedOrderRepository.deleteByUser_IdAndDocument_Id(userId, documentId);
         auditService.recordDocument(doc, userId, AccessAuditAction.COLLABORATOR_LEAVE, "USER", userId, null);
 
         // Leaving may orphan NO_ACCESS breakpoints deeper in the subtree; if this user is
@@ -509,20 +519,8 @@ public class DocumentSharingService {
         return new DocumentAccessResponse(documentId, true, level, false, false);
     }
 
-    private void ensureCollaboratorOrder(Document doc, User targetUser) {
-        if (userDocumentOrderRepository.existsByUser_IdAndDocument_Id(targetUser.getId(), doc.getId())) {
-            return;
-        }
-        String minKey = userDocumentOrderRepository
-                .findMinOrderKeyByUserId(targetUser.getId(), doc.getId())
-                .filter(FractionalIndex::isValidOrderKey)
-                .orElse(null);
-        UserDocumentOrder udo = UserDocumentOrder.builder()
-                .user(targetUser)
-                .document(doc)
-                .orderKey(FractionalIndex.keyBetween(null, minKey))
-                .build();
-        userDocumentOrderRepository.saveAndFlush(udo);
+    private void ensureSharedOrderRow(Document doc, User targetUser) {
+        sharedSectionService.ensureOrderRow(targetUser, doc);
     }
 
     private User resolveActor(UUID actorId, Document doc) {
@@ -635,7 +633,7 @@ public class DocumentSharingService {
             return;
         }
 
-        // Decide first, mutate last: UserDocumentOrder deletes clear the persistence context,
+        // Decide first, mutate last: UserSharedOrder deletes clear the persistence context,
         // detaching the subtree documents loaded above. Touching a lazy association afterwards
         // (doc.getParent().getUser()) would fail with LazyInitializationException, so every
         // access resolution has to happen before the first order row is deleted.
@@ -646,11 +644,11 @@ public class DocumentSharingService {
             decideSharedRoots(userId, chunk, documentsToFloat, orderRowsToDelete);
         }
 
-        for (Document doc : documentsToFloat) {
-            ensureCollaboratorOrder(doc, user);
+        if (!documentsToFloat.isEmpty()) {
+            sharedSectionService.ensureOrderRows(user, documentsToFloat);
         }
         for (UUID docId : orderRowsToDelete) {
-            userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(userId, docId);
+            userSharedOrderRepository.deleteByUser_IdAndDocument_Id(userId, docId);
         }
     }
 

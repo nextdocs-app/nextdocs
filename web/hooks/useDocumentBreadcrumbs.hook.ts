@@ -119,6 +119,14 @@ export function useDocumentBreadcrumbs(
     currentIcon,
   ]);
 
+  // The local tree is the only signal a move produces immediately: the id and token stay
+  // the same, so the fetch below would keep describing the old parent without this input.
+  const localPlacementKey = useMemo(
+    () =>
+      `${localSpace?.id ?? ''}:${localBreadcrumbs.map((breadcrumb) => breadcrumb.id).join('/')}`,
+    [localSpace, localBreadcrumbs]
+  );
+
   // Fetch full path from server to catch any non-loaded ancestor levels
   useEffect(() => {
     if (!documentId || typeof documentService?.getDocumentBreadcrumbs !== 'function') {
@@ -146,7 +154,9 @@ export function useDocumentBreadcrumbs(
     return () => {
       isCancelled = true;
     };
-  }, [documentId, accessToken]);
+    // A move changes only the local placement: documentId and accessToken stay the same,
+    // and the server path has to be refetched or the breadcrumb keeps the old parent.
+  }, [documentId, accessToken, localPlacementKey]);
 
   const serverBreadcrumbs =
     serverState && serverState.documentId === documentId ? serverState.items : [];
@@ -155,7 +165,10 @@ export function useDocumentBreadcrumbs(
     return serverBreadcrumbs.find((b) => b.space)?.space ?? null;
   }, [serverBreadcrumbs]);
 
-  const effectiveSpace = serverSpace ?? localSpace;
+  // Once the server has described the path, its space (or its absence) is the answer:
+  // the API omits the space when the viewer cannot see it, and falling back to a local
+  // tree would name a space the server just decided to withhold.
+  const effectiveSpace = serverBreadcrumbs.length > 0 ? serverSpace : localSpace;
 
   // Merge and apply reactive live updates to titles
   const breadcrumbs = useMemo<DocumentBreadcrumbItem[]>(() => {

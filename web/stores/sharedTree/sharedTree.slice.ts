@@ -18,6 +18,52 @@ const initialState: SharedTreeState = {
   rootIds: [],
 };
 
+/**
+ * Compares creation timestamps as instants, not as text: an offset or millisecond suffix
+ * makes lexicographic order disagree with real time. Unparseable or absent values sort
+ * after the parseable ones so the comparator stays a total order.
+ */
+function compareCreatedAt(a: string | undefined, b: string | undefined): number {
+  const timeA = Date.parse(a ?? '');
+  const timeB = Date.parse(b ?? '');
+  const validA = !Number.isNaN(timeA);
+  const validB = !Number.isNaN(timeB);
+  if (validA !== validB) {
+    return validA ? -1 : 1;
+  }
+  if (!validA) {
+    return 0;
+  }
+  return timeA === timeB ? 0 : timeA < timeB ? -1 : 1;
+}
+
+/**
+ * Orders Shared-tree roots the way the server lists them: keyed roots by the caller's
+ * personal navigation key, then the `shared:<id>` fallbacks by creation instant and id.
+ * Comparing fallbacks against keys made the order depend on the sort's input order, and
+ * sorting keys alone put a fallback wherever its synthetic string happened to land.
+ */
+function compareSharedRoots(
+  nodes: Record<string, SidebarTreeNode>,
+  aId: string,
+  bId: string
+): number {
+  const nodeA = nodes[aId];
+  const nodeB = nodes[bId];
+  const keyA = nodeA?.orderKey ?? '';
+  const keyB = nodeB?.orderKey ?? '';
+  const fallbackA = keyA.startsWith('shared:');
+  const fallbackB = keyB.startsWith('shared:');
+  if (fallbackA !== fallbackB) {
+    return fallbackA ? 1 : -1;
+  }
+  if (!fallbackA) {
+    return compareOrderKeys(keyA, keyB);
+  }
+  const byCreation = compareCreatedAt(nodeA?.createdAt, nodeB?.createdAt);
+  return byCreation !== 0 ? byCreation : compareOrderKeys(aId, bId);
+}
+
 export interface MoveDocumentArgs {
   documentId: string;
   newParentId: string | null;
@@ -93,6 +139,10 @@ export const moveDocumentThunk = createAsyncThunk<
       newParentId,
       prevSiblingId,
       nextSiblingId,
+      // A real section entry must keep its own position inside its space, so the
+      // server must not infer the space path. Children fetched under a shared page
+      // are not section entries; the server falls back to a sibling reorder for them.
+      section: 'SHARED',
     };
 
     const updatedNode = await documentService.moveDocument(documentId, request, accessToken);
@@ -137,6 +187,49 @@ const sharedTreeSlice = createSlice({
       if (node) {
         node.isExpanded = !node.isExpanded;
       }
+    },
+
+    /**
+     * Adds a page the caller just grafted into a Shared parent from their Private tree.
+     * The parent is already in this tree (it hosted the drop), so the node belongs under
+     * it; a page whose parent is not loaded stays out instead of becoming a false root.
+     */
+    insertSharedNode(state, action: PayloadAction<TreeNode>) {
+      const node = toSidebarTreeNode(action.payload);
+      if (!node.parentId || !state.nodes[node.parentId]) {
+        return;
+      }
+
+      const existing = state.nodes[node.id];
+      if (existing?.parentId && state.nodes[existing.parentId]) {
+        const oldParent = state.nodes[existing.parentId];
+        oldParent.children = oldParent.children.filter((childId) => childId !== node.id);
+        if (oldParent.children.length === 0) {
+          oldParent.hasChildren = false;
+        }
+      } else if (existing) {
+        state.rootIds = state.rootIds.filter((rootId) => rootId !== node.id);
+      }
+
+      state.nodes[node.id] = {
+        ...node,
+        children: existing?.children ?? [],
+        childrenLoaded: existing?.childrenLoaded ?? false,
+        childrenTruncated: existing?.childrenTruncated,
+        isExpanded: existing?.isExpanded ?? false,
+      };
+
+      const parent = state.nodes[node.parentId];
+      parent.hasChildren = true;
+      parent.isExpanded = true;
+      if (!parent.children.includes(node.id)) {
+        parent.children.push(node.id);
+      }
+      parent.children.sort((aId, bId) => {
+        const keyA = state.nodes[aId]?.orderKey ?? '';
+        const keyB = state.nodes[bId]?.orderKey ?? '';
+        return compareOrderKeys(keyA, keyB);
+      });
     },
 
     removeNode(state, action: PayloadAction<string>) {
@@ -246,6 +339,10 @@ const sharedTreeSlice = createSlice({
      * synthesized here: they stay in the Private tree under their actual
      * parent. This guarantees that reordering inside the Shared section can
      * never detach a nested document from its real parent.
+     *
+     * `relationship` is ownership, never the access level: a collaborator can
+     * hold an OWNER-level grant, and such a page is a Shared entry that must
+     * float here rather than be dropped as the caller's own nested page.
      */
     syncSharedRoots(state, action: PayloadAction<SharedDocumentEntry[]>) {
       const entries = action.payload;
@@ -256,6 +353,9 @@ const sharedTreeSlice = createSlice({
       const entryNodes: Record<string, SidebarTreeNode> = {};
 
       for (const entry of entries) {
+        // Only the caller's own nested page belongs to the Private tree, and the
+        // section listing never returns one (it excludes owned pages with a
+        // parent), so this guard only catches a server regression.
         if (entry.relationship === 'owner' && entry.parentId != null) {
           continue;
         }
@@ -275,8 +375,10 @@ const sharedTreeSlice = createSlice({
           parentId: isChild ? entry.parentId : null,
           orderKey: entry.orderKey ?? `shared:${entry.id}`,
           hasChildren: false,
+          // The server resolves the effective level, an archived space capping
+          // ownership included; OWNER is only the fallback for a level it omitted.
           effectiveAccessLevel:
-            entry.relationship === 'owner' ? 'OWNER' : (entry.accessLevel ?? null),
+            entry.accessLevel ?? (entry.relationship === 'owner' ? 'OWNER' : null),
           // Same boundary sanitization as toSidebarTreeNode: the shared list
           // may carry a stale icon that must degrade to null, not reach render.
           icon: sanitizeDocumentIcon(entry.meta.icon) ?? null,
@@ -360,14 +462,10 @@ const sharedTreeSlice = createSlice({
         .filter((entry) => rootEntryIds.has(entry.id))
         .map((entry) => entry.id);
 
-      newRootIds.sort((aId, bId) => {
-        const keyA = entryNodes[aId]?.orderKey ?? '';
-        const keyB = entryNodes[bId]?.orderKey ?? '';
-        if (!keyA.startsWith('shared:') && !keyB.startsWith('shared:')) {
-          return compareOrderKeys(keyA, keyB);
-        }
-        return 0;
-      });
+      // A keyless root keeps a `shared:<id>` fallback until its first reorder, and the same
+      // comparator keeps a local move from reshuffling them into an order the server does
+      // not return.
+      newRootIds.sort((aId, bId) => compareSharedRoots(entryNodes, aId, bId));
       state.rootIds = newRootIds;
     },
   },
@@ -466,11 +564,7 @@ const sharedTreeSlice = createSlice({
         if (!state.rootIds.includes(updatedNode.id)) {
           state.rootIds.push(updatedNode.id);
         }
-        state.rootIds.sort((aId, bId) => {
-          const keyA = state.nodes[aId]?.orderKey ?? '';
-          const keyB = state.nodes[bId]?.orderKey ?? '';
-          return compareOrderKeys(keyA, keyB);
-        });
+        state.rootIds.sort((aId, bId) => compareSharedRoots(state.nodes, aId, bId));
       }
     });
   },
@@ -480,6 +574,7 @@ export const {
   toggleExpanded,
   syncSharedRoots,
   syncPublicRoots,
+  insertSharedNode,
   removeNode,
   resetTree,
   updateNodeMeta,

@@ -235,7 +235,10 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50, {
+      parentId: 'root',
+      scope: 'private',
+    });
     expect(result.current.documents[0].id).toBe('cloud-1');
     expect(result.current.canShowAll).toBe(false);
   });
@@ -370,7 +373,10 @@ describe('useDocumentList', () => {
     });
 
     await waitFor(() => {
-      expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
+      expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50, {
+        parentId: 'root',
+        scope: 'private',
+      });
     });
 
     await waitFor(() => {
@@ -382,7 +388,10 @@ describe('useDocumentList', () => {
       await result.current.loadMore();
     });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 50);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 1, 50, {
+      parentId: 'root',
+      scope: 'private',
+    });
     expect(result.current.documents.length).toBe(30);
     expect(result.current.hasMore).toBe(false);
   });
@@ -436,12 +445,14 @@ describe('useDocumentList', () => {
     expect(result.current.documents[0].id).toBe('cloud-2');
   });
 
-  it('moves owner documents with collaborators to shared list', async () => {
+  it('leaves an owner-shared root to the Shared section instead of the private list', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
     });
 
+    // The server answers scope=private, so a root that carries an audience is not in
+    // this payload at all: the single-home rule lives in one place, the API query.
     listCloudDocumentsSpy.mockResolvedValue({
       items: [
         {
@@ -453,10 +464,22 @@ describe('useDocumentList', () => {
             createdAt: '2024-01-01T10:00:00Z',
           },
         },
+      ],
+      page: 0,
+      size: 7,
+      totalElements: 1,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    // Shared is server-computed: an owner-shared root arrives from that endpoint.
+    listSharedDocumentsSpy.mockResolvedValue({
+      items: [
         {
           id: 'owner-shared-doc',
           parentId: null,
-          hasCollaborators: true,
+          accessLevel: 'OWNER',
+          owner: true,
           meta: {
             title: 'Owner Shared',
             updatedAt: '2024-01-01T13:00:00Z',
@@ -466,7 +489,7 @@ describe('useDocumentList', () => {
       ],
       page: 0,
       size: 7,
-      totalElements: 2,
+      totalElements: 1,
       totalPages: 1,
       hasMore: false,
     });
@@ -510,31 +533,45 @@ describe('useDocumentList', () => {
     expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual(['owner-shared-doc']);
   });
 
-  it('keeps nested owner documents with collaborators in the private list', async () => {
+  it('classifies a shared page by ownership rather than by an OWNER-level grant', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
     });
 
     listCloudDocumentsSpy.mockResolvedValue({
+      items: [],
+      page: 0,
+      size: 7,
+      totalElements: 0,
+      totalPages: 0,
+      hasMore: false,
+    });
+
+    // A collaborator can hold OWNER on a page they do not own, and an unreadable parent
+    // floats that page in Shared. Reading the level as ownership marks it as the caller's
+    // own nested page, which the Shared tree drops.
+    listSharedDocumentsSpy.mockResolvedValue({
       items: [
         {
-          id: 'nested-shared-doc',
-          parentId: 'private-parent-doc',
-          hasCollaborators: true,
+          id: 'granted-at-owner',
+          parentId: 'unreadable-parent',
+          accessLevel: 'OWNER',
+          owner: false,
           meta: {
-            title: 'Nested Shared',
-            updatedAt: '2024-01-01T12:00:00Z',
+            title: 'Granted at OWNER',
+            updatedAt: '2024-01-01T13:00:00Z',
             createdAt: '2024-01-01T10:00:00Z',
           },
         },
         {
-          id: 'root-shared-doc',
+          id: 'owned-root',
           parentId: null,
-          hasCollaborators: true,
+          accessLevel: 'OWNER',
+          owner: true,
           meta: {
-            title: 'Root Shared',
-            updatedAt: '2024-01-01T13:00:00Z',
+            title: 'Owned Root',
+            updatedAt: '2024-01-01T12:00:00Z',
             createdAt: '2024-01-01T10:00:00Z',
           },
         },
@@ -546,42 +583,53 @@ describe('useDocumentList', () => {
       hasMore: false,
     });
 
-    listCollaboratorsSpy.mockImplementation(async (documentId: string) => {
-      if (documentId === 'nested-shared-doc' || documentId === 'root-shared-doc') {
-        return [
-          {
-            userId: 'owner-1',
-            email: 'owner@example.com',
-            displayName: 'Owner',
-            accessLevel: 'OWNER',
-            addedAt: '2024-01-01T10:00:00Z',
-          },
-          {
-            userId: 'collab-1',
-            email: 'collab@example.com',
-            displayName: 'Collaborator',
-            accessLevel: 'EDIT',
-            addedAt: '2024-01-01T11:00:00Z',
-          },
-        ];
-      }
+    const { result } = renderHook(() => useDocumentList());
 
-      return [];
+    await waitForInitialLoad(result, { includeShared: true });
+
+    expect(
+      result.current.sharedDocuments.map(({ id, relationship }) => [id, relationship])
+    ).toEqual([
+      ['granted-at-owner', 'collaborator'],
+      ['owned-root', 'owner'],
+    ]);
+  });
+
+  it('loads the flat list from the private scope the server applies the rule to', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token-1',
+    });
+
+    listCloudDocumentsSpy.mockResolvedValue({
+      items: [],
+      page: 0,
+      size: 7,
+      totalElements: 0,
+      totalPages: 1,
+      hasMore: false,
+    });
+    listSharedDocumentsSpy.mockResolvedValue({
+      items: [],
+      page: 0,
+      size: 7,
+      totalElements: 0,
+      totalPages: 1,
+      hasMore: false,
     });
 
     const { result } = renderHook(() => useDocumentList());
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    // The nested document stays in the private list under its real parent;
-    // only the root-level shared document moves to the shared section.
-    expect(result.current.documents.map((doc) => doc.id)).toEqual(['nested-shared-doc']);
-    expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual(['root-shared-doc']);
-    expect(result.current.sharedDocuments[0]).toMatchObject({
-      id: 'root-shared-doc',
-      relationship: 'owner',
-      parentId: null,
+    // A workspace-wide audience carries no AccessGrant row, so the removed client
+    // filter could never see it. Asking for scope=all and filtering in the browser
+    // also broke pagination: the server counts rows it would never show.
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50, {
+      parentId: 'root',
+      scope: 'private',
     });
+    expect(result.current.documents).toEqual([]);
   });
 
   it('shows all shared documents and paginates shared-with-me list', async () => {
@@ -757,40 +805,20 @@ describe('useDocumentList', () => {
     expect(result.current.sharedHasMore).toBe(false);
   });
 
-  it('exposes owner-shared docs from the initial page and reports truthful hasMore', async () => {
+  it('keeps owner-shared docs out of the private list and reports truthful hasMore', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
     });
 
-    const firstPage = [
-      ...Array.from({ length: 6 }, (_, i) => ({
-        id: `private-doc-${i + 1}`,
-        meta: {
-          title: `Private ${i + 1}`,
-          updatedAt: '2024-01-01T13:00:00Z',
-          createdAt: '2024-01-01T10:00:00Z',
-        },
-      })),
-      {
-        id: 'owner-shared-1',
-        hasCollaborators: true,
-        meta: {
-          title: 'Owner Shared 1',
-          updatedAt: '2024-01-01T13:00:00Z',
-          createdAt: '2024-01-01T10:00:00Z',
-        },
+    const firstPage = Array.from({ length: 6 }, (_, i) => ({
+      id: `private-doc-${i + 1}`,
+      meta: {
+        title: `Private ${i + 1}`,
+        updatedAt: '2024-01-01T13:00:00Z',
+        createdAt: '2024-01-01T10:00:00Z',
       },
-      {
-        id: 'owner-shared-2',
-        hasCollaborators: true,
-        meta: {
-          title: 'Owner Shared 2',
-          updatedAt: '2024-01-01T12:30:00Z',
-          createdAt: '2024-01-01T10:00:00Z',
-        },
-      },
-    ];
+    }));
 
     listCloudDocumentsSpy.mockResolvedValueOnce({
       items: firstPage,
@@ -802,11 +830,34 @@ describe('useDocumentList', () => {
     });
 
     listSharedDocumentsSpy.mockResolvedValue({
-      items: [],
+      items: [
+        {
+          id: 'owner-shared-1',
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
+          meta: {
+            title: 'Owner Shared 1',
+            updatedAt: '2024-01-01T13:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+        {
+          id: 'owner-shared-2',
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
+          meta: {
+            title: 'Owner Shared 2',
+            updatedAt: '2024-01-01T12:30:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+      ],
       page: 0,
       size: 7,
-      totalElements: 0,
-      totalPages: 0,
+      totalElements: 2,
+      totalPages: 1,
       hasMore: false,
     });
 
@@ -839,7 +890,10 @@ describe('useDocumentList', () => {
 
     await waitForInitialLoad(result, { includeShared: true });
 
-    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50);
+    expect(listCloudDocumentsSpy).toHaveBeenCalledWith('token-1', 0, 50, {
+      parentId: 'root',
+      scope: 'private',
+    });
     expect(listCloudDocumentsSpy).toHaveBeenCalledTimes(1);
     expect(result.current.documents).toHaveLength(6);
     expect(result.current.sharedDocuments.map((doc) => doc.id)).toEqual([
@@ -850,7 +904,7 @@ describe('useDocumentList', () => {
     expect(result.current.canShowAll).toBe(true);
   });
 
-  it('reports sharedHasMore when owner-shared pagination still has more', async () => {
+  it('reports sharedHasMore from the Shared listing', async () => {
     (useAuth as jest.Mock).mockReturnValue({
       isAuthenticated: true,
       accessToken: 'token-1',
@@ -876,12 +930,24 @@ describe('useDocumentList', () => {
     });
 
     listSharedDocumentsSpy.mockResolvedValue({
-      items: [],
+      items: [
+        {
+          id: 'owner-shared-doc',
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
+          meta: {
+            title: 'Owner Shared',
+            updatedAt: '2024-01-01T13:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+      ],
       page: 0,
       size: 7,
-      totalElements: 0,
-      totalPages: 0,
-      hasMore: false,
+      totalElements: 50,
+      totalPages: 8,
+      hasMore: true,
     });
 
     listCollaboratorsSpy.mockResolvedValue([
@@ -1151,11 +1217,34 @@ describe('useDocumentList', () => {
     });
 
     listSharedDocumentsSpy.mockResolvedValue({
-      items: [],
+      items: [
+        {
+          id: 'owner-shared-1',
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
+          meta: {
+            title: 'Owner Shared 1',
+            updatedAt: '2024-01-02T13:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+        {
+          id: 'owner-shared-2',
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
+          meta: {
+            title: 'Owner Shared 2',
+            updatedAt: '2024-01-02T12:00:00Z',
+            createdAt: '2024-01-01T10:00:00Z',
+          },
+        },
+      ],
       page: 0,
       size: 7,
-      totalElements: 0,
-      totalPages: 0,
+      totalElements: 2,
+      totalPages: 1,
       hasMore: false,
     });
 
@@ -1303,7 +1392,8 @@ describe('useDocumentList', () => {
       isInitializing: false,
     });
 
-    // First load: user owns 1 private doc and 1 shared doc (with collaborators)
+    // First load: the server's private scope returns only the unshared root. The
+    // owner's shared root arrives from the Shared listing, as it must.
     listCloudDocumentsSpy.mockResolvedValue({
       items: [
         {
@@ -1314,28 +1404,32 @@ describe('useDocumentList', () => {
             createdAt: '2024-01-01T10:00:00Z',
           },
         },
+      ],
+      page: 0,
+      size: 7,
+      totalElements: 1,
+      totalPages: 1,
+      hasMore: false,
+    });
+
+    // Shared holds both the owner's collaborative root and another user's grant.
+    listSharedDocumentsSpy.mockResolvedValue({
+      items: [
         {
           id: 'owner-shared-1',
-          hasCollaborators: true,
+          parentId: null,
+          accessLevel: 'OWNER',
+          owner: true,
           meta: {
             title: 'Owner Shared 1',
             updatedAt: '2024-01-01T12:00:00Z',
             createdAt: '2024-01-01T10:00:00Z',
           },
         },
-      ],
-      page: 0,
-      size: 7,
-      totalElements: 2,
-      totalPages: 1,
-      hasMore: false,
-    });
-
-    // Another user shared a doc with this user
-    listSharedDocumentsSpy.mockResolvedValue({
-      items: [
         {
           id: 'shared-with-me-1',
+          parentId: null,
+          relationship: 'COLLABORATOR',
           meta: {
             title: 'Shared With Me 1',
             updatedAt: '2024-01-01T14:00:00Z',
@@ -1345,7 +1439,7 @@ describe('useDocumentList', () => {
       ],
       page: 0,
       size: 7,
-      totalElements: 1,
+      totalElements: 2,
       totalPages: 1,
       hasMore: false,
     });

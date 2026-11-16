@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -18,14 +19,18 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.SharedEntry;
 import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
+import com.nextdocs.api.document.entity.DocumentOrderSection;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
+import com.nextdocs.api.document.entity.UserSharedOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
@@ -42,6 +47,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -57,6 +63,12 @@ class DocumentTreeServiceTest {
 
     @Mock
     private UserDocumentOrderRepository userDocumentOrderRepository;
+
+    @Mock
+    private UserSharedOrderRepository userSharedOrderRepository;
+
+    @Mock
+    private SharedSectionService sharedSectionService;
 
     @Mock
     private UserRepository userRepository;
@@ -87,10 +99,39 @@ class DocumentTreeServiceTest {
                 documentRepository,
                 accessGrantRepository,
                 userDocumentOrderRepository,
+                userSharedOrderRepository,
+                sharedSectionService,
                 userRepository,
                 permissionService,
                 spaceAccessService,
                 publishedEvents::add);
+    }
+
+    private SharedEntry sharedEntry(UUID id, UUID parentId, UUID spaceId, String title, String orderKey) {
+        return new SharedEntry(
+                id,
+                parentId,
+                spaceId,
+                title,
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                orderKey,
+                DocumentAccessLevel.VIEW,
+                false);
+    }
+
+    @Test
+    void move_rejectsTheSamePageAsBothNeighbours() {
+        UUID docId = UUID.randomUUID();
+        UUID siblingId = UUID.randomUUID();
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, siblingId, siblingId)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        // A malformed pair is answered before any namespace is read or rebuilt.
+        verifyNoInteractions(documentRepository, sharedSectionService, userDocumentOrderRepository);
     }
 
     @Test
@@ -151,61 +192,66 @@ class DocumentTreeServiceTest {
     }
 
     @Test
-    void move_reorderSharedNavigationByCollaborator_updatesOnlyCallerUserDocumentOrder() {
+    void move_sharedReorderByCollaborator_writesOnlyTheCallersSharedKey() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
+        UUID nextSiblingId = UUID.randomUUID();
         User owner = User.builder().id(UUID.randomUUID()).build();
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner) // Document is owned by someone else
-                .title("Shared Doc")
+                .user(owner)
+                .title("Shared To Me Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
-
-        Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
-        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
+        SharedEntry prevEntry = sharedEntry(prevSiblingId, null, null, "Prev", "a0");
+        SharedEntry nextEntry = sharedEntry(nextSiblingId, null, null, "Next", "a2");
+        SharedEntry movedEntry = sharedEntry(docId, null, null, "Shared To Me Doc", null);
+        List<SharedEntry> entries = List.of(prevEntry, movedEntry, nextEntry);
+        // The section read under the account lock sees keys a concurrent reindex replaced;
+        // the interval has to come from these, not from the unlocked ensureOrders listing.
+        List<SharedEntry> refreshedEntries = List.of(
+                sharedEntry(prevSiblingId, null, null, "Prev", "a5"),
+                sharedEntry(docId, null, null, "Shared To Me Doc", "a6"),
+                sharedEntry(nextSiblingId, null, null, "Next", "a7"));
+        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
-        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(true);
+        when(sharedSectionService.ensureOrders(userId, docId, prevSiblingId, nextSiblingId))
+                .thenReturn(entries);
+        when(sharedSectionService.list(userId)).thenReturn(refreshedEntries);
+        when(sharedSectionService.keyBetweenSiblings(userId, refreshedEntries, docId, prevSiblingId, nextSiblingId))
+                .thenReturn("a6x");
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
-                .thenReturn(Optional.of("a0"));
-        when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a0"), eq(docId)))
+        when(userSharedOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
-                .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+        when(userSharedOrderRepository.saveAndFlush(any(UserSharedOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertNull(result.parentId());
         assertNotNull(result.orderKey());
-        assertTrue(result.orderKey().compareTo("a0") > 0);
+        assertEquals("a6x", result.orderKey());
         assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
 
-        // Verify ONLY userDocumentOrder was saved, and Document was NOT modified/saved!
-        verify(userDocumentOrderRepository).saveAndFlush(any(UserDocumentOrder.class));
-        verify(documentRepository, times(0)).saveAndFlush(any(Document.class));
+        // A shared drag is personal navigation: the page and the Private table stay untouched.
+        verify(userSharedOrderRepository).saveAndFlush(any(UserSharedOrder.class));
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+        verifyNoInteractions(userDocumentOrderRepository);
     }
 
     @Test
-    void move_collaboratorReordersFloatedNestedDocument_withoutReparenting() {
+    void move_sharedNestedPageReorder_preservesTheRealParent() {
         UUID docId = UUID.randomUUID();
-        UUID prevSiblingId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
         User owner = User.builder().id(UUID.randomUUID()).build();
         Document parent =
                 Document.builder().id(parentId).user(owner).title("Parent").build();
-
-        // Real parent is not shared with the caller, so the frontend floats the
-        // document at the root of the Shared section.
         Document doc = Document.builder()
                 .id(docId)
                 .user(owner)
@@ -215,44 +261,98 @@ class DocumentTreeServiceTest {
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
-
-        Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
-        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
+        SharedEntry movedEntry = sharedEntry(docId, parentId, null, "Nested Shared Doc", "a5");
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
-        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
-                .thenReturn(Optional.of("a0"));
-        when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a0"), eq(docId)))
-                .thenReturn(Optional.empty());
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(true);
+        when(sharedSectionService.ensureOrders(userId, docId, null, null)).thenReturn(List.of(movedEntry));
+        when(sharedSectionService.list(userId)).thenReturn(List.of(movedEntry));
+        when(sharedSectionService.keyBetweenSiblings(userId, List.of(movedEntry), docId, null, null))
+                .thenReturn("a6");
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
+        when(userSharedOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+        when(userSharedOrderRepository.saveAndFlush(any(UserSharedOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
+
+        DocumentResponse result = documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null));
+
+        assertEquals(parentId, result.parentId());
+        assertTrue(result.orderKey().compareTo("a5") > 0);
+        // A collaborator reorder must NOT un-parent the document.
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+        verify(userSharedOrderRepository).saveAndFlush(any(UserSharedOrder.class));
+    }
+
+    @Test
+    void move_sharedTreeChildReorder_writesTheSiblingKeyInsteadOfFailingTheSectionLookup() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID prevSiblingId = UUID.randomUUID();
+        UUID nextSiblingId = UUID.randomUUID();
+        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        // A child of a shared page has a readable parent, so the Shared listing never
+        // contains it even though the client renders it in the Shared tree and tags the
+        // drop as SHARED. Its reorder is a real sibling reorder inside that parent.
+        Document parent = Document.builder()
+                .id(parentId)
+                .user(owner)
+                .title("Shared parent")
+                .build();
+        Document doc = Document.builder()
+                .id(docId)
+                .user(owner)
+                .title("Fetched child")
+                .parent(parent)
+                .siblingOrderKey("a1")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        Document prevSibling = Document.builder()
+                .id(prevSiblingId)
+                .parent(parent)
+                .siblingOrderKey("a0")
+                .build();
+        Document nextSibling = Document.builder()
+                .id(nextSiblingId)
+                .parent(parent)
+                .siblingOrderKey("a2")
+                .build();
+        DocumentMoveRequest request =
+                new DocumentMoveRequest(parentId, prevSiblingId, nextSiblingId, false, DocumentOrderSection.SHARED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
+        when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId)).thenReturn(Optional.of(nextSibling));
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
         assertEquals(parentId, result.parentId());
-        assertNotNull(result.orderKey());
         assertTrue(result.orderKey().compareTo("a0") > 0);
-
-        // A collaborator reorder must NOT un-parent the document.
-        verify(documentRepository, times(0)).saveAndFlush(any(Document.class));
-        verify(userDocumentOrderRepository).saveAndFlush(any(UserDocumentOrder.class));
+        assertTrue(result.orderKey().compareTo("a2") < 0);
+        assertEquals(result.orderKey(), doc.getSiblingOrderKey());
+        // A sibling reorder stays EDIT-gated and never claims a personal Shared position.
+        verify(permissionService).requireEditAccess(userId, docId);
+        verify(sharedSectionService, never()).ensureOrders(any(), any(), any(), any());
+        verifyNoInteractions(userSharedOrderRepository);
     }
 
     @Test
-    void move_collaboratorReorderWithFloatedSibling_lazilyCreatesSiblingOrder() {
+    void move_sharedReorderUsesTheKeysEnsureOrdersCreatedForKeylessSiblings() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         User owner = User.builder().id(UUID.randomUUID()).build();
-
         Document doc = Document.builder()
                 .id(docId)
                 .user(owner)
@@ -260,97 +360,72 @@ class DocumentTreeServiceTest {
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
-
-        // Floated sibling has no UserDocumentOrder row yet.
-        Document floatedSibling = Document.builder()
-                .id(prevSiblingId)
-                .user(owner)
-                .title("Floated Sibling")
-                .build();
-
+        // ensureOrders appends a key for the previously keyless sibling before neighbors resolve.
+        SharedEntry prevEntry = sharedEntry(prevSiblingId, null, null, "Floated Sibling", "a0");
+        SharedEntry movedEntry = sharedEntry(docId, null, null, "Shared Doc", "a1");
+        List<SharedEntry> entries = List.of(prevEntry, movedEntry);
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
-        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(floatedSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
-                .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(userId, prevSiblingId))
-                .thenReturn(Optional.of("b5"));
-        when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), anyString(), eq(docId)))
-                .thenReturn(Optional.empty());
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(true);
+        when(sharedSectionService.ensureOrders(userId, docId, prevSiblingId, null))
+                .thenReturn(entries);
+        when(sharedSectionService.list(userId)).thenReturn(entries);
+        when(sharedSectionService.keyBetweenSiblings(userId, entries, docId, prevSiblingId, null))
+                .thenReturn("a05");
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
+        when(userSharedOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+        when(userSharedOrderRepository.saveAndFlush(any(UserSharedOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
-        assertNotNull(result.orderKey());
-        // One row for the lazily-created sibling order, one for the moved doc.
-        verify(userDocumentOrderRepository, times(2)).saveAndFlush(any(UserDocumentOrder.class));
+        assertTrue(result.orderKey().compareTo("a0") > 0);
+        assertTrue(result.orderKey().compareTo("a1") < 0);
+        // The keyless sibling never needed its own Private row.
+        verifyNoInteractions(userDocumentOrderRepository);
     }
 
     @Test
-    void move_collaboratorReordersSharedToMeDocBetweenOwnerSharedDocs_updatesOnlyCallerOrder() {
-        UUID docId = UUID.randomUUID(); // Shared to me doc
-        UUID prevSiblingId = UUID.randomUUID(); // Owned by caller & shared with others
-        UUID nextSiblingId = UUID.randomUUID(); // Owned by caller & shared with others
-        UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
-
+    void move_sharedReorderCollision_reindexesAndRetries() {
+        UUID docId = UUID.randomUUID();
+        User owner = User.builder().id(UUID.randomUUID()).build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner) // Document is owned by owner (not caller)
-                .title("Shared To Me Doc")
+                .user(owner)
+                .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
-
-        Document prevSibling =
-                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
-        Document nextSibling =
-                Document.builder().id(nextSiblingId).user(user).title("Next").build();
-        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
+        SharedEntry entry = sharedEntry(docId, null, null, "Shared Doc", "a1");
+        DocumentMoveRequest request = new DocumentMoveRequest(null, null, null, false, DocumentOrderSection.SHARED);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
-        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
-        when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId)).thenReturn(Optional.of(nextSibling));
+        when(sharedSectionService.ensureOrders(userId, docId, null, null)).thenReturn(List.of(entry));
+        when(sharedSectionService.list(userId)).thenReturn(List.of(entry));
+        when(sharedSectionService.keyBetweenSiblings(userId, List.of(entry), docId, null, null))
+                .thenReturn("a2");
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        // Caller has order keys for both owned shared siblings: "a0" and "a2"
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
-                .thenReturn(Optional.of("a0"));
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, nextSiblingId))
-                .thenReturn(Optional.of("a2"));
-        when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a0"), eq(docId)))
-                .thenReturn(Optional.of("a2"));
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
+        when(userSharedOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+        when(userSharedOrderRepository.saveAndFlush(any(UserSharedOrder.class)))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"uq_user_shared_orders_user_order_key\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
-        assertNull(result.parentId());
         assertNotNull(result.orderKey());
-        // Generated key should be strictly between a0 and a2
-        assertTrue(result.orderKey().compareTo("a0") > 0);
-        assertTrue(result.orderKey().compareTo("a2") < 0);
-        assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
-
-        // Verify ONLY userDocumentOrder for userId was saved, Document and owner's orders were never touched
-        ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository).saveAndFlush(captor.capture());
-        assertEquals(userId, captor.getValue().getUser().getId());
-        assertEquals(docId, captor.getValue().getDocument().getId());
-        verify(documentRepository, times(0)).saveAndFlush(any(Document.class));
+        // The retry rebuilds the Shared keys first, then writes the moved position again.
+        verify(sharedSectionService).reindex(userId);
+        verify(userSharedOrderRepository, times(2)).saveAndFlush(any(UserSharedOrder.class));
     }
 
     @Test
@@ -645,7 +720,10 @@ class DocumentTreeServiceTest {
         when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.of("a5"));
         when(documentRepository.findAllSiblingsForReindex(parentId)).thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class)))
-                .thenThrow(new DataIntegrityViolationException("sibling_order_key unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_documents_parent_sibling_order_key_unique\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
@@ -654,6 +732,86 @@ class DocumentTreeServiceTest {
 
         verify(documentRepository, times(2)).saveAndFlush(any(Document.class));
         assertNotNull(result.orderKey());
+    }
+
+    @Test
+    void move_sharedSpacePage_writesOnlyThePersonalSharedKey() {
+        UUID docId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Design").build();
+        Document doc = Document.builder()
+                .id(docId)
+                .user(user)
+                .title("Shared space page")
+                .space(space)
+                .siblingOrderKey("space-key")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        SharedEntry entry = sharedEntry(docId, null, space.getId(), "Shared space page", "a0");
+        DocumentMoveRequest request = new DocumentMoveRequest(null, null, null, false, DocumentOrderSection.SHARED);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(sharedSectionService.ensureOrders(userId, docId, null, null)).thenReturn(List.of(entry));
+        when(sharedSectionService.list(userId)).thenReturn(List.of(entry));
+        when(sharedSectionService.keyBetweenSiblings(userId, List.of(entry), docId, null, null))
+                .thenReturn("a3");
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userSharedOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
+                .thenReturn(Optional.empty());
+        when(userSharedOrderRepository.saveAndFlush(any(UserSharedOrder.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(true);
+
+        DocumentResponse response = documentTreeService.move(userId, docId, request);
+
+        assertNotNull(response.orderKey());
+        // The space's own order must never move because of a personal Shared drag.
+        assertEquals("space-key", doc.getSiblingOrderKey());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+        // A VIEW collaborator can arrange their own Shared section: no EDIT gate is hit.
+        verify(permissionService, never()).requireEditAccess(any(), any());
+        // The interval and the row write share the account lock that a concurrent grant
+        // seeding this section would hold, and the interval is read after the lock.
+        InOrder locks = inOrder(sharedSectionService);
+        locks.verify(sharedSectionService).lockOrderWrites(userId);
+        locks.verify(sharedSectionService).list(userId);
+        locks.verify(sharedSectionService).keyBetweenSiblings(userId, List.of(entry), docId, null, null);
+
+        ArgumentCaptor<UserSharedOrder> captor = ArgumentCaptor.forClass(UserSharedOrder.class);
+        verify(userSharedOrderRepository).saveAndFlush(captor.capture());
+        assertEquals(docId, captor.getValue().getDocument().getId());
+        assertTrue(captor.getValue().getOrderKey().compareTo("a2") > 0);
+    }
+
+    @Test
+    void move_nestedCollaboratorPageToRoot_rejectsInsteadOfWritingAPrivateRow() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        User owner = User.builder().id(UUID.randomUUID()).build();
+        Document parent =
+                Document.builder().id(parentId).user(owner).title("Owner root").build();
+        Document doc = Document.builder()
+                .id(docId)
+                .user(owner)
+                .title("Nested collaborator page")
+                .parent(parent)
+                .siblingOrderKey("a1")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.resolveSpace(doc)).thenReturn(null);
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        // The Private table holds the caller's own pages only; a collaborator's position
+        // belongs to the Shared namespace, which the section listing owns.
+        verifyNoInteractions(userDocumentOrderRepository);
+        verifyNoInteractions(userSharedOrderRepository);
     }
 
     @Test
@@ -692,10 +850,6 @@ class DocumentTreeServiceTest {
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.of("a5"));
         when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of(collaborator));
-        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(collaboratorId, docId))
-                .thenReturn(false);
-        when(userDocumentOrderRepository.findMinOrderKeyByUserId(collaboratorId, docId))
-                .thenReturn(Optional.of("a7"));
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
@@ -705,13 +859,12 @@ class DocumentTreeServiceTest {
         assertNull(result.parentId());
         assertNotNull(result.orderKey());
 
+        // The owner's Private row is the only row in that namespace; the collaborator's
+        // position is created in the Shared namespace instead.
         ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
-        verify(userDocumentOrderRepository, times(2)).saveAndFlush(captor.capture());
-        List<UserDocumentOrder> saved = captor.getAllValues();
-        assertTrue(saved.stream().anyMatch(o -> o.getUser().getId().equals(collaboratorId)));
-        assertTrue(saved.stream()
-                .filter(o -> o.getUser().getId().equals(collaboratorId))
-                .allMatch(o -> o.getOrderKey().compareTo("a7") < 0));
+        verify(userDocumentOrderRepository).saveAndFlush(captor.capture());
+        assertEquals(userId, captor.getValue().getUser().getId());
+        verify(sharedSectionService).ensureOrderRow(collaboratorUser, doc);
 
         // Un-parenting removes the ancestor chain that justified any NO_ACCESS breakpoints.
         verify(accessGrantRepository).pruneOrphanedBreakpoints(docId);
@@ -743,24 +896,24 @@ class DocumentTreeServiceTest {
     void move_rootReorderCollision_reindexesUserOrdersAndRetries() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
 
+        // The page and its siblings belong to the caller: a collaborator's root position
+        // lives in the Shared namespace, which the section tests cover.
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .user(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
+                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
                 .thenReturn(Optional.of("a0"));
         when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a0"), eq(docId)))
@@ -770,10 +923,12 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_user_document_orders_user_order_key\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
@@ -787,35 +942,32 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .user(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
+                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(owner).title("Next").build();
+                Document.builder().id(nextSiblingId).user(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId)).thenReturn(Optional.of(nextSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolveAccess(userId, nextSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
                 .thenReturn(Optional.of("a4"));
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, nextSiblingId))
                 .thenReturn(Optional.of("a8"));
-        // A private-root document lives between the two shared siblings in the single
-        // shared user_document_orders key space; the moved doc must slot between the
-        // actual adjacent keys instead of colliding with the interleaved document.
+        // A row the caller does not render (a trashed page, another tab's move) sits
+        // between the two requested siblings; the moved page must slot between the actual
+        // adjacent keys instead of colliding with it.
         when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a4"), eq(docId)))
                 .thenReturn(Optional.of("a5"));
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -824,7 +976,6 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
@@ -839,28 +990,25 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .user(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
+                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(owner).title("Next").build();
+                Document.builder().id(nextSiblingId).user(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId)).thenReturn(Optional.of(nextSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolveAccess(userId, nextSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
         // The frontend can report prev/next in display order, which is inverted
         // relative to the ascending key space (Gothhaa a4zx above EBbbba a4zt).
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
@@ -875,7 +1023,6 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
@@ -889,27 +1036,25 @@ class DocumentTreeServiceTest {
     void move_rootReorderFrontOfInterleavedList_placesDocumentBeforeFirstSibling() {
         UUID docId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .user(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(owner).title("Next").build();
+                Document.builder().id(nextSiblingId).user(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, null, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId)).thenReturn(Optional.of(nextSibling));
-        when(permissionService.resolveAccess(userId, nextSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, nextSiblingId))
                 .thenReturn(Optional.of("a8"));
-        // A private-root document sits just before the first shared sibling.
+        // A row the caller cannot see sits just before the requested successor.
         when(userDocumentOrderRepository.findMaxOrderKeyLessThan(eq(userId), eq("a8"), eq(docId)))
                 .thenReturn(Optional.of("a4"));
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -918,7 +1063,6 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
@@ -936,7 +1080,7 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .user(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -959,7 +1103,7 @@ class DocumentTreeServiceTest {
         DocumentMoveRequest request = new DocumentMoveRequest(null, null, siblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(siblingId)).thenReturn(Optional.of(siblingDoc));
         when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, siblingId))
                 .thenAnswer(invocation -> Optional.of(siblingOrder.getOrderKey()));
@@ -971,10 +1115,20 @@ class DocumentTreeServiceTest {
         when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
         when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenThrow(new DataIntegrityViolationException("order_key unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_user_document_orders_user_order_key\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        List<List<String>> keySnapshots = new ArrayList<>();
+        doAnswer(invocation -> {
+                    keySnapshots.add(List.of(otherOrder.getOrderKey(), siblingOrder.getOrderKey()));
+                    return null;
+                })
+                .when(userDocumentOrderRepository)
+                .flush();
 
         DocumentResponse result = documentTreeService.move(userId, docId, request);
 
@@ -984,46 +1138,14 @@ class DocumentTreeServiceTest {
         assertTrue(result.orderKey().compareTo("a8") < 0);
         verify(userDocumentOrderRepository, times(2)).saveAndFlush(any(UserDocumentOrder.class));
         verify(userDocumentOrderRepository).findAllForReindex(userId);
-    }
 
-    @Test
-    void move_collaboratorWithAncestorShareNoDirectRow_reordersSuccessfully() {
-        UUID docId = UUID.randomUUID();
-        UUID prevSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
-
-        Document doc = Document.builder()
-                .id(docId)
-                .user(owner)
-                .title("Shared Doc")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        Document prevSibling =
-                Document.builder().id(prevSiblingId).user(owner).title("Prev").build();
-        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenReturn(doc);
-        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(prevSibling));
-        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(userDocumentOrderRepository.findOrderKeyByUserIdAndDocumentId(userId, prevSiblingId))
-                .thenReturn(Optional.of("a0"));
-        when(userDocumentOrderRepository.findMinOrderKeyGreaterThan(eq(userId), eq("a0"), eq(docId)))
-                .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
-                .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.VIEW);
-
-        DocumentResponse result = documentTreeService.move(userId, docId, request);
-
-        assertNotNull(result.orderKey());
-        assertTrue(result.orderKey().compareTo("a0") > 0);
-        assertEquals(DocumentAccessLevel.VIEW, result.accessLevel());
+        // The rebuild parks every row on a distinct temporary key before writing the final
+        // keys: a final key can still be held by a row the pass has not reached yet, and
+        // idx_user_document_orders_user_order_key is not deferrable.
+        assertEquals(2, keySnapshots.size());
+        assertEquals(2, keySnapshots.get(0).stream().distinct().count());
+        keySnapshots.get(0).forEach(key -> assertFalse(FractionalIndex.isValidOrderKey(key)));
+        assertEquals(List.of("a0", "a8"), keySnapshots.get(1));
     }
 
     @Test
@@ -1190,7 +1312,10 @@ class DocumentTreeServiceTest {
         when(documentRepository.findAllSpaceRootSiblingsForReindex(space.getId()))
                 .thenReturn(siblings);
         when(documentRepository.saveAndFlush(any(Document.class)))
-                .thenThrow(new DataIntegrityViolationException("sibling_order_key unique violation"))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"idx_documents_parent_sibling_order_key_unique\"")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
@@ -1251,7 +1376,7 @@ class DocumentTreeServiceTest {
     }
 
     @Test
-    void move_nestedSpacePageWithoutDetach_preservesParentAndOnlyUpdatesSharedOrder() {
+    void move_nestedSpacePageWithoutDetach_rejectsInsteadOfWritingAPrivateRow() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
         Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
@@ -1265,27 +1390,48 @@ class DocumentTreeServiceTest {
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
         when(permissionService.resolveSpace(doc)).thenReturn(space);
-        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
-        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
-                .thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(userId, docId)).thenReturn(Optional.empty());
-        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
-        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
-        when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
-        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
 
-        DocumentResponse response =
-                documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null, false));
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
 
-        assertEquals(parentId, response.parentId());
-        assertEquals(DocumentAccessLevel.EDIT, response.accessLevel());
-        assertSame(parentDoc, doc.getParent());
-        verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+        // A root-level drop names no destination and no detach, so nothing moved. Keeping
+        // the parent and writing a Private row would file a page the caller may not own
+        // into their own navigation.
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        verifyNoInteractions(userDocumentOrderRepository);
+        verifyNoInteractions(userSharedOrderRepository);
         verify(documentRepository, never()).saveAndFlush(any(Document.class));
-        verify(userDocumentOrderRepository).saveAndFlush(any(UserDocumentOrder.class));
+        verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+    }
+
+    @Test
+    void move_privateReorderWithANonOwnedSibling_rejectsInsteadOfWritingAPrivateRow() {
+        UUID docId = UUID.randomUUID();
+        UUID siblingId = UUID.randomUUID();
+        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+        Document doc = Document.builder().id(docId).user(user).title("Mine").build();
+        Document sibling = Document.builder()
+                .id(siblingId)
+                .user(otherOwner)
+                .title("Theirs")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(documentRepository.findByIdAndDeletedAtIsNull(siblingId)).thenReturn(Optional.of(sibling));
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.resolveAccess(userId, siblingId)).thenReturn(DocumentAccessLevel.VIEW);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, siblingId, null)));
+
+        // A readable page someone else owns is a Shared entry; a Private row for it would
+        // belong to a namespace the caller cannot arrange.
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
     }
 
     @Test

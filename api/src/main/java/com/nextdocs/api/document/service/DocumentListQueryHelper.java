@@ -5,13 +5,14 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponses;
+import com.nextdocs.api.document.dto.response.SharedEntry;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.SharedDocumentCandidate;
-import com.nextdocs.api.document.repository.SharedRootCandidate;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
+import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.Collection;
@@ -40,6 +41,8 @@ public class DocumentListQueryHelper {
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
+    private final UserSharedOrderRepository userSharedOrderRepository;
+    private final SharedSectionService sharedSectionService;
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
@@ -137,37 +140,7 @@ public class DocumentListQueryHelper {
         }
 
         if ("shared".equals(normalizedScope)) {
-            // Access inheritance and deny breakpoints have to resolve for every candidate
-            // before pagination, so the candidate query stays unpaged. It returns metadata
-            // only; the requested page's full rows are loaded afterwards so the scan never
-            // materialises every candidate row.
-            List<SharedRootCandidate> candidates = documentRepository.findSharedRootDocuments(userId);
-            if (candidates.isEmpty()) {
-                return new PageImpl<>(List.of(), pageable, 0);
-            }
-
-            List<UUID> nonOwnedIds = candidates.stream()
-                    .filter(candidate -> !candidate.ownerId().equals(userId))
-                    .map(SharedRootCandidate::id)
-                    .toList();
-            Map<UUID, DocumentAccessLevel> visibleAccess = new HashMap<>(fetchAccessLevels(userId, nonOwnedIds));
-            candidates.stream()
-                    .filter(candidate -> candidate.ownerId().equals(userId))
-                    .forEach(candidate -> visibleAccess.put(candidate.id(), DocumentAccessLevel.OWNER));
-            List<SharedListingRow> visibleRows = candidates.stream()
-                    .filter(candidate -> visibleAccess.containsKey(candidate.id()))
-                    .map(candidate -> new SharedListingRow(
-                            candidate.id(),
-                            candidate.title(),
-                            candidate.createdAt(),
-                            candidate.updatedAt(),
-                            candidate.orderKey()))
-                    .toList();
-            if (visibleRows.isEmpty()) {
-                return new PageImpl<>(List.of(), pageable, 0);
-            }
-
-            return toSharedPage(paginateRows(visibleRows, pageable), visibleAccess);
+            return listSharedSection(userId, pageable);
         }
 
         if ("all".equals(normalizedScope)) {
@@ -234,6 +207,62 @@ public class DocumentListQueryHelper {
                 ErrorCode.VALIDATION_FAILED,
                 "Invalid scope value for root documents: " + scope
                         + ". Must be 'private', 'shared', 'space', or 'all'.");
+    }
+
+    /**
+     * The signed-in Shared section. The service owns the single-home rule (including a
+     * space root the caller cannot browse through its space) and the personal order;
+     * this method only paginates and fills in the listing-only fields.
+     */
+    private Page<DocumentResponse> listSharedSection(UUID userId, Pageable pageable) {
+        List<SharedEntry> entries = sharedSectionService.list(userId);
+        if (entries.isEmpty()) {
+            return new PageImpl<>(List.of(), pageable, 0);
+        }
+
+        int total = entries.size();
+        // Spring always supplies a pageable; an explicitly unpaged request is the only
+        // case without a window to slice, and then the whole section is the page.
+        int start = pageable.isUnpaged() ? 0 : (int) Math.min(pageable.getOffset(), total);
+        int size = pageable.isUnpaged() ? total : pageable.getPageSize();
+        int end = Math.min(start + size, total);
+        List<SharedEntry> pageEntries = entries.subList(start, end);
+        if (pageEntries.isEmpty()) {
+            return new PageImpl<>(List.of(), pageable, total);
+        }
+
+        List<UUID> ids = pageEntries.stream().map(SharedEntry::id).toList();
+        Map<UUID, Document> documents = new HashMap<>();
+        for (Document document : documentRepository.findAllById(ids)) {
+            documents.put(document.getId(), document);
+        }
+        // The count is the section listing's, not this page's: a page purged between the
+        // listing and the load below is dropped from the page but stays counted, so the
+        // total can be a row or two high until the next listing. Re-counting per page
+        // would cost the full candidate scan again.
+        Map<UUID, Long> childCounts = fetchChildCounts(ids);
+        Set<UUID> collaboratorDocIds = fetchCollaboratorDocIds(ids);
+
+        List<DocumentResponse> responses = pageEntries.stream()
+                .map(entry -> {
+                    Document doc = documents.get(entry.id());
+                    if (doc == null) {
+                        return null;
+                    }
+                    return DocumentResponses.shared(
+                            doc,
+                            entry.parentId(),
+                            entry.orderKey(),
+                            childCounts.getOrDefault(entry.id(), 0L) > 0,
+                            collaboratorDocIds.contains(entry.id()),
+                            entry.accessLevel(),
+                            entry.spaceId(),
+                            entry.owner());
+                })
+                .filter(Objects::nonNull)
+                .toList();
+
+        return new PageImpl<>(responses, pageable, total);
     }
 
     /**
@@ -376,7 +405,7 @@ public class DocumentListQueryHelper {
                     .filter(candidate -> candidate.parentId() == null || parentAccess.get(candidate.parentId()) == null)
                     .map(SharedDocumentCandidate::id)
                     .toList();
-            Map<UUID, String> userOrderKeys = fetchUserOrderKeys(userId, rootAndFloatedDocIds);
+            Map<UUID, String> userOrderKeys = fetchSharedOrderKeys(userId, rootAndFloatedDocIds);
 
             List<SharedListingRow> rows = docs.stream()
                     .map(candidate -> {
@@ -469,6 +498,18 @@ public class DocumentListQueryHelper {
         }
         Map<UUID, String> orderKeys = new HashMap<>();
         for (Object[] row : userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, docIds)) {
+            orderKeys.put((UUID) row[0], (String) row[1]);
+        }
+        return orderKeys;
+    }
+
+    /** The flat Shared listing is the search/cache view, but its order is still personal. */
+    private Map<UUID, String> fetchSharedOrderKeys(UUID userId, Collection<UUID> docIds) {
+        if (docIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, String> orderKeys = new HashMap<>();
+        for (Object[] row : userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, docIds)) {
             orderKeys.put((UUID) row[0], (String) row[1]);
         }
         return orderKeys;

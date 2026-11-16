@@ -37,6 +37,8 @@ export interface MoveDocumentRequest {
   newParentId: string | null;
   prevSiblingId: string | null;
   nextSiblingId: string | null;
+  /** Personal navigation section; SHARED never rewrites the document's tree order. */
+  section?: 'PRIVATE' | 'SHARED';
 }
 
 export interface SidebarTreeNode {

@@ -12,6 +12,11 @@ import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -114,6 +119,81 @@ public class SpaceAccessService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         return context;
+    }
+
+    /**
+     * The subset of {@code spaces} the caller can find in navigation at all: their listed
+     * memberships, every PUBLIC space of the workspace, and — for a workspace owner or
+     * admin — the spaces they may administer without joining, which are exactly the spaces
+     * the space list shows them.
+     *
+     * <p>Archived spaces are included on purpose. A page inside one still resolves (the
+     * archive caps the level at VIEW instead of hiding the page), so a search hit or a
+     * breadcrumb has to be able to name that container even though navigation no longer
+     * lists it. Hiding it would leave a readable page with no address.
+     *
+     * <p>A page can be shared directly out of a Custom space the viewer is not in, so a
+     * breadcrumb naming that space would confirm a container they cannot open and cannot
+     * find. Use this, not the page's access level, to decide whether a space may be named.
+     */
+    @Transactional(readOnly = true)
+    public Set<UUID> visibleSpaceIds(UUID userId, Collection<Space> spaces) {
+        if (spaces.isEmpty()) {
+            return Set.of();
+        }
+        SpaceStanding standing = standing(userId);
+        if (standing == null) {
+            return Set.of();
+        }
+        boolean admin = standing.workspaceAdmin();
+        Set<UUID> visible = new HashSet<>();
+        for (Space space : spaces) {
+            if (standing.inWorkspace(space) && (admin || standing.level(space) != null)) {
+                visible.add(space.getId());
+            }
+        }
+        return visible;
+    }
+
+    /**
+     * The caller's membership plus the levels of their explicit space rows. One lookup for
+     * every space under consideration, so a caller filtering a page does not pay per row;
+     * null when the caller is not a member of any workspace.
+     */
+    private SpaceStanding standing(UUID userId) {
+        WorkspaceAccessService.Membership membership =
+                workspaceAccessService.findMember(userId).orElse(null);
+        if (membership == null) {
+            return null;
+        }
+        Map<UUID, DocumentAccessLevel> memberLevels = new HashMap<>();
+        for (SpaceMember member : memberRepository.findAllByUser_Id(userId)) {
+            memberLevels.put(member.getSpace().getId(), member.getAccessLevel());
+        }
+        return new SpaceStanding(membership, memberLevels);
+    }
+
+    private record SpaceStanding(
+            WorkspaceAccessService.Membership membership, Map<UUID, DocumentAccessLevel> memberLevels) {
+
+        boolean inWorkspace(Space space) {
+            return membership.workspace().getId().equals(space.getWorkspace().getId());
+        }
+
+        boolean workspaceAdmin() {
+            return membership.member().getRole().canManageMembers();
+        }
+
+        /** Public mode alone grants the space's everyone-else level to every member. */
+        DocumentAccessLevel level(Space space) {
+            DocumentAccessLevel everyoneLevel =
+                    space.getAccessMode() == SpaceAccessMode.PUBLIC ? space.getEveryoneAccessLevel() : null;
+            DocumentAccessLevel memberLevel = memberLevels.get(space.getId());
+            if (memberLevel == null) {
+                return everyoneLevel;
+            }
+            return everyoneLevel == null ? memberLevel : DocumentAccessLevel.broadest(memberLevel, everyoneLevel);
+        }
     }
 
     /**

@@ -1,7 +1,7 @@
 import { documentService } from '@/services/document.service';
 import { toSortableTimestamp } from '@/lib/timestamp.util';
 import type { DocumentMeta } from '@/types/document.types';
-import type { LocalDocumentEntry, SharedDocumentEntry } from './documentList.types';
+import type { LocalDocumentEntry } from './documentList.types';
 
 export const DOCS_PAGE_SIZE = 50;
 export const INITIAL_DOCS_COUNT = DOCS_PAGE_SIZE;
@@ -71,35 +71,6 @@ export function updateDocumentMetaInList<T extends LocalDocumentEntry>(
   return {
     entries: sortByUpdatedAtDesc(entries.map((doc) => (doc.id === id ? { ...doc, meta } : doc))),
     exists: true,
-  };
-}
-
-export function combineSharedDocuments(
-  sharedWithMeDocuments: SharedDocumentEntry[],
-  ownerSharedDocuments: SharedDocumentEntry[]
-): SharedDocumentEntry[] {
-  return mergeUniqueDocuments(sharedWithMeDocuments, ownerSharedDocuments);
-}
-
-export function classifyOwnedDocuments(
-  docs: (LocalDocumentEntry & { parentId: string | null; hasCollaborators?: boolean })[]
-): { privateDocs: LocalDocumentEntry[]; sharedByOwnerDocs: SharedDocumentEntry[] } {
-  if (docs.length === 0) {
-    return { privateDocs: [], sharedByOwnerDocs: [] };
-  }
-
-  return {
-    // Nested documents (real parentId set) stay in the private tree under their
-    // actual parent even when they have collaborators; only root-level shared
-    // documents are surfaced in the Shared section.
-    privateDocs: docs.filter((doc) => !doc.hasCollaborators || doc.parentId != null),
-    sharedByOwnerDocs: docs
-      .filter((doc) => Boolean(doc.hasCollaborators) && doc.parentId == null)
-      .map((doc) => ({
-        ...doc,
-        relationship: 'owner' as const,
-        accessLevel: 'OWNER' as const,
-      })),
   };
 }
 

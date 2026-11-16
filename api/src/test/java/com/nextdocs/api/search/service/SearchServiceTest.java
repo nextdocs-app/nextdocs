@@ -20,12 +20,14 @@ import com.nextdocs.api.search.dto.response.SearchTextSegmentResponse;
 import com.nextdocs.api.search.repository.DocumentSearchRepository;
 import com.nextdocs.api.search.repository.DocumentSearchRepository.BreadcrumbRow;
 import com.nextdocs.api.search.repository.DocumentSearchRepository.SearchRow;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.IntStream;
@@ -48,6 +50,12 @@ class SearchServiceTest {
 
     @Mock
     private DocumentSearchRepository repository;
+
+    @Mock
+    private SpaceAccessService spaceAccessService;
+
+    @Mock
+    private SpaceRepository spaceRepository;
 
     @InjectMocks
     private SearchService searchService;
@@ -151,7 +159,9 @@ class SearchServiceTest {
                 .thenReturn(List.of(
                         new BreadcrumbRow(documentId, rootId, "Engineering", spaceId, 1),
                         new BreadcrumbRow(documentId, documentId, "Auth guide", null, 0)));
-        when(repository.findSpaceNames(Set.of(spaceId))).thenReturn(Map.of(spaceId, "Engineering"));
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        when(spaceRepository.findAllById(Set.of(spaceId))).thenReturn(List.of(space));
+        when(spaceAccessService.visibleSpaceIds(userId, List.of(space))).thenReturn(Set.of(spaceId));
 
         SearchHitResponse result =
                 searchService.search(userId, "auth", null, null).items().get(0);
@@ -165,6 +175,27 @@ class SearchServiceTest {
         assertThat(result.snippet())
                 .extracting(SearchTextSegmentResponse::match)
                 .containsExactly(false, true);
+    }
+
+    @Test
+    void omitsTheSpaceTheCallerCannotSee() {
+        memberOfWorkspace();
+        UUID documentId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        SearchRow hit = new SearchRow(documentId, "Shared page", null, null, null, null, null, OffsetDateTime.now());
+        when(repository.search(eq(workspaceId), eq(userId), eq("shared"), eq("shared:*"), eq(21), eq(0)))
+                .thenReturn(List.of(hit));
+        when(repository.findBreadcrumbs(List.of(documentId), userId))
+                .thenReturn(List.of(new BreadcrumbRow(documentId, documentId, "Shared page", spaceId, 0)));
+        Space space = Space.builder().id(spaceId).name("Internal Secret Space").build();
+        when(spaceRepository.findAllById(Set.of(spaceId))).thenReturn(List.of(space));
+        when(spaceAccessService.visibleSpaceIds(userId, List.of(space))).thenReturn(Set.of());
+
+        SearchHitResponse result =
+                searchService.search(userId, "shared", null, null).items().get(0);
+
+        assertThat(result.breadcrumb()).isEmpty();
+        assertThat(result.space()).isNull();
     }
 
     @Test

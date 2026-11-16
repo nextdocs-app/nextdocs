@@ -13,6 +13,9 @@ import com.nextdocs.api.search.dto.response.SearchTextSegmentResponse;
 import com.nextdocs.api.search.repository.DocumentSearchRepository;
 import com.nextdocs.api.search.repository.DocumentSearchRepository.BreadcrumbRow;
 import com.nextdocs.api.search.repository.DocumentSearchRepository.SearchRow;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,6 +54,8 @@ public class SearchService {
     private final SearchProperties properties;
     private final WorkspaceAccessService workspaceAccessService;
     private final DocumentSearchRepository repository;
+    private final SpaceAccessService spaceAccessService;
+    private final SpaceRepository spaceRepository;
 
     @Transactional(readOnly = true)
     public SearchResponse search(UUID userId, String rawQuery, Integer limit, Integer offset) {
@@ -136,9 +141,10 @@ public class SearchService {
     }
 
     /**
-     * Ancestors and space for one page of hits. Two extra queries regardless of page
-     * size: the recursive chain carries its own document ids, and space names are one
-     * lookup for the distinct ids the chain found.
+     * Ancestors and space for one page of hits. A fixed number of queries regardless of
+     * page size: the recursive chain carries its own document ids, the distinct space
+     * anchors it found are loaded in one lookup, and the visibility check behind those
+     * names is one membership read plus one space-membership read.
      */
     private Enrichment enrich(List<SearchRow> rows, UUID userId) {
         if (rows.isEmpty()) {
@@ -165,7 +171,7 @@ public class SearchService {
 
         Set<UUID> distinctSpaceIds =
                 spaceIds.values().stream().filter(Objects::nonNull).collect(Collectors.toSet());
-        Map<UUID, String> spaceNames = repository.findSpaceNames(distinctSpaceIds);
+        Map<UUID, String> spaceNames = visibleSpaceNames(userId, distinctSpaceIds);
         Map<UUID, SearchSpaceResponse> spaces = new HashMap<>();
         spaceIds.forEach((documentId, spaceId) -> {
             String name = spaceId == null ? null : spaceNames.get(spaceId);
@@ -174,6 +180,30 @@ public class SearchService {
             }
         });
         return new Enrichment(Map.copyOf(breadcrumbs), Map.copyOf(spaces));
+    }
+
+    /**
+     * Names of the spaces among {@code spaceIds} this caller may see, keyed by id. A hit
+     * can live in a Custom space the viewer is not a member of — shared with them page by
+     * page — so the anchor cannot be named without the same visibility check the space
+     * list applies: the name is what would tell them the space exists.
+     */
+    private Map<UUID, String> visibleSpaceNames(UUID userId, Set<UUID> spaceIds) {
+        if (spaceIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Space> spaces = spaceRepository.findAllById(spaceIds);
+        Set<UUID> visible = spaceAccessService.visibleSpaceIds(userId, spaces);
+        if (visible.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, String> names = new HashMap<>();
+        for (Space space : spaces) {
+            if (visible.contains(space.getId())) {
+                names.put(space.getId(), space.getName());
+            }
+        }
+        return names;
     }
 
     private static SearchHitResponse toHit(SearchRow row, Enrichment enrichment) {
