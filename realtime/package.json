@@ -35,7 +35,7 @@
   "dependencies": {
     "@y/hub": "^0.10.1",
     "@y/y": "^14.0.0-rc.29",
-    "dotenv": "^18.0.9",
+    "dotenv": "^18.0.10",
     "postgres": "^3.4.9",
     "yjs": "^13.6.33"
   },
@@ -46,19 +46,19 @@
     "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.2",
-    "@typescript-eslint/eslint-plugin": "^8.72.1",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.51.0",
     "@typescript/typescript6": "^6.0.2",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.5.2",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "supertest": "^7.3.2",
     "ts-jest": "^29.4.15",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "typescript-eslint": "^8.72.1",
-    "ws": "^8.22.2",
+    "typescript-eslint": "^8.72.2",
+    "ws": "^8.23.0",
     "y-websocket": "^3.1.0"
   }
 }
