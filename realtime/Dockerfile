@@ -1,7 +1,7 @@
 # uWS ships a prebuilt binding that requires glibc >= 2.38. Debian bookworm (node:24-slim)
 # has 2.36 and the image dies at import; trixie has 2.41. Keep all stages on the same
 # libc so the native binding installed in deps matches the runner.
-FROM node:24-trixie-slim AS deps
+FROM node:26-trixie-slim AS deps
 WORKDIR /app
 ENV HUSKY=0
 COPY package.json package-lock.json ./
@@ -13,7 +13,7 @@ COPY web/package.json ./web/package.json
 RUN npm pkg delete scripts.prepare
 RUN npm ci --workspace realtime --include-workspace-root=false
 
-FROM node:24-trixie-slim AS builder
+FROM node:26-trixie-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/ ./
 COPY tsconfig.base.json ./tsconfig.base.json
@@ -21,7 +21,7 @@ COPY realtime/ ./realtime/
 WORKDIR /app/realtime
 RUN npm run build
 
-FROM node:24-trixie-slim AS runner
+FROM node:26-trixie-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HUSKY=0
