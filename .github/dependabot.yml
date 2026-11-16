@@ -15,15 +15,15 @@ updates:
     labels:
       - "dependencies"
       - "npm"
-    # Yjs 14 publishes two prerelease lines, and dependabot reads the older
-    # numbered one (`14.0.0-22`) as newer than `14.0.0-rc.29`: semver ranks
-    # numeric prerelease identifiers below alphanumeric ones. That line also
-    # predates the type API (`Y.Node`) realtime and `@y/hub` are written against,
-    # and installing it splits the tree into two Yjs copies, which breaks the
-    # `instanceof` checks that cross the Yhub boundary.
+    # Yjs 14 publishes two prerelease lines and dependabot reads the older
+    # numbered one (`14.0.0-22`) as newer than `14.0.0-rc.30`: semver ranks
+    # numeric prerelease identifiers below alphanumeric ones. A range filter on
+    # that line did not stop #165, so the dependency is ignored outright.
+    # Upgrades are taken by hand next to `@y/hub`, which decides the line this
+    # service can run: the lines renamed the type API (`Y.Node`) and two copies
+    # break the `instanceof` checks across the Yhub boundary.
     ignore:
       - dependency-name: "@y/y"
-        versions: [">=14.0.0-0 <14.0.0-rc.0"]
 
   # Maven dependencies (API service)
   - package-ecosystem: "maven"
