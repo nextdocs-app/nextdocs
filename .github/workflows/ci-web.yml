@@ -1,95 +1,46 @@
 name: CI - Web
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "web/**"
-      - "scripts/**"
-      - "codecov.yml"
-      - "package.json"
-      - "package-lock.json"
-      - "turbo.json"
-      - "tsconfig.base.json"
-      - ".prettierrc"
-      - ".editorconfig"
-      - ".github/workflows/ci-web.yml"
-  pull_request:
-    branches: ["main"]
-    paths:
-      - "web/**"
-      - "scripts/**"
-      - "codecov.yml"
-      - "package.json"
-      - "package-lock.json"
-      - "turbo.json"
-      - "tsconfig.base.json"
-      - ".prettierrc"
-      - ".editorconfig"
-      - ".github/workflows/ci-web.yml"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 permissions:
   contents: read
 
 env:
-  NODE_VERSION: "24.14.1"
+  HUSKY: 0
+  NEXT_TELEMETRY_DISABLED: 1
   TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
 
 jobs:
-  # Job 1: Code quality checks (format + lint)
-  lint:
-    name: Format & Lint
+  checks:
+    name: Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
+      - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
+          node-version-file: .nvmrc
+          cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Validate workspace lockfile policy
         run: npm run check:lockfiles
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --fund=false
 
-      - name: Check formatting
-        run: npx turbo run format --filter=web
-
-      - name: Lint
-        run: npx turbo run lint --filter=web
-
-  # Job 2: Unit & integration tests
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: package-lock.json
-
-      - name: Validate workspace lockfile policy
-        run: npm run check:lockfiles
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Check formatting and lint
+        run: npx turbo run format lint --filter=web
 
       - name: Run tests with coverage
-        run: npm run test:coverage -w web
+        run: npm run test:coverage -w web -- --ci
 
       - name: Rebase coverage paths to the repository root
         if: ${{ !cancelled() }}
@@ -97,33 +48,66 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: web
+          name: web
           files: web/coverage/lcov.info
+          disable_search: true
           fail_ci_if_error: false
-
-  # Job 3: Production build
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: package-lock.json
-
-      - name: Validate workspace lockfile policy
-        run: npm run check:lockfiles
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Build
         run: npx turbo run build --filter=web
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./web/Dockerfile
+          push: false
+          load: true
+          tags: nextdocs-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Start image and wait for HTTP 200
+        run: |
+          docker run -d --name nextdocs-web-ci -p 3000:3000 nextdocs-web:ci
+          for _ in $(seq 1 60); do
+            if ! docker inspect -f '{{.State.Running}}' nextdocs-web-ci | grep -q true; then
+              echo "web container exited before it became ready"
+              docker logs nextdocs-web-ci || true
+              exit 1
+            fi
+            status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || true)
+            if [ "$status" = "200" ]; then
+              echo "web image is serving HTTP 200"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "web image did not become ready"
+          docker logs nextdocs-web-ci || true
+          exit 1
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs nextdocs-web-ci || true
+
+      - name: Remove container
+        if: always()
+        run: docker rm -f nextdocs-web-ci || true

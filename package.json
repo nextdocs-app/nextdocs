@@ -13,7 +13,11 @@
   ],
   "scripts": {
     "check:lockfiles": "node scripts/check-workspace-lockfiles.js",
+    "check:runtime-versions": "node scripts/check-runtime-versions.js",
     "verify": "node scripts/hooks.js verify",
+    "verify:all": "node scripts/hooks.js verify --all",
+    "format:root": "prettier --check package.json turbo.json tsconfig.base.json .prettierrc codecov.yml docker-compose.yml \".github/**/*.{yml,yaml}\" \"scripts/**/*.js\" lint-staged.config.js",
+    "format:root:fix": "prettier --write package.json turbo.json tsconfig.base.json .prettierrc codecov.yml docker-compose.yml \".github/**/*.{yml,yaml}\" \"scripts/**/*.js\" lint-staged.config.js",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",

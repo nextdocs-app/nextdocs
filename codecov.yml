@@ -17,6 +17,23 @@ flags:
       - api/
     carryforward: true
 
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        # Allow the project percentage to dip by at most one point before failing.
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 5%
+
+comment:
+  layout: 'reach, diff, flags, files'
+  behavior: default
+  require_changes: true
+
 # JaCoCo keys files by package path (com/nextdocs/api/...), not by the Maven
 # source root it lives under.
 fixes:

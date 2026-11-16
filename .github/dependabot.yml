@@ -2,19 +2,22 @@ version: 2
 
 updates:
   # npm dependencies (root monorepo + workspaces)
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: 'npm'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 10
     groups:
-      web-dependencies:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+      javascript-dependencies:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
     labels:
-      - "dependencies"
-      - "npm"
+      - 'dependencies'
+      - 'npm'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
     # Yjs 14 publishes two prerelease lines and dependabot reads the older
     # numbered one (`14.0.0-22`) as newer than `14.0.0-rc.30`: semver ranks
     # numeric prerelease identifiers below alphanumeric ones. A range filter on
@@ -23,66 +26,98 @@ updates:
     # service can run: the lines renamed the type API (`Y.Node`) and two copies
     # break the `instanceof` checks across the Yhub boundary.
     ignore:
-      - dependency-name: "@y/y"
+      - dependency-name: '@y/y'
 
   # Maven dependencies (API service)
-  - package-ecosystem: "maven"
-    directory: "/api"
+  - package-ecosystem: 'maven'
+    directory: '/api'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 5
     groups:
       java-dependencies:
-        patterns: ["*"]
+        patterns: ['*']
     labels:
-      - "dependencies"
-      - "java"
+      - 'dependencies'
+      - 'java'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
 
   # GitHub Actions versions
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 5
     groups:
       ci-dependencies:
-        patterns: ["*"]
+        patterns: ['*']
     labels:
-      - "dependencies"
-      - "ci"
+      - 'dependencies'
+      - 'ci'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
 
-  # Docker base images
-  - package-ecosystem: "docker"
-    directory: "/api"
+  # Docker base images per service
+  - package-ecosystem: 'docker'
+    directory: '/api'
     schedule:
-      interval: "monthly"
+      interval: 'monthly'
     groups:
       docker-api:
-        patterns: ["*"]
+        patterns: ['*']
     labels:
-      - "dependencies"
-      - "docker"
+      - 'dependencies'
+      - 'docker'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
 
-  - package-ecosystem: "docker"
-    directory: "/web"
+  - package-ecosystem: 'docker'
+    directory: '/web'
     schedule:
-      interval: "monthly"
+      interval: 'monthly'
     groups:
       docker-web:
-        patterns: ["*"]
+        patterns: ['*']
     labels:
-      - "dependencies"
-      - "docker"
+      - 'dependencies'
+      - 'docker'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
 
-  - package-ecosystem: "docker"
-    directory: "/realtime"
+  - package-ecosystem: 'docker'
+    directory: '/realtime'
     schedule:
-      interval: "monthly"
+      interval: 'monthly'
     groups:
       docker-realtime:
-        patterns: ["*"]
+        patterns: ['*']
     labels:
-      - "dependencies"
-      - "docker"
+      - 'dependencies'
+      - 'docker'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'
+
+  # Compose-only images (Postgres, Redis, Mailpit). Dependabot needs the
+  # dedicated ecosystem to read docker-compose.yml; `docker` only reads Dockerfiles.
+  - package-ecosystem: 'docker-compose'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+    open-pull-requests-limit: 5
+    groups:
+      docker-compose:
+        patterns: ['*']
+    labels:
+      - 'dependencies'
+      - 'docker'
+    commit-message:
+      prefix: 'build'
+      include: 'scope'

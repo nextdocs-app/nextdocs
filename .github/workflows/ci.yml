@@ -1,0 +1,193 @@
+name: CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  merge_group:
+  schedule:
+    # Nightly full suite: catches dependency/registry drift that path-filtered PRs miss.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Every commit on main and every merge-queue batch must finish; PR runs can be replaced.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  HUSKY: 0
+
+jobs:
+  changes:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      web: ${{ steps.resolve.outputs.web }}
+      realtime: ${{ steps.resolve.outputs.realtime }}
+      api: ${{ steps.resolve.outputs.api }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Validate workspace lockfile policy
+        run: npm run check:lockfiles
+
+      - name: Install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: Check root formatting
+        run: npm run format:root
+
+      - name: Check runtime version pins
+        run: npm run check:runtime-versions
+
+      - name: Lint GitHub Actions workflows
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            web:
+              - "web/**"
+              - "realtime/src/types/**"
+              - "package.json"
+              - "package-lock.json"
+              - "turbo.json"
+              - "tsconfig.base.json"
+              - ".prettierrc"
+              - ".editorconfig"
+              - ".nvmrc"
+              - "scripts/**"
+              - "codecov.yml"
+              - "docker/**"
+              - "docker-compose.yml"
+              - ".github/workflows/**"
+            realtime:
+              - "realtime/**"
+              - "package.json"
+              - "package-lock.json"
+              - "turbo.json"
+              - "tsconfig.base.json"
+              - ".prettierrc"
+              - ".editorconfig"
+              - ".nvmrc"
+              - "scripts/**"
+              - "codecov.yml"
+              - "docker/**"
+              - "docker-compose.yml"
+              - ".github/workflows/**"
+            api:
+              - "api/**"
+              - ".java-version"
+              - "codecov.yml"
+              - "docker/**"
+              - "docker-compose.yml"
+              - ".github/workflows/**"
+
+      - name: Resolve service flags
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WEB: ${{ steps.filter.outputs.web }}
+          REALTIME: ${{ steps.filter.outputs.realtime }}
+          API: ${{ steps.filter.outputs.api }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            web=${WEB:-false}
+            realtime=${REALTIME:-false}
+            api=${API:-false}
+          else
+            # main pushes, merge queues, schedules, and manual runs get everything.
+            web=true
+            realtime=true
+            api=true
+          fi
+          {
+            echo "web=$web"
+            echo "realtime=$realtime"
+            echo "api=$api"
+          } >> "$GITHUB_OUTPUT"
+
+  web:
+    name: Web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/ci-web.yml
+    secrets: inherit
+
+  realtime:
+    name: Realtime
+    needs: changes
+    if: needs.changes.outputs.realtime == 'true'
+    uses: ./.github/workflows/ci-realtime.yml
+    secrets: inherit
+
+  api:
+    name: API
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    uses: ./.github/workflows/ci-api.yml
+    secrets: inherit
+
+  required:
+    name: Required checks
+    if: always()
+    needs: [changes, web, realtime, api]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Evaluate job results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          node - <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS);
+          const services = ['web', 'realtime', 'api'];
+          const problems = [];
+
+          if (needs.changes?.result !== 'success') {
+            problems.push(`changes: ${needs.changes?.result ?? 'missing'}`);
+          }
+
+          for (const id of services) {
+            const result = needs[id]?.result ?? 'missing';
+            if (result === 'failure' || result === 'cancelled' || result === 'missing') {
+              problems.push(`${id}: ${result}`);
+            }
+            if (result === 'skipped' && needs.changes?.outputs?.[id] === 'true') {
+              problems.push(`${id}: skipped despite a matching change`);
+            }
+          }
+
+          if (problems.length > 0) {
+            console.error('Required checks failed:');
+            for (const problem of problems) console.error(`- ${problem}`);
+            process.exit(1);
+          }
+
+          const skipped = services.filter((id) => needs[id]?.result === 'skipped');
+          console.log(
+            `All required checks passed${skipped.length ? ` (skipped: ${skipped.join(', ')})` : ''}.`
+          );
+          NODE

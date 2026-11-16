@@ -290,13 +290,15 @@ function classify(files) {
   return targets;
 }
 
-function runChecks(files) {
+function runChecks(files, forceAll = false) {
   if (checkWorkspaceLockfiles() !== 0) {
     error('✖ checks blocked: remove the workspace lockfile(s) listed above.');
     return 1;
   }
 
-  if (files === null) info('Could not determine the changed files, so every service is checked.');
+  if (files === null && !forceAll) {
+    info('Could not determine the changed files, so every service is checked.');
+  }
 
   const targets = files === null ? { web: true, realtime: true, api: true } : classify(files);
   const jsPackages = [targets.web ? 'web' : null, targets.realtime ? 'realtime' : null].filter(
@@ -341,23 +343,28 @@ function runChecks(files) {
   return 0;
 }
 
-function runVerify(explicitBase) {
-  info('Running format/lint/test checks against the local branch diff.');
-  return runChecks(localBranchChangedFiles(explicitBase));
+function runVerify(explicitBase, all) {
+  info(
+    all
+      ? 'Running format/lint/test checks for every service (full-suite mode).'
+      : 'Running format/lint/test checks against the local branch diff.'
+  );
+  return runChecks(all ? null : localBranchChangedFiles(explicitBase), all);
 }
 
 const COMMANDS = {
   'pre-commit': runPreCommit,
   'commit-msg': () => runCommitMsg(process.argv[3]),
   'java-spotless': runJavaSpotless,
-  verify: () => runVerify(process.argv[3]),
+  verify: () => runVerify(process.argv[3], process.argv.includes('--all')),
 };
 
 function usage() {
-  info('Usage: node scripts/hooks.js <pre-commit|commit-msg <file>|verify [base]>');
+  info('Usage: node scripts/hooks.js <pre-commit|commit-msg <file>|verify [base] [--all]>');
   info('  pre-commit    lint-staged for staged files (run by .husky/pre-commit)');
   info('  commit-msg    validate a commit message file (run by .husky/commit-msg)');
   info('  verify [base] format/lint/test the services the branch touches (npm run verify)');
+  info('  verify --all  force every service, like a push to main (npm run verify:all)');
   info('  java-spotless <files...>  internal: Spotless runner used by lint-staged.config.js');
 }
 
