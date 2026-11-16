@@ -5,6 +5,8 @@ on:
     branches: ["main"]
     paths:
       - "web/**"
+      - "scripts/**"
+      - "codecov.yml"
       - "package.json"
       - "package-lock.json"
       - "turbo.json"
@@ -16,6 +18,8 @@ on:
     branches: ["main"]
     paths:
       - "web/**"
+      - "scripts/**"
+      - "codecov.yml"
       - "package.json"
       - "package-lock.json"
       - "turbo.json"
@@ -84,8 +88,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npx turbo run test --filter=web
+      - name: Run tests with coverage
+        run: npm run test:coverage -w web
+
+      - name: Rebase coverage paths to the repository root
+        if: ${{ !cancelled() }}
+        run: node scripts/coverage-paths.js web
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: web
+          files: web/coverage/lcov.info
+          fail_ci_if_error: false
 
   # Job 3: Production build
   build:

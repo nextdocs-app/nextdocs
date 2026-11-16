@@ -55,6 +55,7 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 - Flyway migrations in `api/src/main/resources/db/migration` are never applied by tests (test properties disable Flyway; `ddl-auto` is `none` locally / `validate` in Docker). Exercise new SQL against the `./nd` Postgres container. Hibernate must not manage the schema — every schema change needs a migration file.
 - API tests run on H2 locally, while CI starts a Postgres service with `SPRING_DATASOURCE_*` overrides for the same suite — avoid H2-only SQL in repositories.
 - Web Jest runs through `next/jest`; if it logs `jest-haste-map: Haste module naming collision: web`, a standalone build left `web/.next/standalone` behind. Tests still pass.
+- Coverage goes to Codecov, never to a local gate: each workflow uploads under its own flag (`web`, `realtime`, `api`) and a failed upload does not fail CI. Jest reports paths relative to the workspace, so `scripts/coverage-paths.js` rebases them to the repo root before upload; JaCoCo keys files by package, which `fixes` in `codecov.yml` maps onto `api/src/main/java`. The JaCoCo report is bound to `verify`, so `./nd test api` spends no time on it.
 
 ## Conventions
 

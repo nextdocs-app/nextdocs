@@ -36,6 +36,9 @@
 		<jjwt.version>0.13.0</jjwt.version>
 		<!-- springdoc 3.x supports Spring Boot 4 -->
 		<springdoc.version>3.2.0</springdoc.version>
+		<!-- The Spring Boot BOM does not manage jacoco (unlike surefire/compiler);
+		     unpinned, Maven resolves the newest release it can reach. -->
+		<jacoco.version>0.8.16</jacoco.version>
 	</properties>
 	<dependencies>
 		<!-- Web MVC -->
@@ -217,6 +220,26 @@
 					<execution>
 						<goals>
 							<goal>check</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<!-- Coverage XML for Codecov; runs at verify so `mvn test` stays fast. -->
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>report</goal>
 						</goals>
 					</execution>
 				</executions>

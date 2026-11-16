@@ -5,11 +5,13 @@ on:
     branches: ["main"]
     paths:
       - "api/**"
+      - "codecov.yml"
       - ".github/workflows/ci-api.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "api/**"
+      - "codecov.yml"
       - ".github/workflows/ci-api.yml"
 
 concurrency:
@@ -94,6 +96,14 @@ jobs:
           name: api-test-reports
           path: api/target/surefire-reports/
           retention-days: 7
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: api
+          files: api/target/site/jacoco/jacoco.xml
+          fail_ci_if_error: false
 
   # Job 3: Docker image build (validates Dockerfile)
   docker-build:

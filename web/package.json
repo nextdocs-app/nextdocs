@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
+    "test:coverage": "jest --coverage",
     "format": "prettier --check \"**/*.{ts,tsx,js,mjs,cjs,json,md}\"",
     "format:fix": "prettier --write \"**/*.{ts,tsx,js,mjs,cjs,json,md}\""
   },

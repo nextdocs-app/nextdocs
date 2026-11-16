@@ -1,0 +1,23 @@
+# Each CI workflow uploads only its own report under its own flag, so a change
+# that touches one service does not report the other services as uncovered.
+
+flags:
+  web:
+    paths:
+      - web/
+    # Workflows are path-filtered, so a flag that did not upload this commit
+    # keeps the coverage it had on the base commit instead of vanishing.
+    carryforward: true
+  realtime:
+    paths:
+      - realtime/
+    carryforward: true
+  api:
+    paths:
+      - api/
+    carryforward: true
+
+# JaCoCo keys files by package path (com/nextdocs/api/...), not by the Maven
+# source root it lives under.
+fixes:
+  - 'com/nextdocs/::api/src/main/java/com/nextdocs/'
