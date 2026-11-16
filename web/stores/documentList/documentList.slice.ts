@@ -14,7 +14,6 @@ import {
   sortByUpdatedAtDesc,
   mergeUniqueDocuments,
   updateDocumentMetaInList,
-  classifyOwnedDocuments,
   ensureCloudDocsCachedLocally,
 } from './documentList.utils';
 
@@ -26,11 +25,9 @@ const initialState: DocumentListState = {
   isShowingAll: false,
 
   sharedWithMeDocuments: [],
-  ownerSharedDocuments: [],
   isSharedLoading: true,
   isSharedLoadingMore: false,
   sharedWithMeHasMore: false,
-  ownerSharedHasMore: false,
   isShowingAllShared: false,
 
   trashedDocuments: [],
@@ -49,9 +46,7 @@ const initialState: DocumentListState = {
 export const fetchDocumentsThunk = createAsyncThunk<
   {
     documents: LocalDocumentEntry[];
-    ownerSharedDocuments: SharedDocumentEntry[];
     hasMore: boolean;
-    ownerSharedHasMore: boolean;
     isShowingAll: boolean;
     nextCloudPage: number;
     localAllDocs?: LocalDocumentEntry[];
@@ -77,7 +72,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
     const state = getState();
     const { user, accessToken } = state.auth;
     const isAuthenticated = !!user && !!accessToken;
-    const { isShowingAll, sharedWithMeDocuments, ownerSharedDocuments } = state.documentList;
+    const { isShowingAll, sharedWithMeDocuments } = state.documentList;
 
     const expandedMode = keepExpanded && isShowingAll;
 
@@ -86,9 +81,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
     if (!isAuthenticated || !accessToken) {
       return {
         documents: [],
-        ownerSharedDocuments: [],
         hasMore: false,
-        ownerSharedHasMore: false,
         isShowingAll: expandedMode,
         nextCloudPage: 0,
         localAllDocs: [],
@@ -100,12 +93,20 @@ export const fetchDocumentsThunk = createAsyncThunk<
     if (!isCloudUnavailable) {
       const pageSize = DOCS_PAGE_SIZE;
       try {
-        const page = await documentService.listCloudDocuments(accessToken, 0, pageSize);
-        const { privateDocs, sharedByOwnerDocs } = classifyOwnedDocuments(page.items);
-        const hasMoreAfterClassify = page.hasMore;
+        // scope=private is the server's single-home rule, the one the Private tree
+        // already uses: an owned root with an audience (a page grant or workspace
+        // sharing) is listed in Shared instead. The client-side filter this replaces
+        // could not see a workspace-wide audience, and it broke pagination because
+        // the server counted rows it would never show. parentId=root is what selects
+        // the private root listing; the flat form does not accept scope=private.
+        const page = await documentService.listCloudDocuments(accessToken, 0, pageSize, {
+          parentId: 'root',
+          scope: 'private',
+        });
+        const documents = page.items;
 
         void ensureCloudDocsCachedLocally(
-          [...privateDocs, ...sharedByOwnerDocs],
+          documents,
           isAuthenticated,
           accessToken,
           isCloudUnavailable,
@@ -113,10 +114,8 @@ export const fetchDocumentsThunk = createAsyncThunk<
         );
 
         return {
-          documents: privateDocs,
-          ownerSharedDocuments: sharedByOwnerDocs,
-          hasMore: hasMoreAfterClassify,
-          ownerSharedHasMore: sharedByOwnerDocs.length > 0 && hasMoreAfterClassify,
+          documents,
+          hasMore: page.hasMore,
           isShowingAll: expandedMode,
           nextCloudPage: 1,
           degradedToLocal: false,
@@ -133,10 +132,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
         }
 
         const allLocalDocs = sortByUpdatedAtDesc(await documentService.getAllDocumentsMeta());
-        const sharedDocIds = new Set([
-          ...sharedWithMeDocuments.map((doc) => doc.id),
-          ...ownerSharedDocuments.map((doc) => doc.id),
-        ]);
+        const sharedDocIds = new Set(sharedWithMeDocuments.map((doc) => doc.id));
 
         // getAllDocumentsMeta already excludes share-link mirrors; only the
         // shared-section ids still need removing here.
@@ -146,9 +142,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
 
         return {
           documents: initialDocs,
-          ownerSharedDocuments: [...ownerSharedDocuments],
           hasMore: localPrivateDocs.length > initialDocs.length,
-          ownerSharedHasMore: false,
           isShowingAll: expandedMode,
           nextCloudPage: 0,
           localAllDocs: allLocalDocs,
@@ -160,10 +154,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
     }
 
     const docs = sortByUpdatedAtDesc(await documentService.getAllDocumentsMeta());
-    const sharedDocIds = new Set([
-      ...sharedWithMeDocuments.map((doc) => doc.id),
-      ...ownerSharedDocuments.map((doc) => doc.id),
-    ]);
+    const sharedDocIds = new Set(sharedWithMeDocuments.map((doc) => doc.id));
     // Share-link mirrors are filtered out by getAllDocumentsMeta; only the
     // shared-section ids still need removing here.
     const privateDocs = docs.filter((doc) => !sharedDocIds.has(doc.id));
@@ -173,9 +164,7 @@ export const fetchDocumentsThunk = createAsyncThunk<
 
     return {
       documents: initialDocs,
-      ownerSharedDocuments: [...ownerSharedDocuments],
       hasMore: privateDocs.length > initialDocs.length,
-      ownerSharedHasMore: false,
       isShowingAll: expandedMode,
       nextCloudPage: 0,
       localAllDocs: docs,
@@ -228,7 +217,7 @@ export const fetchSharedDocumentsThunk = createAsyncThunk<
       const sharedPage = await documentService.listSharedDocuments(accessToken, 0, pageSize);
       const items = sharedPage.items.map((doc) => ({
         ...doc,
-        relationship: 'collaborator' as const,
+        relationship: doc.owner ? ('owner' as const) : ('collaborator' as const),
       }));
 
       void ensureCloudDocsCachedLocally(
@@ -319,9 +308,7 @@ export const fetchTrashDocumentsThunk = createAsyncThunk<
 export const loadMoreDocumentsThunk = createAsyncThunk<
   {
     documents: LocalDocumentEntry[];
-    ownerSharedDocuments?: SharedDocumentEntry[];
     hasMore: boolean;
-    ownerSharedHasMore?: boolean;
     nextCloudPage?: number;
     localLoadedCount?: number;
     errorType?: 'connectivity_error' | null;
@@ -344,7 +331,6 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
       documents,
       hasMore,
       sharedWithMeDocuments,
-      ownerSharedDocuments,
       localAllDocs,
       localLoadedCount,
     } = state.documentList;
@@ -354,25 +340,17 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
         const page = await documentService.listCloudDocuments(
           accessToken,
           nextCloudPage,
-          DOCS_PAGE_SIZE
+          DOCS_PAGE_SIZE,
+          { parentId: 'root', scope: 'private' }
         );
-        const { privateDocs: nextPrivateDocs, sharedByOwnerDocs: nextOwnerSharedDocs } =
-          classifyOwnedDocuments(page.items);
+        const nextPrivateDocs = page.items;
 
         const seen = new Set(documents.map((doc) => doc.id));
         const filteredDocs = nextPrivateDocs.filter((doc) => !seen.has(doc.id));
         const updatedDocuments = [...documents, ...filteredDocs];
 
-        const hadOwnerSharedDocs = ownerSharedDocuments.length > 0;
-        const updatedOwnerSharedDocuments = mergeUniqueDocuments(
-          ownerSharedDocuments,
-          nextOwnerSharedDocs
-        );
-        const updatedOwnerSharedHasMore =
-          page.hasMore && (hadOwnerSharedDocs || nextOwnerSharedDocs.length > 0);
-
         void ensureCloudDocsCachedLocally(
-          [...nextPrivateDocs, ...nextOwnerSharedDocs],
+          nextPrivateDocs,
           isAuthenticated,
           accessToken,
           isCloudUnavailable,
@@ -381,9 +359,7 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
 
         return {
           documents: updatedDocuments,
-          ownerSharedDocuments: updatedOwnerSharedDocuments,
           hasMore: page.hasMore,
-          ownerSharedHasMore: updatedOwnerSharedHasMore,
           nextCloudPage: nextCloudPage + 1,
         };
       } catch (error) {
@@ -398,10 +374,7 @@ export const loadMoreDocumentsThunk = createAsyncThunk<
         };
       }
     } else {
-      const sharedDocIds = new Set([
-        ...sharedWithMeDocuments.map((doc) => doc.id),
-        ...ownerSharedDocuments.map((doc) => doc.id),
-      ]);
+      const sharedDocIds = new Set(sharedWithMeDocuments.map((doc) => doc.id));
 
       const localPrivateDocs = localAllDocs.filter((doc) => !sharedDocIds.has(doc.id));
       const nextChunk = localPrivateDocs.slice(localLoadedCount, localLoadedCount + DOCS_PAGE_SIZE);
@@ -457,7 +430,7 @@ export const loadMoreSharedDocumentsThunk = createAsyncThunk<
       );
       const mapped = page.items.map((doc) => ({
         ...doc,
-        relationship: 'collaborator' as const,
+        relationship: doc.owner ? ('owner' as const) : ('collaborator' as const),
       }));
       const updatedSharedWithMeDocuments = mergeUniqueDocuments(sharedWithMeDocuments, mapped);
 
@@ -593,18 +566,11 @@ const documentListSlice = createSlice({
     updateDocumentMeta(state, action: PayloadAction<{ id: string; meta: DocumentMeta }>) {
       const { id, meta } = action.payload;
 
-      const { entries: nextSharedWithMeDocuments, exists: existsInSharedWithMe } =
+      const { entries: nextSharedWithMeDocuments, exists: existsInShared } =
         updateDocumentMetaInList(state.sharedWithMeDocuments, id, meta);
-      const { entries: nextOwnerSharedDocuments, exists: existsInOwnerShared } =
-        updateDocumentMetaInList(state.ownerSharedDocuments, id, meta);
-      const existsInShared = existsInSharedWithMe || existsInOwnerShared;
 
-      if (existsInSharedWithMe) {
+      if (existsInShared) {
         state.sharedWithMeDocuments = nextSharedWithMeDocuments;
-      }
-
-      if (existsInOwnerShared) {
-        state.ownerSharedDocuments = nextOwnerSharedDocuments;
       }
 
       const { entries: updatedPrivateDocs, exists: existsInPrivate } = updateDocumentMetaInList(
@@ -640,8 +606,6 @@ const documentListSlice = createSlice({
       state.nextCloudPage = 0;
       if (!action.payload.isAuthenticated) {
         state.sharedWithMeDocuments = [];
-        state.ownerSharedDocuments = [];
-        state.ownerSharedHasMore = false;
         state.isSharedLoading = false;
         state.isSharedLoadingMore = false;
         state.sharedWithMeHasMore = false;
@@ -674,9 +638,7 @@ const documentListSlice = createSlice({
       })
       .addCase(fetchDocumentsThunk.fulfilled, (state, action) => {
         state.documents = action.payload.documents;
-        state.ownerSharedDocuments = action.payload.ownerSharedDocuments;
         state.hasMore = action.payload.hasMore;
-        state.ownerSharedHasMore = action.payload.ownerSharedHasMore;
         state.isShowingAll = action.payload.isShowingAll;
         state.nextCloudPage = action.payload.nextCloudPage;
         state.isLoading = false;
@@ -741,12 +703,6 @@ const documentListSlice = createSlice({
         state.hasMore = action.payload.hasMore;
         state.isLoadingMore = false;
 
-        if (action.payload.ownerSharedDocuments) {
-          state.ownerSharedDocuments = action.payload.ownerSharedDocuments;
-        }
-        if (action.payload.ownerSharedHasMore !== undefined) {
-          state.ownerSharedHasMore = action.payload.ownerSharedHasMore;
-        }
         if (action.payload.nextCloudPage !== undefined) {
           state.nextCloudPage = action.payload.nextCloudPage;
         }

@@ -15,7 +15,6 @@ import {
 } from '@/lib/search-helpers.util';
 import { documentService } from '@/services/document.service';
 import { MAX_SEARCH_QUERY_LENGTH } from '@/services/search.service';
-import { combineSharedDocuments } from '@/stores/documentList/documentList.utils';
 import type {
   LocalDocumentEntry,
   SharedDocumentEntry,
@@ -50,11 +49,8 @@ export function SearchDialog() {
 
   const documents = useAppSelector((state) => state.documentList?.documents ?? EMPTY_DOCS);
   const localAllDocs = useAppSelector((state) => state.documentList?.localAllDocs ?? EMPTY_DOCS);
-  const sharedWithMeDocuments = useAppSelector(
+  const sharedDocuments = useAppSelector(
     (state) => state.documentList?.sharedWithMeDocuments ?? EMPTY_SHARED_DOCS
-  );
-  const ownerSharedDocuments = useAppSelector(
-    (state) => state.documentList?.ownerSharedDocuments ?? EMPTY_SHARED_DOCS
   );
   const trashedDocuments = useAppSelector(
     (state) => state.documentList?.trashedDocuments ?? EMPTY_DOCS
@@ -63,11 +59,6 @@ export function SearchDialog() {
   const sharedNodes = useAppSelector((state) => state.sharedTree?.nodes ?? EMPTY_NODES);
   const spaceTrees = useAppSelector((state) => state.spaceTree?.trees ?? EMPTY_SPACE_TREES);
   const spaces = useAppSelector((state) => state.spaceTree?.spaces ?? EMPTY_SPACES);
-
-  const sharedDocuments = useMemo(
-    () => combineSharedDocuments(sharedWithMeDocuments, ownerSharedDocuments),
-    [sharedWithMeDocuments, ownerSharedDocuments]
-  );
 
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
