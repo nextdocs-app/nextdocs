@@ -12,7 +12,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # PR runs share a group per PR so a new push replaces the old run. Every other
+  # event gets its own group: a shared group would queue main pushes behind each
+  # other and let a third pending run cancel the second, which must finish.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   # Every commit on main and every merge-queue batch must finish; PR runs can be replaced.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -80,6 +83,7 @@ jobs:
               - "codecov.yml"
               - "docker/**"
               - "docker-compose.yml"
+              - ".dockerignore"
               - ".github/workflows/**"
             realtime:
               - "realtime/**"
@@ -94,6 +98,7 @@ jobs:
               - "codecov.yml"
               - "docker/**"
               - "docker-compose.yml"
+              - ".dockerignore"
               - ".github/workflows/**"
             api:
               - "api/**"

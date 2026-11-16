@@ -28,7 +28,12 @@ function read(relativePath) {
 }
 
 function majorOf(version) {
-  return String(version).trim().split('.')[0];
+  // Tags can carry a suffix (24.14.1-trixie-slim, 24-trixie-slim), so take the
+  // leading digits instead of trusting a dot split to end at the major.
+  const match = String(version)
+    .trim()
+    .match(/^(\d+)/);
+  return match ? match[1] : String(version).trim();
 }
 
 const nodeVersion = read('.nvmrc').trim();

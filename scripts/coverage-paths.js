@@ -32,9 +32,11 @@ const rewritten = lines.map((line) => {
   if (!line.startsWith('SF:')) return line;
 
   const source = line.slice(3);
-  // Keep a second run a no-op instead of stacking another prefix on.
+  // Keep a second run a no-op instead of stacking another prefix on, but still
+  // verify the path: a file deleted since the first run must be reported.
   if (source.startsWith(prefix)) {
-    skipped += 1;
+    if (!fs.existsSync(path.resolve(root, source))) missing.push(source);
+    else skipped += 1;
     return line;
   }
 
@@ -46,14 +48,14 @@ const rewritten = lines.map((line) => {
   return `SF:${relative}`;
 });
 
-if (rebased + skipped === 0) fail(`${path.relative(root, report)} has no SF: entries.`);
-
 if (missing.length > 0) {
   fail(
     `${missing.length} covered file(s) do not exist at the rebased path, which would upload ` +
       `zeroed paths to Codecov:\n  ${missing.slice(0, 10).join('\n  ')}`
   );
 }
+
+if (rebased + skipped === 0) fail(`${path.relative(root, report)} has no SF: entries.`);
 
 fs.writeFileSync(report, rewritten.join('\n'));
 
