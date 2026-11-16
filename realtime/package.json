@@ -36,7 +36,7 @@
     "@y/hub": "^0.10.1",
     "@y/y": "^14.0.0-rc.30",
     "dotenv": "^18.0.10",
-    "postgres": "^3.4.9",
+    "postgres": "^4.1.1",
     "yjs": "^13.6.33"
   },
   "devDependencies": {
