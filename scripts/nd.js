@@ -181,8 +181,8 @@ function run(cmd, opts = {}) {
   return result.status;
 }
 
-function runSilent(cmd) {
-  return spawnSync(cmd, { shell: true, cwd: ROOT, stdio: 'pipe' });
+function runSilent(cmd, opts = {}) {
+  return spawnSync(cmd, { shell: true, cwd: ROOT, stdio: 'pipe', timeout: opts.timeout });
 }
 
 function verifyWorkspaceLockfilePolicy() {
@@ -384,30 +384,66 @@ function ensurePostgres({ yhubSchema = true } = {}) {
   ensureYhubDatabase(yhubSchema);
 }
 
+/**
+ * A restarted Redis replays its append-only file before it answers commands; a dev
+ * volume that accumulated Yhub rooms takes seconds to do that. Until then every
+ * command fails with `LOADING Redis is loading the dataset in memory`, and the
+ * realtime server's first command would kill the process instead of retrying.
+ * `docker start` returns long before that point, so wait for PONG here the same
+ * way Postgres waits for `pg_isready`.
+ */
+function waitForRedisReady(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let announced = false;
+  for (;;) {
+    // A wedged `docker exec` would otherwise block the loop past the deadline;
+    // bound every probe by what is left and count a timeout as a failed attempt.
+    const ping = runSilent(`docker exec ${REDIS_CONTAINER} redis-cli ping`, {
+      timeout: Math.max(1, deadline - Date.now()),
+    });
+    if (ping.status === 0 && ping.stdout.toString().trim() === 'PONG') {
+      return true;
+    }
+    if (!announced) {
+      console.log(`\x1b[34m> Waiting for Redis to finish loading its dataset...\x1b[0m`);
+      announced = true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    sleepSync(250);
+  }
+}
+
 function ensureRedis() {
   const check = runSilent(`docker inspect -f "{{.State.Running}}" ${REDIS_CONTAINER}`);
   if (check.status === 0 && check.stdout.toString().trim() === 'true') {
     console.log(`\x1b[32m✓ Redis already running\x1b[0m`);
-    return;
+  } else {
+    const exists = runSilent(`docker inspect ${REDIS_CONTAINER}`);
+    if (exists.status === 0) {
+      console.log(`\x1b[34m> Starting existing redis container...\x1b[0m`);
+      run(`docker start ${REDIS_CONTAINER}`);
+    } else {
+      console.log(`\x1b[34m> Starting redis...\x1b[0m`);
+      run(
+        [
+          'docker run -d',
+          `--name ${REDIS_CONTAINER}`,
+          `-p ${REDIS_PORT}:6379`,
+          REDIS_IMAGE,
+          'redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru',
+        ].join(' ')
+      );
+    }
   }
 
-  const exists = runSilent(`docker inspect ${REDIS_CONTAINER}`);
-  if (exists.status === 0) {
-    console.log(`\x1b[34m> Starting existing redis container...\x1b[0m`);
-    run(`docker start ${REDIS_CONTAINER}`);
-    return;
+  if (!waitForRedisReady()) {
+    console.error(
+      `\x1b[31m✗ Redis did not become ready in ${REDIS_CONTAINER} (still loading or unreachable).\x1b[0m`
+    );
+    process.exit(1);
   }
-
-  console.log(`\x1b[34m> Starting redis...\x1b[0m`);
-  run(
-    [
-      'docker run -d',
-      `--name ${REDIS_CONTAINER}`,
-      `-p ${REDIS_PORT}:6379`,
-      REDIS_IMAGE,
-      'redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru',
-    ].join(' ')
-  );
 }
 
 /**
