@@ -1,7 +1,8 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
+import { getYjsStringMap } from '@/lib/yjs.util';
 import documentReducer, {
   setCurrentDocument,
   updateMeta as updateMetaAction,
@@ -132,8 +133,7 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('test-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     expect(saveDocumentSpy).not.toHaveBeenCalled();
 
@@ -167,8 +167,7 @@ describe('useYjsPersistence', () => {
 
     const { unmount } = renderHook(() => useYjsPersistence('test-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     expect(saveDocumentSpy).not.toHaveBeenCalled();
 
@@ -202,8 +201,7 @@ describe('useYjsPersistence', () => {
       wrapper,
     });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -244,8 +242,7 @@ describe('useYjsPersistence', () => {
     try {
       renderHook(() => useYjsPersistence('offline-doc', ydoc, meta), { wrapper });
 
-      const fragment = ydoc.getXmlFragment('blocknote');
-      fragment.push([new Y.XmlElement('paragraph')]);
+      ydoc.get('blocknote').insert(0, ['paragraph']);
 
       await act(async () => {
         jest.advanceTimersByTime(500);
@@ -309,15 +306,13 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('test-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
     jest.advanceTimersByTime(100);
 
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
     jest.advanceTimersByTime(100);
 
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
     jest.advanceTimersByTime(100);
 
     expect(saveDocumentSpy).not.toHaveBeenCalled();
@@ -345,8 +340,7 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('test-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -378,8 +372,7 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('test-id', ydoc, null), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     jest.advanceTimersByTime(500);
 
@@ -400,8 +393,7 @@ describe('useYjsPersistence', () => {
 
     unmount();
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     jest.advanceTimersByTime(500);
 
@@ -423,8 +415,7 @@ describe('useYjsPersistence', () => {
     expect(result.current.isSaving).toBe(false);
     expect(result.current.lastSaved).toBeNull();
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -453,8 +444,7 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -488,8 +478,7 @@ describe('useYjsPersistence', () => {
 
     renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     expect(saveDocumentSpy).not.toHaveBeenCalled();
 
@@ -541,8 +530,7 @@ describe('useYjsPersistence', () => {
 
     const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -583,8 +571,7 @@ describe('useYjsPersistence', () => {
 
     const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -630,8 +617,7 @@ describe('useYjsPersistence', () => {
 
     const { result } = renderHook(() => useYjsPersistence('cloud-id', ydoc, meta), { wrapper });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -679,8 +665,7 @@ describe('useYjsPersistence', () => {
       }
     });
 
-    const fragment = ydoc.getXmlFragment('blocknote');
-    fragment.push([new Y.XmlElement('paragraph')]);
+    ydoc.get('blocknote').insert(0, ['paragraph']);
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -693,7 +678,7 @@ describe('useYjsPersistence', () => {
     });
 
     // Nothing reached the receiving document while the socket was down.
-    expect(receivingYdoc.getXmlFragment('blocknote').length).toBe(0);
+    expect(receivingYdoc.get('blocknote').length).toBe(0);
 
     undelivered.forEach((update) => Y.applyUpdate(receivingYdoc, update));
     synced = true;
@@ -706,7 +691,7 @@ describe('useYjsPersistence', () => {
 
     // The provider delivered the offline edit to the receiving document; that
     // delivery is what the cleared marker was asserting.
-    expect(receivingYdoc.getXmlFragment('blocknote').length).toBe(1);
+    expect(receivingYdoc.get('blocknote').length).toBe(1);
   });
 
   it('replays a queued title through REST before clearing its marker', async () => {
@@ -1225,7 +1210,7 @@ describe('useYjsPersistence', () => {
       const nextMeta: DocumentMeta = { ...base, title };
       act(() => {
         store.dispatch(updateMetaAction({ title, updatedAt: nextMeta.updatedAt }));
-        ydoc.getMap('meta').set('title', title);
+        getYjsStringMap(ydoc, 'meta').set('title', title);
         rerender({ meta: nextMeta });
       });
     }
@@ -1278,7 +1263,7 @@ describe('useYjsPersistence', () => {
     );
 
     act(() => {
-      ydoc.getMap('meta').set('title', base.title);
+      getYjsStringMap(ydoc, 'meta').set('title', base.title);
     });
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -1289,7 +1274,7 @@ describe('useYjsPersistence', () => {
     const typedMeta: DocumentMeta = { ...base, title: 'Meeting Notes' };
     act(() => {
       store.dispatch(updateMetaAction({ title: typedMeta.title, updatedAt: typedMeta.updatedAt }));
-      ydoc.getMap('meta').set('title', typedMeta.title);
+      getYjsStringMap(ydoc, 'meta').set('title', typedMeta.title);
       rerender({ meta: typedMeta });
     });
 

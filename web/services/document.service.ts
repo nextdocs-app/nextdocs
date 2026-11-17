@@ -1,4 +1,4 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { indexedDBService } from './indexed-db.service';
 import {
   createYjsDoc,

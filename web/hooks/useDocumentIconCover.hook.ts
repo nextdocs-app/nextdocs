@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import type * as Y from 'yjs';
+import type * as Y from '@y/y';
 import { documentService, iconCoverPatch } from '@/services/document.service';
 import {
   sanitizeDocumentCover,

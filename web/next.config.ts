@@ -8,7 +8,7 @@ import { PHASE_TEST } from 'next/constants';
 // transformIgnorePatterns cannot re-include node_modules. Keeping the list
 // test-scoped means production does not recompile packages it already bundles
 // correctly.
-const blockNotePackages = [
+const esmTestPackages = [
   '@blocknote/code-block',
   '@blocknote/core',
   '@blocknote/diagram-block',
@@ -16,11 +16,18 @@ const blockNotePackages = [
   '@blocknote/react',
   '@blocknote/shadcn',
   '@blocknote/xl-multi-column',
+  // Yjs 14 packages are ESM-only; @y/y even resolves to its raw `src`.
+  '@y/prosemirror',
+  '@y/protocols',
+  '@y/websocket',
+  '@y/y',
+  // @y/y resolves lib0 to its raw ESM `src` as well.
+  'lib0',
 ];
 
 const nextConfig = (phase: string): NextConfig => ({
   output: 'standalone',
-  ...(phase === PHASE_TEST ? { transpilePackages: blockNotePackages } : {}),
+  ...(phase === PHASE_TEST ? { transpilePackages: esmTestPackages } : {}),
   // NOTE: Disabled because BlockNote's Yjs UndoManager / ProseMirror view is
   // torn down during React StrictMode's double-mount (dev only), which breaks
   // undo/redo. We can't find any other workarounds that is not complex.

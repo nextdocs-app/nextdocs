@@ -1,4 +1,4 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { resolveRootDocumentId } from '@/lib/root-document.util';
 import { listPendingCloudCreates, queuePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { documentService } from '@/services/document.service';

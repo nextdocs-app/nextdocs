@@ -1,4 +1,4 @@
-import type * as Y from 'yjs';
+import type * as Y from '@y/y';
 
 /**
  * Module-level singleton for the active Y.Doc instance.

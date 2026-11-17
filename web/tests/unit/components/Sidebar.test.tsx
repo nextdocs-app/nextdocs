@@ -21,7 +21,7 @@ import { useWorkspace } from '../../../hooks/useWorkspace.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import { listPendingCloudCreates } from '../../../lib/pending-cloud-create.util';
 import { resolveRootDocumentId } from '../../../lib/root-document.util';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 
 const mockTreeNodes = {
   'id-1': {

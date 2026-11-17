@@ -1,5 +1,82 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import type { DocumentMeta } from '@/types/document.types';
+
+/**
+ * String-only view over one shared Yjs 14 map.
+ *
+ * Yjs 14 collapsed `Y.Map`/`Y.Array`/`Y.Text` into a single `YNode`, so the
+ * document meta channel is attributes on one node
+ * (`getAttr`/`setAttr`/`hasAttr`/`deleteAttr`) rather than a typed map. Keeping
+ * that behind this interface means the meta-sync code below does not depend on
+ * the v14 node API, and an rc-level API change touches one file.
+ */
+export interface YjsStringMapChange {
+  /** Keys whose attribute this transaction removed. */
+  deleted: ReadonlySet<string>;
+}
+
+export interface YjsStringMap {
+  get(key: string): string | undefined;
+  has(key: string): boolean;
+  set(key: string, value: string): void;
+  delete(key: string): void;
+  /** Returns an unsubscribe function. */
+  observe(listener: (change: YjsStringMapChange) => void): () => void;
+}
+
+/**
+ * The slice of a v14 `YNode` a map needs.
+ *
+ * `unknown` is required: `YNode`'s attribute methods are generic over the
+ * node's `DeltaConf`, which `Doc.get(name)` leaves as `any`. Casting through
+ * `unknown` keeps that erasure explicit instead of pretending the generic
+ * declarations line up with this narrower, string-only view.
+ */
+interface YjsStringMapNode {
+  getAttr(name: string): unknown;
+  setAttr(name: string, value: unknown): unknown;
+  hasAttr(name: string): boolean;
+  deleteAttr(name: string): void;
+  observe<F extends (event: { keysChanged: Set<string> }) => void>(listener: F): F;
+  unobserve(listener: (event: { keysChanged: Set<string> }) => void): void;
+}
+
+export function getYjsStringMap(ydoc: Y.Doc, name: string): YjsStringMap {
+  // `Doc.get` returns the same node for a name, so separate wrappers still read
+  // and write one shared value.
+  const node = ydoc.get(name) as unknown as YjsStringMapNode;
+
+  return {
+    get: (key) => {
+      const value = node.getAttr(key);
+      return typeof value === 'string' ? value : undefined;
+    },
+    has: (key) => node.hasAttr(key),
+    set: (key, value) => {
+      node.setAttr(key, value);
+    },
+    delete: (key) => {
+      if (node.hasAttr(key)) {
+        node.deleteAttr(key);
+      }
+    },
+    observe: (listener) => {
+      const handler = (event: { keysChanged: Set<string> }) => {
+        // v14 reports changed attrs but not their action; absence after the
+        // transaction is what distinguishes a delete from a set.
+        const deleted = new Set<string>();
+        for (const key of event.keysChanged) {
+          if (!node.hasAttr(key)) {
+            deleted.add(key);
+          }
+        }
+        listener({ deleted });
+      };
+      node.observe(handler);
+      return () => node.unobserve(handler);
+    },
+  };
+}
 
 export function createYjsDoc(): Y.Doc {
   return new Y.Doc();

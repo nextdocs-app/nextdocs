@@ -1,5 +1,6 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { waitFor } from '@testing-library/react';
+import { getYjsStringMap } from '../../../lib/yjs.util';
 import { DocumentServiceApiError } from '../../../services/document.service';
 import {
   determineMetaWriteRoute,
@@ -237,19 +238,19 @@ describe('mirrorTitleToYjs', () => {
 
     mirrorTitleToYjs(ydoc, 'Hello', guard);
 
-    expect(ydoc.getMap<string>(YJS_META_MAP_KEY).get(YJS_META_TITLE_KEY)).toBe('Hello');
+    expect(getYjsStringMap(ydoc, YJS_META_MAP_KEY).get(YJS_META_TITLE_KEY)).toBe('Hello');
     expect(guard.current).toBe('Hello');
   });
 
   it('skips the write when the map already holds the title', () => {
     const ydoc = new Y.Doc();
-    ydoc.getMap<string>(YJS_META_MAP_KEY).set(YJS_META_TITLE_KEY, 'Same');
+    getYjsStringMap(ydoc, YJS_META_MAP_KEY).set(YJS_META_TITLE_KEY, 'Same');
     const guard = { current: null as string | null };
 
     mirrorTitleToYjs(ydoc, 'Same', guard);
 
     expect(guard.current).toBe('Same');
-    expect(ydoc.getMap<string>(YJS_META_MAP_KEY).get(YJS_META_TITLE_KEY)).toBe('Same');
+    expect(getYjsStringMap(ydoc, YJS_META_MAP_KEY).get(YJS_META_TITLE_KEY)).toBe('Same');
   });
 });
 
@@ -262,7 +263,7 @@ describe('mirrorIconCoverToYjs', () => {
     const coverJson = JSON.stringify({ type: 'link', value: 'https://cdn.example/c.jpg' });
 
     mirrorIconCoverToYjs(ydoc, iconJson, coverJson, iconGuard, coverGuard);
-    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+    const metaMap = getYjsStringMap(ydoc, YJS_META_MAP_KEY);
     expect(metaMap.get(YJS_META_ICON_KEY)).toBe(iconJson);
     expect(metaMap.get(YJS_META_COVER_KEY)).toBe(coverJson);
 

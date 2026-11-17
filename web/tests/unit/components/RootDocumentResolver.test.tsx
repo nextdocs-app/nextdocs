@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import RootDocumentResolver from '../../../components/RootDocumentResolver';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
