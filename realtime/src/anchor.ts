@@ -85,7 +85,7 @@ function enforceAnchorRateLimit(req: AnchorRequest): void {
 }
 
 /**
- * The attribute key y-prosemirror uses for an overlapping mark: the mark name
+ * The attribute key @y/prosemirror uses for an overlapping mark: the mark name
  * plus an eight-character suffix. Comment marks can be nested, so a plain
  * `comment` key would let one thread's mark overwrite another's.
  *
@@ -97,51 +97,117 @@ export function commentMarkKey(threadId: string): string {
   return `comment--${digest.slice(0, 8)}`;
 }
 
-/** The plain key and the hashed form y-prosemirror may have written earlier. */
+/** The plain key and the hashed form @y/prosemirror can write. */
 export function isCommentMarkKey(key: string): boolean {
   return /^comment(?:--[A-Za-z0-9+/=]{8})?$/.test(key);
 }
 
-type TextEntry = {
-  node: Y.Node;
-  path: number[];
-};
-
 /**
- * Flatten the BlockNote fragment into text nodes in document order.
+ * Index the document for range formatting.
  *
- * Yjs 14 (the implementation Yhub persists) represents both XML elements and
- * text runs as `YNode`: a named node is an element, an unnamed one is text. The
- * path of child indexes gives a stable document order that can also place an
- * absolute position that landed on an element boundary.
+ * Every node gets the path of its own slot, so an absolute position (a node
+ * plus an index in that node's space) sorts against every other position, and a
+ * range can be split into one span per node. Only `nodes` are formatted, the
+ * ones holding text of their own: formatting a container would put the mark on
+ * its children's items instead of on its text. A block whose only content is an
+ * atom therefore has no anchor range, while a mark already on that atom is
+ * still cleared by `removeAnchorMark`.
  */
-function indexTree(root: Y.Node): { texts: TextEntry[]; paths: Map<Y.Node, number[]> } {
-  const texts: TextEntry[] = [];
+function indexTree(root: Y.Node): {
+  nodes: Array<{ node: Y.Node; path: number[] }>;
+  paths: Map<Y.Node, number[]>;
+} {
+  const nodes: Array<{ node: Y.Node; path: number[] }> = [];
   const paths = new Map<Y.Node, number[]>();
   paths.set(root, []);
 
   const walk = (node: Y.Node, path: number[]): void => {
     const children = node.toArray();
-    for (let index = 0; index < children.length; index += 1) {
-      const child = children[index];
-      if (!(child instanceof Y.Node)) {
-        continue;
-      }
-      const childPath = [...path, index];
-      paths.set(child, childPath);
-      if (child.name == null) {
-        texts.push({ node: child, path: childPath });
-      } else {
+    // Yjs 14 has two index spaces: text inserted as strings indexes characters,
+    // while content inserted as arrays indexes array items. `format` and
+    // absolute positions follow whichever space built the content.
+    const characterLength = children.reduce(
+      (total, child) => total + (typeof child === 'string' ? child.length : 1),
+      0
+    );
+    const characters = node.length === characterLength;
+    let offset = 0;
+    let carriesText = false;
+
+    for (const child of children) {
+      if (typeof child === 'string') {
+        if (!carriesText) {
+          carriesText = true;
+          nodes.push({ node, path });
+        }
+        offset += characters ? child.length : 1;
+      } else if (child instanceof Y.Node) {
+        const childPath = [...path, offset];
+        paths.set(child, childPath);
         walk(child, childPath);
+        offset += 1;
       }
     }
   };
 
   walk(root, []);
-  return { texts, paths };
+  return { nodes, paths };
 }
 
-/** Lexicographic order of child-index paths. */
+/**
+ * The position as `[...node path, index]`. A child occupies one index unit, so
+ * a slot starts at its own path and a position inside the child extends it. That
+ * makes plain lexicographic order the document order for positions and slots
+ * alike, which is what the span rules below rely on.
+ */
+function positionKey(
+  tree: ReturnType<typeof indexTree>,
+  absolute: Y.AbsolutePosition | null
+): number[] | null {
+  if (!absolute || absolute.index < 0 || absolute.index > absolute.type.length) {
+    // A malformed position, or one that points past the end of a type the
+    // document no longer has.
+    return null;
+  }
+  const path = tree.paths.get(absolute.type);
+  // The position names a type that is no longer part of the document.
+  return path ? [...path, absolute.index] : null;
+}
+
+function isStrictPrefix(prefix: number[], path: number[]): boolean {
+  return prefix.length < path.length && prefix.every((value, index) => value === path[index]);
+}
+
+/**
+ * Where the range begins inside a node that starts at `path`, or null when the
+ * node is entirely before the range.
+ *
+ * A node starting at or after the range's first position is inside it from its
+ * own beginning — that is the block-boundary case, where the selection starts on
+ * the container and the first block is already selected. When the position is
+ * inside the node instead, the range enters it at that depth's offset.
+ */
+function spanStart(path: number[], from: number[]): number | null {
+  if (comparePaths(from, path) <= 0) {
+    return 0;
+  }
+  return isStrictPrefix(path, from) ? from[path.length] : null;
+}
+
+/**
+ * Where the range ends inside a node of `length` that starts at `path`, or null
+ * when the node is entirely after the range. The mirror of `spanStart`: a node
+ * starting exactly at the range's last position is not selected, because the
+ * range ends before its first index.
+ */
+function spanEnd(path: number[], to: number[], length: number): number | null {
+  if (isStrictPrefix(path, to)) {
+    return to[path.length];
+  }
+  return comparePaths(to, path) > 0 ? length : null;
+}
+
+/** Lexicographic order of index-space paths. */
 function comparePaths(a: number[], b: number[]): number {
   const shared = Math.min(a.length, b.length);
   for (let index = 0; index < shared; index += 1) {
@@ -175,49 +241,6 @@ function absoluteOf(ydoc: Y.Doc, position: RelativePositionJson): Y.AbsolutePosi
     // A malformed or GC'd position is a stale selection, not a server fault.
     return null;
   }
-}
-
-/**
- * Turn an absolute position into a text node plus an offset.
- *
- * A selection normally lands inside a text run, but a selection that starts or
- * ends at a block boundary resolves to the block element instead. In that case
- * the first text after the boundary (start) or the last text before it (end) is
- * the edge of the range.
- */
-function resolveEndpoint(
-  absolute: Y.AbsolutePosition,
-  side: 'start' | 'end',
-  tree: ReturnType<typeof indexTree>
-): { textIndex: number; offset: number } | null {
-  const direct = tree.texts.findIndex((entry) => entry.node === absolute.type);
-  if (direct >= 0) {
-    const length = tree.texts[direct].node.length;
-    if (absolute.index < 0 || absolute.index > length) {
-      return null;
-    }
-    return { textIndex: direct, offset: absolute.index };
-  }
-
-  const path = tree.paths.get(absolute.type);
-  if (!path) {
-    // The position points into a type that is no longer part of the document.
-    return null;
-  }
-  const boundary = [...path, absolute.index];
-
-  if (side === 'start') {
-    // Equal paths are the first child at this boundary, whose text starts here.
-    const next = tree.texts.findIndex((entry) => comparePaths(entry.path, boundary) >= 0);
-    return next >= 0 ? { textIndex: next, offset: 0 } : null;
-  }
-
-  for (let index = tree.texts.length - 1; index >= 0; index -= 1) {
-    if (comparePaths(tree.texts[index].path, boundary) < 0) {
-      return { textIndex: index, offset: tree.texts[index].node.length };
-    }
-  }
-  return null;
 }
 
 function isRelativePosition(value: unknown): value is RelativePositionJson {
@@ -276,37 +299,31 @@ export function parseAnchorRequest(body: unknown): AnchorCreateRequest {
 export function applyAnchorMark(ydoc: Y.Doc, selection: AnchorSelection, threadId: string): void {
   const root = rootOf(ydoc);
   const tree = indexTree(root);
-  let startAbsolute = absoluteOf(ydoc, selection.anchor);
-  let endAbsolute = absoluteOf(ydoc, selection.head);
-  const startPath = startAbsolute && tree.paths.get(startAbsolute.type);
-  const endPath = endAbsolute && tree.paths.get(endAbsolute.type);
-  if (!startAbsolute || !endAbsolute || !startPath || !endPath) {
+  const start = positionKey(tree, absoluteOf(ydoc, selection.anchor));
+  const end = positionKey(tree, absoluteOf(ydoc, selection.head));
+  if (!start || !end) {
     throw apiError(409, 'Selection no longer exists');
   }
 
-  // Order the positions before applying the direction-specific block boundary rules.
-  if (comparePaths([...startPath, startAbsolute.index], [...endPath, endAbsolute.index]) > 0) {
-    [startAbsolute, endAbsolute] = [endAbsolute, startAbsolute];
-  }
-  const from = resolveEndpoint(startAbsolute, 'start', tree);
-  const to = resolveEndpoint(endAbsolute, 'end', tree);
-  if (!from || !to) {
-    throw apiError(409, 'Selection no longer exists');
-  }
-  if (from.textIndex === to.textIndex && from.offset === to.offset) {
+  // A selection can be dragged backwards.
+  const [from, to] = comparePaths(start, end) > 0 ? [end, start] : [start, end];
+  if (comparePaths(from, to) === 0) {
     throw apiError(400, 'Selection is empty');
   }
 
+  // One span per node, in the node's own index space. An inline atom (mention,
+  // image) sits between two text runs of the same node, so a span that covers
+  // the gap covers the atom too: the browser's node selection over a mention is
+  // exactly such a one-unit span.
   const key = commentMarkKey(threadId);
   let marked = false;
-  for (let index = from.textIndex; index <= to.textIndex; index += 1) {
-    const text = tree.texts[index].node;
-    const begin = index === from.textIndex ? from.offset : 0;
-    const finish = index === to.textIndex ? to.offset : text.length;
-    if (begin >= finish) {
+  for (const { node, path } of tree.nodes) {
+    const begin = spanStart(path, from);
+    const finish = spanEnd(path, to, node.length);
+    if (begin === null || finish === null || begin >= finish) {
       continue;
     }
-    text.format(begin, finish - begin, { [key]: { orphan: false, threadId } });
+    node.format(begin, finish - begin, { [key]: { orphan: false, threadId } });
     marked = true;
   }
 
@@ -331,7 +348,9 @@ export function removeAnchorMark(ydoc: Y.Doc, threadId: string): { removed: numb
   const tree = indexTree(root);
   let removed = 0;
 
-  for (const { node } of tree.texts) {
+  // Every node, not just the ones holding text: a block whose text was deleted
+  // around a mention keeps the mark on the mention itself.
+  for (const node of tree.paths.keys()) {
     const delta = node.toDelta() as unknown as {
       children?: Array<{ insert?: unknown; format?: Record<string, unknown> | null }>;
     };
@@ -340,8 +359,14 @@ export function removeAnchorMark(ydoc: Y.Doc, threadId: string): { removed: numb
 
     for (const op of delta.children ?? []) {
       const insert = op.insert;
-      const length = typeof insert === 'string' ? insert.length : 0;
-      if (typeof insert === 'string' && op.format) {
+      // The offset has to advance in the same index space `format` uses: a text
+      // run counts its characters, an inserted child (mention, image, …) counts
+      // one. Counting an atom as zero drifts every following range.
+      const length =
+        typeof insert === 'string' ? insert.length : Array.isArray(insert) ? insert.length : 0;
+      // Comment marks can sit on an inline atom (mention, image) as well as on a
+      // text run, so every insertion that carries a format has to be inspected.
+      if (op.format) {
         const keys = Object.keys(op.format).filter((key) => {
           if (!isCommentMarkKey(key)) {
             return false;

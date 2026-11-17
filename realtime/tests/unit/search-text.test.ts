@@ -1,34 +1,48 @@
 import { describe, expect, it } from '@jest/globals';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { extractDocumentText, MAX_TEXT_BYTES } from '../../src/search-text.js';
 
-function encode(build: (fragment: Y.XmlFragment) => void): Uint8Array {
+function encode(build: (root: Y.Node) => void): Uint8Array {
   const doc = new Y.Doc();
-  build(doc.getXmlFragment('blocknote'));
+  build(doc.get('blocknote'));
   const update = Y.encodeStateAsUpdate(doc);
   doc.destroy();
   return update;
 }
 
-function text(content: string): Y.XmlText {
-  const node = new Y.XmlText();
-  node.insert(0, content);
+function element(name: string, content?: string | Y.Node[]): Y.Node {
+  const node = new Y.Node(name);
+  if (typeof content === 'string') {
+    node.insert(0, content);
+  } else if (content) {
+    node.insert(0, content);
+  }
   return node;
 }
 
-function element(name: string, ...children: Array<Y.XmlElement | Y.XmlText>): Y.XmlElement {
-  const node = new Y.XmlElement(name);
-  node.insert(0, children);
-  return node;
+/**
+ * The shape the editor writes (`pmnodeToDelta` on BlockNote's ProseMirror doc):
+ * doc → blockGroup → blockContainer → paragraph, with the text runs owned by the
+ * paragraph itself and inline atoms as sibling nodes.
+ */
+function block(name: string, content: string): Y.Node {
+  return element(name, content);
+}
+
+function addBlock(root: Y.Node, blockNode: Y.Node): void {
+  // The root has to own the node before its length can be read.
+  root.insert(root.length, [blockNode]);
 }
 
 describe('extractDocumentText', () => {
   it('joins block text with newlines and keeps headings', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [
-        element('heading', text('Getting started')),
-        element('paragraph', text('Install the app.')),
-        element('paragraph', text('Then sign in.')),
+    const update = encode((root) => {
+      const group = element('blockGroup');
+      addBlock(root, group);
+      group.insert(0, [
+        element('blockContainer', [block('heading', 'Getting started')]),
+        element('blockContainer', [block('paragraph', 'Install the app.')]),
+        element('blockContainer', [block('paragraph', 'Then sign in.')]),
       ]);
     });
 
@@ -38,11 +52,24 @@ describe('extractDocumentText', () => {
     );
   });
 
+  it('keeps text from an unknown custom block instead of dropping it', () => {
+    const update = encode((root) => {
+      addBlock(root, element('customWidget', 'Quarterly numbers'));
+    });
+
+    expect(extractDocumentText(update).text).toBe('Quarterly numbers');
+  });
+
   it('renders table rows as pipe-separated cells', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [
-        element('tableRow', element('tableCell', text('Name')), element('tableCell', text('Role'))),
-      ]);
+    // BlockNote's table shape: table → tableRow → tableCell → tableParagraph.
+    const update = encode((root) => {
+      addBlock(
+        root,
+        element('tableRow', [
+          element('tableCell', [element('tableParagraph', 'Name')]),
+          element('tableCell', [element('tableParagraph', 'Role')]),
+        ])
+      );
     });
 
     expect(extractDocumentText(update).text).toBe('Name | Role');
@@ -50,41 +77,45 @@ describe('extractDocumentText', () => {
 
   it('keeps media captions and never indexes the attachment URL', () => {
     const image = element('image');
-    image.setAttribute('url', '/api/v1/attachments/secret/file?sig=abc');
-    image.setAttribute('caption', 'Architecture diagram');
+    image.setAttr('url', '/api/v1/attachments/secret/file?sig=abc');
+    image.setAttr('caption', 'Architecture diagram');
 
-    expect(extractDocumentText(encode((fragment) => fragment.insert(0, [image]))).text).toBe(
+    expect(extractDocumentText(encode((root) => addBlock(root, image))).text).toBe(
       'Architecture diagram'
     );
   });
 
-  it('indexes formatted text without Yjs markup or link targets', () => {
-    const update = encode((fragment) => {
-      const formatted = new Y.XmlText();
-      formatted.insert(0, 'See the ');
-      formatted.insert(8, 'runbook', {
-        link: { href: 'https://example.com/api/v1/attachments/secret?sig=abc' },
-      });
-      formatted.insert(15, ' now', { bold: true });
-      fragment.insert(0, [element('paragraph', formatted)]);
+  it('keeps a mention label without indexing its attributes', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      const mention = element('mention');
+      mention.setAttr('name', 'Alice');
+      mention.setAttr('id', 'user-1');
+      paragraph.insert(0, 'ask ');
+      paragraph.insert(4, [mention]);
     });
 
-    // XmlText.toString() renders <bold><link href="…">…</link></bold>: indexing it would
-    // leak attribute names and signed URLs into the projection and its snippets.
+    expect(extractDocumentText(update).text).toBe('ask Alice');
+  });
+
+  it('indexes formatted text without mark attributes or link targets', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      paragraph.insert(0, 'See the runbook now');
+      paragraph.format(8, 7, { link: { href: 'https://example.com/api/v1/attachments/secret' } });
+      paragraph.format(16, 3, { bold: {} });
+    });
+
+    // Only character content is searchable: indexing mark attributes would leak
+    // attribute names and signed URLs into the projection and its snippets.
     expect(extractDocumentText(update).text).toBe('See the runbook now');
   });
 
-  it('keeps text from an unknown custom block instead of dropping it', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [element('customWidget', text('Quarterly numbers'))]);
-    });
-
-    expect(extractDocumentText(update).text).toBe('Quarterly numbers');
-  });
-
   it('strips NUL and control characters and collapses tabs into spaces', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [element('paragraph', text('a\u0000b\u0007c\td\ne'))]);
+    const update = encode((root) => {
+      addBlock(root, block('paragraph', 'a\u0000b\u0007c\td\ne'));
     });
 
     expect(extractDocumentText(update).text).toBe('abc d\ne');
@@ -92,15 +123,14 @@ describe('extractDocumentText', () => {
 
   it('drops deleted blocks from a later update', () => {
     const doc = new Y.Doc();
-    const fragment = doc.getXmlFragment('blocknote');
-    const first = element('paragraph', text('keep me'));
-    const second = element('paragraph', text('delete me'));
-    fragment.insert(0, [first, second]);
+    const root = doc.get('blocknote');
+    addBlock(root, block('paragraph', 'keep me'));
+    addBlock(root, block('paragraph', 'delete me'));
     const beforeDelete = Y.encodeStateAsUpdate(doc);
 
     expect(extractDocumentText(beforeDelete).text).toContain('delete me');
 
-    fragment.delete(1, 1);
+    root.delete(1, 1);
     const afterDelete = Y.encodeStateAsUpdate(doc);
     expect(extractDocumentText(afterDelete).text).toBe('keep me');
     doc.destroy();
@@ -115,16 +145,14 @@ describe('extractDocumentText', () => {
   });
 
   it('preserves unicode and emoji', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [element('paragraph', text('Café 🚀 résumé'))]);
-    });
+    const update = encode((root) => addBlock(root, block('paragraph', 'Café 🚀 résumé')));
 
     expect(extractDocumentText(update).text).toBe('Café 🚀 résumé');
   });
 
   it('caps the projection on a byte boundary and flags it', () => {
     const long = 'word '.repeat(MAX_TEXT_BYTES);
-    const update = encode((fragment) => fragment.insert(0, [element('paragraph', text(long))]));
+    const update = encode((root) => addBlock(root, block('paragraph', long)));
     const extracted = extractDocumentText(update, 1000);
 
     expect(extracted.truncated).toBe(true);
@@ -132,9 +160,7 @@ describe('extractDocumentText', () => {
   });
 
   it('never leaves half of an emoji surrogate pair at the cut', () => {
-    const update = encode((fragment) => {
-      fragment.insert(0, [element('paragraph', text('🚀'.repeat(100)))]);
-    });
+    const update = encode((root) => addBlock(root, block('paragraph', '🚀'.repeat(100))));
     const extracted = extractDocumentText(update, 9);
 
     expect(extracted.truncated).toBe(true);

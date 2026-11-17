@@ -71,8 +71,8 @@ API's filter layer, and the service token is their only gate; exposing them woul
 the shared secret in reach of every client. `X-Yhub-Service` is not a browser header, so
 a request carrying it only from the realtime service is the intended path.
 
-A 503 is retried with backoff by `y-websocket` on the browser side and re-checked by the
-next sweep here. A transient outage never freezes a room: only a 401/403 is permanent.
+A 503 is retried with backoff by the browser's `@y/websocket` provider and re-checked
+by the next sweep here. A transient outage never freezes a room: only a 401/403 is permanent.
 
 ## Permissions
 

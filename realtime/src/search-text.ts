@@ -1,4 +1,4 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { MAX_TEXT_BYTES } from './config.js';
 
 /** Re-exported so callers and tests keep one import site for extraction limits. */
@@ -54,10 +54,15 @@ const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 /**
  * Extracts the searchable text of a BlockNote document from its Yjs update.
  *
- * <p>This is a schema-aware XML walk, not BlockNote's own converter: that one needs an
+ * <p>This is a schema-aware walk, not BlockNote's own converter: that one needs an
  * editor and a ProseMirror schema, which are far heavier than a server-side text
  * projection needs. Unknown elements still contribute their children, so a custom block
  * cannot make text disappear; it just does not get its own line break.
+ *
+ * <p>Yjs 14 stores a text run as a string child of its owning node, so the walk reads
+ * `Y.Node` and string children: a paragraph owns its runs directly, and inline atoms
+ * (mentions, images) are nodes among them. We migrated from Yjs 13 to Yjs 14 before the
+ * release, so there is no legacy room shape or backfill to support.
  */
 export function extractDocumentText(
   update: Uint8Array | null | undefined,
@@ -70,8 +75,12 @@ export function extractDocumentText(
       Y.applyUpdate(doc, update);
     }
     const parts: string[] = [];
-    for (const child of doc.getXmlFragment('blocknote').toArray()) {
-      walk(child, parts);
+    for (const child of doc.get('blocknote').toArray()) {
+      if (typeof child === 'string') {
+        parts.push(child);
+      } else if (child instanceof Y.Node) {
+        walk(child, parts);
+      }
     }
     return capText(normalize(parts.join('')), maxBytes);
   } finally {
@@ -79,44 +88,32 @@ export function extractDocumentText(
   }
 }
 
-function walk(node: Y.XmlElement | Y.XmlText | Y.XmlHook, out: string[]): void {
-  if (node instanceof Y.XmlText) {
-    // toString() renders Yjs formatting as markup ("<bold><link href=\"…\">text</link></bold>")
-    // and embeds as object strings. Only the string inserts are document text; attribute
-    // names, formatting, and, importantly, link targets must never reach the index.
-    for (const op of node.toDelta()) {
-      if (typeof op.insert === 'string') {
-        out.push(op.insert);
-      }
-    }
-    return;
-  }
-  if (!(node instanceof Y.XmlElement)) {
-    return;
-  }
-
-  const name = node.nodeName;
+function walk(node: Y.Node, out: string[]): void {
+  const name = node.name ?? '';
 
   if (name === 'tableRow') {
-    node.toArray().forEach((cell, index) => {
-      if (index > 0) {
+    let firstCell = true;
+    for (const cell of node.toArray()) {
+      if (typeof cell === 'string') {
+        out.push(cell);
+        continue;
+      }
+      if (!(cell instanceof Y.Node)) {
+        continue;
+      }
+      if (!firstCell) {
         out.push(' | ');
       }
-      if (cell instanceof Y.XmlElement) {
-        for (const child of cell.toArray()) {
-          walk(child, out);
-        }
-      }
-    });
+      firstCell = false;
+      visitChildren(cell, out);
+    }
     out.push('\n');
     return;
   }
 
   // Cells are separated by the row, so they must not append a break of their own.
   if (name === 'tableCell') {
-    for (const child of node.toArray()) {
-      walk(child, out);
-    }
+    visitChildren(node, out);
     return;
   }
 
@@ -137,26 +134,33 @@ function walk(node: Y.XmlElement | Y.XmlText | Y.XmlHook, out: string[]): void {
     return;
   }
 
-  if (CONTAINER_ELEMENTS.has(name)) {
-    for (const child of node.toArray()) {
-      walk(child, out);
-    }
-    return;
-  }
+  visitChildren(node, out);
 
-  const isBlock = BLOCK_ELEMENTS.has(name);
-  for (const child of node.toArray()) {
-    walk(child, out);
+  if (CONTAINER_ELEMENTS.has(name)) {
+    return;
   }
   // A space, not a newline, for an unknown or inline element: separating words matters,
   // but inventing a block boundary would reflow text that belongs to one line.
-  out.push(isBlock ? '\n' : ' ');
+  out.push(BLOCK_ELEMENTS.has(name) ? '\n' : ' ');
 }
 
-function firstAttribute(node: Y.XmlElement, names: readonly string[]): string | null {
+/** Recurses in document order, appending the text runs of string children as-is. */
+function visitChildren(node: Y.Node, out: string[]): void {
+  for (const child of node.toArray()) {
+    if (typeof child === 'string') {
+      // Formats (bold, link, …) never reach the projection: only the character
+      // content is indexed, so a signed link target cannot leak into a snippet.
+      out.push(child);
+    } else if (child instanceof Y.Node) {
+      walk(child, out);
+    }
+  }
+}
+
+function firstAttribute(node: Y.Node, names: readonly string[]): string | null {
   for (const name of names) {
-    const value = node.getAttribute(name);
-    if (value) {
+    const value = node.getAttr(name);
+    if (typeof value === 'string' && value) {
       return value;
     }
   }

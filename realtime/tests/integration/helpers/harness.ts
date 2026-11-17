@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
-import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
+import * as Y from '@y/y';
+import { WebsocketProvider } from '@y/websocket';
 import WebSocket from 'ws';
 import {
   DIST_MAIN,
@@ -302,7 +302,7 @@ export function connectClient(
     provider,
     destroy: () => {
       provider.destroy();
-      // y-websocket leaves the Awareness resync interval running; without this the
+      // @y/websocket leaves the Awareness check interval running; without this the
       // suite finishes green but Jest never exits.
       provider.awareness.destroy();
       clients.delete(client);
@@ -354,6 +354,22 @@ export function waitForClose(
   });
 }
 
+/**
+ * Concatenates the text runs of a node in document order. Yjs 14 has no `getText`:
+ * a run is a string child of its owning node, and an atomic child is not text.
+ */
+export function nodeText(node: Y.Node): string {
+  let text = '';
+  for (const child of node.toArray()) {
+    if (typeof child === 'string') {
+      text += child;
+    } else if (child instanceof Y.Node) {
+      text += nodeText(child);
+    }
+  }
+  return text;
+}
+
 /** Reads the stored document as the service identity, over a socket. */
 export async function readTextAsService(
   wsBase: string,
@@ -365,7 +381,7 @@ export async function readTextAsService(
   });
   try {
     await waitForSynced(client.provider);
-    return client.doc.getText(textName).toString();
+    return nodeText(client.doc.get(textName));
   } finally {
     client.destroy();
   }
