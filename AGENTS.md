@@ -33,6 +33,8 @@ All from the repo root:
 ./nd db               # psql into the container (postgres is published on host port 5433)
 npm run verify        # git-hook checks (format/lint/test) against the branch diff
 npm run verify:all    # force every service, like a push to main (needs local Postgres)
+npm run e2e           # Playwright browser suite; needs the full stack on the E2E
+                      # database (e2e/README.md documents the exact env)
 npm run check:runtime-versions  # .nvmrc / .java-version / Dockerfile drift guard
 ```
 
@@ -52,7 +54,7 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 
 ## CI and verification gotchas
 
-- CI is one `CI` workflow that calls the reusable per-service workflows. Pull requests stay path-filtered (`web/**`, `realtime/**`, `api/**`, plus shared JS/realtime types and root config), but every push to `main`, merge-queue batch, manual run, and nightly schedule runs the full suite. The only status branch protection should require is `CI / Required checks`; path-filtered workflows do not report a status when they are skipped.
+- CI is one `CI` workflow that calls the reusable per-service workflows. Pull requests stay path-filtered (`web/**`, `realtime/**`, `api/**`, plus shared JS/realtime types and root config), but every push to `main`, merge-queue batch, manual run, and nightly schedule runs the full suite. The browser suite (`ci-e2e`) runs on every non-PR event and on PRs that touch `web/**`, `realtime/**`, `api/**`, `e2e/**` or shared root config: it needs Postgres, Redis, Mailpit, the API, the realtime server and the web dev server at once, so it is path-filtered rather than unconditional on PRs. The only status branch protection should require is `CI / Required checks`; path-filtered workflows do not report a status when they are skipped.
 - Each service pipeline runs code checks and Docker image checks in separate parallel jobs. Web smoke-tests the image over HTTP; API starts the image against Postgres with Flyway and `ddl-auto=validate`; realtime runs the image-level integration tests. Dockerfiles must match `.nvmrc` / `.java-version`; `npm run check:runtime-versions` (part of CI) fails on drift.
 - Java formatting is **not** checked by `mvn test`: `spotless:check` is bound to `verify`, which CI runs in the API checks job. Run `./nd lint api` (or `./nd format api --fix`, Spotless + palantirJavaFormat) before pushing; do not hand-format Java.
 - Flyway migrations in `api/src/main/resources/db/migration` are never applied by the H2 tests (test properties disable Flyway; the local suite uses Hibernate `create-drop`). The PostgreSQL-backed migration suites in CI do apply Flyway, and the API Docker job boots the real image with `ddl-auto=validate`, so a migration/entity mismatch fails CI. Exercise new SQL against the `./nd` Postgres container too. Hibernate must not manage the schema — every schema change needs a migration file.

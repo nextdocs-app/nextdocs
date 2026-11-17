@@ -1,0 +1,168 @@
+name: CI - E2E
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: 0
+  # The API refuses a JWT secret shorter than 32 bytes and the realtime server
+  # rejects a one-sided token, so both services share this value.
+  JWT_SECRET: e2e-ci-jwt-secret-0123456789abcdef
+  YHUB_SERVICE_TOKEN: e2e-ci-service-token-0123456789abcdef
+  # Test-only AES-256 key; the API rejects only the shipped placeholder value.
+  OAUTH_TOKEN_ENCRYPTION_KEY_BASE64: IdjyIdChmW8Yv4AMcT+nYw7HPFaSQcKj2iK+47mkVVo=
+  POSTGRES: postgres://nextdocs:nextdocs@127.0.0.1:5432/nextdocs_e2e_yhub
+  SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/nextdocs_e2e
+  SPRING_DATASOURCE_USERNAME: nextdocs
+  SPRING_DATASOURCE_PASSWORD: nextdocs
+  # The app URLs stay on `localhost`: Next's dev server blocks its own HMR/dev
+  # resources when a page is loaded from another origin (127.0.0.1 counts).
+  API_BASE_URL: http://localhost:8080
+  CORS_ALLOWED_ORIGINS: http://localhost:3000
+  NEXT_PUBLIC_API_URL: http://localhost:8080
+  NEXT_PUBLIC_REALTIME_URL: ws://localhost:1234
+  # Mailpit carries the workspace invite the member account registers with.
+  SPRING_MAIL_HOST: 127.0.0.1
+  SPRING_MAIL_PORT: '1025'
+  SPRING_MAIL_SMTP_STARTTLS: 'false'
+  SPRING_MAIL_SMTP_SSL_CHECK_SERVER_IDENTITY: 'false'
+  APP_WEB_BASE_URL: http://localhost:3000
+  # The suite signs in several times per minute from one loopback address.
+  RATE_LIMIT_AUTH_MAX_REQUESTS: '1000'
+  E2E_API_URL: http://localhost:8080
+  E2E_WEB_URL: http://localhost:3000
+  E2E_REALTIME_URL: http://localhost:1234
+
+jobs:
+  e2e:
+    name: Browser suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: nextdocs
+          POSTGRES_PASSWORD: nextdocs
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextdocs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mailpit:
+        image: axllent/mailpit:v1.24
+        ports:
+          - 1025:1025
+          - 8025:8025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+          cache: maven
+          cache-dependency-path: api/pom.xml
+
+      - name: Validate workspace lockfile policy
+        run: npm run check:lockfiles
+
+      - name: Install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: Create the E2E databases and the Yhub schema
+        run: |
+          PGPASSWORD=nextdocs psql -h 127.0.0.1 -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e;'
+          PGPASSWORD=nextdocs psql -h 127.0.0.1 -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e_yhub;'
+          node node_modules/@y/hub/bin/init-db.js
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      # Three independent installs, so they run at once: the job's fixed cost is
+      # mostly waiting, and the suite itself is only ~90s.
+      - name: Build the services and install Chromium
+        run: |
+          set +e
+          (cd api && ./mvnw -q -DskipTests package) & api_build=$!
+          npm run build -w realtime & realtime_build=$!
+          npx playwright install --with-deps chromium & playwright_install=$!
+          wait "$api_build"; api_status=$?
+          wait "$realtime_build"; realtime_status=$?
+          wait "$playwright_install"; playwright_status=$?
+          [ "$api_status" -eq 0 ] || exit "$api_status"
+          [ "$realtime_status" -eq 0 ] || exit "$realtime_status"
+          [ "$playwright_status" -eq 0 ] || exit "$playwright_status"
+
+      # The three services start in the background; the suite's global setup waits
+      # for each of them and fails with the name of the one that never answered.
+      - name: Start the stack
+        run: |
+          mkdir -p /tmp/e2e
+          java -jar api/target/app.jar > /tmp/e2e/api.log 2>&1 &
+          PORT=1234 node realtime/dist/main.js > /tmp/e2e/realtime.log 2>&1 &
+          npm run dev -w web -- -p 3000 > /tmp/e2e/web.log 2>&1 &
+
+      - name: Warm the first-request routes
+        run: |
+          # `next dev` compiles a route on its first request, and a cold `/doc/...`
+          # compile would otherwise eat into the suite's 15s visibility timeout.
+          # --retry-connrefused also waits for the dev server to finish booting.
+          for path in /login /doc/00000000-0000-4000-8000-000000000000; do
+            curl -s -o /dev/null -m 180 --retry 60 --retry-delay 1 --retry-connrefused \
+              "http://localhost:3000$path" || true
+          done
+
+      - name: Run the browser suite
+        run: npm run e2e
+
+      - name: Upload traces, video and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-traces
+          path: e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          for log in api realtime web; do
+            echo "--- $log"
+            tail -n 200 "/tmp/e2e/$log.log" || true
+          done
+          echo "--- leftover documents"
+          PGPASSWORD=nextdocs psql -h 127.0.0.1 -U nextdocs -d nextdocs_e2e -c "SELECT count(*) FROM documents;" || true

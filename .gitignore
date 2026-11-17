@@ -21,3 +21,7 @@ yarn-debug.log*
 
 # Local attachment storage (default dev path for the API)
 api/data/
+
+# Playwright
+e2e/test-results/
+e2e/playwright-report/
