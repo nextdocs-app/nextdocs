@@ -25,6 +25,26 @@ const eslintConfig = defineConfig([
       'react-hooks/set-state-in-effect': 'warn',
     },
   },
+  {
+    // web ships on @y/y. These imports would load a second, incompatible Yjs
+    // and silently break syncing, so make them a lint error instead of a review note.
+    files: ['**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: 'yjs', message: 'Use @y/y in web.' },
+            { name: '@blocknote/core/yjs', message: 'Use @blocknote/core/y.' },
+            { name: 'y-websocket', message: 'Use @y/websocket.' },
+            { name: 'y-prosemirror', message: 'Use @y/prosemirror.' },
+            { name: 'y-monaco', message: 'y-monaco does not support @y/y.' },
+          ],
+          patterns: [{ group: ['y-protocols', 'y-protocols/*'], message: 'Use @y/protocols.' }],
+        },
+      ],
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

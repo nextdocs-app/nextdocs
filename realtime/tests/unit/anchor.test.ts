@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import * as Y from '@y/y';
-import * as Y13 from 'yjs';
 import {
   ANCHOR_RATE_LIMIT_MAX,
   applyAnchorMark,
@@ -21,64 +20,55 @@ const rateDocumentId = '44444444-4444-4444-8444-444444444444';
 
 type BuiltDocument = {
   ydoc: Y.Doc;
-  paragraphs: Y13.XmlElement[];
-  texts: Y13.XmlText[];
+  /** One text-bearing paragraph per content string, in document order. */
+  blocks: Y.Node[];
 };
 
-/** Build the client-side Yjs 13 shape and hydrate it the way Yhub does. */
+/** Build a v14 document with one text-bearing paragraph per string. */
 function buildDocument(contents: string[]): BuiltDocument {
-  const source = new Y13.Doc();
-  const fragment = source.getXmlFragment('blocknote');
-  const paragraphs: Y13.XmlElement[] = [];
-  const texts: Y13.XmlText[] = [];
+  const ydoc = new Y.Doc();
+  const root = ydoc.get('blocknote');
+  const blocks: Y.Node[] = [];
 
   for (const content of contents) {
-    const paragraph = new Y13.XmlElement('paragraph');
-    paragraph.setAttribute('id', crypto.randomUUID());
-    const text = new Y13.XmlText(content);
-    paragraph.insert(0, [text]);
-    fragment.insert(fragment.length, [paragraph]);
-    paragraphs.push(paragraph);
-    texts.push(text);
+    const paragraph = new Y.Node('paragraph');
+    paragraph.setAttr('id', crypto.randomUUID());
+    paragraph.insert(0, content);
+    root.insert(root.length, [paragraph]);
+    blocks.push(paragraph);
   }
 
-  const ydoc = new Y.Doc();
-  Y.applyUpdate(ydoc, Y13.encodeStateAsUpdate(source));
-  return { ydoc, paragraphs, texts };
+  return { ydoc, blocks };
 }
 
-function relative(type: Y13.XmlText | Y13.XmlElement, index: number): RelativePositionJson {
-  return Y13.relativePositionToJSON(
-    Y13.createRelativePositionFromTypeIndex(type, index)
+/** A relative position on a v14 node, in the form the browser sends it. */
+function relative(node: Y.Node, index: number): RelativePositionJson {
+  return Y.relativePositionToJSON(
+    Y.createRelativePositionFromTypeIndex(node, index)
   ) as RelativePositionJson;
 }
 
 type TextOp = { insert: string; format?: Record<string, unknown> };
 
-/** Flatten the hydrated document's text runs in order. */
+/** Flatten the document's text runs in document order. */
 function textOps(ydoc: Y.Doc): TextOp[] {
-  const root = ydoc.get('blocknote');
   const ops: TextOp[] = [];
 
   const walk = (node: Y.Node): void => {
-    for (const child of node.toArray()) {
-      if (!(child instanceof Y.Node)) {
-        continue;
+    const delta = node.toDelta() as unknown as { children?: Array<TextOp> };
+    for (const op of delta.children ?? []) {
+      if (typeof op.insert === 'string') {
+        ops.push(op);
       }
-      if (child.name == null) {
-        const delta = child.toDelta() as unknown as { children?: Array<TextOp> };
-        for (const op of delta.children ?? []) {
-          if (typeof op.insert === 'string') {
-            ops.push(op);
-          }
-        }
-      } else {
+    }
+    for (const child of node.toArray()) {
+      if (child instanceof Y.Node) {
         walk(child);
       }
     }
   };
 
-  walk(root);
+  walk(ydoc.get('blocknote'));
   return ops;
 }
 
@@ -88,13 +78,47 @@ function commentFormats(op: TextOp): Record<string, unknown> {
   );
 }
 
+/**
+ * A v14 paragraph with text runs around an inline atom (“hi @Alice there”), the
+ * shape `pmnodeToDelta` writes for real mentions: the text runs are characters
+ * in the node's index space and the atom counts one.
+ */
+function mentionParagraph(): { ydoc: Y.Doc; paragraph: Y.Node; mention: Y.Node } {
+  const ydoc = new Y.Doc();
+  const paragraph = new Y.Node('paragraph');
+  ydoc.get('blocknote').insert(0, [paragraph]);
+  const mention = new Y.Node('mention');
+  mention.setAttr('name', 'Alice');
+  paragraph.insert(0, 'hi ');
+  paragraph.insert(3, [mention]);
+  paragraph.insert(4, ' there');
+  return { ydoc, paragraph, mention };
+}
+
+type NodeOp = { insert: unknown; format?: Record<string, unknown> };
+
+function nodeOps(node: Y.Node): NodeOp[] {
+  const delta = node.toDelta() as unknown as { children?: Iterable<NodeOp> };
+  return delta.children ? [...delta.children] : [];
+}
+
+/** The text this node carries under a comment format, in document order. */
+function markedText(node: Y.Node): string {
+  return nodeOps(node)
+    .filter(
+      (op) => typeof op.insert === 'string' && Object.keys(commentFormats(op as TextOp)).length > 0
+    )
+    .map((op) => op.insert)
+    .join('');
+}
+
 describe('applyAnchorMark', () => {
   it('marks exactly the selected text', () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
 
     applyAnchorMark(
       ydoc,
-      { anchor: relative(texts[0], 6), head: relative(texts[0], 11) },
+      { anchor: relative(blocks[0], 6), head: relative(blocks[0], 11) },
       threadId
     );
 
@@ -106,10 +130,245 @@ describe('applyAnchorMark', () => {
     });
   });
 
-  it('marks every text run between two paragraphs', () => {
-    const { ydoc, texts } = buildDocument(['alpha beta', 'gamma delta']);
+  it('marks a v14 paragraph whose text is a string child', () => {
+    // The browser's editor writes string children and indexes characters, so a
+    // block is positioned directly without a separate text node.
+    const ydoc = new Y.Doc();
+    const paragraph = new Y.Node('paragraph');
+    paragraph.insert(0, 'hello world');
+    ydoc.get('blocknote').insert(0, [paragraph]);
 
-    applyAnchorMark(ydoc, { anchor: relative(texts[0], 6), head: relative(texts[1], 5) }, threadId);
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 6), head: relative(paragraph, 11) },
+      threadId
+    );
+
+    const delta = paragraph.toDelta() as unknown as { children?: Iterable<TextOp> };
+    const ops = delta.children ? [...delta.children] : [];
+    expect(ops.map((op) => op.insert)).toEqual(['hello ', 'world']);
+    expect(commentFormats(ops[1])).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+  });
+
+  it('marks text around an inline atom instead of rejecting the selection', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+    expect(paragraph.length).toBe(10);
+
+    // Character 3..4 is the mention: `format` and absolute indexes share the
+    // node's own length, so a selection spanning it is neither stale nor short.
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 0), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    const ops = nodeOps(paragraph);
+    expect(ops.map((op) => (typeof op.insert === 'string' ? op.insert : 'mention'))).toEqual([
+      'hi ',
+      'mention',
+      ' there',
+    ]);
+    for (const op of ops) {
+      expect(commentFormats(op)).toEqual({
+        [commentMarkKey(threadId)]: { orphan: false, threadId },
+      });
+    }
+  });
+
+  it('does not mark the atom when the selection starts after it', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 4), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    const [before, atom, after] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({});
+    expect(commentFormats(atom)).toEqual({});
+    expect(commentFormats(after)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+  });
+
+  it('marks the atom a selection starts on', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+
+    // A selection can begin on the mention itself: the browser reports the
+    // atom's own index, which is one unit of the paragraph, not the start of the
+    // text that follows it.
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 3), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    const [before, atom, after] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({});
+    expect(commentFormats(atom)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+    expect(commentFormats(after)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+  });
+
+  it('marks the atom a selection ends on', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+
+    // The end of a range is exclusive, so index 4 is the first position after
+    // the atom and still selects it; index 3 stops short of it.
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 0), head: relative(paragraph, 4) },
+      threadId
+    );
+
+    const [before, atom, after] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+    expect(commentFormats(atom)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+    expect(commentFormats(after)).toEqual({});
+  });
+
+  it('does not mark the atom when the selection ends before it', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 0), head: relative(paragraph, 3) },
+      threadId
+    );
+
+    const [before, atom] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+    expect(commentFormats(atom)).toEqual({});
+  });
+
+  it('marks an atom-only selection', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+
+    // Selecting nothing but a mention has no text run to anchor to at all; the
+    // atom's own index unit is the whole range.
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 3), head: relative(paragraph, 4) },
+      threadId
+    );
+
+    const [before, atom, after] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({});
+    expect(commentFormats(atom)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+    expect(commentFormats(after)).toEqual({});
+  });
+
+  it('marks an atom-only selection at the end of a block', () => {
+    // The same selection with no text after the atom: there is no following run
+    // to extend the range to, so the atom alone has to carry the mark.
+    const ydoc = new Y.Doc();
+    const paragraph = new Y.Node('paragraph');
+    ydoc.get('blocknote').insert(0, [paragraph]);
+    const mention = new Y.Node('mention');
+    mention.setAttr('name', 'Alice');
+    paragraph.insert(0, 'hi ');
+    paragraph.insert(3, [mention]);
+
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 3), head: relative(paragraph, 4) },
+      threadId
+    );
+
+    const [before, atom] = nodeOps(paragraph);
+    expect(commentFormats(before)).toEqual({});
+    expect(commentFormats(atom)).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+  });
+
+  it('marks a selection made on the block containers', () => {
+    // The browser positions a selection that spans whole blocks on the container
+    // that holds them, not on their text.
+    const { ydoc, blocks } = buildDocument(['alpha', 'beta']);
+    const root = ydoc.get('blocknote');
+
+    applyAnchorMark(ydoc, { anchor: relative(root, 0), head: relative(root, 2) }, threadId);
+
+    expect(markedText(blocks[0])).toBe('alpha');
+    expect(markedText(blocks[1])).toBe('beta');
+  });
+
+  it('stops at the block boundary the selection ends on', () => {
+    const { ydoc, blocks } = buildDocument(['alpha', 'beta']);
+    const root = ydoc.get('blocknote');
+
+    applyAnchorMark(ydoc, { anchor: relative(root, 0), head: relative(root, 1) }, threadId);
+
+    expect(markedText(blocks[0])).toBe('alpha');
+    expect(markedText(blocks[1])).toBe('');
+  });
+
+  it('orders a node that owns text before its own children', () => {
+    // A node can hold text and child text at once. The path sort has to keep the
+    // parent's run before the nested text, or a range that starts on the parent
+    // and ends inside the child walks backwards and is rejected.
+    const ydoc = new Y.Doc();
+    const root = ydoc.get('blocknote');
+    const host = new Y.Node('paragraph');
+    root.insert(0, [host]);
+    const inner = new Y.Node('innerNode');
+    host.insert(0, ['pre ']);
+    host.insert(1, [inner]);
+    host.insert(2, [' post']);
+    inner.insert(0, 'inner text');
+
+    applyAnchorMark(ydoc, { anchor: relative(host, 0), head: relative(inner, 10) }, threadId);
+
+    // The child's own text is inside the range, so it carries the mark too.
+    expect(commentFormats(nodeOps(inner)[0])).toEqual({
+      [commentMarkKey(threadId)]: { orphan: false, threadId },
+    });
+  });
+
+  it('orders a parent’s trailing text after its nested child', () => {
+    // The editor writes this shape: string runs index characters, so the text
+    // after the nested node follows it in the same index space. A selection from
+    // the parent's trailing run back into the nested text used to resolve
+    // backwards and be rejected as a stale selection.
+    const ydoc = new Y.Doc();
+    const root = ydoc.get('blocknote');
+    const host = new Y.Node('paragraph');
+    root.insert(0, [host]);
+    const inner = new Y.Node('innerNode');
+    host.insert(0, 'pre ');
+    host.insert(4, [inner]);
+    host.insert(5, ' post');
+    inner.insert(0, 'inner text');
+
+    applyAnchorMark(ydoc, { anchor: relative(host, 7), head: relative(inner, 5) }, threadId);
+
+    expect(markedText(inner)).toBe(' text');
+    expect(markedText(host)).toBe(' p');
+  });
+
+  it('marks every text run between two paragraphs', () => {
+    const { ydoc, blocks } = buildDocument(['alpha beta', 'gamma delta']);
+
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(blocks[0], 6), head: relative(blocks[1], 5) },
+      threadId
+    );
 
     const ops = textOps(ydoc);
     const byText = (text: string): TextOp | undefined => ops.find((op) => op.insert === text);
@@ -124,11 +383,11 @@ describe('applyAnchorMark', () => {
   });
 
   it('normalizes a reversed selection', () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
 
     applyAnchorMark(
       ydoc,
-      { anchor: relative(texts[0], 11), head: relative(texts[0], 6) },
+      { anchor: relative(blocks[0], 11), head: relative(blocks[0], 6) },
       threadId
     );
 
@@ -139,9 +398,9 @@ describe('applyAnchorMark', () => {
   it.each([false, true])(
     'applies a full-block selection on block boundaries (backward: %s)',
     (backward) => {
-      const { ydoc, paragraphs } = buildDocument(['block one', 'block two']);
-      const start = relative(paragraphs[0], 0);
-      const end = relative(paragraphs[1], 1);
+      const { ydoc, blocks } = buildDocument(['block one', 'block two']);
+      const start = relative(blocks[0], 0);
+      const end = relative(blocks[1], blocks[1].length);
 
       applyAnchorMark(
         ydoc,
@@ -155,10 +414,10 @@ describe('applyAnchorMark', () => {
   );
 
   it('is idempotent when the same request is retried', () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
     const selection = {
-      anchor: relative(texts[0], 0),
-      head: relative(texts[0], 5),
+      anchor: relative(blocks[0], 0),
+      head: relative(blocks[0], 5),
     };
 
     applyAnchorMark(ydoc, selection, threadId);
@@ -170,14 +429,14 @@ describe('applyAnchorMark', () => {
 
   it('rejects a relative position that no longer resolves', () => {
     const { ydoc } = buildDocument(['hello world']);
-    const { texts: otherTexts } = buildDocument(['other document']);
+    const { blocks: otherBlocks } = buildDocument(['other document']);
 
     expect(() =>
       applyAnchorMark(
         ydoc,
         {
-          anchor: relative(otherTexts[0], 0),
-          head: relative(otherTexts[0], 5),
+          anchor: relative(otherBlocks[0], 0),
+          head: relative(otherBlocks[0], 5),
         },
         threadId
       )
@@ -185,12 +444,12 @@ describe('applyAnchorMark', () => {
   });
 
   it('rejects an empty selection', () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
 
     expect(() =>
       applyAnchorMark(
         ydoc,
-        { anchor: relative(texts[0], 5), head: relative(texts[0], 5) },
+        { anchor: relative(blocks[0], 5), head: relative(blocks[0], 5) },
         threadId
       )
     ).toThrow('Selection is empty');
@@ -199,11 +458,15 @@ describe('applyAnchorMark', () => {
 
 describe('removeAnchorMark', () => {
   it('removes only the requested thread and leaves the text intact', () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
-    applyAnchorMark(ydoc, { anchor: relative(texts[0], 0), head: relative(texts[0], 5) }, threadId);
+    const { ydoc, blocks } = buildDocument(['hello world']);
     applyAnchorMark(
       ydoc,
-      { anchor: relative(texts[0], 6), head: relative(texts[0], 11) },
+      { anchor: relative(blocks[0], 0), head: relative(blocks[0], 5) },
+      threadId
+    );
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(blocks[0], 6), head: relative(blocks[0], 11) },
       otherThreadId
     );
 
@@ -214,6 +477,85 @@ describe('removeAnchorMark', () => {
     expect(ops.map((op) => op.insert).join('')).toBe('hello world');
     expect(JSON.stringify(ops)).not.toContain(threadId);
     expect(JSON.stringify(ops)).toContain(otherThreadId);
+  });
+
+  it('clears a mark that starts after an inline atom', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 4), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    const result = removeAnchorMark(ydoc, threadId);
+
+    // An atom contributes one index, not zero: drifting the offset by it would
+    // clear the wrong characters and leave part of the mark behind.
+    expect(result.removed).toBe(1);
+    expect(JSON.stringify(nodeOps(paragraph))).not.toContain(threadId);
+    expect(
+      nodeOps(paragraph).map((op) => (typeof op.insert === 'string' ? op.insert : 'atom'))
+    ).toEqual(['hi ', 'atom', ' there']);
+  });
+
+  it('clears a mark that sits on an inline atom', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+    // The editor can put the comment mark on the mention's own insertion, not on
+    // the text runs around it.
+    paragraph.format(3, 1, { [commentMarkKey(threadId)]: { orphan: false, threadId } });
+
+    const result = removeAnchorMark(ydoc, threadId);
+
+    expect(result.removed).toBe(1);
+    expect(JSON.stringify(nodeOps(paragraph))).not.toContain(threadId);
+  });
+
+  it('clears every run of a node that holds one mark', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+    // One anchor spanning the whole paragraph is one thread's mark on three
+    // insertions, and all three have to go.
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 0), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    const result = removeAnchorMark(ydoc, threadId);
+
+    expect(result.removed).toBe(3);
+    expect(JSON.stringify(nodeOps(paragraph))).not.toContain(threadId);
+  });
+
+  it('clears a mark on a block that no longer holds text', () => {
+    // Only an atom is left, so the block is not among the text-bearing nodes a
+    // scan of the text runs would visit.
+    const ydoc = new Y.Doc();
+    const paragraph = new Y.Node('paragraph');
+    ydoc.get('blocknote').insert(0, [paragraph]);
+    const mention = new Y.Node('mention');
+    mention.setAttr('name', 'Alice');
+    paragraph.insert(0, [mention]);
+    paragraph.format(0, 1, { [commentMarkKey(threadId)]: { orphan: false, threadId } });
+
+    expect(removeAnchorMark(ydoc, threadId)).toEqual({ removed: 1 });
+    expect(JSON.stringify(nodeOps(paragraph))).not.toContain(threadId);
+  });
+
+  it('clears a mark on a mention after its surrounding text is deleted', () => {
+    const { ydoc, paragraph } = mentionParagraph();
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(paragraph, 0), head: relative(paragraph, 10) },
+      threadId
+    );
+
+    // Deleting the commented text leaves the mark on the atom alone.
+    paragraph.delete(4, 6);
+    paragraph.delete(0, 3);
+    expect(JSON.stringify(nodeOps(paragraph))).toContain(threadId);
+
+    expect(removeAnchorMark(ydoc, threadId)).toEqual({ removed: 1 });
+    expect(JSON.stringify(nodeOps(paragraph))).not.toContain(threadId);
   });
 
   it('is a no-op when the thread has no mark', () => {
@@ -278,7 +620,7 @@ describe('anchor handlers', () => {
   }
 
   it('validates the thread, inserts the mark, and answers JSON', async () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
     global.fetch = jest.fn(async () =>
       apiReply(200, { success: true, data: { id: threadId } })
     ) as unknown as typeof fetch;
@@ -288,8 +630,8 @@ describe('anchor handlers', () => {
         body: {
           threadId,
           selection: {
-            anchor: relative(texts[0], 0),
-            head: relative(texts[0], 5),
+            anchor: relative(blocks[0], 0),
+            head: relative(blocks[0], 5),
           },
         },
       })
@@ -332,7 +674,7 @@ describe('anchor handlers', () => {
   });
 
   it('limits repeated anchor requests per user and document', async () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
     global.fetch = jest.fn(async () =>
       apiReply(200, { success: true, data: { id: threadId } })
     ) as unknown as typeof fetch;
@@ -340,8 +682,8 @@ describe('anchor handlers', () => {
     const body = {
       threadId,
       selection: {
-        anchor: relative(texts[0], 0),
-        head: relative(texts[0], 5),
+        anchor: relative(blocks[0], 0),
+        head: relative(blocks[0], 5),
       },
     };
     const request = () => httpRequest(ydoc, { docid: rateDocumentId, body });
@@ -354,7 +696,7 @@ describe('anchor handlers', () => {
   });
 
   it('refuses to anchor a thread the API does not return', async () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
+    const { ydoc, blocks } = buildDocument(['hello world']);
     global.fetch = jest.fn(async () =>
       apiReply(404, { success: false, error: 'NOT_FOUND' })
     ) as unknown as typeof fetch;
@@ -365,8 +707,8 @@ describe('anchor handlers', () => {
           body: {
             threadId,
             selection: {
-              anchor: relative(texts[0], 0),
-              head: relative(texts[0], 5),
+              anchor: relative(blocks[0], 0),
+              head: relative(blocks[0], 5),
             },
           },
         })
@@ -377,8 +719,12 @@ describe('anchor handlers', () => {
   });
 
   it('removes an anchor only after the API reports the thread gone', async () => {
-    const { ydoc, texts } = buildDocument(['hello world']);
-    applyAnchorMark(ydoc, { anchor: relative(texts[0], 0), head: relative(texts[0], 5) }, threadId);
+    const { ydoc, blocks } = buildDocument(['hello world']);
+    applyAnchorMark(
+      ydoc,
+      { anchor: relative(blocks[0], 0), head: relative(blocks[0], 5) },
+      threadId
+    );
     global.fetch = jest.fn(async () =>
       apiReply(404, { success: false, error: 'NOT_FOUND' })
     ) as unknown as typeof fetch;

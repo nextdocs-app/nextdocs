@@ -1,7 +1,7 @@
 import type { CommentData, ThreadData } from '@blocknote/core/comments';
-import type { Awareness } from 'y-protocols/awareness';
-import * as Y from 'yjs';
-import { absolutePositionToRelativePosition, ySyncPluginKey } from 'y-prosemirror';
+import type { Awareness } from '@y/protocols/awareness';
+import * as Y from '@y/y';
+import { resolvedPositionToRelativePosition } from '@y/prosemirror';
 import { ApiError } from '../../../services/api-client';
 import { commentAnchorService } from '../../../services/comment-anchor.service';
 import { commentService } from '../../../services/comment.service';
@@ -35,9 +35,8 @@ jest.mock('../../../services/comment.service', () => ({
   },
 }));
 
-jest.mock('y-prosemirror', () => ({
-  absolutePositionToRelativePosition: jest.fn(),
-  ySyncPluginKey: { getState: jest.fn() },
+jest.mock('@y/prosemirror', () => ({
+  resolvedPositionToRelativePosition: jest.fn(),
 }));
 
 const service = commentService as jest.Mocked<typeof commentService>;
@@ -144,8 +143,7 @@ function blockNoteComment(
 describe('CommentThreadStore', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (absolutePositionToRelativePosition as jest.Mock).mockReset();
-    (ySyncPluginKey.getState as jest.Mock).mockReset();
+    (resolvedPositionToRelativePosition as jest.Mock).mockReset();
     anchorService.add.mockResolvedValue(undefined);
     anchorService.remove.mockResolvedValue(undefined);
   });
@@ -296,42 +294,34 @@ describe('CommentThreadStore', () => {
 
   it('serializes the editor selection into relative positions for the anchor request', async () => {
     const relativeDoc = new Y.Doc();
-    const text = relativeDoc.getText('anchor');
+    const text = relativeDoc.get('anchor');
     text.insert(0, 'hello world');
     const anchor = Y.createRelativePositionFromTypeIndex(text, 1);
     const head = Y.createRelativePositionFromTypeIndex(text, 4);
-    const binding = { type: {}, mapping: {} };
-    (absolutePositionToRelativePosition as jest.Mock)
+    // An array insert would make both indexes serialize to the same anchor
+    // (no item), so the assertions below could pass with equal endpoints.
+    expect(Y.relativePositionToJSON(anchor)).not.toEqual(Y.relativePositionToJSON(head));
+    const view = { state: { doc: { resolve: (pos: number) => ({ pos }) } } };
+    (resolvedPositionToRelativePosition as jest.Mock)
       .mockReturnValueOnce(anchor)
       .mockReturnValueOnce(head);
-    (ySyncPluginKey.getState as jest.Mock).mockReturnValue({ binding });
     const { store } = createStore();
 
     await store.addThreadToDocument({
       threadId: 'thread-1',
       selection: { anchor: 1, head: 4 },
-      editor: { prosemirrorState: {} } as never,
+      editor: { prosemirrorView: view } as never,
     });
 
-    expect(absolutePositionToRelativePosition).toHaveBeenNthCalledWith(
-      1,
-      1,
-      binding.type,
-      binding.mapping
-    );
-    expect(absolutePositionToRelativePosition).toHaveBeenNthCalledWith(
-      2,
-      4,
-      binding.type,
-      binding.mapping
-    );
+    expect(resolvedPositionToRelativePosition).toHaveBeenNthCalledWith(1, view, { pos: 1 });
+    expect(resolvedPositionToRelativePosition).toHaveBeenNthCalledWith(2, view, { pos: 4 });
     expect(anchorService.add).toHaveBeenCalledWith('doc-1', 'token-1', 'thread-1', {
       anchor: Y.relativePositionToJSON(anchor),
       head: Y.relativePositionToJSON(head),
     });
   });
 
-  it('reports an unavailable anchor binding without failing thread creation', async () => {
+  it('reports an unavailable editor view without failing thread creation', async () => {
     const onError = jest.fn();
     const onAnchorError = jest.fn();
     const { store } = createStore({ onError, onAnchorError });
@@ -340,7 +330,7 @@ describe('CommentThreadStore', () => {
       store.addThreadToDocument({
         threadId: 'thread-1',
         selection: { anchor: 0, head: 5 },
-        editor: { prosemirrorState: {} } as never,
+        editor: {} as never,
       })
     ).resolves.toBeUndefined();
 
@@ -351,14 +341,12 @@ describe('CommentThreadStore', () => {
 
   it('reports a rejected anchor request without failing thread creation', async () => {
     const relativeDoc = new Y.Doc();
-    const text = relativeDoc.getText('anchor');
-    text.insert(0, 'hello world');
-    (absolutePositionToRelativePosition as jest.Mock)
+    const text = relativeDoc.get('anchor');
+    text.insert(0, ['hello world']);
+    const view = { state: { doc: { resolve: (pos: number) => ({ pos }) } } };
+    (resolvedPositionToRelativePosition as jest.Mock)
       .mockReturnValueOnce(Y.createRelativePositionFromTypeIndex(text, 0))
       .mockReturnValueOnce(Y.createRelativePositionFromTypeIndex(text, 5));
-    (ySyncPluginKey.getState as jest.Mock).mockReturnValue({
-      binding: { type: {}, mapping: {} },
-    });
     const error = new ApiError('Anchor service down', 503);
     anchorService.add.mockRejectedValue(error);
     const onError = jest.fn();
@@ -369,7 +357,7 @@ describe('CommentThreadStore', () => {
       store.addThreadToDocument({
         threadId: 'thread-1',
         selection: { anchor: 0, head: 5 },
-        editor: { prosemirrorState: {} } as never,
+        editor: { prosemirrorView: view } as never,
       })
     ).resolves.toBeUndefined();
 

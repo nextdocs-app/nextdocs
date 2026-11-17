@@ -8,7 +8,7 @@ import {
 } from '@blocknote/core';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
-import { withCollaboration } from '@blocknote/core/yjs';
+import { withCollaboration } from '@blocknote/core/y';
 import { en } from '@blocknote/core/locales';
 import {
   AddCommentButton,
@@ -81,9 +81,9 @@ import type { DocumentAccessLevel } from '@/services/document.service';
 import type { AuthUser } from '@/types/auth.types';
 import type { CommentsFilter, CommentsSort } from '@/components/comments/CommentProvider';
 import type { DocumentMeta } from '@/types/document.types';
-import type * as Y from 'yjs';
-import type { WebsocketProvider } from 'y-websocket';
-import type { Awareness } from 'y-protocols/awareness';
+import type * as Y from '@y/y';
+import type { WebsocketProvider } from '@y/websocket';
+import type { Awareness } from '@y/protocols/awareness';
 import {
   COMMENT_USER_CACHE_TTL_MS,
   createCommentThreadFloatingOptions,
@@ -660,7 +660,7 @@ export function EditorContent({
       },
       collaboration: {
         provider: collaborationProvider,
-        fragment: ydoc.getXmlFragment('blocknote'),
+        fragment: ydoc.get('blocknote'),
         user: {
           name: activeCommentUser.username,
           color: getPresenceColor(

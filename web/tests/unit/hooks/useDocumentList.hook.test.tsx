@@ -5,7 +5,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import documentListReducer from '@/stores/documentList/documentList.slice';
 import authReducer from '@/stores/auth/auth.slice';
 import documentReducer from '@/stores/document/document.slice';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { useDocumentList } from '@/hooks/useDocumentList.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
 import { useCloudBackoff } from '../../../hooks/useCloudBackoff.hook';

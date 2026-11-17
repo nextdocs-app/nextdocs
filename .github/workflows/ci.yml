@@ -35,6 +35,7 @@ jobs:
       web: ${{ steps.resolve.outputs.web }}
       realtime: ${{ steps.resolve.outputs.realtime }}
       api: ${{ steps.resolve.outputs.api }}
+      e2e: ${{ steps.resolve.outputs.e2e }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -107,6 +108,24 @@ jobs:
               - "docker/**"
               - "docker-compose.yml"
               - ".github/workflows/**"
+            # The browser suite drives all three services, so it follows the union
+            # of the paths that can change what they serve. Formatting-only files
+            # and dev tooling are left out: they cannot change the running app.
+            e2e:
+              - "e2e/**"
+              - "web/**"
+              - "realtime/**"
+              - "api/**"
+              - "package.json"
+              - "package-lock.json"
+              - "turbo.json"
+              - "tsconfig.base.json"
+              - ".nvmrc"
+              - ".java-version"
+              - "docker/**"
+              - "docker-compose.yml"
+              - ".dockerignore"
+              - ".github/workflows/**"
 
       - name: Resolve service flags
         id: resolve
@@ -115,21 +134,25 @@ jobs:
           WEB: ${{ steps.filter.outputs.web }}
           REALTIME: ${{ steps.filter.outputs.realtime }}
           API: ${{ steps.filter.outputs.api }}
+          E2E: ${{ steps.filter.outputs.e2e }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             web=${WEB:-false}
             realtime=${REALTIME:-false}
             api=${API:-false}
+            e2e=${E2E:-false}
           else
             # main pushes, merge queues, schedules, and manual runs get everything.
             web=true
             realtime=true
             api=true
+            e2e=true
           fi
           {
             echo "web=$web"
             echo "realtime=$realtime"
             echo "api=$api"
+            echo "e2e=$e2e"
           } >> "$GITHUB_OUTPUT"
 
   web:
@@ -153,10 +176,17 @@ jobs:
     uses: ./.github/workflows/ci-api.yml
     secrets: inherit
 
+  e2e:
+    name: E2E
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    uses: ./.github/workflows/ci-e2e.yml
+    secrets: inherit
+
   required:
     name: Required checks
     if: always()
-    needs: [changes, web, realtime, api]
+    needs: [changes, web, realtime, api, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -168,7 +198,7 @@ jobs:
         run: |
           node - <<'NODE'
           const needs = JSON.parse(process.env.NEEDS);
-          const services = ['web', 'realtime', 'api'];
+          const services = ['web', 'realtime', 'api', 'e2e'];
           const problems = [];
 
           if (needs.changes?.result !== 'success') {

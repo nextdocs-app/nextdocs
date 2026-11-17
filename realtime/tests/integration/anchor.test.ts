@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import {
   connectClient,
   destroyClients,
@@ -24,50 +24,46 @@ import { SERVICE_TOKEN } from './helpers/env.js';
  * every other client's document.
  */
 
-type TextRun = { insert?: unknown; attributes?: Record<string, unknown> };
-type FragmentNode = Y.XmlFragment | Y.XmlElement | Y.XmlText;
+type TextRun = { insert?: unknown; format?: Record<string, unknown> };
 
-/** Comment format keys (`comment--<hash>`) on every text run of the fragment. */
+/**
+ * Comment format keys (`comment--<hash>`) on every text run of the document.
+ *
+ * Yjs 14 renders a run as a delta op whose `format` carries the marks; a text run
+ * and an inline atom are both ops of the node that owns them.
+ */
 function commentMarks(doc: Y.Doc): string[] {
   const marks: string[] = [];
 
-  const walk = (node: FragmentNode): void => {
-    if (node instanceof Y.XmlText) {
-      for (const run of node.toDelta() as TextRun[]) {
-        for (const key of Object.keys(run.attributes ?? {})) {
-          if (key.startsWith('comment')) {
-            marks.push(JSON.stringify(run.attributes?.[key]));
-          }
+  const walk = (node: Y.Node): void => {
+    const delta = node.toDelta() as unknown as { children?: Iterable<TextRun> };
+    for (const run of delta.children ?? []) {
+      for (const key of Object.keys(run.format ?? {})) {
+        if (key.startsWith('comment')) {
+          marks.push(JSON.stringify(run.format?.[key]));
         }
       }
-      return;
     }
     for (const child of node.toArray()) {
-      if (child instanceof Y.AbstractType) {
-        walk(child as FragmentNode);
+      if (child instanceof Y.Node) {
+        walk(child);
       }
     }
   };
 
-  walk(doc.getXmlFragment('blocknote'));
+  walk(doc.get('blocknote'));
   return marks;
 }
 
 function plainText(doc: Y.Doc): string {
-  let text = '';
-  const walk = (node: FragmentNode): void => {
-    if (node instanceof Y.XmlText) {
-      text += node.toString();
-      return;
-    }
+  const walk = (node: Y.Node): string => {
+    let text = '';
     for (const child of node.toArray()) {
-      if (child instanceof Y.AbstractType) {
-        walk(child as FragmentNode);
-      }
+      text += typeof child === 'string' ? child : child instanceof Y.Node ? walk(child) : '';
     }
+    return text;
   };
-  walk(doc.getXmlFragment('blocknote'));
-  return text;
+  return walk(doc.get('blocknote'));
 }
 
 describe('comment anchor endpoint', () => {
@@ -90,7 +86,7 @@ describe('comment anchor endpoint', () => {
   });
 
   /** Seeds "hello world" through a real client and waits until the server has it. */
-  async function seedDocument(): Promise<{ docid: string; text: Y.XmlText }> {
+  async function seedDocument(): Promise<{ docid: string; text: Y.Node }> {
     const docid = newDocId();
     const editorToken = mintToken();
     api.setVerdict(editorToken, { allowed: true, accessLevel: 'EDIT' });
@@ -98,10 +94,10 @@ describe('comment anchor endpoint', () => {
     editor = connectClient(server.wsBase, docid, { token: editorToken });
     await waitForSynced(editor.provider);
 
-    const paragraph = new Y.XmlElement('paragraph');
-    const text = new Y.XmlText('hello world');
-    paragraph.insert(0, [text]);
-    editor.doc.getXmlFragment('blocknote').insert(0, [paragraph]);
+    // The shape the browser writes: the paragraph owns its text run directly.
+    const text = new Y.Node('paragraph');
+    text.insert(0, 'hello world');
+    editor.doc.get('blocknote').insert(0, [text]);
 
     const reader = connectClient(server.wsBase, docid, {
       headers: { Authorization: `Bearer ${SERVICE_TOKEN}` },
@@ -117,7 +113,7 @@ describe('comment anchor endpoint', () => {
   }
 
   /** The selection the browser would send: two Yjs relative positions, as JSON. */
-  function selectionOf(text: Y.XmlText, from: number, to: number) {
+  function selectionOf(text: Y.Node, from: number, to: number) {
     return {
       anchor: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, from)),
       head: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, to)),

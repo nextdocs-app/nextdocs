@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect } from 'react';
-import type * as Y from 'yjs';
+import type * as Y from '@y/y';
+import { getYjsStringMap, type YjsStringMapChange } from '@/lib/yjs.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
 import { sanitizeDocumentCover, sanitizeDocumentIcon } from '@/lib/document-icon.util';
 import {
@@ -88,7 +89,7 @@ export function useDocumentYjsMetaSync({
       return;
     }
     try {
-      const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+      const metaMap = getYjsStringMap(ydoc, YJS_META_MAP_KEY);
       if (!metaMap.has(YJS_META_TITLE_KEY)) {
         metaMap.set(YJS_META_TITLE_KEY, normalizeDocumentTitle(seedTitle));
       }
@@ -120,17 +121,19 @@ export function useDocumentYjsMetaSync({
       return;
     }
 
-    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+    const metaMap = getYjsStringMap(ydoc, YJS_META_MAP_KEY);
 
     // The observer owns deletions: a missing key is only treated as a remote
-    // delete when this transaction actually deleted it (`changes.keys`), not
-    // when the key was simply never set. Mere absence (`get() === undefined`)
-    // conflates the two — e.g. a title-only transaction would read as an icon
-    // delete for a client whose icon was never seeded — and two late joiners
-    // racing a seed against such a phantom delete re-create the key. Creation
-    // belongs to the seeder above (`has()` create-only); this observer only
-    // deletes on real delete transactions (plus applies string updates).
-    const observer = (event: Y.YMapEvent<string>) => {
+    // delete when this transaction actually removed the attribute
+    // (`change.deleted`, computed by the facade from `keysChanged` plus absence
+    // after the transaction), not when the key was simply never set. Mere
+    // absence (`get() === undefined`) conflates the two — e.g. a title-only
+    // transaction would read as an icon delete for a client whose icon was
+    // never seeded — and two late joiners racing a seed against such a phantom
+    // delete re-create the key. Creation belongs to the seeder above (`has()`
+    // create-only); this observer only deletes on real delete transactions
+    // (plus applies string updates).
+    const observer = (change: YjsStringMapChange) => {
       let nextTitle: string | null = null;
       let nextIcon: DocumentMeta['icon'] | null | undefined = undefined;
       let iconChanged = false;
@@ -138,7 +141,7 @@ export function useDocumentYjsMetaSync({
       let coverChanged = false;
 
       const yjsTitle = metaMap.get(YJS_META_TITLE_KEY);
-      if (typeof yjsTitle === 'string') {
+      if (yjsTitle !== undefined) {
         // Hand-crafted EDIT writes can carry blank titles; honor the same
         // Untitled invariant as local edits and the API.
         const normalizedTitle = normalizeDocumentTitle(yjsTitle);
@@ -152,7 +155,7 @@ export function useDocumentYjsMetaSync({
       }
 
       const yjsIconRaw = metaMap.get(YJS_META_ICON_KEY);
-      if (typeof yjsIconRaw === 'string') {
+      if (yjsIconRaw !== undefined) {
         try {
           const sanitized = sanitizeDocumentIcon(JSON.parse(yjsIconRaw));
           if (sanitized) {
@@ -170,7 +173,7 @@ export function useDocumentYjsMetaSync({
         } catch {
           // Unparseable payloads are ignored like invalid ones.
         }
-      } else if (event.changes.keys.get(YJS_META_ICON_KEY)?.action === 'delete') {
+      } else if (change.deleted.has(YJS_META_ICON_KEY)) {
         // A real delete transaction for this key. Our own deletion echo
         // (guard is null, metaRef not yet committed) is a no-op; a remote
         // deletion of a locally present icon wins. Never-set keys never reach
@@ -184,7 +187,7 @@ export function useDocumentYjsMetaSync({
       // (hand-crafted garbage): ignored. The seeder owns creation.
 
       const yjsCoverRaw = metaMap.get(YJS_META_COVER_KEY);
-      if (typeof yjsCoverRaw === 'string') {
+      if (yjsCoverRaw !== undefined) {
         try {
           const sanitized = sanitizeDocumentCover(JSON.parse(yjsCoverRaw));
           if (sanitized) {
@@ -201,7 +204,7 @@ export function useDocumentYjsMetaSync({
         } catch {
           // Unparseable payloads are ignored like invalid ones.
         }
-      } else if (event.changes.keys.get(YJS_META_COVER_KEY)?.action === 'delete') {
+      } else if (change.deleted.has(YJS_META_COVER_KEY)) {
         if (lastLocalCoverRef.current !== null && metaRef.current?.cover !== undefined) {
           nextCover = null;
           coverChanged = true;
@@ -246,10 +249,7 @@ export function useDocumentYjsMetaSync({
       dispatchDocumentMetaUpdated(resolvedDocumentIdRef.current, nextMeta);
     };
 
-    metaMap.observe(observer);
-    return () => {
-      metaMap.unobserve(observer);
-    };
+    return metaMap.observe(observer);
   }, [
     ydoc,
     resolvedDocumentId,

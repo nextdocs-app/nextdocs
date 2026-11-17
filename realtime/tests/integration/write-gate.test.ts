@@ -4,6 +4,7 @@ import {
   destroyClients,
   mintToken,
   newDocId,
+  nodeText,
   readTextAsService,
   sleep,
   startFakeApi,
@@ -46,7 +47,7 @@ describe('write gate over a socket', () => {
 
     const viewer = connectClient(server.wsBase, docid, { token: viewerToken });
     await waitForSynced(viewer.provider);
-    viewer.doc.getText('body').insert(0, 'viewer-write');
+    viewer.doc.get('body').insert(0, 'viewer-write');
     await sleep(500);
 
     // The update reached the server and was dropped: a read-only client that writes
@@ -57,7 +58,7 @@ describe('write gate over a socket', () => {
     api.setVerdict(editorToken, { allowed: true, accessLevel: 'EDIT' });
     const editor = connectClient(server.wsBase, docid, { token: editorToken });
     await waitForSynced(editor.provider);
-    editor.doc.getText('body').insert(0, 'editor-write');
+    editor.doc.get('body').insert(0, 'editor-write');
 
     await waitFor(
       async () => (await readTextAsService(server.wsBase, docid)).includes('editor-write'),
@@ -67,7 +68,7 @@ describe('write gate over a socket', () => {
 
     // The viewer is a reader, not a writer: it still receives the editor's content.
     await waitFor(
-      () => viewer.doc.getText('body').toString().includes('editor-write'),
+      () => nodeText(viewer.doc.get('body')).includes('editor-write'),
       5000,
       'the VIEW client did not receive the editor update'
     );

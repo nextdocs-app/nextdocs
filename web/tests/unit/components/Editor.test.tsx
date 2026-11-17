@@ -220,7 +220,7 @@ jest.mock('@blocknote/core/extensions', () => ({
   filterSuggestionItems: jest.fn((items) => items),
 }));
 
-jest.mock('@blocknote/core/yjs', () => ({
+jest.mock('@blocknote/core/y', () => ({
   YjsThreadStore: jest.fn(),
   withCollaboration: jest.fn((options) => options),
 }));
@@ -305,9 +305,9 @@ import {
 import toastsReducer from '../../../stores/toasts/toasts.slice';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
-import * as Y from 'yjs';
-import type { Awareness } from 'y-protocols/awareness';
-import type { WebsocketProvider } from 'y-websocket';
+import * as Y from '@y/y';
+import type { Awareness } from '@y/protocols/awareness';
+import type { WebsocketProvider } from '@y/websocket';
 
 const render = (
   ui: React.ReactElement,

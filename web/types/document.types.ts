@@ -1,6 +1,6 @@
 import type { DocumentMeta } from '@/../../realtime/src/types/blocks';
 import type { DocumentAccessLevel } from '@/services/document.service';
-import type * as Y from 'yjs';
+import type * as Y from '@y/y';
 
 export type {
   Document,

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import { documentService, iconCoverPatch } from '@/services/document.service';
 import { indexedDBService } from '@/services/indexed-db.service';
 import { getLocalDocumentParents, setLocalDocumentParent } from '@/lib/local-tree.util';
@@ -39,9 +39,7 @@ describe('document.service', () => {
   describe('saveDocument', () => {
     it('should save document to IndexedDB', async () => {
       const ydoc = new Y.Doc();
-      const fragment = ydoc.getXmlFragment('blocknote');
-      const element = new Y.XmlElement('paragraph');
-      fragment.push([element]);
+      ydoc.get('blocknote').insert(0, ['paragraph']);
 
       const meta = {
         title: 'Test Document',
@@ -1309,7 +1307,7 @@ describe('document.service', () => {
 
     it('loads the body from the content endpoint and decodes it', async () => {
       const source = new Y.Doc();
-      source.getText('body').insert(0, 'hello');
+      source.get('body').insert(0, ['hello']);
       const bytes = Y.encodeStateAsUpdate(source);
       let binary = '';
       bytes.forEach((byte) => {
@@ -1339,7 +1337,7 @@ describe('document.service', () => {
 
       const { ydoc } = await documentService.getCloudDocument('doc-123', 'access-token');
 
-      expect(ydoc.getText('body').toString()).toBe('hello');
+      expect(JSON.stringify(ydoc.get('body').toDelta())).toContain('hello');
       expect(fetchMock).toHaveBeenCalledWith(
         'http://localhost:8080/api/v1/documents/doc-123/content',
         expect.anything()
@@ -1412,7 +1410,7 @@ describe('document.service', () => {
   describe('getPublicDocument', () => {
     it('loads a public body from the public content endpoint', async () => {
       const source = new Y.Doc();
-      source.getText('body').insert(0, 'guest');
+      source.get('body').insert(0, ['guest']);
       const bytes = Y.encodeStateAsUpdate(source);
       let binary = '';
       bytes.forEach((byte) => {
@@ -1443,7 +1441,7 @@ describe('document.service', () => {
 
       const { ydoc, accessLevel } = await documentService.getPublicDocument('doc-123');
 
-      expect(ydoc.getText('body').toString()).toBe('guest');
+      expect(JSON.stringify(ydoc.get('body').toDelta())).toContain('guest');
       expect(accessLevel).toBe('VIEW');
       expect(fetchMock).toHaveBeenCalledWith(
         'http://localhost:8080/api/v1/documents/doc-123/public/content',

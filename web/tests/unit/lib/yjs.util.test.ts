@@ -1,9 +1,10 @@
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import {
   createYjsDoc,
   encodeYjsState,
   decodeYjsState,
   createDefaultDocumentMeta,
+  getYjsStringMap,
 } from '@/lib/yjs.util';
 
 describe('yjs.util', () => {
@@ -23,9 +24,7 @@ describe('yjs.util', () => {
   describe('encodeYjsState', () => {
     it('should encode Y.Doc to Uint8Array', () => {
       const ydoc = new Y.Doc();
-      const fragment = ydoc.getXmlFragment('test');
-      const element = new Y.XmlElement('paragraph');
-      fragment.push([element]);
+      getYjsStringMap(ydoc, 'test').set('paragraph', '1');
 
       const encoded = encodeYjsState(ydoc);
       expect(encoded).toBeInstanceOf(Uint8Array);
@@ -36,27 +35,82 @@ describe('yjs.util', () => {
   describe('decodeYjsState', () => {
     it('should decode Uint8Array to Y.Doc', () => {
       const originalDoc = new Y.Doc();
-      const fragment = originalDoc.getXmlFragment('test');
-      const element = new Y.XmlElement('paragraph');
-      element.setAttribute('id', 'test-id');
-      fragment.push([element]);
+      getYjsStringMap(originalDoc, 'test').set('id', 'test-id');
 
       const encoded = encodeYjsState(originalDoc);
       const decodedDoc = decodeYjsState(encoded);
 
       expect(decodedDoc).toBeInstanceOf(Y.Doc);
-      const decodedFragment = decodedDoc.getXmlFragment('test');
-      expect(decodedFragment.length).toBe(1);
+      expect(getYjsStringMap(decodedDoc, 'test').get('id')).toBe('test-id');
     });
 
-    it('should preserve Yjs document structure', () => {
+    it('should preserve Yjs document content', () => {
       const originalDoc = new Y.Doc();
-      const state = Y.encodeStateAsUpdate(originalDoc);
+      originalDoc.get('blocknote').insert(0, ['hello']);
 
-      const decodedDoc = decodeYjsState(state);
-      const decodedState = Y.encodeStateAsUpdate(decodedDoc);
+      const decodedDoc = decodeYjsState(encodeYjsState(originalDoc));
 
-      expect(decodedState).toEqual(state);
+      expect(decodedDoc.get('blocknote').length).toBe(1);
+      expect(JSON.stringify(decodedDoc.get('blocknote').toDelta())).toContain('hello');
+    });
+  });
+
+  describe('getYjsStringMap', () => {
+    it('exposes string values and filters anything else', () => {
+      const ydoc = new Y.Doc();
+      const map = getYjsStringMap(ydoc, 'meta');
+      map.set('title', 'Hello');
+
+      expect(map.get('title')).toBe('Hello');
+      expect(map.has('title')).toBe(true);
+      expect(map.get('missing')).toBeUndefined();
+
+      // A hand-crafted writer can put a non-string under a key. The facade is
+      // the typed boundary, so consumers must never see it.
+      (ydoc.get('meta') as unknown as { setAttr(name: string, value: unknown): void }).setAttr(
+        'bad',
+        42
+      );
+      expect(map.get('bad')).toBeUndefined();
+    });
+
+    it('emits nothing when deleting a key that was never set', () => {
+      const ydoc = new Y.Doc();
+      const map = getYjsStringMap(ydoc, 'meta');
+      const listener = jest.fn();
+      map.observe(listener);
+
+      map.delete('missing');
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('distinguishes a set from a delete through keysChanged', () => {
+      const ydoc = new Y.Doc();
+      const map = getYjsStringMap(ydoc, 'meta');
+      const deletions: string[][] = [];
+      map.observe((change) => deletions.push([...change.deleted]));
+
+      map.set('title', 'A');
+      expect(deletions).toEqual([[]]);
+
+      map.delete('title');
+      expect(deletions).toEqual([[], ['title']]);
+      expect(map.has('title')).toBe(false);
+    });
+
+    it('stops delivering once the observer is unsubscribed', () => {
+      const ydoc = new Y.Doc();
+      const map = getYjsStringMap(ydoc, 'meta');
+      const listener = jest.fn();
+      const unsubscribe = map.observe(listener);
+
+      map.set('title', 'A');
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      map.set('title', 'B');
+      expect(listener).toHaveBeenCalledTimes(1);
     });
   });
 

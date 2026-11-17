@@ -1,8 +1,8 @@
 import type { CommentData, ThreadData } from '@blocknote/core/comments';
 import { ThreadStore, ThreadStoreAuth } from '@blocknote/core/comments';
-import type { Awareness } from 'y-protocols/awareness';
-import * as Y from 'yjs';
-import { absolutePositionToRelativePosition, ySyncPluginKey } from 'y-prosemirror';
+import type { Awareness } from '@y/protocols/awareness';
+import * as Y from '@y/y';
+import { resolvedPositionToRelativePosition } from '@y/prosemirror';
 import { ApiError } from '@/services/api-client';
 import { commentAnchorService } from '@/services/comment-anchor.service';
 import { commentService } from '@/services/comment.service';
@@ -86,20 +86,23 @@ export class CommentThreadStore extends ThreadStore {
    */
   public addThreadToDocument = async (options: AddThreadToDocumentOptions): Promise<void> => {
     try {
-      const binding = ySyncPluginKey.getState(options.editor.prosemirrorState)?.binding;
-      if (!binding?.type) {
-        throw new Error('The collaborative binding is not ready');
+      // @y/prosemirror maps ProseMirror positions through the editor view's
+      // sync plugin, so there is no separate binding to look up. The relative
+      // position this produces is encoded by @y/y, matching what realtime's
+      // anchor endpoint decodes (it also runs @y/y).
+      const view = options.editor.prosemirrorView;
+      if (!view) {
+        throw new Error('The collaborative editor is not ready');
       }
 
-      const anchor = absolutePositionToRelativePosition(
-        options.selection.anchor,
-        binding.type,
-        binding.mapping
+      // BlockNote hands us absolute ProseMirror positions, not resolved ones.
+      const anchor = resolvedPositionToRelativePosition(
+        view,
+        view.state.doc.resolve(options.selection.anchor)
       );
-      const head = absolutePositionToRelativePosition(
-        options.selection.head,
-        binding.type,
-        binding.mapping
+      const head = resolvedPositionToRelativePosition(
+        view,
+        view.state.doc.resolve(options.selection.head)
       );
       if (!anchor || !head) {
         throw new Error('The selection no longer exists in the document');

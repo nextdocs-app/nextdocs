@@ -1,8 +1,9 @@
-import type * as Y from 'yjs';
+import type * as Y from '@y/y';
+import { getYjsStringMap } from '@/lib/yjs.util';
 import { isConnectivityError, isUnauthorizedError } from '@/lib/cloud-connectivity.util';
 import type { DocumentAccessLevel } from '@/services/document.service';
 
-// Yjs-shared document meta: `ydoc.getMap('meta')` carries the live title
+// Yjs-shared document meta: the `meta` map carries the live title
 // (key `title`) and the page icon/cover JSON strings (keys `icon`/`cover`).
 // REST PATCH remains the durable source of truth for lists/trees; Yjs carries
 // the keystroke-instant cross-client update.
@@ -163,7 +164,7 @@ export function mirrorTitleToYjs(
   }
   try {
     lastLocalTitleRef.current = title;
-    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+    const metaMap = getYjsStringMap(ydoc, YJS_META_MAP_KEY);
     if (metaMap.get(YJS_META_TITLE_KEY) !== title) {
       metaMap.set(YJS_META_TITLE_KEY, title);
     }
@@ -208,7 +209,7 @@ export function mirrorIconCoverToYjs(
     return;
   }
   try {
-    const metaMap = ydoc.getMap<string>(YJS_META_MAP_KEY);
+    const metaMap = getYjsStringMap(ydoc, YJS_META_MAP_KEY);
     if (iconJson === null) {
       if (metaMap.has(YJS_META_ICON_KEY)) {
         lastLocalIconRef.current = null;

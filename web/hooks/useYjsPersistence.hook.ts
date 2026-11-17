@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
 import {
   documentService,
   DocumentServiceApiError,

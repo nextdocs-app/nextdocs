@@ -51,9 +51,9 @@ import { normalizeDocumentTitle } from '@/lib/document-content.util';
 import { mergeYjsSnapshot } from '@/lib/yjs.util';
 import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
-import type * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
-import { Awareness } from 'y-protocols/awareness';
+import type * as Y from '@y/y';
+import { WebsocketProvider } from '@y/websocket';
+import { Awareness } from '@y/protocols/awareness';
 
 // Reconnect backoff after server close (e.g. 1008 or 4401).
 const CLOSE_RECONNECT_BASE_MS = 500;
@@ -200,7 +200,7 @@ async function resolveLocalFallbackDocument(
  * The pending-sync marker normally stops a cloud read from replacing unsynced
  * work, but the marker is only added while the provider is not synced. A socket
  * can read "connected" after it stopped delivering (a half-open connection,
- * before the close is detected); y-websocket drops the update instead of queueing
+ * before the close is detected); @y/websocket drops the update instead of queueing
  * it, so that edit exists only in IndexedDB and has no marker. Merging it back
  * before the cloud copy replaces the local snapshot is what keeps it, and the
  * provider uploads whatever the merge added once it is connected again.
@@ -938,7 +938,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       if (closeHandlerCancelled) {
         return;
       }
-      // y-websocket retries on its own; surfacing the failure is the point. Silence
+      // @y/websocket retries on its own; surfacing the failure is the point. Silence
       // here made a misconfigured URL look like an idle document.
       console.warn('Realtime connection error:', error);
       setIsRealtimeConnected(false);
@@ -975,7 +975,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       // and a true access revocation (403/404). This prevents locking the user out unnecessarily
       // when their session simply needs to be refreshed.
       // Halt the automatic retry while that check is in flight, so it cannot
-      // race the decision below. y-websocket checks this flag exactly once,
+      // race the decision below. @y/websocket checks this flag exactly once,
       // on its own backoff tick, so resuming has to go through connect().
       if (provider) {
         provider.shouldConnect = false;

@@ -105,6 +105,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final Duration downloadWindow;
     private final int iconMaxRequests;
     private final Duration iconWindow;
+    private final int authMaxRequests;
+    private final Duration authWindow;
 
     public RateLimitFilter(
             RateLimiter rateLimiter,
@@ -124,6 +126,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.download-window-seconds:60}") long downloadWindowSeconds,
             @Value("${app.rate-limit.icon-max-requests:60}") int iconMaxRequests,
             @Value("${app.rate-limit.icon-window-seconds:60}") long iconWindowSeconds,
+            @Value("${app.rate-limit.auth-max-requests:20}") int authMaxRequests,
+            @Value("${app.rate-limit.auth-window-seconds:60}") long authWindowSeconds,
             @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
@@ -142,6 +146,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.downloadWindow = Duration.ofSeconds(downloadWindowSeconds);
         this.iconMaxRequests = iconMaxRequests;
         this.iconWindow = Duration.ofSeconds(iconWindowSeconds);
+        this.authMaxRequests = authMaxRequests;
+        this.authWindow = Duration.ofSeconds(authWindowSeconds);
         // Same ceiling the multipart parser enforces, derived rather than duplicated: a
         // self-hoster who raises ATTACHMENT_MAX_REQUEST_SIZE must not silently hit a second,
         // stale limit in the filter.
@@ -380,7 +386,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // prefix must not select a different bucket than the endpoint it addresses.
         String uri = decodePath(request.getRequestURI());
         if (uri.startsWith(AUTH_PATH_PREFIX)) {
-            return Verdict.defaultBudget("auth:");
+            return Verdict.customBudget("auth:", authMaxRequests, authWindow);
         }
 
         // Workspace routes are membership administration behind a JWT: unlimited,
@@ -609,18 +615,6 @@ public class RateLimitFilter extends OncePerRequestFilter {
             boolean perCaller) {
         static Verdict unlimited() {
             return new Verdict(false, "", true, 0, Duration.ZERO, 0, 0, false);
-        }
-
-        static Verdict defaultBudget(String bucketPrefix) {
-            return new Verdict(
-                    true,
-                    bucketPrefix,
-                    true,
-                    RateLimiter.DEFAULT_MAX_REQUESTS,
-                    RateLimiter.DEFAULT_WINDOW,
-                    0,
-                    0,
-                    false);
         }
 
         static Verdict customBudget(String bucketPrefix, int maxRequests, Duration window) {

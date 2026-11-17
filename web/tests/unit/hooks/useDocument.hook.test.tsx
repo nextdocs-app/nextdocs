@@ -1,7 +1,8 @@
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import * as Y from 'yjs';
+import * as Y from '@y/y';
+import { getYjsStringMap } from '@/lib/yjs.util';
 import documentReducer from '@/stores/document/document.slice';
 import { useDocument } from '@/hooks/useDocument.hook';
 import { documentService, DocumentServiceApiError } from '@/services/document.service';
@@ -18,7 +19,7 @@ import {
 } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
-import { WebsocketProvider } from 'y-websocket';
+import { WebsocketProvider } from '@y/websocket';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 
@@ -72,7 +73,7 @@ const mockProviderInstance = {
   },
 };
 
-jest.mock('y-websocket', () => ({
+jest.mock('@y/websocket', () => ({
   WebsocketProvider: jest.fn().mockImplementation(() => mockProviderInstance),
 }));
 
@@ -536,7 +537,7 @@ describe('useDocument', () => {
       expect(result.current.meta?.title).toBe('Updated Title');
     });
 
-    expect(ydoc.getMap('meta').get('title')).toBe('Updated Title');
+    expect(getYjsStringMap(ydoc, 'meta').get('title')).toBe('Updated Title');
   });
 
   it('should not fan out a second title event for its own Yjs echo', async () => {
@@ -602,7 +603,7 @@ describe('useDocument', () => {
     updateMetadataSpy.mockClear();
 
     await act(async () => {
-      ydoc.getMap('meta').set('title', 'Remote Title');
+      getYjsStringMap(ydoc, 'meta').set('title', 'Remote Title');
     });
 
     await waitFor(() => {
@@ -643,7 +644,7 @@ describe('useDocument', () => {
     });
 
     await act(async () => {
-      ydoc.getMap('meta').set('title', '   ');
+      getYjsStringMap(ydoc, 'meta').set('title', '   ');
     });
 
     await waitFor(() => {
@@ -691,7 +692,7 @@ describe('useDocument', () => {
       expect(result.current.meta?.icon).toEqual(nextIcon);
     });
 
-    expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(nextIcon));
+    expect(getYjsStringMap(ydoc, 'meta').get('icon')).toBe(JSON.stringify(nextIcon));
   });
 
   it('should mirror local cover edits and removals into the shared Yjs meta map', async () => {
@@ -728,7 +729,7 @@ describe('useDocument', () => {
       expect(result.current.meta?.cover).toEqual(nextCover);
     });
 
-    expect(ydoc.getMap('meta').get('cover')).toBe(JSON.stringify(nextCover));
+    expect(getYjsStringMap(ydoc, 'meta').get('cover')).toBe(JSON.stringify(nextCover));
 
     await act(async () => {
       result.current.updateCover(null);
@@ -738,7 +739,7 @@ describe('useDocument', () => {
       expect(result.current.meta?.cover).toBeUndefined();
     });
 
-    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+    expect(getYjsStringMap(ydoc, 'meta').has('cover')).toBe(false);
   });
 
   it('should not fan out a second icon event for its own Yjs echo', async () => {
@@ -811,8 +812,8 @@ describe('useDocument', () => {
     };
 
     await act(async () => {
-      ydoc.getMap('meta').set('icon', JSON.stringify(remoteIcon));
-      ydoc.getMap('meta').set('cover', JSON.stringify(remoteCover));
+      getYjsStringMap(ydoc, 'meta').set('icon', JSON.stringify(remoteIcon));
+      getYjsStringMap(ydoc, 'meta').set('cover', JSON.stringify(remoteCover));
     });
 
     await waitFor(() => {
@@ -859,14 +860,14 @@ describe('useDocument', () => {
 
     // The seeder mirrors the loaded icon so late joiners see it live.
     await waitFor(() => {
-      expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(meta.icon));
+      expect(getYjsStringMap(ydoc, 'meta').get('icon')).toBe(JSON.stringify(meta.icon));
     });
 
     dispatchEventSpy.mockClear();
     updateMetadataSpy.mockClear();
 
     await act(async () => {
-      ydoc.getMap('meta').delete('icon');
+      getYjsStringMap(ydoc, 'meta').delete('icon');
     });
 
     await waitFor(() => {
@@ -908,14 +909,14 @@ describe('useDocument', () => {
 
     // The seeder mirrors the loaded cover so late joiners see it live.
     await waitFor(() => {
-      expect(ydoc.getMap('meta').get('cover')).toBe(JSON.stringify(meta.cover));
+      expect(getYjsStringMap(ydoc, 'meta').get('cover')).toBe(JSON.stringify(meta.cover));
     });
 
     dispatchEventSpy.mockClear();
     updateMetadataSpy.mockClear();
 
     await act(async () => {
-      ydoc.getMap('meta').delete('cover');
+      getYjsStringMap(ydoc, 'meta').delete('cover');
     });
 
     await waitFor(() => {
@@ -957,10 +958,11 @@ describe('useDocument', () => {
     dispatchEventSpy.mockClear();
 
     await act(async () => {
-      ydoc.getMap('meta').set('icon', 'not-json');
-      ydoc
-        .getMap('meta')
-        .set('cover', JSON.stringify({ type: 'link', value: 'http://insecure/x.jpg' }));
+      getYjsStringMap(ydoc, 'meta').set('icon', 'not-json');
+      getYjsStringMap(ydoc, 'meta').set(
+        'cover',
+        JSON.stringify({ type: 'link', value: 'http://insecure/x.jpg' })
+      );
     });
 
     // Let any observer-driven dispatch flush; neither payload may apply.
@@ -1070,7 +1072,7 @@ describe('useDocument', () => {
       expect(result.current.meta?.cover).toBeUndefined();
     });
 
-    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+    expect(getYjsStringMap(ydoc, 'meta').has('cover')).toBe(false);
   });
 
   it('should persist updateIcon through updatePublicIconCover for an edit-level guest', async () => {
@@ -1454,8 +1456,8 @@ describe('useDocument', () => {
     expect(updateMetadataSpy).not.toHaveBeenCalled();
     expect(result.current.meta?.icon).toBeUndefined();
     expect(result.current.meta?.cover).toBeUndefined();
-    expect(ydoc.getMap('meta').has('icon')).toBe(false);
-    expect(ydoc.getMap('meta').has('cover')).toBe(false);
+    expect(getYjsStringMap(ydoc, 'meta').has('icon')).toBe(false);
+    expect(getYjsStringMap(ydoc, 'meta').has('cover')).toBe(false);
   });
 
   it('should expose the server sharing context for a space page', async () => {
@@ -1530,9 +1532,9 @@ describe('useDocument', () => {
 
     // A late joiner receives the current values over the live channel.
     await waitFor(() => {
-      expect(ydoc.getMap('meta').get('title')).toBe('Legacy Doc');
+      expect(getYjsStringMap(ydoc, 'meta').get('title')).toBe('Legacy Doc');
     });
-    expect(ydoc.getMap('meta').get('icon')).toBe(JSON.stringify(meta.icon));
+    expect(getYjsStringMap(ydoc, 'meta').get('icon')).toBe(JSON.stringify(meta.icon));
   });
 
   it('should apply a remote icon deletion observed on the Yjs map', async () => {
@@ -1562,7 +1564,7 @@ describe('useDocument', () => {
     // A collaborator's delete transaction arrives as a real map deletion —
     // not mere absence — so the local icon is cleared without a REST write.
     await act(async () => {
-      ydoc.getMap('meta').delete('icon');
+      getYjsStringMap(ydoc, 'meta').delete('icon');
     });
 
     await waitFor(() => {
@@ -1595,13 +1597,16 @@ describe('useDocument', () => {
 
     // Non-string values and unparseable JSON must never reach the DOM or Redux.
     await act(async () => {
-      ydoc.getMap('meta').set('icon', 42 as never);
+      getYjsStringMap(ydoc, 'meta').set('icon', 42 as never);
     });
     await act(async () => {
-      ydoc.getMap('meta').set('icon', 'not-json{{{');
+      getYjsStringMap(ydoc, 'meta').set('icon', 'not-json{{{');
     });
     await act(async () => {
-      ydoc.getMap('meta').set('icon', JSON.stringify({ type: 'link', value: 'javascript:x' }));
+      getYjsStringMap(ydoc, 'meta').set(
+        'icon',
+        JSON.stringify({ type: 'link', value: 'javascript:x' })
+      );
     });
 
     expect(result.current.meta?.icon).toBeUndefined();
@@ -1638,9 +1643,9 @@ describe('useDocument', () => {
 
   it('should merge a local snapshot with no pending marker into the cloud read', async () => {
     const localYdoc = new Y.Doc();
-    localYdoc.getText('body').insert(0, 'edit that never reached the socket');
+    localYdoc.get('body').insert(0, ['edit that never reached the socket']);
     const cloudYdoc = new Y.Doc();
-    cloudYdoc.getText('body').insert(0, 'server copy');
+    cloudYdoc.get('body').insert(0, ['server copy']);
     const meta = {
       title: 'Merged Document',
       createdAt: '2024-01-01T00:00:00.000Z',
@@ -1659,7 +1664,7 @@ describe('useDocument', () => {
     // The socket still reported "connected" while the edit was made, so nothing
     // blocked the cloud read; without the merge it would overwrite the local copy.
     expect(readPendingSyncEdits('cloud-id')).toBe(0);
-    const text = result.current.ydoc?.getText('body').toString() ?? '';
+    const text = JSON.stringify(result.current.ydoc?.get('body').toDelta() ?? '');
     expect(text).toContain('server copy');
     expect(text).toContain('edit that never reached the socket');
     expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', cloudYdoc, meta, {
@@ -3471,7 +3476,7 @@ describe('useDocument', () => {
       // back; otherwise the socket stays closed for the rest of the session.
       expect(mockProviderInstance.shouldConnect).toBe(false);
 
-      // y-websocket already spent its one retry by the time this slow round trip
+      // @y/websocket already spent its one retry by the time this slow round trip
       // answers, so the flag alone would not reopen anything.
       await waitFor(() => {
         expect(mockConnect).toHaveBeenCalledTimes(1);

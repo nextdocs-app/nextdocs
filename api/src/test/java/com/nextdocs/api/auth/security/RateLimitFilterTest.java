@@ -67,6 +67,8 @@ class RateLimitFilterTest {
                 60,
                 60,
                 60,
+                30,
+                45,
                 MAX_TEST_UPLOAD_REQUEST_SIZE);
         mockMvc = MockMvcBuilders.standaloneSetup(new StubController())
                 .addFilters(filter)
@@ -100,6 +102,9 @@ class RateLimitFilterTest {
 
         assertThat(rateLimiter.invocationCount).isEqualTo(1);
         assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.1");
+        // Distinct from the limiter defaults, so the configured budget is the one used.
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(30);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(45));
     }
 
     @Test
@@ -120,6 +125,8 @@ class RateLimitFilterTest {
 
         assertThat(rateLimiter.invocationCount).isEqualTo(1);
         assertThat(rateLimiter.lastKey).isEqualTo("auth:10.0.0.12");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(30);
+        assertThat(rateLimiter.lastWindow).isEqualTo(Duration.ofSeconds(45));
     }
 
     @Test

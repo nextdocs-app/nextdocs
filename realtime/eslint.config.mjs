@@ -31,6 +31,17 @@ export default tseslint.config(
     ignores: ['dist/**', 'node_modules/**', 'coverage/**'],
   },
   {
+    files: ['src/**/*.ts'],
+    rules: {
+      // The service runs on @y/y. Importing `yjs` would load a second, incompatible
+      // Yjs implementation and silently read the wrong node shape.
+      'no-restricted-imports': [
+        'error',
+        { paths: [{ name: 'yjs', message: 'Use @y/y in realtime src.' }] },
+      ],
+    },
+  },
+  {
     files: ['tests/**/*.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
