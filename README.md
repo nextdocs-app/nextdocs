@@ -54,11 +54,21 @@ The fastest way to get NextDocs running locally:
 
 That's it. The `./nd` CLI auto-starts a PostgreSQL container, generates ephemeral dev keys if needed, and launches all services with hot-reload.
 
-| Service            | URL                   |
+| Service            | Default URL           |
 | ------------------ | --------------------- |
 | Web app            | http://localhost:3000 |
 | API                | http://localhost:8080 |
 | Realtime WebSocket | ws://localhost:1234   |
+
+The defaults belong to the first worktree that starts. Every additional git worktree
+gets free ports, its own databases and its own Yhub Redis prefix, so several stacks
+can run at once — run `./nd status` to see them and `./nd urls` for this worktree.
+
+For agent or scripted use, `./nd up` starts the full stack detached, writes logs to
+`.nd/logs/`, waits until the API, web and realtime URLs answer, and returns. `./nd logs`
+reads those logs and `./nd stop` shuts the stack down without touching the shared
+containers. Add `--json` to `up`, `status`, `urls`, `logs` or `stop` for one
+machine-readable document on stdout; progress and banners go to stderr.
 
 ### Development Commands
 
@@ -69,6 +79,10 @@ Use the `./nd` CLI for all development tasks:
 ./nd dev api          # Start only the API
 ./nd dev web          # Start only the web frontend
 
+./nd up               # Full stack detached; returns when all services answer
+./nd logs api         # Recent logs from the detached stack (-n N)
+./nd stop             # Stop this worktree's stack
+
 ./nd test             # Run all tests
 ./nd test api         # Run API tests only
 
@@ -78,12 +92,15 @@ Use the `./nd` CLI for all development tasks:
 ./nd format --fix     # Format all code (Prettier + Spotless)
 ./nd build            # Build all packages
 
-./nd db               # Open a psql shell to the database
+./nd db               # Open a psql shell to this worktree's database
+./nd status           # Ports and databases of every worktree, plus container health
+./nd urls             # This worktree's URLs (--env for sourceable exports)
+./nd down             # Alias of ./nd stop (--infra also stops containers)
 ./nd --help           # See all available commands
 ```
 
 > [!TIP]
-> If `./nd` doesn't have permission to execute, run `chmod +x nd` first. On Windows, use `nd.cmd` instead.
+> If `./nd` doesn't have permission to execute, run `chmod +x nd` first. On Windows, use `nd.cmd` instead. The `--json` commands are the portable machine interface; `.nd/instance.env` uses POSIX shell syntax.
 
 ### Manual Setup
 
@@ -101,7 +118,7 @@ cp .env.example .env
 # 3. Install JS workspace dependencies (from repository root)
 npm ci
 
-# 4. Start the API (from api/ directory)
+# 4. Start the API (from api/ directory; use mvnw.cmd on Windows)
 ./mvnw spring-boot:run
 
 # 5. Start the web + realtime servers (uses Turborepo)

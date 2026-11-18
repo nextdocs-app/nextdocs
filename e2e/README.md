@@ -96,6 +96,19 @@ npm run e2e -- e2e/tests/editor.spec.ts
 `global-setup.ts` fails with the missing service and URL when the stack is not
 up, instead of letting every test time out.
 
+To run against a specific worktree's stack, source the file `./nd dev` writes there:
+
+```bash
+source .nd/instance.env   # NEXTDOCS_*, E2E_* and database URLs for this worktree
+npm run e2e
+```
+
+On Windows, use `nd.cmd urls --json` and set the same values in the environment;
+`.nd/instance.env` is POSIX shell syntax.
+
+The fixed `localhost:3000/8080/1234` variables below remain the default and are what
+CI uses.
+
 ## CI
 
 The suite is wired in as `ci-e2e.yml` (`E2E / Browser suite`) and is part of
