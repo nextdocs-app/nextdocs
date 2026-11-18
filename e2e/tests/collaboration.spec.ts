@@ -73,9 +73,11 @@ test.describe('editor collaboration', () => {
 
       await tap.kill();
       // Key the caret back to the end: clicking the editor body would place it
-      // on the clicked line and swallow the leading space.
+      // on the clicked line and swallow the leading space. Insert the run in one
+      // input event: a socket close can re-render the editor between the first
+      // keydown and keyup, which occasionally dropped the leading space.
       await writerEditor.press('Control+End');
-      await writer.page.keyboard.type(' and typed mid-edit');
+      await writer.page.keyboard.insertText(' and typed mid-edit');
       await expect(writerEditor).toContainText('and typed mid-edit');
 
       // A new handshake and the post-kill edit prove a real reconnect/resync,
