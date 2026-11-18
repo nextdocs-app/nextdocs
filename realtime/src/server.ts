@@ -3,6 +3,7 @@ import {
   ORG,
   PORT,
   REDIS_URL,
+  REDIS_PREFIX,
   POSTGRES_URL,
   JWT_SECRET,
   CORS_ORIGINS,
@@ -226,7 +227,7 @@ export async function createServer(): Promise<RunningServer> {
   const yhub = await createYHub({
     redis: {
       url: REDIS_URL,
-      prefix: 'yhub',
+      prefix: REDIS_PREFIX,
       taskDebounce: 10000,
     },
     postgres: POSTGRES_URL,

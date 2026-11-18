@@ -25,20 +25,21 @@ POSTGRES=postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub \
 
 ## Configuration
 
-| Variable              | Default                                                     | Description                                                            |
-| --------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `PORT`                | `1234`                                                      | Server port                                                            |
-| `REDIS`               | `redis://localhost:6379`                                    | Yhub stream and task queue                                             |
-| `POSTGRES`            | `postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub` | Yhub persistence                                                       |
-| `API_BASE_URL`        | `http://localhost:8080`                                     | API origin for access checks                                           |
-| `JWT_SECRET`          | dev default                                                 | Must match the API; required and ≥ 32 bytes when `NODE_ENV=production` |
-| `YHUB_SERVICE_TOKEN`  | dev default                                                 | Shared service secret; required and ≥ 32 bytes in production           |
-| `CORS_ORIGIN`         | `http://localhost:3000`                                     | Comma-separated browser origins (`CORS_ALLOWED_ORIGINS` also accepted) |
-| `MAX_DOC_SIZE_BYTES`  | `16777216`                                                  | Per-document ceiling; Yhub's 500 MB default is a memory hazard         |
-| `SWEEP_INTERVAL_MS`   | `30000`                                                     | Active-room re-authorization interval                                  |
-| `MAX_RECHECK_DOCS`    | `5000`                                                      | Upper bound for one batched recheck request                            |
-| `RECHECK_CONCURRENCY` | `8`                                                         | Rooms re-authorized in parallel by the sweep and batch handler         |
-| `LOG_LEVEL`           | `info`                                                      | `debug`, `info`, `warn`, or `error`                                    |
+| Variable              | Default                                                     | Description                                                                      |
+| --------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `PORT`                | `1234`                                                      | Server port                                                                      |
+| `REDIS`               | `redis://localhost:6379`                                    | Yhub stream and task queue                                                       |
+| `REDIS_PREFIX`        | `yhub`                                                      | Keyspace prefix; `./nd dev` sets `yhub_<worktree>` so parallel stacks stay apart |
+| `POSTGRES`            | `postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub` | Yhub persistence                                                                 |
+| `API_BASE_URL`        | `http://localhost:8080`                                     | API origin for access checks                                                     |
+| `JWT_SECRET`          | dev default                                                 | Must match the API; required and ≥ 32 bytes when `NODE_ENV=production`           |
+| `YHUB_SERVICE_TOKEN`  | dev default                                                 | Shared service secret; required and ≥ 32 bytes in production                     |
+| `CORS_ORIGIN`         | `http://localhost:3000`                                     | Comma-separated browser origins (`CORS_ALLOWED_ORIGINS` also accepted)           |
+| `MAX_DOC_SIZE_BYTES`  | `16777216`                                                  | Per-document ceiling; Yhub's 500 MB default is a memory hazard                   |
+| `SWEEP_INTERVAL_MS`   | `30000`                                                     | Active-room re-authorization interval                                            |
+| `MAX_RECHECK_DOCS`    | `5000`                                                      | Upper bound for one batched recheck request                                      |
+| `RECHECK_CONCURRENCY` | `8`                                                         | Rooms re-authorized in parallel by the sweep and batch handler                   |
+| `LOG_LEVEL`           | `info`                                                      | `debug`, `info`, `warn`, or `error`                                              |
 
 In production the process refuses to start with a missing, published or short secret.
 A server that boots with a known secret either accepts forged tokens or rejects every

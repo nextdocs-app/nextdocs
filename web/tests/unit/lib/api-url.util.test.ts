@@ -12,6 +12,8 @@ describe('api-url.util', () => {
     process.env = { ...originalEnv };
     delete process.env.NEXT_PUBLIC_API_URL;
     delete process.env.NEXT_PUBLIC_REALTIME_URL;
+    delete process.env.NEXT_PUBLIC_API_PORT;
+    delete process.env.NEXT_PUBLIC_REALTIME_PORT;
   });
 
   afterEach(() => {
@@ -58,6 +60,31 @@ describe('api-url.util', () => {
 
   it('getApiBaseUrl/getRealtimeUrl default to localhost in jsdom without env', () => {
     // jsdom default location is http://localhost/
+    expect(getApiBaseUrl()).toBe('http://localhost:8080');
+    expect(getRealtimeUrl()).toBe('ws://localhost:1234');
+  });
+
+  it('uses per-worktree ports while still deriving the LAN hostname', () => {
+    expect(buildApiBaseUrl({ hostname: '192.168.1.7', protocol: 'http:' }, undefined, 8181)).toBe(
+      'http://192.168.1.7:8181'
+    );
+    expect(buildRealtimeUrl({ hostname: '192.168.1.7', protocol: 'http:' }, undefined, 1335)).toBe(
+      'ws://192.168.1.7:1335'
+    );
+    expect(buildApiBaseUrl(null, undefined, 8181)).toBe('http://localhost:8181');
+    expect(buildRealtimeUrl(null, undefined, 1335)).toBe('ws://localhost:1335');
+  });
+
+  it('getApiBaseUrl/getRealtimeUrl read the per-worktree port overrides', () => {
+    process.env.NEXT_PUBLIC_API_PORT = '8181';
+    process.env.NEXT_PUBLIC_REALTIME_PORT = '1335';
+    expect(getApiBaseUrl()).toBe('http://localhost:8181');
+    expect(getRealtimeUrl()).toBe('ws://localhost:1335');
+  });
+
+  it('ignores invalid port overrides', () => {
+    process.env.NEXT_PUBLIC_API_PORT = 'not-a-port';
+    process.env.NEXT_PUBLIC_REALTIME_PORT = '70000';
     expect(getApiBaseUrl()).toBe('http://localhost:8080');
     expect(getRealtimeUrl()).toBe('ws://localhost:1234');
   });

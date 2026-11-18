@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="220" viewBox="0 0 760 220" role="img" aria-label="Ingest log and consumer offsets">
+  <rect width="760" height="220" fill="#FFFFFF"/>
+  <g font-family="Inter, Arial, sans-serif" font-size="14" fill="#101828">
+    <text x="24" y="40" font-weight="700">harbor-ingest writes once; consumers read at their own pace</text>
+    <rect x="24" y="64" width="712" height="44" rx="8" fill="#EFF4FF" stroke="#1D4ED8"/>
+    <text x="40" y="92">durable event log</text>
+    <rect x="24" y="132" width="200" height="52" rx="8" fill="#F2F4F7" stroke="#D0D5DD"/>
+    <text x="44" y="163">consumer: warehouse</text>
+    <rect x="256" y="132" width="200" height="52" rx="8" fill="#F2F4F7" stroke="#D0D5DD"/>
+    <text x="276" y="163">consumer: alerts</text>
+    <rect x="488" y="132" width="248" height="52" rx="8" fill="#FFFAEB" stroke="#FEC84B"/>
+    <text x="508" y="163">reconciliation reads the same log</text>
+  </g>
+  <g stroke="#667085" stroke-width="2" fill="none" marker-end="url(#b)">
+    <path d="M124 108v22"/><path d="M356 108v22"/><path d="M612 108v22"/>
+  </g>
+  <defs>
+    <marker id="b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0l10 5-10 5z" fill="#667085"/>
+    </marker>
+  </defs>
+</svg>

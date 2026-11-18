@@ -1,0 +1,38 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 260] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 398 >>
+stream
+BT /F1 16 Tf 40 210 Td (Acme Inc holiday calendar 2026) Tj ET
+BT /F1 11 Tf 40 180 Td (1 Jan  New Year's Day) Tj ET
+BT /F1 11 Tf 40 160 Td (3 Apr  Good Friday) Tj ET
+BT /F1 11 Tf 40 140 Td (1 May  Labour Day) Tj ET
+BT /F1 11 Tf 40 120 Td (25 Dec Christmas Day) Tj ET
+BT /F1 11 Tf 40 100 Td (26 Dec Boxing Day) Tj ET
+BT /F1 9 Tf 40 60 Td (Regional holidays are added by People Ops in January.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000689 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+759
+%%EOF

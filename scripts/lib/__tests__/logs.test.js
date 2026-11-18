@@ -1,0 +1,194 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const test = require('node:test');
+
+const {
+  beginLog,
+  logFile,
+  logsDir,
+  readTail,
+  stripAnsi,
+  tailFile,
+  tailSession,
+  tailText,
+} = require('../logs');
+
+function tempRoot() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'nd-logs-'));
+}
+
+test('tailText keeps the newest lines and ignores the trailing newline', () => {
+  assert.deepEqual(tailText('one\ntwo\nthree\n', 2), ['two', 'three']);
+  assert.deepEqual(tailText('only\n', 10), ['only']);
+  assert.deepEqual(tailText('', 10), []);
+  assert.deepEqual(tailText('a\r\nb\r\n', 10), ['a', 'b']);
+  assert.deepEqual(tailText('a\nb\nc', 1), ['c']);
+});
+
+test('tailText strips terminal control sequences from detached logs', () => {
+  assert.equal(stripAnsi('\u001b[?25hready\u001b[0m'), 'ready');
+  assert.deepEqual(tailText('one\u001b[?25h\ntwo\n', 10), ['one', 'two']);
+  assert.deepEqual(tailText('\u001b[31mred\u001b[0m\n', 10), ['red']);
+});
+
+test('tailText rejects a bad line count', () => {
+  assert.throws(() => tailText('a\n', 0), /positive integer/);
+  assert.throws(() => tailText('a\n', 2.5), /positive integer/);
+});
+
+test('beginLog writes a session header and tailFile reads it back', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  assert.equal(first.file, logFile('api', root));
+  fs.writeSync(first.fd, 'line one\nline two\n');
+  fs.closeSync(first.fd);
+
+  const tail = tailFile('api', 10, root);
+  assert.equal(tail.file, logFile('api', root));
+  assert.equal(tail.missing, undefined);
+  assert.ok(tail.lines.some((line) => /nextdocs agent_one api/.test(line)));
+  assert.ok(tail.lines.includes('line one'));
+  assert.ok(tail.lines.includes('line two'));
+});
+
+test('beginLog replaces the previous session so the log does not grow across starts', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(first.fd, 'old line\n'.repeat(1000));
+  fs.closeSync(first.fd);
+
+  const second = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(second.fd, 'new line\n');
+  fs.closeSync(second.fd);
+
+  const text = fs.readFileSync(logFile('api', root), 'utf8');
+  assert.ok(!text.includes('old line'));
+  assert.equal(text.match(/nextdocs agent_one api/g).length, 1);
+  assert.ok(text.length < 200);
+});
+
+test('tailSession starts after the newest session header', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(first.fd, 'old line\n');
+  fs.closeSync(first.fd);
+
+  const second = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(second.fd, 'new line\n');
+  fs.closeSync(second.fd);
+
+  assert.deepEqual(tailSession('api', 10, root).lines, ['new line']);
+});
+
+test('tailFile reports a missing log instead of throwing', () => {
+  const root = tempRoot();
+  const tail = tailFile('web', 5, root);
+  assert.equal(tail.missing, true);
+  assert.deepEqual(tail.lines, []);
+  assert.equal(tail.file, path.join(logsDir(root), 'web.log'));
+});
+
+test('readTail stops once it has the requested lines', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  // Two chunks' worth of lines, so "stopped early" is observable: the returned text must
+  // be shorter than the file.
+  fs.writeFileSync(file, `${'padding line\n'.repeat(20_000)}last line\n`);
+  const size = fs.statSync(file).size;
+
+  const { text, atStart } = readTail(file, { limit: 5 });
+  assert.equal(atStart, false);
+  assert.ok(text.length < size / 2, `read ${text.length} of ${size} bytes`);
+  assert.ok(text.endsWith('last line\n'));
+});
+
+test('tailFile reads the last lines of a log larger than one chunk', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  const bulk = Array.from({ length: 20_000 }, (_, index) => `bulk line ${index}`).join('\n');
+  fs.writeSync(first.fd, `${bulk}\nfinal line \u2014 with a dash\n`);
+  fs.closeSync(first.fd);
+
+  const tail = tailFile('api', 3, root);
+  assert.deepEqual(tail.lines, [
+    'bulk line 19998',
+    'bulk line 19999',
+    'final line \u2014 with a dash',
+  ]);
+});
+
+test('tailSession limits reads and does not mistake service output for a header', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  const log = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(
+    log.fd,
+    `${'padding line\n'.repeat(20_000)}new line one\n=== recovery nextdocs retry api ===\n`
+  );
+  fs.closeSync(log.fd);
+  const size = fs.statSync(file).size;
+
+  const { text } = readTail(file, { limit: 10 });
+  assert.ok(text.length < size / 2, `read ${text.length} of ${size} bytes`);
+  assert.deepEqual(tailSession('api', 2, root).lines, [
+    'new line one',
+    '=== recovery nextdocs retry api ===',
+  ]);
+});
+
+test('stripAnsi keeps the visible label of an OSC 8 hyperlink', () => {
+  assert.equal(stripAnsi('\u001b]8;;https://example.com\u001b\\docs\u001b]8;;\u001b\\'), 'docs');
+});
+
+test('readTail counts complete lines after a long blank tail', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  fs.writeFileSync(file, `${'real line\n'.repeat(50)}${'\n'.repeat(5_000)}`);
+
+  const tail = tailFile('api', 3, root);
+  assert.deepEqual(tail.lines, ['real line', 'real line', 'real line']);
+});
+
+test('readTail reports whether it covers the file from its first byte', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  fs.writeFileSync(file, 'one\ntwo\n');
+  assert.deepEqual(readTail(file, { limit: 10 }), { text: 'one\ntwo\n', atStart: true });
+
+  fs.writeFileSync(file, `${'padding\n'.repeat(20_000)}tail\n`);
+  assert.equal(readTail(file, { limit: 2 }).atStart, false);
+});
+
+test('beginLog never rewrites the generation a reader already opened', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(first.fd, 'first generation\n');
+  fs.closeSync(first.fd);
+
+  // A reader that opened the file before the next start keeps one complete generation:
+  // beginLog replaces the path by rename instead of truncating the inode in place.
+  const reader = fs.openSync(logFile('api', root), 'r');
+  try {
+    const second = beginLog('api', { id: 'agent_two' }, root);
+    fs.writeSync(second.fd, 'second generation\n');
+    fs.closeSync(second.fd);
+
+    const seen = Buffer.alloc(1024);
+    const bytes = fs.readSync(reader, seen, 0, seen.length, 0);
+    const text = seen.subarray(0, bytes).toString('utf8');
+    assert.match(text, /nextdocs agent_one api/);
+    assert.match(text, /first generation/);
+    assert.doesNotMatch(text, /second generation/);
+  } finally {
+    fs.closeSync(reader);
+  }
+  assert.match(fs.readFileSync(logFile('api', root), 'utf8'), /second generation/);
+});

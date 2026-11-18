@@ -22,6 +22,8 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "test:scripts": "node --test \"scripts/**/*.test.js\"",
+    "verify:instances": "node scripts/verify-instances.js",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
     "e2e:install": "playwright install chromium",
@@ -31,6 +33,7 @@
   "devDependencies": {
     "@playwright/test": "^1.65.1",
     "husky": "^9.0.0",
+    "jsdom": "^26.1.0",
     "lint-staged": "^17.6.0",
     "prettier": "^3.10.1",
     "turbo": "^2"

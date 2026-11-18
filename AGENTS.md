@@ -2,7 +2,11 @@
 
 NextDocs: block-based (BlockNote) wiki/docs platform. Three services: Next.js web (`web/`), Yjs WebSocket server (`realtime/`), Spring Boot API (`api/`) + PostgreSQL.
 
-Ports: web `3000`, API `8080`, realtime `1234`.
+Ports: web `3000`, API `8080`, realtime `1234` are the _main_ worktree's ports, not
+reserved ones. Every git worktree gets its own ports, Postgres databases and Yhub Redis
+prefix; `./nd urls` prints the ones in use here, and `.nd/instance.env` carries them for
+agents and e2e. Shared containers (Postgres 5433, Redis 6379, Mailpit 1025/8025) outlive
+a dev session and are stopped only by `./nd stop --infra` (alias `./nd down --infra`).
 
 ## Layout decisions that are easy to misread
 
@@ -10,6 +14,7 @@ Ports: web `3000`, API `8080`, realtime `1234`.
 - Exactly one lockfile: the root `package-lock.json`. `web/package-lock.json` / `realtime/package-lock.json` are rejected by `npm run check:lockfiles`, by `./nd`, and by CI. Add JS deps from the repo root, e.g. `npm install <pkg> -w web`.
 - `web/types/document.types.ts` imports block types from `../realtime/src/types/blocks.ts` through the alias `@/../../realtime/src/types/blocks`; `web/Dockerfile` copies `realtime/src/types` before building web. Block-type changes affect both services.
 - `realtime/` is ESM (`"type": "module"`, `moduleResolution: NodeNext`): relative imports inside `src/` must use the `.js` extension even though the files are `.ts` (`import config from './config.js'`).
+- **Parallel worktrees** — `./nd dev` allocates three ports per worktree and persists them in `<git-common-dir>/nextdocs/instances/<id>.json`. Each worktree then gets `nextdocs_<id>` / `nextdocs_<id>_yhub` databases, a `yhub_<id>` Redis prefix and its own api/web/realtime processes; the main worktree keeps `nextdocs`, `nextdocs_yhub`, prefix `yhub` and 3000/8080/1234. Ports are sticky (`--new-ports`, `--port-offset N`, `ND_WEB_PORT`/`ND_API_PORT`/`ND_REALTIME_PORT`), `.nd/instance.env` carries this worktree's URLs for agents and e2e, and `./nd status` / `./nd urls` reprint them. Ports in this file and in the READMEs are the main worktree's; ask `./nd urls` instead of assuming. `./nd db reset` is scoped to the current worktree; shared containers are stopped only by `./nd stop --infra`.
 
 ## Entrypoints
 
@@ -22,15 +27,29 @@ Ports: web `3000`, API `8080`, realtime `1234`.
 
 ## Commands
 
-All from the repo root:
+All from the repo root. On Windows use `nd.cmd` (and `mvnw.cmd` for the API); `--json` is
+the portable machine-readable interface, while `.nd/instance.env` is POSIX shell syntax.
 
 ```bash
-./nd dev              # api + web + realtime; requires Docker (auto-starts/stops postgres and Mailpit)
-./nd dev web          # one service (postgres is still started even for web/realtime only)
+./nd dev              # api + web + realtime; starts Postgres/Mailpit (needs Docker)
+./nd dev web          # one service; web alone needs neither Docker nor Postgres
+./nd up               # full stack detached; exits 0 once api, web and realtime answer
+./nd stop             # stop this worktree's stack (foreground or detached); alias: down
+./nd logs [service]   # recent detached logs (-n N, default 100)
 ./nd test [service]   # api | web | realtime
 ./nd lint web --fix   # eslint --fix for web/realtime (spotless:check for api)
 ./nd format --fix     # prettier for web/realtime + spotless:apply for api
 ./nd db               # psql into the container (postgres is published on host port 5433)
+./nd db status       # containers, databases, Flyway, Redis, services, attachments
+./nd db reset --yes  # this worktree's databases, Yhub rooms, Redis prefix, attachments
+./nd status          # every worktree instance and shared container health
+./nd urls [--env]    # this worktree's URLs (--env prints sourceable exports)
+./nd down [--infra]  # alias of stop; --infra also stops the shared containers
+./nd db prune        # drop databases of worktrees that no longer exist
+./nd seed regular    # seed an empty local database; small|regular|large, --verify
+# seeded logins: <key>@nextdocs.test / NextDocs!2026; alice is the workspace owner
+npm run test:scripts # node:test for the nd/seed scripts (no database needed)
+npm run verify:instances # two-worktree concurrency/isolation check (Docker; several minutes)
 npm run verify        # git-hook checks (format/lint/test) against the branch diff
 npm run verify:all    # force every service, like a push to main (needs local Postgres)
 npm run e2e           # Playwright browser suite; needs the full stack on the E2E
@@ -38,7 +57,20 @@ npm run e2e           # Playwright browser suite; needs the full stack on the E2
 npm run check:runtime-versions  # .nvmrc / .java-version / Dockerfile drift guard
 ```
 
-`./nd --help` prints usage but also "Unknown command" and exits 1.
+`./nd --help` (also `-h` / `help`) prints usage and exits 0; an unknown command prints the
+same usage and exits 1.
+
+`./nd up` is the non-interactive lifecycle: it starts the full stack detached, writes
+`.nd/logs/{api,web,realtime}.log`, waits for all three services to answer, and exits 0
+only when the worktree is usable. `./nd dev --detach` is an alias. It is idempotent
+while healthy; a failed start stops only the services that run started.
+
+Lifecycle and inspection commands accept `--json` (`up`, `status`, `urls`, `logs`,
+`stop`). In JSON mode stdout contains exactly one document and all progress/banners go
+to stderr; a failed command writes no JSON and exits nonzero (130/143 on interrupt).
+`up --json` returns instance, urls, ports, database, pids, logs, envFile and healthy.
+`ND_READY_TIMEOUT_MS` overrides the 180 s readiness budget; a failure names the log
+file of each pending service and never silently restarts a running stack.
 
 Single test / focused run (args after `--` are forwarded to Jest):
 
