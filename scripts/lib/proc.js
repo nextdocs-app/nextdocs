@@ -77,6 +77,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Signal 0 is a liveness probe. EPERM means the process exists but belongs to another
+ * user; on Windows access checks can produce it as well. Only ESRCH is a definitive
+ * "gone".
+ */
+function isPidAlive(pid) {
+  if (!pid || !Number.isInteger(Number(pid))) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
 module.exports = {
   ROOT,
   COLOR,
@@ -89,4 +104,5 @@ module.exports = {
   redirectRunStdout,
   sleepSync,
   sleep,
+  isPidAlive,
 };

@@ -103,7 +103,7 @@ function ensureDatabases({ yhubSchema = true, local = false } = {}) {
 
 // Yhub never runs DDL on boot; init-db.js is the only supported path and is
 // idempotent, so running it here is what makes `./nd dev` work on a fresh volume.
-function ensureYhubSchema(local = false) {
+function yhubInitializerPath() {
   // Prefer the initializer from the workspace that declares @y/hub: when npm could
   // not hoist it (a version split), the root copy is the stale one.
   const initScript = [
@@ -118,6 +118,11 @@ function ensureYhubSchema(local = false) {
         'Run `npm ci` (or `npm install`) from the repo root, then retry.'
     );
   }
+  return initScript;
+}
+
+function ensureYhubSchema(local = false) {
+  const initScript = yhubInitializerPath();
   const result = spawnSync(process.execPath, [initScript], {
     cwd: ROOT,
     stdio: 'pipe',
@@ -149,6 +154,40 @@ function startSharedContainer(command, name) {
   console.log(`\x1b[34m> Another worktree started ${name}; using it.\x1b[0m`);
 }
 
+/**
+ * What is wrong with the container's published Postgres mapping, as a message, or null
+ * when the mapping is the one this CLI provisions and connects to. Pure so the accepted
+ * and rejected shapes are covered without a Docker host.
+ */
+function postgresBindingProblem(bindings) {
+  const ports = bindings && bindings['5432/tcp'];
+  const observed = Array.isArray(ports)
+    ? ports.map((port) => `${port.HostIp || '*'}:${port.HostPort}`).join(', ')
+    : '(none)';
+  const recreate =
+    'Remove and recreate the container with ./nd dev; its nextdocs_pgdata volume will be preserved.';
+  if (!Array.isArray(ports) || ports.length === 0) {
+    return (
+      `${POSTGRES_CONTAINER} publishes no host port (${observed}); it must publish ` +
+      `127.0.0.1:${POSTGRES_PORT}. ${recreate}`
+    );
+  }
+  const loopback = (host) => host === '127.0.0.1' || host === '::1';
+  if (ports.some((port) => !loopback(port.HostIp))) {
+    return `${POSTGRES_CONTAINER} is not bound to loopback only (${observed}). ${recreate}`;
+  }
+  // Provisioning runs inside the container while the API and Flyway connect to the host
+  // port, so a container published on another host port is the wrong server for every
+  // command that follows.
+  if (ports.some((port) => String(port.HostPort) !== String(POSTGRES_PORT))) {
+    return (
+      `${POSTGRES_CONTAINER} publishes Postgres on ${observed}, but this CLI expects ` +
+      `127.0.0.1:${POSTGRES_PORT}. ${recreate}`
+    );
+  }
+  return null;
+}
+
 function assertPostgresLoopback() {
   const bindings = spawnSync(
     'docker',
@@ -157,23 +196,15 @@ function assertPostgresLoopback() {
       encoding: 'utf8',
     }
   );
-  if (bindings.status === 0) {
-    let ports;
-    try {
-      ports = JSON.parse(bindings.stdout)?.['5432/tcp'];
-    } catch {
-      throw new Error(`Could not inspect ${POSTGRES_CONTAINER} port bindings.`);
-    }
-    if (
-      !Array.isArray(ports) ||
-      ports.length === 0 ||
-      ports.some((port) => port.HostIp !== '127.0.0.1' && port.HostIp !== '::1')
-    ) {
-      throw new Error(
-        `${POSTGRES_CONTAINER} is not bound to loopback only. Remove and recreate the container with ./nd dev; its nextdocs_pgdata volume will be preserved.`
-      );
-    }
+  if (bindings.status !== 0) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(bindings.stdout);
+  } catch {
+    throw new Error(`Could not inspect ${POSTGRES_CONTAINER} port bindings.`);
   }
+  const problem = postgresBindingProblem(parsed);
+  if (problem) throw new Error(problem);
 }
 
 function ensurePostgres({ yhubSchema = true, local = false } = {}) {
@@ -322,37 +353,60 @@ function redisPing() {
 /**
  * Delete this worktree's Yhub keys only. A `FLUSHDB` here would wipe the live streams
  * of every other running instance that shares the Redis container.
+ *
+ * The scan runs as one bounded step per Redis call, driven from here: a Lua loop over the
+ * whole keyspace would block every other worktree's Redis commands until it finished.
+ * Keys never leave Redis, so binary keys cannot be split or interpreted by a shell.
  */
-function redisFlushPrefix(prefixOverride) {
-  const prefix = prefixOverride || redisPrefix();
-  if (!/^[A-Za-z0-9_.:-]+$/.test(prefix)) {
+function redisFlushPrefix(prefix = redisPrefix()) {
+  if (typeof prefix !== 'string' || !/^[A-Za-z0-9_.:-]+$/.test(prefix)) {
     throw new Error(`Refusing to flush an unexpected Redis prefix '${prefix}'.`);
   }
-  // Keep keys inside Redis so even binary keys cannot be split or interpreted by a shell.
-  const script = [
-    "local cursor, removed = '0', 0",
-    'repeat',
-    "  local result = redis.call('SCAN', cursor, 'MATCH', ARGV[1], 'COUNT', 200)",
-    '  cursor = result[1]',
-    "  for _, key in ipairs(result[2]) do removed = removed + redis.call('DEL', key) end",
-    "until cursor == '0'",
-    'return removed',
+  return flushPrefixInSteps(`${prefix}:*`, (cursor) => runRedisScanStep(prefix, cursor));
+}
+
+function runRedisScanStep(prefix, cursor) {
+  const step = [
+    "local result = redis.call('SCAN', ARGV[1], 'MATCH', ARGV[2], 'COUNT', 200)",
+    'local removed = 0',
+    "for _, key in ipairs(result[2]) do removed = removed + redis.call('DEL', key) end",
+    "return result[1] .. ' ' .. removed",
   ].join('\n');
   const result = spawnSync(
     'docker',
-    ['exec', REDIS_CONTAINER, 'redis-cli', '-e', 'EVAL', script, '0', `${prefix}:*`],
-    {
-      encoding: 'utf8',
-      timeout: 10_000,
-    }
+    ['exec', REDIS_CONTAINER, 'redis-cli', 'EVAL', step, '0', String(cursor), `${prefix}:*`],
+    { encoding: 'utf8', timeout: 10_000 }
   );
-  const count = (result.stdout || '').trim();
-  if (result.status !== 0 || !/^\d+$/.test(count)) {
+  const output = (result.stdout || '').trim();
+  const match = /^(\d+)\s+(\d+)$/.exec(output);
+  if (result.status !== 0 || !match) {
     throw new Error(
-      `Could not clear Redis prefix '${prefix}': ${(result.stderr || result.stdout || result.error?.message || '').trim()}`
+      `Could not clear Redis prefix '${prefix}': ` +
+        `${(result.stderr || result.stdout || result.error?.message || '').trim()}`
     );
   }
-  return Number(count);
+  return { cursor: match[1], removed: Number(match[2]) };
+}
+
+/**
+ * Drive a `SCAN`-based flush cursor to completion, one bounded batch per call. The loop
+ * is client-side on purpose; `step` is injectable so the batching is testable without a
+ * Redis server.
+ */
+function flushPrefixInSteps(pattern, step, { maxSteps = 100_000 } = {}) {
+  let cursor = '0';
+  let removed = 0;
+  let steps = 0;
+  do {
+    steps += 1;
+    if (steps > maxSteps) {
+      throw new Error(`Gave up clearing '${pattern}' after ${maxSteps} scan steps.`);
+    }
+    const batch = step(cursor);
+    removed += Number(batch.removed) || 0;
+    cursor = String(batch.cursor);
+  } while (cursor !== '0');
+  return removed;
 }
 
 /** Drop one database and its connections; used by `db reset` and `db prune`. */
@@ -377,6 +431,8 @@ module.exports = {
   startSharedContainer,
   waitForRedisReady,
   ensureRedis,
+  yhubInitializerPath,
+  postgresBindingProblem,
   containerRunning,
   psql,
   queryValue,
@@ -384,5 +440,6 @@ module.exports = {
   tableExists,
   redisPing,
   redisFlushPrefix,
+  flushPrefixInSteps,
   dropDatabase,
 };

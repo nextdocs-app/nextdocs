@@ -101,7 +101,8 @@ test('readTail stops once it has the requested lines', () => {
   fs.writeFileSync(file, `${'padding line\n'.repeat(20_000)}last line\n`);
   const size = fs.statSync(file).size;
 
-  const text = readTail(file, { limit: 5 });
+  const { text, atStart } = readTail(file, { limit: 5 });
+  assert.equal(atStart, false);
   assert.ok(text.length < size / 2, `read ${text.length} of ${size} bytes`);
   assert.ok(text.endsWith('last line\n'));
 });
@@ -133,7 +134,7 @@ test('tailSession limits reads and does not mistake service output for a header'
   fs.closeSync(log.fd);
   const size = fs.statSync(file).size;
 
-  const text = readTail(file, { limit: 10 });
+  const { text } = readTail(file, { limit: 10 });
   assert.ok(text.length < size / 2, `read ${text.length} of ${size} bytes`);
   assert.deepEqual(tailSession('api', 2, root).lines, [
     'new line one',
@@ -143,4 +144,51 @@ test('tailSession limits reads and does not mistake service output for a header'
 
 test('stripAnsi keeps the visible label of an OSC 8 hyperlink', () => {
   assert.equal(stripAnsi('\u001b]8;;https://example.com\u001b\\docs\u001b]8;;\u001b\\'), 'docs');
+});
+
+test('readTail counts complete lines after a long blank tail', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  fs.writeFileSync(file, `${'real line\n'.repeat(50)}${'\n'.repeat(5_000)}`);
+
+  const tail = tailFile('api', 3, root);
+  assert.deepEqual(tail.lines, ['real line', 'real line', 'real line']);
+});
+
+test('readTail reports whether it covers the file from its first byte', () => {
+  const root = tempRoot();
+  const file = logFile('api', root);
+  fs.mkdirSync(logsDir(root), { recursive: true });
+  fs.writeFileSync(file, 'one\ntwo\n');
+  assert.deepEqual(readTail(file, { limit: 10 }), { text: 'one\ntwo\n', atStart: true });
+
+  fs.writeFileSync(file, `${'padding\n'.repeat(20_000)}tail\n`);
+  assert.equal(readTail(file, { limit: 2 }).atStart, false);
+});
+
+test('beginLog never rewrites the generation a reader already opened', () => {
+  const root = tempRoot();
+  const first = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(first.fd, 'first generation\n');
+  fs.closeSync(first.fd);
+
+  // A reader that opened the file before the next start keeps one complete generation:
+  // beginLog replaces the path by rename instead of truncating the inode in place.
+  const reader = fs.openSync(logFile('api', root), 'r');
+  try {
+    const second = beginLog('api', { id: 'agent_two' }, root);
+    fs.writeSync(second.fd, 'second generation\n');
+    fs.closeSync(second.fd);
+
+    const seen = Buffer.alloc(1024);
+    const bytes = fs.readSync(reader, seen, 0, seen.length, 0);
+    const text = seen.subarray(0, bytes).toString('utf8');
+    assert.match(text, /nextdocs agent_one api/);
+    assert.match(text, /first generation/);
+    assert.doesNotMatch(text, /second generation/);
+  } finally {
+    fs.closeSync(reader);
+  }
+  assert.match(fs.readFileSync(logFile('api', root), 'utf8'), /second generation/);
 });

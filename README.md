@@ -70,6 +70,14 @@ reads those logs and `./nd stop` shuts the stack down without touching the share
 containers. Add `--json` to `up`, `status`, `urls`, `logs` or `stop` for one
 machine-readable document on stdout; progress and banners go to stderr.
 
+Each start replaces its service's log, so restarts do not accumulate files. There is no
+size cap inside one session: the child writes straight to the log's file descriptor, so
+renaming it cannot rotate it. A stack left running for days therefore keeps growing its
+current logs; `./nd logs --clear` (after `./nd stop`) removes them.
+
+`dev`, `up` and `db reset` claim the worktree while they provision or drop it, so a
+reset cannot drop databases under a start that is already in progress.
+
 ### Development Commands
 
 Use the `./nd` CLI for all development tasks:
@@ -81,6 +89,7 @@ Use the `./nd` CLI for all development tasks:
 
 ./nd up               # Full stack detached; returns when all services answer
 ./nd logs api         # Recent logs from the detached stack (-n N)
+./nd logs --clear     # Remove this worktree's logs once the stack is stopped
 ./nd stop             # Stop this worktree's stack
 
 ./nd test             # Run all tests

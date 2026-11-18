@@ -80,6 +80,46 @@ async function realtimeReachable() {
   }
 }
 
+/**
+ * The stack the seed talks to has to be this worktree's stack. A linked worktree without
+ * a record falls back to the default ports, which belong to whichever worktree started
+ * first: the HTTP health checks would pass against that stack while every SQL write
+ * targets this worktree's (empty) database, leaving partial identity rows behind.
+ */
+function assertSeedTarget(instance) {
+  if (!instance.hasRecord && !instance.isMain) {
+    throw new Error(
+      `This linked worktree has no stack recorded. Start it with \`./nd dev\` or ` +
+        '`./nd up` first, then run `./nd seed` again: the seed writes to the database and ' +
+        'API of the worktree it runs in.'
+    );
+  }
+  // The main worktree keeps the historic defaults, but only a record knows which
+  // attachment directory the running API was actually started with.
+  if (!instance.hasRecord) return;
+  const storage = attachmentStoragePath();
+  if (instance.attachmentStorage && instance.attachmentStorage !== storage) {
+    throw new Error(
+      `The running API stores attachments in ${instance.attachmentStorage}, but this shell ` +
+        `resolves to ${storage}. Start the stack and the seed with the same ` +
+        'ATTACHMENT_STORAGE_PATH (or unset it) so seeded files land where the API reads them.'
+    );
+  }
+}
+
+async function apiWorkspaceInitialized() {
+  try {
+    const res = await fetch(`${apiBaseUrl()}/api/v1/instance/status`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return null;
+    const payload = await res.json().catch(() => null);
+    return payload?.data?.initialized === true;
+  } catch {
+    return null;
+  }
+}
+
 /** Everything that must be true before the first write. */
 async function preflight(plan) {
   if (!(await apiReachable())) {
@@ -120,6 +160,15 @@ async function preflight(plan) {
   if (!tableExists(yhubDatabase(), 'yhub_ydoc_v1')) {
     throw new Error(
       `The ${yhubDatabase()} schema is not initialized. Run \`./nd db reset --yes\`.`
+    );
+  }
+  if (await apiWorkspaceInitialized()) {
+    // This worktree's database is empty, so an initialized API is a different API: every
+    // document would be created in the wrong database.
+    throw new Error(
+      `The API at ${apiBaseUrl()} reports an initialized workspace, but ${apiDatabase()} is ` +
+        `empty: it is serving a different database. Stop it and start this worktree's stack ` +
+        'with `./nd dev`, then retry.'
     );
   }
   const rooms = Number(queryValue(yhubDatabase(), 'SELECT count(*) FROM yhub_ydoc_v1'));
@@ -583,6 +632,8 @@ function printSummary(plan, run, startedAt) {
 async function runSeed(args, startedAt) {
   const plan = buildPlan(args.profile);
   const instance = getInstance();
+  // Reject a target that cannot be this worktree's before the prompt or any probe.
+  assertSeedTarget(instance);
   // SQL always targets this worktree; inherited URLs must not send HTTP to another one.
   process.env.NEXTDOCS_API_URL = `http://localhost:${instance.ports.api}`;
   process.env.NEXTDOCS_REALTIME_URL = `http://localhost:${instance.ports.realtime}`;
@@ -604,8 +655,10 @@ async function runSeed(args, startedAt) {
   await preflight(plan);
 
   info('Writing identity rows...');
-  insertIdentity(plan);
+  // Marked before the insert: a client can report failure after the server committed,
+  // and the recovery instructions have to appear for that state too.
   args.seedWritten = true;
+  insertIdentity(plan);
   plan.users.forEach((user) => {
     if (!user.id) throw new Error(`User ${user.key} has no id`);
   });
@@ -680,3 +733,6 @@ async function main(argv) {
 }
 
 module.exports = main;
+// Exposed for the script tests: the target guard is what keeps a seed out of another
+// worktree's stack.
+module.exports.assertSeedTarget = assertSeedTarget;

@@ -6,31 +6,53 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 const {
   DEFAULT_PORTS,
+  claimInstance,
+  claimStaleRecord,
+  claimedServices,
   clearServicePids,
+  clearSupervisor,
   databaseNames,
+  finishPruneClaim,
+  instanceClaimOwner,
   instanceId,
   isMainWorktree,
+  isWorktreePresent,
   listRecords,
   liveServicePids,
+  liveSupervisors,
   peekInstance,
   readableName,
+  recordMetadataProblem,
   redisPrefix,
   registryDir,
+  releaseInstanceClaim,
   resolveInstance,
   setServicePids,
   setSupervisor,
-  clearSupervisor,
-  supervisorServices,
   updateRecord,
+  withRegistryLock,
 } = require('../instance');
 const { allocatePorts, ephemeralPort, isPortFree } = require('../ports');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'nd-instance-'));
+}
+
+/** A live process with a pid that is not this test runner's. */
+function liveChild() {
+  return spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+}
+
+function stopChild(child) {
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    // Already gone.
+  }
 }
 
 /** A repo whose main worktree is `<root>/nextdocs`. */
@@ -241,14 +263,16 @@ test('worktree records are listed across worktrees and supervisors are tracked',
   assert.notDeepEqual(records[0].ports, records[1].ports);
 
   setSupervisor(instanceA, process.pid);
-  assert.equal(
-    listRecords(instanceA.registry).find((r) => r.id === instanceA.id).supervisorPid,
-    process.pid
+  assert.deepEqual(
+    listRecords(instanceA.registry)
+      .find((r) => r.id === instanceA.id)
+      .supervisors.map((entry) => entry.pid),
+    [process.pid]
   );
   clearSupervisor(instanceA, process.pid);
-  assert.equal(
-    listRecords(instanceA.registry).find((r) => r.id === instanceA.id).supervisorPid,
-    null
+  assert.deepEqual(
+    listRecords(instanceA.registry).find((r) => r.id === instanceA.id).supervisors,
+    []
   );
 });
 
@@ -260,34 +284,56 @@ test('a supervisor records the services it owns so a second start can be refused
   const read = () => listRecords(instance.registry).find((entry) => entry.id === instance.id);
 
   setSupervisor(instance, process.pid, ['api', 'not-a-service']);
-  assert.deepEqual(read().supervisorServices, ['api']);
-  assert.deepEqual(supervisorServices(read()), ['api']);
-
-  // Last starter owns the slot: a second terminal's service set replaces the first.
-  setSupervisor(instance, process.pid, ['web']);
-  assert.deepEqual(supervisorServices(read()), ['web']);
+  assert.deepEqual(read().supervisors[0].services, ['api']);
+  assert.deepEqual(claimedServices(read()), ['api']);
 
   // A record from before the service set was stored cannot say what it owns, so it is
   // read as owning the whole stack rather than silently allowing a second one.
-  assert.deepEqual(supervisorServices({ supervisorPid: process.pid }), ['web', 'api', 'realtime']);
-
-  // A detached stack owns the services through its pids, not through this slot.
-  setServicePids(instance, { api: process.pid });
-  assert.equal(read().supervisorServices, null);
-
-  setSupervisor(instance, process.pid, ['realtime']);
-  clearSupervisor(instance, process.pid);
-  assert.equal(read().supervisorServices, null);
-  assert.equal(read().supervisorPid, null);
+  assert.deepEqual(claimedServices({ supervisorPid: process.pid }), ['web', 'api', 'realtime']);
 });
 
-test('detached pids are recorded, filtered by liveness, and clear the supervisor slot', async () => {
+test('two foreground supervisors are kept side by side and cleared independently', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'two-terminals', 'nextdocs');
+  fs.mkdirSync(worktree, { recursive: true });
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  const read = () => listRecords(instance.registry).find((entry) => entry.id === instance.id);
+  const api = liveChild();
+  const web = liveChild();
+
+  try {
+    setSupervisor(instance, api.pid, ['api']);
+    setSupervisor(instance, web.pid, ['web']);
+
+    assert.deepEqual(
+      read()
+        .supervisors.map((entry) => entry.pid)
+        .sort((left, right) => left - right),
+      [api.pid, web.pid].sort((left, right) => left - right),
+      'a second foreground start must not replace the first supervisor'
+    );
+    assert.deepEqual(liveSupervisors(read()).length, 2);
+    assert.deepEqual(claimedServices(read()), ['web', 'api']);
+
+    // One supervisor exiting keeps the other one's record intact.
+    clearSupervisor(instance, api.pid);
+    assert.deepEqual(
+      read().supervisors.map((entry) => entry.pid),
+      [web.pid]
+    );
+    assert.deepEqual(claimedServices(read()), ['web']);
+  } finally {
+    stopChild(api);
+    stopChild(web);
+  }
+});
+
+test('detached pids are recorded, filtered by liveness, and leave supervisors alone', async () => {
   const repo = fakeRepository();
   const worktree = path.join(repo.root, 'worktrees', 'detached', 'nextdocs');
   fs.mkdirSync(worktree, { recursive: true });
   const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
 
-  setSupervisor(instance, process.pid);
   setServicePids(instance, {
     api: process.pid,
     web: 2_147_483_647,
@@ -296,7 +342,6 @@ test('detached pids are recorded, filtered by liveness, and clear the supervisor
 
   const record = listRecords(instance.registry).find((entry) => entry.id === instance.id);
   assert.deepEqual(record.pids, { api: process.pid, realtime: process.pid });
-  assert.equal(record.supervisorPid, null);
   assert.deepEqual(liveServicePids(record), { api: process.pid, realtime: process.pid });
 
   clearServicePids(instance);
@@ -304,6 +349,80 @@ test('detached pids are recorded, filtered by liveness, and clear the supervisor
     listRecords(instance.registry).find((entry) => entry.id === instance.id).pids,
     {}
   );
+
+  // A failed stop keeps its pid in the record so a later `./nd stop` can retry it.
+  clearServicePids(instance, { api: process.pid, web: 2_147_483_647 });
+  assert.deepEqual(listRecords(instance.registry).find((entry) => entry.id === instance.id).pids, {
+    api: process.pid,
+  });
+});
+
+test('a lifecycle claim is exclusive and readable by the command that wants it', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'claim', 'nextdocs');
+  fs.mkdirSync(worktree, { recursive: true });
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+
+  const reset = await claimInstance(instance, { waitMs: 0, label: 'db reset' });
+  assert.ok(reset, 'the first claim must succeed');
+  assert.equal(await claimInstance(instance, { waitMs: 0, label: 'dev' }), null);
+  assert.equal(instanceClaimOwner(instance).label, 'db reset');
+
+  releaseInstanceClaim(reset);
+  const dev = await claimInstance(instance, { waitMs: 0, label: 'dev' });
+  assert.ok(dev, 'the claim must be reusable after release');
+  releaseInstanceClaim(dev);
+  assert.equal(instanceClaimOwner(instance), null);
+});
+
+test('a prune claim blocks adoption of a recreated worktree until it is released', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'recreated', 'nextdocs');
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  assert.equal(isWorktreePresent(instance), false);
+
+  const claimed = await withRegistryLock(instance.registry, () =>
+    claimStaleRecord(instance.registry, instance)
+  );
+  assert.ok(claimed && claimed.prune);
+  assert.equal(claimed.prune.pid, process.pid);
+
+  // The worktree is restored while prune owns the record: it must not adopt the record
+  // whose databases are being dropped.
+  fs.mkdirSync(worktree, { recursive: true });
+  await assert.rejects(
+    resolveInstance({ worktree, env: {}, commonDir: repo.commonDir }),
+    /being pruned/
+  );
+  // A second prune cannot steal a live claim either.
+  assert.equal(
+    await withRegistryLock(instance.registry, () => claimStaleRecord(instance.registry, instance)),
+    null
+  );
+
+  await withRegistryLock(instance.registry, () =>
+    finishPruneClaim(instance.registry, instance.id, claimed.prune.token, { remove: false })
+  );
+  const after = listRecords(instance.registry)[0];
+  assert.equal(after.prune, undefined);
+  assert.deepEqual(
+    (await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir })).ports,
+    instance.ports
+  );
+});
+
+test('stale records are validated before anything can be dropped', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'metadata', 'nextdocs');
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+
+  assert.equal(recordMetadataProblem(instance), null);
+  assert.match(recordMetadataProblem({ ...instance, redisPrefix: '' }), /Redis prefix/);
+  assert.match(recordMetadataProblem({ ...instance, redisPrefix: 'yhub' }), /Redis prefix/);
+  assert.match(recordMetadataProblem({ ...instance, database: 'nextdocs' }), /is not 'nextdocs_/);
+  assert.match(recordMetadataProblem({ ...instance, yhubDatabase: 'nextdocs_yhub' }), /Yhub/);
+  assert.match(recordMetadataProblem({ ...instance, id: 'main' }), /never pruned/);
+  assert.match(recordMetadataProblem({ ...instance, id: 'Bad Id' }), /malformed/);
 });
 
 test('a colliding worktree record is never reused', async () => {

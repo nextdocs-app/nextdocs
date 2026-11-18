@@ -96,18 +96,20 @@ npm run e2e -- e2e/tests/editor.spec.ts
 `global-setup.ts` fails with the missing service and URL when the stack is not
 up, instead of letting every test time out.
 
-To run against a specific worktree's stack, source the file `./nd dev` writes there:
+The E2E suite registers accounts and creates/deletes documents, so it must only ever
+run against the dedicated `nextdocs_e2e` / `nextdocs_e2e_yhub` databases above. There
+is no worktree-rooted variant: sourcing a normal `.nd/instance.env` (or exporting
+`NEXTDOCS_*_URL` from another worktree) only changes the URLs Playwright talks to.
+It does **not** change the databases the already-running API and realtime services
+use, so the suite would write its accounts and documents into an ordinary
+development database (`nextdocs` or `nextdocs_<worktree>`). Start the API and
+realtime services with the dedicated E2E database URLs shown above, or use the CI
+workflow, which does exactly that with service containers.
 
-```bash
-source .nd/instance.env   # NEXTDOCS_*, E2E_* and database URLs for this worktree
-npm run e2e
-```
-
-On Windows, use `nd.cmd urls --json` and set the same values in the environment;
-`.nd/instance.env` is POSIX shell syntax.
-
-The fixed `localhost:3000/8080/1234` variables below remain the default and are what
-CI uses.
+On Windows, use `nd.cmd` for the CLI; `.nd/instance.env` is POSIX shell syntax. The
+fixed `localhost:3000/8080/1234` variables below remain the default and are what CI
+uses; the dedicated E2E stack above uses them too, so `E2E_*` overrides are only
+needed when the services are reached through another host.
 
 ## CI
 

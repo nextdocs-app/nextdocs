@@ -24,11 +24,15 @@ const path = require('path');
 const { ROOT, sleep } = require('./lib/proc');
 const { POSTGRES_CONTAINER, POSTGRES_USER, REDIS_CONTAINER } = require('./lib/constants');
 const { dropDatabase, redisFlushPrefix } = require('./lib/containers');
-const { listRecords, peekInstance, removeRecord } = require('./lib/instance');
+const { listRecords, liveServicePids, peekInstance, removeRecord } = require('./lib/instance');
+const { acquireLock, releaseLock } = require('./lib/lock');
 const { portOpen } = require('./lib/ports');
 
 const isWin = process.platform === 'win32';
 const BASE = path.join(ROOT, '.nd', 'verify-instances');
+// The lock lives beside BASE, not inside it: cleanup removes BASE when both worktrees are
+// gone, and a second verifier must still see that the first one owns the run.
+const VERIFIER_LOCK = path.join(ROOT, '.nd', 'verify-instances.lock');
 const AGENTS = [
   { name: 'agent-a', dir: path.join(BASE, 'agent-a') },
   { name: 'agent-b', dir: path.join(BASE, 'agent-b') },
@@ -224,27 +228,66 @@ function registryDir() {
   return path.resolve(ROOT, common, 'nextdocs', 'instances');
 }
 
+/**
+ * Drop the databases and Redis prefix of one verification instance. Returns whether the
+ * cleanup finished: the record is the only place these names are written down, so it is
+ * kept when anything failed and a later run can retry.
+ */
 function dropInstance(instance) {
+  let complete = true;
   for (const database of [instance.database, instance.yhubDatabase]) {
     try {
       dropDatabase(database);
     } catch (err) {
+      complete = false;
       warn(`Could not drop ${database}: ${err.message}`);
     }
   }
   try {
     redisFlushPrefix(instance.redisPrefix);
   } catch (err) {
+    complete = false;
     warn(`Could not clear Redis prefix ${instance.redisPrefix}: ${err.message}`);
   }
+  if (!complete) {
+    warn(`Keeping the instance record for ${instance.id} so the cleanup can be retried.`);
+    return false;
+  }
   removeRecord(instance.registry, instance.id);
+  return true;
 }
 
+/**
+ * Remove one verification worktree only after its stack is confirmed gone. A stop that
+ * failed, a live pid or an open port leaves both the worktree and its record in place:
+ * removing them would orphan running services and lose the only handle for a retry.
+ */
 async function cleanupWorktree(agent) {
   if (!fs.existsSync(agent.dir)) return;
-  const instance = peekInstance({ worktree: agent.dir });
+  const instance = peekInstance({ worktree: agent.dir, env: {}, applyPins: false });
 
-  nd(['stop', '--json'], { cwd: agent.dir, allowFail: true, timeout: 60_000 });
+  const stopped = nd(['stop', '--json'], { cwd: agent.dir, allowFail: true, timeout: 60_000 });
+  if (stopped.status !== 0) {
+    warn(
+      `Not removing ${agent.name}: ./nd stop failed (exit ${stopped.status}): ` +
+        tail(stopped.stderr || stopped.stdout)
+    );
+    return;
+  }
+  // Only a recorded instance owns services and ports here; a worktree whose install failed
+  // before `up` has none, and the main stack's default ports say nothing about it.
+  if (instance.hasRecord) {
+    const live = Object.keys(liveServicePids(instance));
+    const openPorts = [];
+    for (const [name, port] of Object.entries(instance.ports || {})) {
+      if (await portOpen(port)) openPorts.push(`${name}:${port}`);
+    }
+    if (live.length > 0 || openPorts.length > 0) {
+      warn(`Not removing ${agent.name}: still running (${[...live, ...openPorts].join(', ')}).`);
+      return;
+    }
+  }
+
   const removed = run('git', ['worktree', 'remove', '--force', agent.dir], {
     allowFail: true,
   });
@@ -611,7 +654,26 @@ async function runCheck() {
   }
 }
 
-runCheck().catch((err) => {
+/**
+ * One verifier per checkout: a second run would start by cleaning the fixed
+ * `.nd/verify-instances/agent-a|b` paths and remove the first run's worktrees.
+ */
+async function runExclusive() {
+  const lock = await acquireLock(VERIFIER_LOCK, { label: 'verify:instances' });
+  if (!lock) {
+    throw new Error(
+      `Another verify:instances run owns ${path.relative(ROOT, VERIFIER_LOCK)}. ` +
+        'Wait for it to finish, or remove that file if no such run is alive.'
+    );
+  }
+  try {
+    await runCheck();
+  } finally {
+    releaseLock(lock);
+  }
+}
+
+runExclusive().catch((err) => {
   console.error(`\n\x1b[31m✗ ${err.message}\x1b[0m`);
   if (process.env.ND_DEBUG === '1') console.error(err.stack);
   process.exitCode = 1;

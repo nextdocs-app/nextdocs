@@ -21,6 +21,36 @@ function describeBody(body) {
   return text.length > 400 ? `${text.slice(0, 400)}…` : text;
 }
 
+/**
+ * Read a response body, keeping "the body arrived empty" apart from "the body could not
+ * be read". The first is a valid empty response; the second (a stream that timed out or
+ * aborted after the headers, or a body that is not JSON) is not.
+ *
+ * `transport` marks the failures worth retrying: the connection broke while reading, so
+ * a GET can be repeated. A write cannot: the server may already have committed it.
+ */
+async function readBody(response) {
+  let text;
+  try {
+    text = await response.text();
+  } catch (err) {
+    return {
+      unreadable: true,
+      transport: true,
+      reason: `response body was unreadable: ${err.message}`,
+    };
+  }
+  if (typeof text !== 'string') {
+    return { unreadable: true, transport: false, reason: 'response body was unreadable' };
+  }
+  if (text.trim() === '') return { empty: true, value: null };
+  try {
+    return { value: JSON.parse(text) };
+  } catch {
+    return { unreadable: true, transport: false, reason: 'response body is not valid JSON' };
+  }
+}
+
 function jitter(ms) {
   return ms + Math.floor(Math.random() * Math.max(1, Math.round(ms * 0.4)));
 }
@@ -79,7 +109,8 @@ class Session {
    * would have retried. A non-transient response, or a 200 that carries no token, falls
    * through to login; a lost rotation response degrades the same way.
    */
-  async refresh() {
+  async refresh({ attempts = MAX_ATTEMPTS } = {}) {
+    let refreshError = null;
     if (this.refreshCookie) {
       for (let attempt = 0; ; attempt += 1) {
         let response;
@@ -89,14 +120,22 @@ class Session {
             headers: { Cookie: `rt=${this.refreshCookie}` },
           });
         } catch (err) {
-          if (attempt >= MAX_ATTEMPTS - 1) {
-            throw new ApiError(0, `Refresh failed: ${err.message}`, null, '/api/v1/auth/refresh');
+          if (attempt >= attempts - 1) {
+            // Exhausted: fall through to the login fallback below instead of failing the
+            // seed outright. The refresh error is kept in case login fails too.
+            refreshError = new ApiError(
+              0,
+              `Refresh failed: ${err.message}`,
+              null,
+              '/api/v1/auth/refresh'
+            );
+            break;
           }
           await sleep(jitter(500 * 2 ** attempt));
           continue;
         }
 
-        if ((response.status === 429 || response.status >= 500) && attempt < MAX_ATTEMPTS - 1) {
+        if ((response.status === 429 || response.status >= 500) && attempt < attempts - 1) {
           const wait = retryAfterMs(response) || jitter(1000 * (attempt + 1));
           if (this.client.verbose) {
             warn(`${response.status} on POST /api/v1/auth/refresh; retrying in ${wait}ms`);
@@ -106,7 +145,8 @@ class Session {
         }
 
         if (response.ok) {
-          const payload = await response.json().catch(() => null);
+          const body = await readBody(response);
+          const payload = body.unreadable ? null : body.value;
           const token = payload?.data?.accessToken;
           // Without a usable token the old one keeps its original expiry: installing a
           // fresh timestamp here would hide an expired token from ensureFreshToken().
@@ -125,10 +165,20 @@ class Session {
     // A rotated/expired cookie cannot be repaired; one extra login is better than
     // failing a long seed halfway through. Adopt the session login returned: keeping
     // this object's old token made the retry 401 again even though the login succeeded.
-    const session = await this.client.login(this.user.email, this.client.password);
-    this.token = session.token;
-    this.refreshCookie = session.refreshCookie;
-    this.tokenIssuedAt = session.tokenIssuedAt;
+    try {
+      const session = await this.client.login(this.user.email, this.client.password);
+      this.token = session.token;
+      this.refreshCookie = session.refreshCookie;
+      this.tokenIssuedAt = session.tokenIssuedAt;
+    } catch (err) {
+      if (!refreshError) throw err;
+      throw new ApiError(
+        0,
+        `${refreshError.message}; the login fallback also failed: ${err.message}`,
+        null,
+        '/api/v1/auth/refresh'
+      );
+    }
   }
 
   async ensureFreshToken() {
@@ -195,11 +245,18 @@ class Client {
         continue;
       }
 
-      const payload = await response.json().catch(() => null);
-      if (!response.ok || payload?.success !== true) {
+      const body = await readBody(response);
+      if (body.unreadable && body.transport && attempt < MAX_ATTEMPTS - 1) {
+        // A login creates nothing but a session, so repeating it is safe; the earlier
+        // alternative reported a body timeout as "Login failed" with no detail.
+        await sleep(jitter(500 * 2 ** attempt));
+        continue;
+      }
+      const payload = body.unreadable ? null : body.value;
+      if (body.unreadable || !response.ok || payload?.success !== true) {
         throw new ApiError(
           response.status,
-          `Login failed for ${email}: ${describeBody(payload)}`,
+          `Login failed for ${email}: ${body.unreadable ? body.reason : describeBody(payload)}`,
           payload,
           path
         );
@@ -272,11 +329,11 @@ class Client {
 
       if (response.status >= 500) {
         if (method !== 'GET' || attempt === attempts - 1) {
-          const payload = await response.json().catch(() => null);
+          const errorBody = await readBody(response);
           throw new ApiError(
             response.status,
             `${method} ${path} → ${response.status}`,
-            payload,
+            errorBody.unreadable ? null : errorBody.value,
             path
           );
         }
@@ -288,9 +345,41 @@ class Client {
         return withStatus ? { status: response.status, data: null } : null;
       }
 
-      const payload = await response.json().catch(() => null);
-      if (!response.ok || (payload && payload.success === false)) {
-        const detail = payload?.error || payload?.message || describeBody(payload);
+      const parsed = await readBody(response);
+
+      // A status the server did send is the answer, even when its body is unusable: a
+      // rejection was not applied, so it is never an ambiguous write.
+      if (!response.ok) {
+        const detail = parsed.unreadable
+          ? parsed.reason
+          : parsed.value?.error || parsed.value?.message || describeBody(parsed.value);
+        throw new ApiError(
+          response.status,
+          `${method} ${path} → ${response.status}: ${detail}`,
+          parsed.unreadable ? null : parsed.value,
+          path
+        );
+      }
+
+      if (parsed.unreadable) {
+        if (parsed.transport && method === 'GET' && attempt < attempts - 1) {
+          if (this.verbose) warn(`${path}: ${parsed.reason}; retrying`);
+          await sleep(jitter(500 * 2 ** attempt));
+          continue;
+        }
+        // A write whose response could not be read has an unknown outcome: the server
+        // may have committed it, so replaying it could duplicate the effect.
+        const outcome =
+          method === 'GET'
+            ? parsed.reason
+            : `${parsed.reason} The write may already have been applied (outcome unknown); ` +
+              'check before retrying.';
+        throw new ApiError(0, `${method} ${path}: ${outcome}`, null, path);
+      }
+
+      const payload = parsed.value;
+      if (payload && payload.success === false) {
+        const detail = payload.error || payload.message || describeBody(payload);
         throw new ApiError(
           response.status,
           `${method} ${path} → ${response.status}: ${detail}`,

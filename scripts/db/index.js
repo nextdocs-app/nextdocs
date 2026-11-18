@@ -22,25 +22,11 @@ const {
   assertLocalDatabase,
   getInstance,
 } = require('../lib/constants');
-const {
-  ensurePostgres,
-  ensureDatabases,
-  ensureRedis,
-  containerRunning,
-  databaseExists,
-  tableExists,
-  redisPing,
-  redisFlushPrefix,
-  dropDatabase,
-} = require('../lib/containers');
-const {
-  listRecords,
-  isWorktreePresent,
-  liveServicePids,
-  removeRecord,
-} = require('../lib/instance');
-const { runFlyway, migrationState, requireLocalPostgres } = require('../lib/flyway');
-const { confirmDestructive } = require('../lib/prompt');
+const containers = require('../lib/containers');
+const instances = require('../lib/instance');
+const flyway = require('../lib/flyway');
+const prompt = require('../lib/prompt');
+const { describeOwner } = require('../lib/lock');
 
 const DB_USAGE = `Usage: ./nd db [command]
 
@@ -150,7 +136,10 @@ function assertSafeAttachmentDir(directory) {
 
 async function psqlCommand(argv) {
   const forwarded = argv[0] === '--' ? argv.slice(1) : argv;
-  ensurePostgres({ yhubSchema: false });
+  // `db psql` provisions the databases on a fresh worktree, so record them first: `db
+  // prune` can only find a worktree's databases through its record.
+  await refreshInstanceRecord();
+  containers.ensurePostgres({ yhubSchema: false });
   const interactive = process.stdin.isTTY && process.stdout.isTTY;
   // Pass argv as an array, not through a shell: single-quote escaping is not valid
   // cmd.exe quoting, and psql arguments can contain spaces (for example -c 'SQL').
@@ -173,8 +162,18 @@ async function psqlCommand(argv) {
   return result.status === null ? 1 : result.status;
 }
 
+/**
+ * Commands that provision databases write the instance record first. Without it, a
+ * worktree that only ever ran `db reset` leaves databases no later `db prune` can find.
+ * The record is re-resolved under the registry lock, never taken from the snapshot read
+ * before a confirmation prompt: a start that happened meanwhile is in the file.
+ */
+async function refreshInstanceRecord(instance = getInstance()) {
+  return instances.resolveInstance({ worktree: instance.worktree, env: {} });
+}
+
 async function statusCommand() {
-  const postgresRunning = containerRunning(POSTGRES_CONTAINER);
+  const postgresRunning = containers.containerRunning(POSTGRES_CONTAINER);
   if (!postgresRunning) {
     console.log(`${pad('Postgres', 15)}stopped    ${POSTGRES_CONTAINER}`);
     error('Postgres is not reachable; run `./nd dev` (or `./nd db reset --yes`).');
@@ -193,17 +192,17 @@ async function statusCommand() {
   let apiDatabaseExists;
   let yhubDatabaseExists;
   try {
-    apiDatabaseExists = databaseExists(apiDatabase());
-    yhubDatabaseExists = databaseExists(yhubDatabase());
+    apiDatabaseExists = containers.databaseExists(apiDatabase());
+    yhubDatabaseExists = containers.databaseExists(yhubDatabase());
   } catch (err) {
     error(`Could not inspect Postgres: ${err.message}`);
     return 1;
   }
 
   if (apiDatabaseExists) {
-    const flyway = migrationState();
-    const flywayText = flyway.installed
-      ? `Flyway ${flyway.applied} applied, ${flyway.pending} pending, ${flyway.failed} failed`
+    const state = flyway.migrationState();
+    const flywayText = state.installed
+      ? `Flyway ${state.applied} applied, ${state.pending} pending, ${state.failed} failed`
       : 'Flyway history not installed';
     lines.push(`${pad(apiDatabase(), width)}exists     ${flywayText}`);
   } else {
@@ -212,7 +211,7 @@ async function statusCommand() {
 
   let yhubText = 'database missing';
   if (yhubDatabaseExists) {
-    yhubText = tableExists(yhubDatabase(), 'yhub_ydoc_v1')
+    yhubText = containers.tableExists(yhubDatabase(), 'yhub_ydoc_v1')
       ? 'schema initialized (yhub_ydoc_v1 present)'
       : 'schema not initialized';
   }
@@ -220,9 +219,9 @@ async function statusCommand() {
     `${pad(yhubDatabase(), width)}${yhubDatabaseExists ? 'exists ' : 'missing'}    ${yhubText}`
   );
 
-  if (containerRunning(REDIS_CONTAINER)) {
+  if (containers.containerRunning(REDIS_CONTAINER)) {
     lines.push(
-      `${pad('Redis', width)}${redisPing() ? `running    PONG (prefix ${redisPrefix()})` : 'unhealthy  container is up but PING failed'}`
+      `${pad('Redis', width)}${containers.redisPing() ? `running    PONG (prefix ${redisPrefix()})` : 'unhealthy  container is up but PING failed'}`
     );
   } else {
     lines.push(`${pad('Redis', width)}stopped    ${REDIS_CONTAINER}`);
@@ -241,12 +240,14 @@ async function statusCommand() {
 
   for (const line of lines) console.log(line);
 
-  const others = listRecords(instance.registry).filter((record) => record.id !== instance.id);
+  const others = instances
+    .listRecords(instance.registry)
+    .filter((record) => record.id !== instance.id);
   if (others.length > 0) {
     console.log('');
     console.log('Other worktrees:');
     for (const record of others) {
-      const state = isWorktreePresent(record) ? 'recorded' : 'worktree missing';
+      const state = instances.isWorktreePresent(record) ? 'recorded' : 'worktree missing';
       console.log(
         `  ${pad(record.id, 24)} web :${record.ports.web}  api :${record.ports.api}  ${state}`
       );
@@ -281,7 +282,7 @@ state use \`./nd db reset --yes\` (Yhub tombstones make ids unusable).`);
     return 0;
   }
   requireLocalDatabase('db clean');
-  const confirmed = await confirmDestructive({
+  const confirmed = await prompt.confirmDestructive({
     headline: `This will drop all objects in this worktree's '${apiDatabase()}' database:`,
     details: [
       `database: ${apiDatabase()} (localhost:${POSTGRES_PORT}, container ${POSTGRES_CONTAINER})`,
@@ -292,7 +293,7 @@ state use \`./nd db reset --yes\` (Yhub tombstones make ids unusable).`);
   if (!confirmed) return 1;
 
   warn(`Dropping objects in '${apiDatabase()}' only; Yhub content and Redis state survive.`);
-  const status = runFlyway('clean', { clean: true, local: true });
+  const status = flyway.runFlyway('clean', { clean: true, local: true });
   if (status !== 0) return status;
   success(`'${apiDatabase()}' is empty. Run \`./nd db migrate\` to rebuild the schema.`);
   console.log(
@@ -304,16 +305,42 @@ state use \`./nd db reset --yes\` (Yhub tombstones make ids unusable).`);
 /** The container is the local server these commands are allowed to touch. */
 function requireLocalDatabase(action, options) {
   assertLocalDatabase(action, options);
-  requireLocalPostgres();
+  flyway.requireLocalPostgres();
 }
 
-async function apiIsRunning() {
-  return fetchStatus(`${apiBaseUrl()}/api/v1/instance/status`);
+/**
+ * Why this instance's stack must not be reset right now. The ports come from the record:
+ * `NEXTDOCS_API_URL` can be sourced from another worktree's `.nd/instance.env`, and
+ * probing that URL would check a different stack than the one being dropped.
+ */
+async function runningStackReasons(instance) {
+  const apiUrl = `http://localhost:${instance.ports.api}`;
+  const realtimeUrl = `http://localhost:${instance.ports.realtime}`;
+  const [apiUp, realtimeUp] = await Promise.all([
+    fetchStatus(`${apiUrl}/api/v1/instance/status`),
+    fetchStatus(`${realtimeUrl}/api/ping/v1`),
+  ]);
+  const supervisors = instances.liveSupervisors(instance);
+  const pids = instances.liveServicePids(instance);
+  return [
+    apiUp ? `the API on ${apiUrl} answers` : null,
+    realtimeUp ? `realtime on ${realtimeUrl} answers` : null,
+    supervisors.length > 0
+      ? `a foreground supervisor is running (${supervisors.map((entry) => entry.pid).join(', ')})`
+      : null,
+    Object.keys(pids).length > 0
+      ? `detached services are running (${Object.keys(pids).join(', ')})`
+      : null,
+  ].filter(Boolean);
 }
 
-/** Realtime holds its own pool against the Yhub database and its Redis keyspace. */
-async function realtimeIsRunning() {
-  return fetchStatus(`${realtimeBaseUrl()}/api/ping/v1`);
+function refuseRunningStack(instance, reasons) {
+  error(
+    `Refusing to reset instance '${instance.id}': ${reasons.join(', ')}. ` +
+      'Stop the stack first (`./nd stop`), then run this again (dropping a database ' +
+      'under a live connection pool and flushing its Redis keyspace produces ' +
+      'confusing reconnect errors).'
+  );
 }
 
 async function resetCommand(argv) {
@@ -325,7 +352,12 @@ ${yhubDatabase()}), re-initializes the Yhub schema, deletes this worktree's Redi
 prefix (${redisPrefix()}), and removes its attachment files. Other worktrees are
 untouched. The stack must be stopped: run this where \`./nd dev\` is not running, or
 stop it first with \`./nd stop\` (the API and realtime both hold connections to the
-databases this resets).`);
+databases this resets).
+
+The reset claims this worktree for its whole duration, so a \`./nd dev\`/\`./nd up\`
+that starts after the confirmation refuses or waits instead of racing the drops.
+Everything that can fail (local Flyway environment, Redis, the Yhub initializer) is
+checked before the first database is dropped.`);
     return 0;
   }
 
@@ -334,32 +366,13 @@ databases this resets).`);
   assertLocalDatabase('db reset', { includeYhub: true });
   const instance = getInstance();
 
-  // A linked worktree without a record was never started here, so another worktree's
-  // API on the same port must not block its reset. The main worktree keeps the
-  // historical names and may still be served by a stack started before instances
-  // existed, so it always gets the check.
+  // Cheap refusal before the prompt; the same check runs again under the claim. A linked
+  // worktree without a record was never started here, so another worktree's API on the
+  // default port must not block its reset (the record created below gets free ports).
   if (instance.hasRecord || instance.isMain) {
-    const apiUp = await apiIsRunning();
-    const realtimeUp = await realtimeIsRunning();
-    // HTTP alone misses the window between spawn and first answer, which is most of a
-    // cold start. The record already knows: a foreground supervisor is claimed before
-    // its children bind, and `./nd up` publishes pids before it waits for readiness.
-    const pids = liveServicePids(instance);
-    const reasons = [
-      apiUp ? `the API on ${apiBaseUrl()} answers` : null,
-      realtimeUp ? `realtime on ${realtimeBaseUrl()} answers` : null,
-      instance.running ? 'the foreground supervisor is running' : null,
-      Object.keys(pids).length > 0
-        ? `detached services are running (${Object.keys(pids).join(', ')})`
-        : null,
-    ].filter(Boolean);
-    if (reasons.length > 0) {
-      error(
-        `Refusing to reset instance '${instance.id}': ${reasons.join(', ')}. ` +
-          'Stop the stack first (`./nd stop`), then run this again (dropping a database ' +
-          'under a live connection pool and flushing its Redis keyspace produces ' +
-          'confusing reconnect errors).'
-      );
+    const early = await runningStackReasons(instance);
+    if (early.length > 0) {
+      refuseRunningStack(instance, early);
       return 1;
     }
   }
@@ -367,7 +380,7 @@ databases this resets).`);
   const keepFiles = hasFlag(argv, '--keep-files');
   const storage = attachmentStoragePath();
   if (!keepFiles) assertSafeAttachmentDir(storage);
-  const confirmed = await confirmDestructive({
+  const confirmed = await prompt.confirmDestructive({
     headline: `This will permanently delete this worktree's local data (${instance.id}):`,
     details: [
       `database: ${apiDatabase()} (localhost:${POSTGRES_PORT}, container ${POSTGRES_CONTAINER})`,
@@ -380,54 +393,96 @@ databases this resets).`);
   });
   if (!confirmed) return 1;
 
-  // `local` on every step below: the prompt names this worktree's databases, so the
-  // database that gets dropped, initialized and migrated has to be those same ones even
-  // when the shell exports SPRING_DATASOURCE_URL or POSTGRES for another stack.
-  ensurePostgres({ yhubSchema: false, local: true });
+  // Confirmation is only a decision: the claim is what makes it safe. A start that won
+  // the race is visible in the record and on this instance's ports below; a start that
+  // arrives later waits for this claim to be released.
+  const claim = await instances.claimInstance(instance, { waitMs: 0, label: 'db reset' });
+  if (!claim) {
+    const holder = instances.instanceClaimOwner(instance);
+    error(
+      `Refusing to reset instance '${instance.id}': ${describeOwner(holder)} owns this ` +
+        'worktree right now (a start or another reset). Retry when it finishes.'
+    );
+    return 1;
+  }
+  try {
+    return await resetClaimed(instance, { keepFiles, storage });
+  } finally {
+    instances.releaseInstanceClaim(claim);
+  }
+}
 
-  info(`\x1b[34m> Recreating ${apiDatabase()} and ${yhubDatabase()}...\x1b[0m`);
-  dropDatabase(apiDatabase());
-  dropDatabase(yhubDatabase());
-  ensureDatabases({ yhubSchema: true, local: true });
+async function resetClaimed(initial, { keepFiles, storage }) {
+  // Persist the record before provisioning: a worktree that only ever runs `db reset`
+  // still creates databases, and `db prune` can only find them through a record.
+  const instance = await refreshInstanceRecord(initial);
 
-  ensureRedis();
+  // Recheck after acquiring the claim. The first check only saw what the prompt-time
+  // record said; a start that began in between is recorded by now.
+  const reasons = await runningStackReasons(instance);
+  if (reasons.length > 0) {
+    refuseRunningStack(instance, reasons);
+    return 1;
+  }
+
+  // Everything that can fail without a database is validated first. A failure here
+  // leaves both databases intact rather than stranding the API database empty.
+  flyway.flywayEnv({ local: true }); // inherited -Dflyway.* options would retarget it
+  containers.yhubInitializerPath(); // throws when @y/hub is not installed
+  containers.ensurePostgres({ yhubSchema: false, local: true });
+  // Redis must be ready before the keys are flushed, not after the databases are gone.
+  containers.ensureRedis();
+
+  info(`\x1b[34m> Recreating ${instance.database} and ${instance.yhubDatabase}...\x1b[0m`);
+  containers.dropDatabase(instance.database);
+  containers.dropDatabase(instance.yhubDatabase);
+  containers.ensureDatabases({ yhubSchema: true, local: true });
+
   let redisFailure = null;
   try {
-    const removed = redisFlushPrefix();
+    const removed = containers.redisFlushPrefix(instance.redisPrefix);
     success(
       removed === 0
-        ? `No Redis keys under '${redisPrefix()}'; nothing to delete.`
-        : `Deleted ${removed} Redis keys under '${redisPrefix()}'.`
+        ? `No Redis keys under '${instance.redisPrefix}'; nothing to delete.`
+        : `Deleted ${removed} Redis keys under '${instance.redisPrefix}'.`
     );
   } catch (err) {
     redisFailure = err;
     error(`${err.message} Stale Yhub room state may survive this reset.`);
   }
 
+  let attachmentFailure = null;
   if (keepFiles) {
     warn(`Attachment files kept at ${storage}.`);
   } else if (fs.existsSync(storage)) {
-    fs.rmSync(storage, { recursive: true, force: true });
-    success(`Removed attachment files at ${storage}.`);
+    try {
+      fs.rmSync(storage, { recursive: true, force: true });
+      success(`Removed attachment files at ${storage}.`);
+    } catch (err) {
+      // Reported at the end: a file that cannot be deleted must not skip the migration
+      // that makes the databases usable again.
+      attachmentFailure = err;
+      error(`Could not remove attachment files at ${storage}: ${err.message}`);
+    }
   } else {
     info(`No attachment directory at ${storage}; nothing to remove.`);
   }
 
-  const migrateStatus = runFlyway('migrate', { local: true });
+  const migrateStatus = flyway.runFlyway('migrate', { local: true });
   if (migrateStatus !== 0) return migrateStatus;
 
-  const flyway = migrationState();
-  if (!flyway.installed || flyway.pending !== 0 || flyway.failed !== 0) {
+  const state = flyway.migrationState(instance.database);
+  if (!state.installed || state.pending !== 0 || state.failed !== 0) {
     error(
-      `Flyway did not settle: ${flyway.applied} applied, ${flyway.pending} pending, ` +
-        `${flyway.failed} failed. Run \`./nd db info\` for detail.`
+      `Flyway did not settle: ${state.applied} applied, ${state.pending} pending, ` +
+        `${state.failed} failed. Run \`./nd db info\` for detail.`
     );
     return 1;
   }
 
-  // The databases are usable at this point, so the failure is reported last rather than
-  // aborting earlier; reporting success with Yhub still holding rooms for the databases
-  // that were just dropped is the one outcome that cannot be allowed.
+  // The databases are usable at this point, so the remaining failures are reported last
+  // rather than aborting earlier; reporting success with Yhub still holding rooms for the
+  // databases that were just dropped is the one outcome that cannot be allowed.
   if (redisFailure) {
     error(
       `Reset finished with stale Redis state: ${redisFailure.message} ` +
@@ -435,9 +490,17 @@ databases this resets).`);
     );
     return 1;
   }
+  if (attachmentFailure) {
+    error(
+      `Reset finished, but attachment files at ${storage} were not removed: ` +
+        `${attachmentFailure.message}`
+    );
+    return 1;
+  }
 
   success(
-    `Reset complete: ${apiDatabase()} at Flyway ${flyway.latest}, ${yhubDatabase()} initialized.`
+    `Reset complete: ${instance.database} at Flyway ${state.latest}, ` +
+      `${instance.yhubDatabase} initialized.`
   );
   console.log('');
   console.log('Next:');
@@ -459,9 +522,77 @@ already-applied migrations. Never run this against a shared database.`);
     'db repair is a local recovery tool. It removes failed history rows and accepts ' +
       'checksum changes; never run it against a shared database.'
   );
-  const status = runFlyway('repair', { local: true });
+  const status = flyway.runFlyway('repair', { local: true });
   if (status === 0) success('Flyway history repaired.');
   return status;
+}
+
+/**
+ * Prune one stale record. Ownership is a claim inside the record itself, taken under the
+ * registry lock: `resolveInstance` refuses to adopt a claimed record, so a worktree
+ * recreated after the confirmation cannot start against databases being dropped and a
+ * later run re-reads the record instead of trusting the pre-prompt snapshot.
+ */
+async function pruneRecord(registry, expected) {
+  const claimed = await instances.withRegistryLock(registry, () =>
+    instances.claimStaleRecord(registry, expected)
+  );
+  if (!claimed) {
+    return { pruned: false, reason: 'its worktree or record changed after confirmation' };
+  }
+
+  const problem = instances.recordMetadataProblem(claimed);
+  if (problem) {
+    // Invalid metadata is never repaired by deleting something: the record is the only
+    // place these names are written down.
+    await instances.withRegistryLock(registry, () =>
+      instances.finishPruneClaim(registry, claimed.id, claimed.prune.token, { remove: false })
+    );
+    return { pruned: false, reason: `invalid record: ${problem}` };
+  }
+  if (instances.isWorktreePresent(claimed)) {
+    await instances.withRegistryLock(registry, () =>
+      instances.finishPruneClaim(registry, claimed.id, claimed.prune.token, { remove: false })
+    );
+    return { pruned: false, reason: 'its worktree was restored' };
+  }
+
+  let incomplete = false;
+  const fail = (message) => {
+    incomplete = true;
+    warn(message);
+  };
+  try {
+    for (const database of [claimed.database, claimed.yhubDatabase]) {
+      try {
+        containers.dropDatabase(database);
+      } catch (err) {
+        fail(`Could not drop ${database}: ${err.message}`);
+      }
+    }
+    if (containers.containerRunning(REDIS_CONTAINER)) {
+      try {
+        containers.redisFlushPrefix(claimed.redisPrefix);
+      } catch (err) {
+        fail(`Could not clear Redis prefix ${claimed.redisPrefix}: ${err.message}`);
+      }
+    } else {
+      fail(`Redis is not running; prefix ${claimed.redisPrefix} was not cleared.`);
+    }
+  } finally {
+    // Keep the record when anything failed: the drops use IF EXISTS, so the record is
+    // what lets a later prune finish the cleanup.
+    await instances.withRegistryLock(registry, () =>
+      instances.finishPruneClaim(registry, claimed.id, claimed.prune.token, {
+        remove: !incomplete,
+      })
+    );
+  }
+
+  return {
+    pruned: !incomplete,
+    reason: incomplete ? 'cleanup did not finish' : null,
+  };
 }
 
 async function pruneCommand(argv) {
@@ -475,16 +606,16 @@ worktree that still exists are never touched.`);
 
   requireLocalDatabase('db prune');
   const instance = getInstance();
-  const stale = listRecords(instance.registry).filter(
-    (record) => record.id !== 'main' && !isWorktreePresent(record)
-  );
+  const stale = instances
+    .listRecords(instance.registry)
+    .filter((record) => record.id !== 'main' && !instances.isWorktreePresent(record));
 
   if (stale.length === 0) {
     success('No stale worktree databases to prune.');
     return 0;
   }
 
-  const confirmed = await confirmDestructive({
+  const confirmed = await prompt.confirmDestructive({
     headline: 'This will drop the databases of worktrees that no longer exist:',
     details: stale.map((record) => `${record.id}: ${record.database} + ${record.yhubDatabase}`),
     yes: hasFlag(argv, '--yes'),
@@ -493,46 +624,18 @@ worktree that still exists are never touched.`);
 
   let retained = 0;
   for (const record of stale) {
-    const current = listRecords(instance.registry).find((entry) => entry.id === record.id);
-    if (!current || current.worktree !== record.worktree || isWorktreePresent(current)) {
-      warn(`Skipping ${record.id}: its worktree or record changed after confirmation.`);
-      continue;
-    }
-    let incomplete = false;
-    const fail = (message) => {
-      incomplete = true;
-      warn(message);
-    };
-
-    // A worktree can vanish while its stack is still shutting down.
+    let outcome;
     try {
-      dropDatabase(record.database);
+      outcome = await pruneRecord(instance.registry, record);
     } catch (err) {
-      fail(`Could not drop ${record.database}: ${err.message}`);
+      outcome = { pruned: false, reason: err.message };
     }
-    try {
-      dropDatabase(record.yhubDatabase);
-    } catch (err) {
-      fail(`Could not drop ${record.yhubDatabase}: ${err.message}`);
-    }
-    if (containerRunning(REDIS_CONTAINER)) {
-      try {
-        redisFlushPrefix(record.redisPrefix);
-      } catch (err) {
-        fail(`Could not clear Redis prefix ${record.redisPrefix}: ${err.message}`);
-      }
+    if (outcome.pruned) {
+      success(`Pruned ${record.id} (${record.database}, ${record.yhubDatabase}).`);
     } else {
-      fail(`Redis is not running; prefix ${record.redisPrefix} was not cleared.`);
-    }
-
-    if (incomplete) {
-      // The record is the only place these names are written down, and the drops use
-      // IF EXISTS: keeping it is what lets a later prune finish the cleanup.
       retained += 1;
-      continue;
+      warn(`Kept ${record.id}: ${outcome.reason}.`);
     }
-    removeRecord(instance.registry, record.id);
-    success(`Pruned ${record.id} (${record.database}, ${record.yhubDatabase}).`);
   }
 
   if (retained > 0) {
@@ -586,7 +689,7 @@ async function main(argv) {
       // alone is not enough: without this a stray URL would apply schema changes to a
       // remote database while the command reported local-container health.
       requireLocalDatabase('db info');
-      return runFlyway('info');
+      return flyway.runFlyway('info');
     case 'migrate':
       if (hasFlag(argv, '--help')) {
         console.log(
@@ -597,7 +700,7 @@ async function main(argv) {
       requireLocalDatabase('db migrate');
       // `local`: an inherited SPRING_DATASOURCE_URL can name another worktree's database,
       // and the help text promises this one.
-      return runFlyway('migrate', { local: true });
+      return flyway.runFlyway('migrate', { local: true });
     case 'validate':
       if (hasFlag(argv, '--help')) {
         console.log(
@@ -608,7 +711,7 @@ async function main(argv) {
       }
       requireLocalDatabase('db validate');
       // Same target as `migrate`, so validating does not describe a different database.
-      return runFlyway('validate', { local: true });
+      return flyway.runFlyway('validate', { local: true });
     case 'repair':
       return repairCommand(argv);
     case 'clean':
@@ -632,3 +735,9 @@ async function main(argv) {
 }
 
 module.exports = main;
+// Exposed for the script tests: they drive the destructive ordering with stubbed
+// containers instead of a Docker host.
+module.exports.resetCommand = resetCommand;
+module.exports.pruneCommand = pruneCommand;
+module.exports.assertSafeAttachmentDir = assertSafeAttachmentDir;
+module.exports.runningStackReasons = runningStackReasons;

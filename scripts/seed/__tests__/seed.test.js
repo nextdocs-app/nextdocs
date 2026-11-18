@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const os = require('os');
+const path = require('path');
 const test = require('node:test');
 
 const { uuidv5, seedId } = require('../lib/ids');
@@ -10,7 +12,8 @@ const { compileMarkdown, getConverter, commentThreadIdsOf } = require('../lib/ma
 const { createAnchorSelection } = require('../lib/anchors');
 const { dateDaysAgo, afterOrEqual } = require('../lib/time');
 const { commentMarkKey } = require('../lib/comment-mark');
-const { Client } = require('../lib/http');
+const { Client, Session } = require('../lib/http');
+const { assertSeedTarget } = require('../index');
 
 test('seed does not replay writes after an unknown transport outcome', async () => {
   const client = new Client({
@@ -196,4 +199,156 @@ test('timestamps are deterministic and updated_at never precedes created_at', ()
   const created = dateDaysAgo(20, 'doc:example');
   const updated = afterOrEqual(dateDaysAgo(30, 'doc:example'), created, 'doc:example');
   assert.ok(updated.getTime() > created.getTime());
+});
+
+test('seed refuses a linked worktree that has no recorded stack', () => {
+  // Without a record the lookup supplies the main worktree's default ports: the health
+  // probes could pass against that stack while SQL writes this worktree's database.
+  assert.throws(
+    () => assertSeedTarget({ id: 'linked_abcd', isMain: false, hasRecord: false }),
+    /no stack recorded/
+  );
+  // The main worktree's historic defaults are its own stack.
+  assert.doesNotThrow(() => assertSeedTarget({ id: 'main', isMain: true, hasRecord: false }));
+  assert.doesNotThrow(() =>
+    assertSeedTarget({ id: 'linked_abcd', isMain: false, hasRecord: true, attachmentStorage: null })
+  );
+  assert.throws(
+    () =>
+      assertSeedTarget({
+        id: 'linked_abcd',
+        isMain: false,
+        hasRecord: true,
+        attachmentStorage: path.join(os.tmpdir(), 'other-storage'),
+      }),
+    /ATTACHMENT_STORAGE_PATH/
+  );
+});
+
+function textResponse(status, { text = '', bodyError = null } = {}) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: () => null, getSetCookie: () => [] },
+    text: async () => {
+      if (bodyError) throw new Error(bodyError);
+      return text;
+    },
+  };
+}
+
+test('seed retries a GET whose response body was cut off', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  let calls = 0;
+  client.fetchRaw = async () => {
+    calls += 1;
+    if (calls === 1) return textResponse(200, { bodyError: 'terminated' });
+    return textResponse(200, { text: JSON.stringify({ success: true, data: { ok: true } }) });
+  };
+
+  assert.deepEqual(await client.request('GET', '/doc', { attempts: 2 }), { ok: true });
+  assert.equal(calls, 2);
+});
+
+test('seed never replays a write whose response body could not be read', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  let calls = 0;
+  client.fetchRaw = async () => {
+    calls += 1;
+    return textResponse(200, { bodyError: 'terminated' });
+  };
+
+  await assert.rejects(client.request('POST', '/threads', { attempts: 4 }), /outcome unknown/);
+  assert.equal(calls, 1, 'a write may have been committed; it must not be replayed');
+});
+
+test('a rejected request keeps its status even when its body is unreadable', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  client.fetchRaw = async () => ({
+    status: 404,
+    ok: false,
+    headers: { get: () => null, getSetCookie: () => [] },
+    text: async () => {
+      throw new Error('terminated');
+    },
+  });
+  await assert.rejects(
+    client.request('POST', '/threads'),
+    (err) => err.status === 404 && /404/.test(err.message)
+  );
+});
+
+test('a valid empty body is not an unreadable response', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  client.fetchRaw = async () => textResponse(200, { text: '' });
+  assert.equal(await client.request('GET', '/doc'), null);
+});
+
+test('a body that is not JSON fails without being retried', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  let calls = 0;
+  client.fetchRaw = async () => {
+    calls += 1;
+    return textResponse(200, { text: '<html>proxy error</html>' });
+  };
+  await assert.rejects(client.request('GET', '/doc', { attempts: 3 }), /not valid JSON/);
+  assert.equal(calls, 1);
+});
+
+test('refresh falls back to login after its transport retries are exhausted', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+    password: 'secret',
+  });
+  let refreshes = 0;
+  client.fetchRaw = async () => {
+    refreshes += 1;
+    throw new Error('connection reset');
+  };
+  const logins = [];
+  client.login = async (email) => {
+    logins.push(email);
+    return { token: 'fresh', refreshCookie: 'rt2', tokenIssuedAt: Date.now() };
+  };
+
+  const session = new Session(client, { email: 'a@nextdocs.test' }, 'old', 'cookie');
+  await session.refresh({ attempts: 2 });
+  assert.equal(refreshes, 2);
+  assert.deepEqual(logins, ['a@nextdocs.test']);
+  assert.equal(session.token, 'fresh');
+  assert.equal(session.refreshCookie, 'rt2');
+});
+
+test('a failed login fallback keeps the refresh error', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  client.fetchRaw = async () => {
+    throw new Error('connection reset');
+  };
+  client.login = async () => {
+    throw new Error('login denied');
+  };
+  const session = new Session(client, { email: 'a@nextdocs.test' }, 'old', 'cookie');
+  await assert.rejects(
+    session.refresh({ attempts: 2 }),
+    /Refresh failed: connection reset; the login fallback also failed: login denied/
+  );
 });

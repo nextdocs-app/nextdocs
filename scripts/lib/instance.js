@@ -4,8 +4,16 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { ROOT, sleep } = require('./proc');
+const { ROOT, sleep, isPidAlive } = require('./proc');
 const { PORT_NAMES, allocatePorts } = require('./ports');
+const {
+  LOCK_TIMEOUT_MS,
+  acquireLock,
+  describeOwner,
+  readLockOwner,
+  releaseLock,
+  withLock,
+} = require('./lock');
 
 /**
  * One NextDocs development stack per git worktree.
@@ -24,10 +32,8 @@ const isWin = process.platform === 'win32';
 const DEFAULT_PORTS = { web: 3000, api: 8080, realtime: 1234 };
 /** The services one `./nd dev` can start in this worktree. */
 const SERVICE_NAMES = ['web', 'api', 'realtime'];
-const RECORD_VERSION = 1;
+const RECORD_VERSION = 2;
 const MAX_ID_LENGTH = 24;
-// shortcut: a crashed owner leaves a lock to remove manually, upgrade if this becomes common.
-const LOCK_TIMEOUT_MS = 35_000;
 
 const PINNED_PORT_ENV = {
   web: 'ND_WEB_PORT',
@@ -153,11 +159,45 @@ function buildRecord({ id, worktree, ports, createdAt = Date.now() }) {
     database: names.database,
     yhubDatabase: names.yhubDatabase,
     redisPrefix: redisPrefix(id),
+    /** Absolute attachment directory the API was started with; null until a start. */
+    attachmentStorage: null,
     createdAt,
     updatedAt: Date.now(),
-    supervisorPid: null,
-    /** Which services the foreground supervisor started; null when none is running. */
-    supervisorServices: null,
+    /** Every foreground `./nd dev` running in this worktree, one entry per process. */
+    supervisors: [],
+    /** Detached `./nd up` services, owned by pid. */
+    pids: {},
+  };
+}
+
+/**
+ * Records written by an older CLI kept a single supervisor slot. Reading it as a list of
+ * one keeps `status`/`stop` working across an upgrade; the field is dropped on the next
+ * write, so the legacy shape does not spread.
+ */
+function supervisorsOf(record) {
+  if (!record) return [];
+  const stored = Array.isArray(record.supervisors)
+    ? record.supervisors.filter((entry) => entry && Number.isInteger(Number(entry.pid)))
+    : [];
+  if (stored.length > 0 || !record.supervisorPid) return stored;
+  return [
+    {
+      pid: Number(record.supervisorPid),
+      services: Array.isArray(record.supervisorServices) ? record.supervisorServices : null,
+      startedAt: Number(record.updatedAt) || Date.now(),
+    },
+  ];
+}
+
+function normalizeRecord(record) {
+  const { supervisorPid, supervisorServices: legacyServices, prune, ...rest } = record;
+  return {
+    ...rest,
+    version: RECORD_VERSION,
+    supervisors: supervisorsOf(record),
+    pids: rest.pids && typeof rest.pids === 'object' ? rest.pids : {},
+    ...(prune ? { prune } : {}),
   };
 }
 
@@ -169,7 +209,7 @@ function readRecord(dir, id) {
   try {
     const parsed = JSON.parse(fs.readFileSync(recordPath(dir, id), 'utf8'));
     if (!parsed || parsed.id !== id || !parsed.ports) return null;
-    return parsed;
+    return normalizeRecord(parsed);
   } catch {
     return null;
   }
@@ -211,19 +251,6 @@ function listRecords(dir) {
   return records.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function isPidAlive(pid) {
-  if (!pid || !Number.isInteger(Number(pid))) return false;
-  try {
-    process.kill(Number(pid), 0);
-    return true;
-  } catch (err) {
-    // Signal 0 is a liveness probe. EPERM means the process exists but belongs to
-    // another user; on Windows access checks can produce it as well. Only ESRCH is
-    // a definitive "gone".
-    return err.code === 'EPERM';
-  }
-}
-
 /** A record's worktree can be gone while the record (and its databases) remain. */
 function isWorktreePresent(record) {
   return Boolean(record.worktree) && fs.existsSync(record.worktree);
@@ -249,33 +276,40 @@ function assertRecordWorktree(record, worktree) {
   }
 }
 
-async function withRegistryLock(dir, fn) {
+function registryLockPath(dir) {
   // Lock next to the records, not inside them: `<git>/nextdocs/lock`.
-  const lockDir = path.join(path.dirname(dir), 'lock');
-  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  return path.join(path.dirname(dir), 'lock');
+}
 
-  for (;;) {
-    try {
-      fs.mkdirSync(lockDir);
-      break;
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-      if (Date.now() > deadline) {
-        throw new Error(
-          `Timed out waiting for the instance registry lock (${lockDir}). ` +
-            'If no ./nd process is starting, remove that directory and retry.'
-        );
-      }
-      await sleep(50);
-    }
-  }
+/**
+ * Serialise every read-modify-write of the registry (allocation, claims, prune). The lock
+ * records its owner, so a lock left by a killed process is recovered by checking that the
+ * owner is gone instead of waiting for an age-based takeover.
+ */
+function withRegistryLock(dir, fn, { waitMs = LOCK_TIMEOUT_MS } = {}) {
+  return withLock(registryLockPath(dir), { label: 'instance registry', waitMs }, fn);
+}
 
-  try {
-    return await fn();
-  } finally {
-    fs.rmSync(lockDir, { recursive: true, force: true });
-  }
+/** One lifecycle claim per instance, shared by `dev`, `up` and destructive db commands. */
+function instanceClaimPath(dir, id) {
+  return path.join(path.dirname(dir), 'claims', `${id}.lock`);
+}
+
+function instanceClaimOwner(instance) {
+  return readLockOwner(instanceClaimPath(instance.registry, instance.id));
+}
+
+/**
+ * Claim this worktree's start/reset slot. A reset confirms, claims, then rechecks the
+ * stack; a start claims before provisioning, so the two can never overlap. `waitMs` 0
+ * refuses immediately, which is what a destructive command wants.
+ */
+function claimInstance(instance, { waitMs = 0, label = 'nd', onWait } = {}) {
+  return acquireLock(instanceClaimPath(instance.registry, instance.id), { waitMs, label, onWait });
+}
+
+function releaseInstanceClaim(handle) {
+  releaseLock(handle);
 }
 
 function reservedPorts(records, id) {
@@ -319,18 +353,27 @@ function assertPinsUsable(pins, ports, reserved) {
 }
 
 /**
- * Read-only view for commands that must not create state (`db`, `seed`, `urls`).
+ * Read-only view for commands that must not create state (`db`, `seed`, `urls`, `stop`).
  * Falls back to the default ports when this worktree never started a stack; the
  * database names are still its own, because they are derived from the instance id.
+ *
+ * `applyPins: false` is for `stop`: a shell that pinned a port must still be able to
+ * stop the stack the record describes, otherwise the suggested command is the one that
+ * refuses to run.
  */
-function peekInstance({ worktree = ROOT, env = process.env, commonDir: injected } = {}) {
+function peekInstance({
+  worktree = ROOT,
+  env = process.env,
+  commonDir: injected,
+  applyPins = true,
+} = {}) {
   const resolved = path.resolve(worktree);
   const commonDir = injected === undefined ? gitCommonDir(resolved) : injected;
   const id = instanceId(resolved, commonDir);
   const dir = registryDir(commonDir, resolved);
   const record = readRecord(dir, id);
   assertRecordWorktree(record, resolved);
-  const pins = pinnedPorts(env);
+  const pins = applyPins ? pinnedPorts(env) : {};
   if (record && Object.entries(pins).some(([name, port]) => record.ports[name] !== port)) {
     throw new Error(
       `Instance '${id}' has different saved ports; stop it and start with the desired ND_*_PORT values.`
@@ -344,7 +387,7 @@ function peekInstance({ worktree = ROOT, env = process.env, commonDir: injected 
     commonDir,
     isMain: id === 'main',
     hasRecord: Boolean(record),
-    running: isPidAlive(base.supervisorPid),
+    running: liveSupervisors(base).length > 0,
     source: record ? 'record' : 'defaults',
   };
 }
@@ -359,6 +402,7 @@ async function resolveInstance({
   portOffset = null,
   env = process.env,
   commonDir: injected,
+  attachmentStorage = undefined,
 } = {}) {
   const resolved = path.resolve(worktree);
   const commonDir = injected === undefined ? gitCommonDir(resolved) : injected;
@@ -376,9 +420,14 @@ async function resolveInstance({
   return withRegistryLock(dir, async () => {
     const existing = readRecord(dir, id);
     assertRecordWorktree(existing, resolved);
-    const live =
-      existing &&
-      (isPidAlive(existing.supervisorPid) || Object.keys(liveServicePids(existing)).length > 0);
+    // A record `db prune` owns must not be adopted: its databases are being dropped.
+    if (existing && existing.prune && pruneClaimIsLive(existing)) {
+      throw new Error(
+        `Instance '${id}' is being pruned by ${describeOwner(existing.prune)}; retry when it finishes.`
+      );
+    }
+    const { prune: _discardedPrune, ...adoptable } = existing || {};
+    const live = existing && recordIsRunning(existing);
     if (live && (newPorts || offset != null)) {
       throw new Error(`Instance '${id}' is running; stop it before changing its ports.`);
     }
@@ -412,13 +461,14 @@ async function resolveInstance({
     }
 
     const record = {
-      ...(existing || buildRecord({ id, worktree: resolved, ports })),
+      ...(existing ? adoptable : buildRecord({ id, worktree: resolved, ports })),
       id,
       worktree: resolved,
       ports,
       database: databaseNames(id).database,
       yhubDatabase: databaseNames(id).yhubDatabase,
       redisPrefix: redisPrefix(id),
+      ...(attachmentStorage ? { attachmentStorage } : {}),
       updatedAt: Date.now(),
     };
     writeRecord(dir, record);
@@ -429,50 +479,62 @@ async function resolveInstance({
       commonDir,
       isMain: id === 'main',
       hasRecord: true,
-      running: isPidAlive(record.supervisorPid),
+      running: liveSupervisors(record).length > 0,
       source: 'record',
     };
   });
 }
 
-/**
- * Claim the supervisor slot for `./nd status`/`down`.
- *
- * `./nd dev api` and `./nd dev web` in separate terminals share one worktree, so the
- * last starter owns the slot; status also treats an open port as running. `services` is
- * what makes a second start in the same worktree detectable: without it a supervisor
- * could only say "something is running", not "the service you are asking for".
- */
-function setSupervisor(instance, pid = process.pid, services = null) {
-  const owned = Array.isArray(services)
-    ? SERVICE_NAMES.filter((name) => services.includes(name))
-    : null;
-  return updateRecord(instance.registry, instance.id, {
-    supervisorPid: pid,
-    supervisorServices: owned && owned.length > 0 ? owned : null,
-  });
-}
-
-function clearSupervisor(instance, pid = process.pid) {
-  const record = readRecord(instance.registry, instance.id);
-  if (!record || Number(record.supervisorPid) !== Number(pid)) return null;
-  return updateRecord(instance.registry, instance.id, {
-    supervisorPid: null,
-    supervisorServices: null,
-  });
-}
-
-/**
- * Services the recorded foreground supervisor started.
- *
- * A record written before the service set was stored cannot say which half of the
- * stack it owns, so it is read as owning all of it: refusing one unnecessary start is
- * recoverable, two processes binding one port is not.
- */
-function supervisorServices(record) {
-  const stored = record && record.supervisorServices;
+/** The services one recorded foreground supervisor owns; unknown means all of them. */
+function servicesOf(entry) {
+  const stored = entry && entry.services;
   const known = Array.isArray(stored) ? SERVICE_NAMES.filter((name) => stored.includes(name)) : [];
   return known.length > 0 ? known : [...SERVICE_NAMES];
+}
+
+function liveSupervisors(record) {
+  return supervisorsOf(record).filter((entry) => isPidAlive(entry && entry.pid));
+}
+
+/**
+ * Services claimed by a live foreground supervisor. `./nd dev api` and `./nd dev web` in
+ * separate terminals are both recorded, and only the union blocks a second start.
+ */
+function claimedServices(record) {
+  const live = liveSupervisors(record);
+  return SERVICE_NAMES.filter((name) => live.some((entry) => servicesOf(entry).includes(name)));
+}
+
+function recordIsRunning(record) {
+  return liveSupervisors(record).length > 0 || Object.keys(liveServicePids(record)).length > 0;
+}
+
+/**
+ * Add or replace this process's supervisor entry. Other supervisors in the worktree are
+ * left alone: a second terminal's start must not erase the first one from the record.
+ */
+function setSupervisor(instance, pid = process.pid, services = null) {
+  const record = readRecord(instance.registry, instance.id);
+  if (!record) return null;
+  const owned = Array.isArray(services)
+    ? SERVICE_NAMES.filter((name) => services.includes(name))
+    : [];
+  const supervisors = record.supervisors.filter((entry) => Number(entry.pid) !== Number(pid));
+  supervisors.push({
+    pid: Number(pid),
+    services: owned.length > 0 ? owned : null,
+    startedAt: Date.now(),
+  });
+  return updateRecord(instance.registry, instance.id, { supervisors });
+}
+
+/** Clear only the exiting supervisor's entry. */
+function clearSupervisor(instance, pid = process.pid) {
+  const record = readRecord(instance.registry, instance.id);
+  if (!record) return null;
+  const supervisors = record.supervisors.filter((entry) => Number(entry.pid) !== Number(pid));
+  if (supervisors.length === record.supervisors.length) return record;
+  return updateRecord(instance.registry, instance.id, { supervisors });
 }
 
 /**
@@ -484,15 +546,16 @@ function setServicePids(instance, pids) {
   for (const [name, pid] of Object.entries(pids || {})) {
     if (isPidAlive(pid)) live[name] = Number(pid);
   }
-  return updateRecord(instance.registry, instance.id, {
-    pids: live,
-    supervisorPid: null,
-    supervisorServices: null,
-  });
+  return updateRecord(instance.registry, instance.id, { pids: live });
 }
 
-function clearServicePids(instance) {
-  return updateRecord(instance.registry, instance.id, { pids: {} });
+/** Clear detached pids, keeping the ones passed in because they could not be stopped. */
+function clearServicePids(instance, retained = null) {
+  const pids = {};
+  for (const [name, pid] of Object.entries(retained || {})) {
+    if (isPidAlive(pid)) pids[name] = Number(pid);
+  }
+  return updateRecord(instance.registry, instance.id, { pids });
 }
 
 function liveServicePids(record) {
@@ -502,29 +565,116 @@ function liveServicePids(record) {
   }
   return live;
 }
+
+// --- Stale-record claims used by `db prune` --------------------------------------
+
+function pruneClaimIsLive(record) {
+  const claim = record && record.prune;
+  return Boolean(claim && isPidAlive(claim.pid));
+}
+
+/**
+ * Everything a destructive command needs to agree with the record before it drops
+ * anything. Derived names are checked, not trusted: a malformed or edited record must
+ * never be able to name another worktree's database, and an empty Redis prefix must
+ * never fall back to the invoking worktree's.
+ */
+function recordMetadataProblem(record) {
+  if (!record || typeof record.id !== 'string' || !/^[a-z0-9_]+$/.test(record.id)) {
+    return 'its id is missing or malformed';
+  }
+  if (record.id === 'main') return 'the main worktree is never pruned';
+  const names = databaseNames(record.id);
+  if (record.database !== names.database) {
+    return `its database '${record.database}' is not '${names.database}'`;
+  }
+  if (record.yhubDatabase !== names.yhubDatabase) {
+    return `its Yhub database '${record.yhubDatabase}' is not '${names.yhubDatabase}'`;
+  }
+  if (record.redisPrefix !== redisPrefix(record.id)) {
+    return `its Redis prefix '${record.redisPrefix || ''}' is not '${redisPrefix(record.id)}'`;
+  }
+  return null;
+}
+
+/**
+ * Take ownership of a stale record for cleanup. The caller must hold the registry lock;
+ * the returned record carries a `prune` marker that `resolveInstance` refuses to adopt,
+ * so a worktree recreated mid-prune cannot start against databases being dropped.
+ */
+function claimStaleRecord(dir, expected) {
+  const current = readRecord(dir, expected.id);
+  if (!current || current.id !== expected.id || current.worktree !== expected.worktree) return null;
+  if (isWorktreePresent(current)) return null;
+  if (pruneClaimIsLive(current)) return null;
+  const claimed = {
+    ...current,
+    prune: {
+      pid: process.pid,
+      label: 'db prune',
+      token: crypto.randomBytes(6).toString('hex'),
+      startedAt: Date.now(),
+    },
+    updatedAt: Date.now(),
+  };
+  writeRecord(dir, claimed);
+  return claimed;
+}
+
+/**
+ * Release a prune claim. `remove` deletes the record once both databases and the Redis
+ * prefix are confirmed gone; otherwise the record is kept so a later prune can retry.
+ * The caller must hold the registry lock.
+ */
+function finishPruneClaim(dir, id, token, { remove = false } = {}) {
+  const current = readRecord(dir, id);
+  if (!current || !current.prune || current.prune.token !== token) return false;
+  if (remove) {
+    removeRecord(dir, id);
+    return true;
+  }
+  const { prune: _discardedPrune, ...rest } = current;
+  writeRecord(dir, { ...rest, updatedAt: Date.now() });
+  return true;
+}
+
 module.exports = {
   DEFAULT_PORTS,
   PINNED_PORT_ENV,
   buildRecord,
+  claimInstance,
+  claimStaleRecord,
+  claimedServices,
   clearServicePids,
   clearSupervisor,
   databaseNames,
+  finishPruneClaim,
   gitCommonDir,
+  instanceClaimOwner,
+  instanceClaimPath,
   instanceId,
   isMainWorktree,
   isPidAlive,
   isWorktreePresent,
   listRecords,
   liveServicePids,
+  liveSupervisors,
   peekInstance,
+  pruneClaimIsLive,
   readableName,
+  readRecord,
+  recordIsRunning,
+  recordMetadataProblem,
   redisPrefix,
   registryDir,
+  releaseInstanceClaim,
   removeRecord,
   resolveInstance,
   sanitizeName,
+  servicesOf,
   setServicePids,
   setSupervisor,
-  supervisorServices,
+  supervisorsOf,
   updateRecord,
+  withRegistryLock,
 };

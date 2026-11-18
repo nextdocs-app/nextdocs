@@ -20,6 +20,7 @@ const {
   MAILPIT_SMTP_PORT,
   MAILPIT_WEB_PORT,
   isKeyEmptyOrPlaceholder,
+  attachmentStoragePath,
   setInstance,
 } = require('./lib/constants');
 const {
@@ -34,14 +35,23 @@ const {
   isWorktreePresent,
   listRecords,
   liveServicePids,
+  liveSupervisors,
+  claimedServices,
   peekInstance,
   resolveInstance,
+  claimInstance,
+  instanceClaimOwner,
+  releaseInstanceClaim,
+  recordIsRunning,
   clearServicePids,
   setServicePids,
   setSupervisor,
   clearSupervisor,
-  supervisorServices,
+  servicesOf,
+  readRecord,
+  withRegistryLock,
 } = require('./lib/instance');
+const { describeOwner } = require('./lib/lock');
 const { portOpen } = require('./lib/ports');
 const { beginLog, logFile, tailFile, tailSession } = require('./lib/logs');
 
@@ -261,6 +271,44 @@ function servicesForDev() {
   return [service];
 }
 
+/**
+ * Take this worktree's lifecycle slot before provisioning or spawning anything. `db
+ * reset` holds the same slot, so a reset can never run between this check and the
+ * services that depend on the databases it would drop.
+ */
+async function claimLifecycle(instance, command, waitMs = 120_000) {
+  const claim = await claimInstance(instance, {
+    waitMs,
+    label: command,
+    onWait: (holder) => {
+      console.error(
+        `\x1b[34m> Waiting for ${describeOwner(holder)} to release instance '${instance.id}'...\x1b[0m`
+      );
+    },
+  });
+  if (!claim) {
+    throw new Error(
+      `Instance '${instance.id}' is still held by ${describeOwner(instanceClaimOwner(instance))} ` +
+        '(a reset or another start). Retry when it finishes.'
+    );
+  }
+  return claim;
+}
+
+/**
+ * Re-read the instance record under a held claim. The snapshot from before the claim can
+ * describe a stack that another terminal has started in the meantime.
+ */
+function refreshRecord(instance) {
+  const record = readRecord(instance.registry, instance.id);
+  if (!record) return instance;
+  return {
+    ...instance,
+    ...record,
+    running: liveSupervisors(record).length > 0,
+  };
+}
+
 // --- Instance files and banners --------------------------------------------------
 
 function envFilePath() {
@@ -442,12 +490,12 @@ function superviseDev(instance, children, services) {
   for (const child of children) {
     child.stdout.pipe(process.stdout);
     child.stderr.pipe(process.stderr);
-    child.stdout.on('end', () => {
+    // `close` waits for the output pipes as well as the process; `stdout.end` alone can
+    // be reported while the child's exit status is still on its way.
+    child.on('close', (code) => {
+      if (code !== 0 && code !== null) finalCode = code;
       closed += 1;
       if (closed === children.length) process.exit(finalCode);
-    });
-    child.on('exit', (code) => {
-      if (code !== 0 && code !== null) finalCode = code;
     });
   }
 
@@ -487,12 +535,15 @@ async function assertPortsAvailable(instance, requested) {
   // ports occupied, so what matters is not that a port answers but that the service
   // being asked for is already supervised here.
   if (instance.running) {
-    const running = supervisorServices(instance);
+    const running = claimedServices(instance);
+    const supervisors = liveSupervisors(instance)
+      .map((entry) => `${entry.pid} (${servicesOf(entry).join(', ')})`)
+      .join('; ');
     const clash = requested.filter((name) => running.includes(name));
     if (clash.length === 0) {
       console.log(
         `\x1b[34m> Instance '${instance.id}' is already running ${running.join(', ')} ` +
-          `(pid ${instance.supervisorPid}); starting ${requested.join(', ')} alongside it.\x1b[0m`
+          `(pid ${supervisors}); starting ${requested.join(', ')} alongside it.\x1b[0m`
       );
       return;
     }
@@ -500,7 +551,7 @@ async function assertPortsAvailable(instance, requested) {
     const free = ALL_SERVICES.filter((name) => !running.includes(name));
     throw new Error(
       `Instance '${instance.id}' is already running ${running.join(', ')} in the foreground ` +
-        `(pid ${instance.supervisorPid}), and ${clash.join(', ')} is part of it. ` +
+        `(pid ${supervisors}), and ${clash.join(', ')} is part of it. ` +
         'Starting it again would bind the same port twice: use `./nd logs` to inspect the ' +
         'running stack, or `./nd stop` first.' +
         (free.length > 0 ? ` Only ${free.join(', ')} can still be started here.` : '')
@@ -542,41 +593,62 @@ async function devCommand() {
     process.exit(await upCommand());
   }
 
-  const instance = await resolveInstance({ newPorts, portOffset });
+  const instance = await resolveInstance({
+    newPorts,
+    portOffset,
+    // Persisted so `seed` can refuse a shell whose attachment path differs from the
+    // one the running API was started with.
+    attachmentStorage: attachmentStoragePath(),
+  });
   setInstance(instance);
   const services = servicesForDev();
-  await assertPortsAvailable(instance, services);
-  clearServicePids(instance);
 
-  const needsPostgres = services.some((name) => name === 'api' || name === 'realtime');
-  const needsRedis = services.includes('realtime');
-
-  // Fail before touching containers: a fresh worktree without `npm ci` should get the
-  // command to run, not spend time starting infrastructure it cannot use.
-  if (service !== 'api') ensureJsWorkspaceReady(service || 'all');
-  if (needsPostgres || devUsesLocalMailpit(service)) preflightDocker();
-
-  // Only a realtime run needs the Yhub schema; API/web-only sessions should not
-  // fail just because @y/hub is missing. These helpers throw instead of exiting so
-  // `db`/`reset` can report their own failure; dev prints the one-line reason here.
+  const claim = await claimLifecycle(instance, 'dev');
+  // A start that finished while this one waited for the claim is only visible in the
+  // record, and it may own the very service this run was asked to start.
+  const current = refreshRecord(instance);
+  let failure = null;
   try {
+    await assertPortsAvailable(current, services);
+    clearServicePids(instance);
+
+    const needsPostgres = services.some((name) => name === 'api' || name === 'realtime');
+    const needsRedis = services.includes('realtime');
+
+    // Fail before touching containers: a fresh worktree without `npm ci` should get the
+    // command to run, not spend time starting infrastructure it cannot use.
+    if (service !== 'api') ensureJsWorkspaceReady(service || 'all');
+    if (needsPostgres || devUsesLocalMailpit(service)) preflightDocker();
+
+    // Only a realtime run needs the Yhub schema; API/web-only sessions should not
+    // fail just because @y/hub is missing. These helpers throw instead of exiting so
+    // `db`/`reset` can report their own failure; dev prints the one-line reason here.
     if (needsPostgres) {
       // `local`: an inherited POSTGRES names another worktree's Yhub database, while the
       // realtime child always opens this one.
       ensurePostgres({ yhubSchema: needsRedis, local: true });
     }
     if (needsRedis) ensureRedis();
+    if (devUsesLocalMailpit(service)) ensureMailpit();
+
+    // Claimed before the children bind: a reset that arrives later sees this process in
+    // the record and refuses, even during the cold start before the first answer.
+    writeInstanceEnvFile(instance);
+    // Under the registry lock: two terminals that start at the same time must both end
+    // up in the supervisor list instead of overwriting each other.
+    await withRegistryLock(instance.registry, () => setSupervisor(instance, process.pid, services));
   } catch (err) {
-    console.error(`\x1b[31m✗ ${err.message}\x1b[0m`);
+    // Collected rather than printed: `process.exit` inside the try would skip the
+    // release below and leave the worktree claimed.
+    failure = err;
+  } finally {
+    releaseInstanceClaim(claim);
+  }
+  if (failure) {
+    console.error(`\x1b[31m✗ ${failure.message}\x1b[0m`);
     process.exit(1);
   }
 
-  if (devUsesLocalMailpit(service)) {
-    ensureMailpit();
-  }
-
-  writeInstanceEnvFile(instance);
-  setSupervisor(instance, process.pid, services);
   applyTerminalTitle(instance);
   printBanner(instance);
 
@@ -763,7 +835,11 @@ async function upCommand() {
   }
 
   const timeout = readinessTimeout();
-  const instance = await resolveInstance({ newPorts, portOffset });
+  const instance = await resolveInstance({
+    newPorts,
+    portOffset,
+    attachmentStorage: attachmentStoragePath(),
+  });
   setInstance(instance);
 
   const restore = wantJson ? silenceStdout() : () => {};
@@ -842,8 +918,11 @@ async function runUp(instance, timeout) {
   }
 
   if (instance.running) {
+    const supervisors = liveSupervisors(instance)
+      .map((entry) => `${entry.pid} (${servicesOf(entry).join(', ')})`)
+      .join('; ');
     console.error(
-      `\x1b[31m✗ Instance '${instance.id}' is running in the foreground (pid ${instance.supervisorPid}). ` +
+      `\x1b[31m✗ Instance '${instance.id}' is running in the foreground (pid ${supervisors}). ` +
         'Run `./nd stop` first.\x1b[0m'
     );
     return { code: 1 };
@@ -854,35 +933,55 @@ async function runUp(instance, timeout) {
   ensureJsWorkspaceReady('all');
   preflightDocker();
 
-  ensurePostgres({ yhubSchema: true, local: true });
-  ensureRedis();
-  // Only the API sends mail. A detached start includes it, but an external SMTP host
-  // means Mailpit is not wanted (and must not block the start on its ports).
-  if (devUsesLocalMailpit('api')) ensureMailpit();
-
-  writeInstanceEnvFile(instance);
-  clearServicePids(instance);
-  printBanner(instance, 'up');
-
-  const started = await startDetached(instance);
-  const pids = Object.fromEntries(started.map(({ name, pid }) => [name, pid]));
+  // Provision, spawn and record under the same claim `db reset` takes: a reset that
+  // confirms while this run is starting refuses or waits instead of dropping the
+  // databases this stack is about to use.
+  const claim = await claimLifecycle(instance, 'up');
+  let started;
+  let pids;
   try {
+    // Same recheck as `./nd dev`: a start that won the claim while this run waited has
+    // already recorded its services, and starting a second stack would rebind its ports.
+    const current = refreshRecord(instance);
+    if (recordIsRunning(current)) {
+      throw new Error(
+        `Instance '${instance.id}' started while this run was waiting for it. ` +
+          'No restart was attempted; use `./nd logs` or `./nd stop` first.'
+      );
+    }
+    ensurePostgres({ yhubSchema: true, local: true });
+    ensureRedis();
+    // Only the API sends mail. A detached start includes it, but an external SMTP host
+    // means Mailpit is not wanted (and must not block the start on its ports).
+    if (devUsesLocalMailpit('api')) ensureMailpit();
+
+    writeInstanceEnvFile(instance);
+    clearServicePids(instance);
+    printBanner(instance, 'up');
+
+    started = await startDetached(instance);
+    pids = Object.fromEntries(started.map(({ name, pid }) => [name, pid]));
     // `updateRecord` returns null when the record disappeared under us. Without a
     // record, `./nd stop` cannot see these pids, so a failed write has to stop them.
     if (!setServicePids(instance, pids)) {
       throw new Error(`Could not record the started services in ${instance.registry}.`);
     }
   } catch (err) {
-    for (const service of started) await stopProcessGroup(service.pid);
+    if (started) {
+      const { retained } = await stopStarted(started);
+      clearServicePids(instance, retained);
+    }
     throw err;
+  } finally {
+    releaseInstanceClaim(claim);
   }
 
   console.log(
     `\x1b[34m> Waiting up to ${Math.round(timeout / 1000)}s for api, web and realtime...\x1b[0m`
   );
   const releaseInterrupt = trapInterrupt(async () => {
-    for (const service of started) await stopProcessGroup(service.pid);
-    clearServicePids(instance);
+    const { retained } = await stopStarted(started);
+    clearServicePids(instance, retained);
   });
   let health;
   let pending;
@@ -893,8 +992,8 @@ async function runUp(instance, timeout) {
     releaseInterrupt();
   }
   if (!ready) {
-    for (const service of started) await stopProcessGroup(service.pid);
-    clearServicePids(instance);
+    const { retained } = await stopStarted(started);
+    clearServicePids(instance, retained);
     console.error(
       `\x1b[31m✗ NextDocs '${instance.id}' did not become ready: ${pending.join(', ')}. ` +
         'Stopped the services this run started. `ND_READY_TIMEOUT_MS` extends the wait; ' +
@@ -904,9 +1003,46 @@ async function runUp(instance, timeout) {
     return { code: 1 };
   }
 
+  // The probes are HTTP: a service can answer and exit before this line. Reporting a
+  // ready stack that already lost a service is the one outcome `up` must not produce.
+  const exited = started.filter((service) => !isPidAlive(service.pid));
+  if (exited.length > 0) {
+    const { retained } = await stopStarted(started.filter((service) => isPidAlive(service.pid)));
+    clearServicePids(instance, retained);
+    console.error(
+      `\x1b[31m✗ NextDocs '${instance.id}' answered, but ${exited
+        .map((service) => service.name)
+        .join(', ')} exited during the readiness check. Stopped the rest.\x1b[0m`
+    );
+    printLogTails(exited, 30);
+    return { code: 1 };
+  }
+
   printReadyBanner(instance);
   printLifecycleHints();
   return { code: 0, session: sessionPayload(instance, health, pids) };
+}
+
+/**
+ * Stop processes this run started and report the ones that survived. A pid that could
+ * not be terminated stays in the instance record, so a later `./nd stop` can retry it
+ * instead of losing every trace of the process.
+ */
+async function stopStarted(services) {
+  const results = await Promise.all(
+    services.map(async (entry) => ({ ...entry, stopped: await stopProcessGroup(entry.pid) }))
+  );
+  const failed = results.filter((entry) => !entry.stopped);
+  if (failed.length > 0) {
+    console.error(
+      `\x1b[31m✗ Could not stop ${failed.map((entry) => `${entry.name} (pid ${entry.pid})`).join(', ')}. ` +
+        'Their pids stay recorded so `./nd stop` can retry.\x1b[0m'
+    );
+  }
+  return {
+    failed,
+    retained: Object.fromEntries(failed.map((entry) => [entry.name, entry.pid])),
+  };
 }
 
 // --- Shared local infrastructure -------------------------------------------------
@@ -1063,7 +1199,9 @@ function usage(exitCode = 1) {
   console.log('  dev [service]       Start dev servers in the foreground (--detach: full stack)');
   console.log('  up                  Start the full stack detached and wait until it is ready');
   console.log('  stop [--infra]      Stop this worktree’s foreground or detached stack');
-  console.log('  logs [service]      Recent detached logs (-n N, default 100)');
+  console.log(
+    '  logs [service]      Recent detached logs (-n N, default 100; --clear removes them)'
+  );
   console.log('  status              Show every worktree instance and the shared containers');
   console.log('  urls [--env]        Print this worktree’s URLs (--env: sourceable exports)');
   console.log('  down [--infra]      Alias of stop (--infra: also stops shared containers)');
@@ -1080,6 +1218,12 @@ function usage(exitCode = 1) {
   console.log('Each git worktree gets its own ports, databases and Redis prefix;');
   console.log('ports are picked once and reused. --new-ports re-rolls them,');
   console.log('--port-offset N shifts the base (3000/8080/1234) by N.');
+  console.log('`dev`, `up` and `db reset` claim the worktree while they provision or');
+  console.log('drop it, so a reset cannot race a start.');
+  console.log('');
+  console.log('Detached logs are replaced on each start. One long session keeps growing');
+  console.log('its file (the child writes directly to the descriptor, so it cannot be');
+  console.log('rotated); `./nd logs --clear` removes them once the stack is stopped.');
   console.log();
   console.log('  --json              Machine-readable output (up, status, urls, logs, stop)');
   console.log();
@@ -1149,7 +1293,7 @@ async function probeRecord(record) {
   if (!isWorktreePresent(record)) return { health: emptyHealth(), listening: false };
   const listening = await anyPortListening(record);
   const maybeRunning =
-    Object.keys(liveServicePids(record)).length > 0 || isPidAlive(record.supervisorPid);
+    Object.keys(liveServicePids(record)).length > 0 || liveSupervisors(record).length > 0;
 
   if (!maybeRunning && !listening) return { health: emptyHealth(), listening };
   return { health: await probeHealth(record, 1500), listening };
@@ -1158,7 +1302,7 @@ async function probeRecord(record) {
 function describeState(record, probe, live) {
   if (!isWorktreePresent(record)) return 'missing worktree';
   if (Object.keys(live).length > 0) return 'detached';
-  if (isPidAlive(record.supervisorPid)) return 'foreground';
+  if (liveSupervisors(record).length > 0) return 'foreground';
   if (probe.listening || probe.health.web || probe.health.api || probe.health.realtime) {
     return 'running';
   }
@@ -1186,6 +1330,10 @@ function statusPayload(instance, statuses) {
     yhubDatabase: record.yhubDatabase,
     redisPrefix: record.redisPrefix,
     pids: live,
+    supervisors: liveSupervisors(record).map((entry) => ({
+      pid: entry.pid,
+      services: servicesOf(entry),
+    })),
   }));
 
   return {
@@ -1285,13 +1433,25 @@ function parseLogLineCount(raw, flag) {
   return value;
 }
 
-function logsCommand(argv) {
+async function logsCommand(argv) {
   let serviceName = null;
   let limit = 100;
+  let clear = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '-n' || arg === '--lines') {
+    if (arg === '--clear') {
+      clear = true;
+    } else if (arg === '--help' || arg === '-h') {
+      console.log(`Usage: ./nd logs [service] [-n N] [--clear]
+
+Prints the newest lines of this worktree's detached service logs. Each start replaces
+its service log, but one long-running session keeps appending to its file: the page
+policy caps nothing inside a session because the child writes straight to the file
+descriptor (renaming the file cannot rotate it). Run --clear after ./nd stop to reclaim
+that space.`);
+      return 0;
+    } else if (arg === '-n' || arg === '--lines') {
       limit = parseLogLineCount(argv[index + 1], arg);
       index += 1;
     } else if (arg.startsWith('--lines=')) {
@@ -1311,6 +1471,10 @@ function logsCommand(argv) {
 
   if (serviceName) validateService(serviceName);
   const services = serviceName ? [serviceName] : ALL_SERVICES;
+  if (clear) {
+    if (wantJson) throw new Error('Choose either --clear or --json, not both.');
+    return await clearLogs(services);
+  }
 
   if (wantJson) {
     const logs = services.map((name) => {
@@ -1338,6 +1502,34 @@ function logsCommand(argv) {
 }
 
 /**
+ * Reclaim the space of service logs. Only safe when the stack is stopped: a running
+ * child holds the file descriptor, so removing the path would leave it writing to an
+ * unlinked inode and free nothing. The ports are probed as well as the record, because a
+ * stack started by an older CLI has pids this registry never saw.
+ */
+async function clearLogs(services) {
+  const instance = peekInstance({ applyPins: false });
+  const own = listRecords(instance.registry).find((record) => record.id === instance.id);
+  const running = (own && recordIsRunning(own)) || (await anyPortListening(instance));
+  if (running) {
+    throw new Error(
+      `Refusing to clear logs while instance '${instance.id}' is running; run \`./nd stop\` first.`
+    );
+  }
+  let removed = 0;
+  for (const name of services) {
+    const file = logFile(name);
+    if (!fs.existsSync(file)) continue;
+    const size = fs.statSync(file).size;
+    fs.rmSync(file, { force: true });
+    removed += 1;
+    console.log(`Removed ${path.relative(ROOT, file)} (${size} bytes).`);
+  }
+  if (removed === 0) console.log('No service logs to remove.');
+  return 0;
+}
+
+/**
  * Windows has no `ps -o command=`. WMI/CIM gives the command line, which is what the
  * Linux branch uses to avoid signalling a recycled PID. If PowerShell is unavailable
  * the caller must skip rather than guess, even though that can leave a stale stack.
@@ -1361,8 +1553,14 @@ function isNdProcess(pid) {
   return /scripts\/nd\.js/.test(result.stdout.toString());
 }
 
+/**
+ * Terminate a detached/forked process tree. Returns whether termination is confirmed:
+ * a caller that clears the recorded pid must know the process is really gone, otherwise
+ * `./nd stop` loses the only handle it has for a retry.
+ */
 async function stopProcessGroup(pid) {
   if (isWin) {
+    if (!isPidAlive(pid)) return true;
     // process.kill(pid) only terminates the shell on Windows; taskkill /T follows the
     // mvnw/npx children (java, turbo, next, tsx) as well.
     runSilent(`taskkill /pid ${pid} /T /F`, { timeout: 15_000 });
@@ -1370,8 +1568,10 @@ async function stopProcessGroup(pid) {
     while (Date.now() < deadline && isPidAlive(pid)) {
       await sleep(200);
     }
-    return;
+    return !isPidAlive(pid);
   }
+  // On POSIX the group outlives its leader: the shell can exit while the server it
+  // started keeps the port, so signal the group even when `pid` itself is already gone.
 
   const signal = (name) => {
     try {
@@ -1387,7 +1587,8 @@ async function stopProcessGroup(pid) {
 
   // The recorded pid is a shell (spawn uses `shell: true`) and the server is a descendant
   // in the same group. Waiting on the leader alone would return while that descendant
-  // still holds the port, and the caller would then clear its record.
+  // still holds the port, and the caller would then clear its record. A foreground
+  // supervisor is not a group leader, so the pid itself has to be checked too.
   const groupAlive = () => {
     try {
       process.kill(-pid, 0);
@@ -1396,13 +1597,20 @@ async function stopProcessGroup(pid) {
       return err.code === 'EPERM';
     }
   };
+  const alive = () => isPidAlive(pid) || groupAlive();
 
   signal('SIGTERM');
   const deadline = Date.now() + 5000;
-  while (Date.now() < deadline && groupAlive()) {
+  while (Date.now() < deadline && alive()) {
     await sleep(200);
   }
-  if (groupAlive()) signal('SIGKILL');
+  if (!alive()) return true;
+  signal('SIGKILL');
+  const killDeadline = Date.now() + 2000;
+  while (Date.now() < killDeadline && alive()) {
+    await sleep(100);
+  }
+  return !alive();
 }
 
 const SERVICE_PROCESS_PATTERNS = {
@@ -1424,21 +1632,34 @@ function looksLikeService(pid, name) {
 }
 
 async function stopCommand(argv) {
-  const instance = peekInstance();
+  // `applyPins: false`: a shell that exported a different ND_*_PORT must still be able to
+  // run the very stop command its own start error suggests. The record has the ports.
+  const instance = peekInstance({ applyPins: false });
   const records = listRecords(instance.registry);
   const own = records.find((record) => record.id === instance.id);
   const log = wantJson ? () => {} : (...args) => console.log(...args);
   const stoppedEntries = [];
+  const failed = [];
 
-  if (own && own.supervisorPid) {
-    if (isNdProcess(own.supervisorPid)) {
-      log(
-        `\x1b[34m> Stopping foreground dev for '${instance.id}' (pid ${own.supervisorPid})...\x1b[0m`
+  for (const entry of liveSupervisors(own || {})) {
+    if (!isNdProcess(entry.pid)) {
+      console.error(
+        `\x1b[33m… Skipping foreground pid ${entry.pid}: it no longer looks like ./nd. ` +
+          'Clearing the stale record.\x1b[0m'
       );
-      await stopProcessGroup(own.supervisorPid);
-      stoppedEntries.push({ name: 'dev', pid: own.supervisorPid });
+      clearSupervisor(instance, entry.pid);
+      continue;
     }
-    clearSupervisor(instance, own.supervisorPid);
+    log(
+      `\x1b[34m> Stopping foreground dev for '${instance.id}' ` +
+        `(pid ${entry.pid}, ${servicesOf(entry).join(', ')})...\x1b[0m`
+    );
+    if (await stopProcessGroup(entry.pid)) {
+      stoppedEntries.push({ name: 'dev', pid: entry.pid });
+      clearSupervisor(instance, entry.pid);
+    } else {
+      failed.push({ name: 'dev', pid: entry.pid });
+    }
   }
 
   const toStop = [];
@@ -1453,12 +1674,43 @@ async function stopCommand(argv) {
     log(`\x1b[34m> Stopping ${name} (pid ${pid})...\x1b[0m`);
     toStop.push({ name, pid });
   }
-  await Promise.all(toStop.map((service) => stopProcessGroup(service.pid)));
-  stoppedEntries.push(...toStop);
-  if (own) clearServicePids(instance);
+  const stopped = await Promise.all(
+    toStop.map(async (service) => ({ ...service, ok: await stopProcessGroup(service.pid) }))
+  );
+  for (const entry of stopped) {
+    if (entry.ok) stoppedEntries.push({ name: entry.name, pid: entry.pid });
+    else failed.push({ name: entry.name, pid: entry.pid });
+  }
+  if (own) {
+    // Keep the pids this run could not confirm as gone: the record is the retry handle.
+    clearServicePids(
+      instance,
+      Object.fromEntries(
+        failed.filter((entry) => entry.name !== 'dev').map((entry) => [entry.name, entry.pid])
+      )
+    );
+  }
 
-  if (stoppedEntries.length === 0) {
+  if (stoppedEntries.length === 0 && failed.length === 0) {
     log(`No running dev process recorded for '${instance.id}'.`);
+  }
+  if (failed.length > 0) {
+    console.error(
+      `\x1b[31m✗ Could not confirm that ${failed
+        .map((entry) => `${entry.name} (pid ${entry.pid})`)
+        .join(
+          ', '
+        )} stopped. Their records are kept; fix the process or retry \`./nd stop\`.\x1b[0m`
+    );
+    if (wantJson) {
+      emitJson({
+        instance: instance.id,
+        stopped: stoppedEntries,
+        failed,
+        infra: 'left running',
+      });
+    }
+    return 1;
   }
 
   const stopInfra = argv.includes('--infra') || argv.includes('--all');
@@ -1473,7 +1725,7 @@ async function stopCommand(argv) {
   const others = [];
   for (const record of records) {
     if (record.id === instance.id) continue;
-    if (isPidAlive(record.supervisorPid) || Object.keys(liveServicePids(record)).length > 0) {
+    if (recordIsRunning(record)) {
       others.push(record.id);
       continue;
     }
@@ -1502,8 +1754,8 @@ async function stopCommand(argv) {
 
   log('\x1b[34m> Stopping shared containers...\x1b[0m');
   const containers = [POSTGRES_CONTAINER, REDIS_CONTAINER, MAILPIT_CONTAINER];
-  const stopped = runSilent(`docker stop ${containers.join(' ')}`, { timeout: 60_000 });
-  if (stopped.status !== 0) {
+  const stopResult = runSilent(`docker stop ${containers.join(' ')}`, { timeout: 60_000 });
+  if (stopResult.status !== 0) {
     // `docker stop` also fails for a container that was never created; absent is a
     // no-op. A container that is still running, or a daemon that cannot be reached, is
     // not: reporting "stopped" there would leave a stack behind.
@@ -1511,7 +1763,7 @@ async function stopCommand(argv) {
     const stillRunning = containers.filter((name) => containerRunning(name));
     if (daemon.status !== 0 || stillRunning.length > 0) {
       const detail =
-        (stopped.stderr || '').toString().trim() || `docker stop exited ${stopped.status}`;
+        (stopResult.stderr || '').toString().trim() || `docker stop exited ${stopResult.status}`;
       console.error(
         `\x1b[31m✗ Could not stop ${
           stillRunning.length > 0 ? stillRunning.join(', ') : 'the shared containers'
@@ -1561,7 +1813,7 @@ async function main() {
       break;
 
     case 'logs':
-      process.exit(logsCommand(args.slice(1)));
+      process.exit(await logsCommand(args.slice(1)));
       break;
 
     case 'stop':
