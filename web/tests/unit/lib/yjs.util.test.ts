@@ -5,6 +5,7 @@ import {
   decodeYjsState,
   createDefaultDocumentMeta,
   getYjsStringMap,
+  hasRelatedYjsHistory,
 } from '@/lib/yjs.util';
 
 describe('yjs.util', () => {
@@ -29,6 +30,36 @@ describe('yjs.util', () => {
       const encoded = encodeYjsState(ydoc);
       expect(encoded).toBeInstanceOf(Uint8Array);
       expect(encoded.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('hasRelatedYjsHistory', () => {
+    function docWithClientId(clientID: number): Y.Doc {
+      const ydoc = new Y.Doc();
+      (ydoc as unknown as { clientID: number }).clientID = clientID;
+      ydoc.get('blocknote').insert(0, ['hello']);
+      return ydoc;
+    }
+
+    it('accepts a local copy that descends from the cloud copy', () => {
+      const cloud = docWithClientId(1);
+      const local = decodeYjsState(encodeYjsState(cloud));
+
+      expect(hasRelatedYjsHistory(cloud, local)).toBe(true);
+    });
+
+    it('rejects snapshots with disjoint client histories', () => {
+      const cloud = docWithClientId(1);
+      const staleLocal = docWithClientId(2);
+
+      expect(hasRelatedYjsHistory(cloud, staleLocal)).toBe(false);
+    });
+
+    it('merges an empty side so offline edits survive an empty cloud room', () => {
+      const cloud = new Y.Doc();
+      const local = docWithClientId(1);
+
+      expect(hasRelatedYjsHistory(cloud, local)).toBe(true);
     });
   });
 

@@ -13,6 +13,7 @@ import type { CommentsFilter, CommentsSort } from '@/components/comments/Comment
 import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { EMPTY_COMMENT_STATS } from './comment.utils';
 import { EditorContent } from './EditorContent';
+import { EditorErrorBoundary } from './EditorErrorBoundary';
 import { useAppDispatch } from '@/stores/hooks';
 import { addToast } from '@/stores/toasts/toasts.slice';
 
@@ -259,30 +260,32 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         openCommentsCount={activeCommentStats.open}
         onCommentsToggle={() => setShowCommentsSidebar((prev) => !prev)}
       />
-      <EditorContent
-        key={documentId}
-        documentId={documentId}
-        ydoc={ydoc}
-        awareness={awareness}
-        meta={meta}
-        updateMeta={updateMeta}
-        updateIcon={updateIcon}
-        updateCover={updateCover}
-        isReadOnly={isReadOnly}
-        accessLevel={accessLevel}
-        realtimeProvider={realtimeProvider}
-        user={user}
-        isAuthenticated={isAuthenticated}
-        accessToken={accessToken}
-        commentsUiEnabled={showCommentsButton}
-        commentsSidebarOpen={isCommentsSidebarOpen}
-        commentsFilter={commentsFilter}
-        commentsSort={commentsSort}
-        onCommentsFilterChange={setCommentsFilter}
-        onCommentsSortChange={setCommentsSort}
-        onCommentsClose={handleCommentsClose}
-        onCommentsThreadStatsChange={handleThreadStatsChange}
-      />
+      <EditorErrorBoundary key={documentId} documentId={documentId}>
+        <EditorContent
+          key={documentId}
+          documentId={documentId}
+          ydoc={ydoc}
+          awareness={awareness}
+          meta={meta}
+          updateMeta={updateMeta}
+          updateIcon={updateIcon}
+          updateCover={updateCover}
+          isReadOnly={isReadOnly}
+          accessLevel={accessLevel}
+          realtimeProvider={realtimeProvider}
+          user={user}
+          isAuthenticated={isAuthenticated}
+          accessToken={accessToken}
+          commentsUiEnabled={showCommentsButton}
+          commentsSidebarOpen={isCommentsSidebarOpen}
+          commentsFilter={commentsFilter}
+          commentsSort={commentsSort}
+          onCommentsFilterChange={setCommentsFilter}
+          onCommentsSortChange={setCommentsSort}
+          onCommentsClose={handleCommentsClose}
+          onCommentsThreadStatsChange={handleThreadStatsChange}
+        />
+      </EditorErrorBoundary>
     </>
   );
 }
