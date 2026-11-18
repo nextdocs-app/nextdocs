@@ -6,6 +6,7 @@ import {
 } from '@/services/document.service';
 import type { DocumentAccessLevel, DocumentSpaceSummary } from '@/services/document.service';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { addToast } from '@/stores/toasts/toasts.slice';
 import {
   setCurrentDocument,
   setLoading,
@@ -48,7 +49,7 @@ import {
 } from '@/lib/pending-cloud-create.util';
 import { isRealtimeEligibleDocumentId } from '@/lib/document-id.util';
 import { normalizeDocumentTitle } from '@/lib/document-content.util';
-import { mergeYjsSnapshot } from '@/lib/yjs.util';
+import { hasRelatedYjsHistory, mergeYjsSnapshot } from '@/lib/yjs.util';
 import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from '@y/y';
@@ -207,16 +208,28 @@ async function resolveLocalFallbackDocument(
  *
  * A share-link mirror is someone else's document and is never merged; Yjs unions
  * delete sets, so an ordinary stale local copy cannot resurrect removed content.
+ * A local snapshot with no client id in common with the cloud copy is from a
+ * different incarnation of the same id (a reseed); merging that history would
+ * append a second block tree, which BlockNote cannot render.
  */
 async function mergeLocalSnapshotIntoCloudCopy(
   documentId: string,
   cloudYdoc: Awaited<ReturnType<typeof documentService.getCloudDocument>>['ydoc']
-): Promise<void> {
+): Promise<boolean> {
   const local = await documentService.loadDocument(documentId);
   if (!local || local.origin === 'public-link') {
-    return;
+    return false;
+  }
+  if (!hasRelatedYjsHistory(cloudYdoc, local.ydoc)) {
+    console.warn(
+      `Discarding stale local snapshot for ${documentId}: it shares no Yjs history with the cloud copy.`
+    );
+    // The caller surfaces this: the local copy is about to be replaced, and a silent
+    // discard would look like the page lost content.
+    return true;
   }
   mergeYjsSnapshot(cloudYdoc, local.ydoc);
+  return false;
 }
 
 export function useDocument(documentId: string, options?: UseDocumentOptions) {
@@ -709,7 +722,19 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               // Merge before the cloud copy replaces the local snapshot: an edit the
               // socket took but never delivered lives only here, with no marker to
               // block the read (B4-1).
-              await mergeLocalSnapshotIntoCloudCopy(effectiveId, result.ydoc);
+              const discardedLocalCopy = await mergeLocalSnapshotIntoCloudCopy(
+                effectiveId,
+                result.ydoc
+              );
+              if (discardedLocalCopy) {
+                dispatch(
+                  addToast({
+                    message:
+                      'The local copy of this page was out of date and was replaced with the current page.',
+                    type: 'warning',
+                  })
+                );
+              }
               // An account-backed read proves the local copy now belongs to the
               // signed-in user; re-tagging keeps a previous guest mirror from
               // staying filtered out of Private listings after login.

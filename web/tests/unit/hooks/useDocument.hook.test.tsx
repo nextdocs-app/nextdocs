@@ -1642,10 +1642,12 @@ describe('useDocument', () => {
   });
 
   it('should merge a local snapshot with no pending marker into the cloud read', async () => {
-    const localYdoc = new Y.Doc();
-    localYdoc.get('body').insert(0, ['edit that never reached the socket']);
     const cloudYdoc = new Y.Doc();
     cloudYdoc.get('body').insert(0, ['server copy']);
+    // An offline edit is the cloud snapshot plus this client's new operations.
+    const localYdoc = new Y.Doc();
+    Y.applyUpdate(localYdoc, Y.encodeStateAsUpdate(cloudYdoc));
+    localYdoc.get('body').insert(0, ['edit that never reached the socket']);
     const meta = {
       title: 'Merged Document',
       createdAt: '2024-01-01T00:00:00.000Z',
@@ -1671,6 +1673,47 @@ describe('useDocument', () => {
       touchUpdatedAt: false,
       origin: 'local',
     });
+  });
+
+  it('should discard a local snapshot from a different incarnation of the document', async () => {
+    const cloudYdoc = new Y.Doc();
+    (cloudYdoc as unknown as { clientID: number }).clientID = 1;
+    cloudYdoc.get('body').insert(0, ['server copy']);
+    // A reseeded row keeps its id but gets new Yjs history. Merging this copy
+    // would append a second block tree that BlockNote cannot render.
+    const staleLocalYdoc = new Y.Doc();
+    (staleLocalYdoc as unknown as { clientID: number }).clientID = 2;
+    staleLocalYdoc.get('body').insert(0, ['content from the previous seed']);
+    const meta = {
+      title: 'Reseeded Document',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValue({ ydoc: staleLocalYdoc, meta });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc: cloudYdoc, meta });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const text = JSON.stringify(result.current.ydoc?.get('body').toDelta() ?? '');
+      expect(text).toContain('server copy');
+      expect(text).not.toContain('content from the previous seed');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Discarding stale local snapshot for cloud-id')
+      );
+      expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', cloudYdoc, meta, {
+        touchUpdatedAt: false,
+        origin: 'local',
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('should fallback to local document when authenticated cloud fetch fails due to connectivity', async () => {

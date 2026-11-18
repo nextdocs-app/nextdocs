@@ -93,6 +93,44 @@ export function decodeYjsState(state: Uint8Array): Y.Doc {
 }
 
 /**
+ * Whether two snapshots describe the same Yjs history.
+ *
+ * Every client that ever wrote to a document contributes a client id to its
+ * state vector, and those ids survive encoding. A local copy that came from
+ * this cloud document therefore shares at least one id with it. Disjoint
+ * vectors mean the copy belongs to a different incarnation of the document
+ * (typically a reseeded database with new Yjs history under the same row id);
+ * merging it would append a second, unrelated block tree and can leave
+ * BlockNote unable to build its `doc` node.
+ *
+ * An empty side has no history to conflict with, so it is always safe to
+ * merge: this preserves offline edits for a document whose cloud room is still
+ * empty. That case is also the remaining hole in this check — a document whose
+ * room is empty after a reseed (created through the API with a title but no
+ * `yjsState`) has no client id to compare, so a stale pre-reset local copy is
+ * merged back in and rebuilds the same second block tree. A state vector cannot
+ * distinguish "this device's first edit" from "this row's previous incarnation";
+ * comparing anything stronger would need the server to remember a per-row
+ * history identity rather than the room contents.
+ */
+export function hasRelatedYjsHistory(target: Y.Doc, source: Y.Doc): boolean {
+  const targetClients = Y.decodeStateVector(Y.encodeStateVector(target));
+  const sourceClients = Y.decodeStateVector(Y.encodeStateVector(source));
+
+  if (targetClients.size === 0 || sourceClients.size === 0) {
+    return true;
+  }
+
+  for (const client of sourceClients.keys()) {
+    if (targetClients.has(client)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Fold one snapshot into another.
  *
  * Used when a cloud read is about to replace this device's copy: local edits that
