@@ -61,23 +61,15 @@ function tailText(text, limit = 100) {
   return lines.length > limit ? lines.slice(-limit) : lines;
 }
 
-/**
- * One backward read of at most `limit` complete lines, or of everything after the newest
- * line `boundary` matches. `./nd logs` and the failure diagnostics used to read the whole
- * file: a session that ran for hours makes that the slow part of a command that prints 30
- * lines. The scan starts at EOF and stops as soon as it has what it needs.
- *
- * The first line of a partial read is dropped, because a chunk boundary can cut it in
- * half and half a line is worse than one line less. Whole-chunk decoding keeps a UTF-8
- * sequence that straddles the boundary from turning into replacement characters.
- */
-function readTail(file, { limit = 100, boundary = null } = {}) {
+/** Read backwards until the requested complete lines are available. */
+function readTail(file, { limit = 100 } = {}) {
   const fd = fs.openSync(file, 'r');
   try {
     let size = fs.fstatSync(fd).size;
     const chunks = [];
     let read = 0;
     let restarts = 0;
+    let newlines = 0;
     for (;;) {
       if (read < size) {
         const length = Math.min(CHUNK_BYTES, size - read);
@@ -94,22 +86,16 @@ function readTail(file, { limit = 100, boundary = null } = {}) {
           size = fs.fstatSync(fd).size;
           chunks.length = 0;
           read = 0;
+          newlines = 0;
           continue;
         }
         chunks.unshift(buffer);
         read += length;
+        for (const byte of buffer) if (byte === 10) newlines += 1;
       }
-      const text = chunks.length === 0 ? '' : Buffer.concat(chunks).toString('utf8');
-      // The whole file, or the whole tail: there is nothing older left to read.
-      if (read >= size) return text;
-      const lines = text.split('\n');
-      lines.shift();
-      if (boundary) {
-        // Older sessions cannot contain the header this search is looking for, and every
-        // line after the newest one is already in the buffer.
-        if (lines.some((line) => boundary.test(line))) return text;
-      } else if (lines.length > limit) {
-        return text;
+      // One extra newline covers a partial first line and a trailing newline.
+      if (read >= size || newlines > limit + 1) {
+        return Buffer.concat(chunks).toString('utf8');
       }
     }
   } finally {
@@ -130,27 +116,23 @@ function tailFile(service, limit = 100, root = ROOT) {
 
 /**
  * Failure diagnostics want this start's output, not the shutdown of the previous one.
- * `beginLog` writes one header per session; start reading after the last one.
+ * `beginLog` truncates the file and writes its header on the second line.
  */
 function tailSession(service, limit = 100, root = ROOT) {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`Log line count must be a positive integer, received "${limit}".`);
+  }
   const file = logFile(service, root);
   let text;
   try {
-    text = readTail(file, { boundary: sessionHeader(service) });
+    text = readTail(file, { limit: limit + 2 });
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
     return { service, file, lines: [], missing: true };
   }
 
   const lines = stripAnsi(text).replace(/\r\n/g, '\n').split('\n');
-  const header = sessionHeader(service);
-  let start = 0;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (header.test(lines[index])) {
-      start = index + 1;
-      break;
-    }
-  }
+  const start = lines[0] === '' && sessionHeader(service).test(lines[1] || '') ? 2 : 0;
   return { service, file, lines: tailText(lines.slice(start).join('\n'), limit) };
 }
 

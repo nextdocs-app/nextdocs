@@ -5,7 +5,6 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { ROOT, run, runSilent, sleepSync } = require('./proc');
 
-const isWin = process.platform === 'win32';
 const {
   POSTGRES_CONTAINER,
   POSTGRES_IMAGE,
@@ -150,7 +149,35 @@ function startSharedContainer(command, name) {
   console.log(`\x1b[34m> Another worktree started ${name}; using it.\x1b[0m`);
 }
 
+function assertPostgresLoopback() {
+  const bindings = spawnSync(
+    'docker',
+    ['inspect', '-f', '{{json .HostConfig.PortBindings}}', POSTGRES_CONTAINER],
+    {
+      encoding: 'utf8',
+    }
+  );
+  if (bindings.status === 0) {
+    let ports;
+    try {
+      ports = JSON.parse(bindings.stdout)?.['5432/tcp'];
+    } catch {
+      throw new Error(`Could not inspect ${POSTGRES_CONTAINER} port bindings.`);
+    }
+    if (
+      !Array.isArray(ports) ||
+      ports.length === 0 ||
+      ports.some((port) => port.HostIp !== '127.0.0.1' && port.HostIp !== '::1')
+    ) {
+      throw new Error(
+        `${POSTGRES_CONTAINER} is not bound to loopback only. Remove and recreate the container with ./nd dev; its nextdocs_pgdata volume will be preserved.`
+      );
+    }
+  }
+}
+
 function ensurePostgres({ yhubSchema = true, local = false } = {}) {
+  assertPostgresLoopback();
   // Check if container is already running
   const check = runSilent(`docker inspect -f "{{.State.Running}}" ${POSTGRES_CONTAINER}`);
   if (check.status === 0 && check.stdout.toString().trim() === 'true') {
@@ -185,6 +212,7 @@ function ensurePostgres({ yhubSchema = true, local = false } = {}) {
     ].join(' '),
     POSTGRES_CONTAINER
   );
+  assertPostgresLoopback();
   ensureDatabases({ yhubSchema, local });
 }
 
@@ -297,48 +325,34 @@ function redisPing() {
  */
 function redisFlushPrefix(prefixOverride) {
   const prefix = prefixOverride || redisPrefix();
-  // The prefix is interpolated into a redis-cli pattern inside a shell command.
   if (!/^[A-Za-z0-9_.:-]+$/.test(prefix)) {
     throw new Error(`Refusing to flush an unexpected Redis prefix '${prefix}'.`);
   }
-  // cmd.exe does not treat single quotes as quoting, so the pattern needs the shell's
-  // own syntax on Windows or redis-cli would search for the literal quote characters.
-  const pattern = isWin ? `"${prefix}:*"` : `'${prefix}:*'`;
-  const scan = runSilent(`docker exec ${REDIS_CONTAINER} redis-cli --scan --pattern ${pattern}`, {
-    timeout: 10_000,
-  });
-  if (scan.status !== 0) {
+  // Keep keys inside Redis so even binary keys cannot be split or interpreted by a shell.
+  const script = [
+    "local cursor, removed = '0', 0",
+    'repeat',
+    "  local result = redis.call('SCAN', cursor, 'MATCH', ARGV[1], 'COUNT', 200)",
+    '  cursor = result[1]',
+    "  for _, key in ipairs(result[2]) do removed = removed + redis.call('DEL', key) end",
+    "until cursor == '0'",
+    'return removed',
+  ].join('\n');
+  const result = spawnSync(
+    'docker',
+    ['exec', REDIS_CONTAINER, 'redis-cli', '-e', 'EVAL', script, '0', `${prefix}:*`],
+    {
+      encoding: 'utf8',
+      timeout: 10_000,
+    }
+  );
+  const count = (result.stdout || '').trim();
+  if (result.status !== 0 || !/^\d+$/.test(count)) {
     throw new Error(
-      `Could not scan Redis keys for prefix '${prefix}'. ${(scan.stderr || '').toString().trim()}`
+      `Could not clear Redis prefix '${prefix}': ${(result.stderr || result.stdout || result.error?.message || '').trim()}`
     );
   }
-
-  const keys = scan.stdout
-    .toString()
-    .split('\n')
-    .map((key) => key.trim())
-    .filter(Boolean);
-  if (keys.length === 0) return 0;
-
-  // cmd.exe limits a command line to about 8 KiB. UUID-sized Yhub keys are ~50
-  // characters each, so 200 would exceed the limit on Windows; 50 stays safely below.
-  const batchSize = isWin ? 50 : 200;
-  for (let index = 0; index < keys.length; index += batchSize) {
-    const batch = keys.slice(index, index + batchSize);
-    const deleted = runSilent(`docker exec ${REDIS_CONTAINER} redis-cli del ${batch.join(' ')}`, {
-      timeout: 10_000,
-    });
-    if (deleted.status !== 0) {
-      throw new Error(
-        `Could not delete ${batch.length} Redis keys for prefix '${prefix}'. ${(
-          deleted.stderr || ''
-        )
-          .toString()
-          .trim()}`
-      );
-    }
-  }
-  return keys.length;
+  return Number(count);
 }
 
 /** Drop one database and its connections; used by `db reset` and `db prune`. */

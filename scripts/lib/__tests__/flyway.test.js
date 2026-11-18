@@ -91,6 +91,19 @@ test('the local form ignores an inherited database URL', () => {
   }
 });
 
+test('local Flyway refuses JVM properties that can override its target', () => {
+  const saved = { ...process.env };
+  try {
+    process.env.MAVEN_OPTS = '-Xmx512m -Dflyway.url=jdbc:postgresql://other/db';
+    assert.throws(() => flywayEnv({ local: true }), /MAVEN_OPTS contains Flyway/);
+    delete process.env.MAVEN_OPTS;
+    process.env.JAVA_TOOL_OPTIONS = '-Dflyway.cleanDisabled=false';
+    assert.throws(() => flywayEnv({ local: true }), /JAVA_TOOL_OPTIONS contains Flyway/);
+  } finally {
+    process.env = saved;
+  }
+});
+
 test('an explicit URL without a database name is rejected, not retargeted', () => {
   const saved = { ...process.env };
   try {

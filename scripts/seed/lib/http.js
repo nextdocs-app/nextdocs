@@ -161,6 +161,7 @@ class Client {
         ...headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000),
     });
   }
 
@@ -245,7 +246,7 @@ class Client {
           headers: { ...headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         });
       } catch (err) {
-        if (attempt === attempts - 1) {
+        if (method !== 'GET' || attempt === attempts - 1) {
           throw new ApiError(0, `${method} ${path} failed: ${err.message}`, null, path);
         }
         await sleep(jitter(500 * 2 ** attempt));
@@ -270,7 +271,7 @@ class Client {
       }
 
       if (response.status >= 500) {
-        if (attempt === attempts - 1) {
+        if (method !== 'GET' || attempt === attempts - 1) {
           const payload = await response.json().catch(() => null);
           throw new ApiError(
             response.status,
@@ -334,6 +335,7 @@ class Client {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ threadId, selection }),
+        signal: AbortSignal.timeout(30_000),
       });
       if (response.ok) return response.json().catch(() => null);
       const payload = await response.json().catch(() => null);

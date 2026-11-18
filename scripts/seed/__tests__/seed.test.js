@@ -10,6 +10,35 @@ const { compileMarkdown, getConverter, commentThreadIdsOf } = require('../lib/ma
 const { createAnchorSelection } = require('../lib/anchors');
 const { dateDaysAgo, afterOrEqual } = require('../lib/time');
 const { commentMarkKey } = require('../lib/comment-mark');
+const { Client } = require('../lib/http');
+
+test('seed does not replay writes after an unknown transport outcome', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  let calls = 0;
+  client.fetchRaw = async () => {
+    calls += 1;
+    throw new Error('connection lost');
+  };
+  await assert.rejects(client.request('POST', '/threads'), /connection lost/);
+  assert.equal(calls, 1);
+});
+
+test('seed does not replay writes after a server error', async () => {
+  const client = new Client({
+    apiBaseUrl: 'http://localhost',
+    realtimeBaseUrl: 'http://localhost',
+  });
+  let calls = 0;
+  client.fetchRaw = async () => {
+    calls += 1;
+    return { status: 500, json: async () => null };
+  };
+  await assert.rejects(client.request('POST', '/threads'), /500/);
+  assert.equal(calls, 1);
+});
 
 test('uuidv5 is deterministic, version 5 and RFC 4122 variant', () => {
   const first = seedId('doc', 'eng/on-call-runbook');

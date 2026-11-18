@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const isWin = process.platform === 'win32';
@@ -115,16 +114,12 @@ function instanceLine() {
 }
 
 /**
- * A reset deletes the attachment tree recursively, so a path that only looks dedicated is
- * not enough. `ATTACHMENT_STORAGE_PATH=.` resolves to `api/` — a null check passes and the
- * reset then deletes the API module — so a directory inside the checkout has to be under
- * `api/data`, and nothing may name the checkout or a directory that contains it.
+ * A reset may only remove an attachment directory owned by this worktree. External
+ * directories and linked parents must be kept explicitly with --keep-files.
  */
 function assertSafeAttachmentDir(directory) {
   const resolved = path.resolve(directory);
-  const segments = resolved.split(path.sep).filter(Boolean);
-  // Windows paths are case-insensitive; a differently-cased home/root path must still
-  // be rejected before `db reset` calls rmSync on it.
+  // Windows paths are case-insensitive.
   const key = (value) => (isWin ? value.toLowerCase() : value);
   const within = (parent, child) =>
     key(child) === key(parent) || key(child).startsWith(key(parent) + path.sep);
@@ -135,20 +130,21 @@ function assertSafeAttachmentDir(directory) {
     );
   };
 
-  if (
-    key(resolved) === key(path.parse(resolved).root) ||
-    key(resolved) === key(os.homedir()) ||
-    segments.length < 2
-  ) {
-    fail('it resolves to the filesystem root, the home directory, or a top-level path');
-  }
-
   const attachmentRoot = path.join(ROOT, 'api', 'data');
-  if (within(resolved, ROOT) || within(resolved, attachmentRoot)) {
-    fail('it is the checkout or a directory that contains it');
+  if (!within(attachmentRoot, resolved) || key(resolved) === key(attachmentRoot)) {
+    fail('only a directory under api/data is owned by this worktree; use --keep-files');
   }
-  if (within(ROOT, resolved) && !within(attachmentRoot, resolved)) {
-    fail(`it is inside the checkout but outside ${path.relative(ROOT, attachmentRoot)}`);
+  // rmSync follows symlinked parent components, even though it does not follow the final link.
+  const relative = path.relative(ROOT, resolved).split(path.sep);
+  let current = ROOT;
+  for (const segment of relative.slice(0, -1)) {
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) fail(`parent '${current}' is a symlink`);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      break;
+    }
   }
 }
 
@@ -463,7 +459,7 @@ already-applied migrations. Never run this against a shared database.`);
     'db repair is a local recovery tool. It removes failed history rows and accepts ' +
       'checksum changes; never run it against a shared database.'
   );
-  const status = runFlyway('repair');
+  const status = runFlyway('repair', { local: true });
   if (status === 0) success('Flyway history repaired.');
   return status;
 }
@@ -497,6 +493,11 @@ worktree that still exists are never touched.`);
 
   let retained = 0;
   for (const record of stale) {
+    const current = listRecords(instance.registry).find((entry) => entry.id === record.id);
+    if (!current || current.worktree !== record.worktree || isWorktreePresent(current)) {
+      warn(`Skipping ${record.id}: its worktree or record changed after confirmation.`);
+      continue;
+    }
     let incomplete = false;
     const fail = (message) => {
       incomplete = true;

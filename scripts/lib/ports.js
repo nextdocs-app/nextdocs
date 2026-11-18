@@ -5,7 +5,7 @@ const net = require('net');
 /** The three ports one NextDocs instance needs, in start order. */
 const PORT_NAMES = ['web', 'api', 'realtime'];
 
-function isPortFree(port, host = '127.0.0.1') {
+function isPortFree(port, host) {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.unref();

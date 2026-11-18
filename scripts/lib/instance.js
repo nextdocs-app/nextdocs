@@ -26,10 +26,8 @@ const DEFAULT_PORTS = { web: 3000, api: 8080, realtime: 1234 };
 const SERVICE_NAMES = ['web', 'api', 'realtime'];
 const RECORD_VERSION = 1;
 const MAX_ID_LENGTH = 24;
-const LOCK_STALE_MS = 30_000;
-// Must outlast the staleness threshold: a waiter that gave up earlier told the user to
-// delete the lock by hand even though the next attempt would have taken it over.
-const LOCK_TIMEOUT_MS = LOCK_STALE_MS + 5_000;
+// shortcut: a crashed owner leaves a lock to remove manually, upgrade if this becomes common.
+const LOCK_TIMEOUT_MS = 35_000;
 
 const PINNED_PORT_ENV = {
   web: 'ND_WEB_PORT',
@@ -74,7 +72,13 @@ function samePath(left, right) {
 
 function isMainWorktree(worktree, commonDir) {
   if (!commonDir) return true;
-  return samePath(commonDir, path.join(path.resolve(worktree), '.git'));
+  const result = spawnSync('git', ['-C', worktree, 'rev-parse', '--absolute-git-dir'], {
+    encoding: 'utf8',
+  });
+  if (result.status === 0 && result.stdout.trim()) return samePath(commonDir, result.stdout.trim());
+  // A caller may supply a common directory for a not-yet-created worktree.
+  if (!fs.existsSync(path.join(worktree, '.git'))) return false;
+  throw new Error(`git could not determine the worktree directory at ${worktree}.`);
 }
 
 function repositoryName(commonDir) {
@@ -239,10 +243,10 @@ function pinnedPorts(env) {
   return ports;
 }
 
-function applyPinned(record, env) {
-  const pins = pinnedPorts(env);
-  if (Object.keys(pins).length === 0) return record;
-  return { ...record, ports: { ...record.ports, ...pins } };
+function assertRecordWorktree(record, worktree) {
+  if (record && (!record.worktree || !samePath(record.worktree, worktree))) {
+    throw new Error(`Instance '${record.id}' belongs to another worktree; refusing to reuse it.`);
+  }
 }
 
 async function withRegistryLock(dir, fn) {
@@ -257,17 +261,6 @@ async function withRegistryLock(dir, fn) {
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
-      let age = 0;
-      try {
-        age = Date.now() - fs.statSync(lockDir).mtimeMs;
-      } catch {
-        // The holder released it between the mkdir and the stat; retry immediately.
-        continue;
-      }
-      if (age > LOCK_STALE_MS) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
-        continue;
-      }
       if (Date.now() > deadline) {
         throw new Error(
           `Timed out waiting for the instance registry lock (${lockDir}). ` +
@@ -336,10 +329,15 @@ function peekInstance({ worktree = ROOT, env = process.env, commonDir: injected 
   const id = instanceId(resolved, commonDir);
   const dir = registryDir(commonDir, resolved);
   const record = readRecord(dir, id);
-  const base = applyPinned(
-    record || buildRecord({ id, worktree: resolved, ports: DEFAULT_PORTS }),
-    env
-  );
+  assertRecordWorktree(record, resolved);
+  const pins = pinnedPorts(env);
+  if (record && Object.entries(pins).some(([name, port]) => record.ports[name] !== port)) {
+    throw new Error(
+      `Instance '${id}' has different saved ports; stop it and start with the desired ND_*_PORT values.`
+    );
+  }
+  const base =
+    record || buildRecord({ id, worktree: resolved, ports: { ...DEFAULT_PORTS, ...pins } });
   return {
     ...base,
     registry: dir,
@@ -377,6 +375,7 @@ async function resolveInstance({
 
   return withRegistryLock(dir, async () => {
     const existing = readRecord(dir, id);
+    assertRecordWorktree(existing, resolved);
     const live =
       existing &&
       (isPidAlive(existing.supervisorPid) || Object.keys(liveServicePids(existing)).length > 0);

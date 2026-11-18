@@ -43,6 +43,21 @@ function flywayEnv({ clean = false, local = false } = {}) {
     // Flyway's filesystem location uses forward slashes on every platform.
     FLYWAY_LOCATIONS: `filesystem:${MIGRATION_DIR.replace(/\\/g, '/')}`,
   };
+  // JVM system properties take precedence over FLYWAY_* and could redirect a local clean.
+  if (local) {
+    for (const variable of [
+      'MAVEN_OPTS',
+      'JAVA_TOOL_OPTIONS',
+      'JDK_JAVA_OPTIONS',
+      '_JAVA_OPTIONS',
+    ]) {
+      if (/-Dflyway\./i.test(env[variable] || '')) {
+        throw new Error(
+          `Refusing local Flyway operation: ${variable} contains Flyway system properties.`
+        );
+      }
+    }
+  }
   // Pin the guard both ways: only the explicit clean/reset path lifts it, so an exported
   // FLYWAY_CLEAN_DISABLED=false cannot widen what the wrapper runs.
   env.FLYWAY_CLEAN_DISABLED = clean ? 'false' : 'true';

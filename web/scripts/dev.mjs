@@ -14,6 +14,11 @@ const nextBin = path.join(
 );
 
 const requested = process.env.ND_WEB_PORT;
+// Prevent Next's .env.local from overriding the allocated instance ports.
+if (requested !== undefined) {
+  process.env.NEXT_PUBLIC_API_URL = '';
+  process.env.NEXT_PUBLIC_REALTIME_URL = '';
+}
 // A typo must not silently fall back to 3000: that is another worktree's port, and
 // Next would either fail to bind or answer for the wrong stack. Port 0 is refused too:
 // it asks the OS for an ephemeral port, which nothing else in the worktree knows about.

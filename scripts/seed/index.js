@@ -6,6 +6,7 @@ const { info, success, error } = require('../lib/proc');
 const {
   apiBaseUrl,
   realtimeBaseUrl,
+  getInstance,
   apiDatabase,
   yhubDatabase,
   attachmentStoragePath,
@@ -581,6 +582,10 @@ function printSummary(plan, run, startedAt) {
 
 async function runSeed(args, startedAt) {
   const plan = buildPlan(args.profile);
+  const instance = getInstance();
+  // SQL always targets this worktree; inherited URLs must not send HTTP to another one.
+  process.env.NEXTDOCS_API_URL = `http://localhost:${instance.ports.api}`;
+  process.env.NEXTDOCS_REALTIME_URL = `http://localhost:${instance.ports.realtime}`;
 
   if (!args.yes) {
     const confirmed = await confirmDestructive({
@@ -595,18 +600,12 @@ async function runSeed(args, startedAt) {
     if (!confirmed) return 1;
   }
 
-  try {
-    assertLocalDatabase('seed');
-    await preflight(plan);
-  } catch (err) {
-    // Nothing was written; reset advice would destroy the data preflight just refused
-    // to overwrite.
-    err.seedPreflight = true;
-    throw err;
-  }
+  assertLocalDatabase('seed');
+  await preflight(plan);
 
   info('Writing identity rows...');
   insertIdentity(plan);
+  args.seedWritten = true;
   plan.users.forEach((user) => {
     if (!user.id) throw new Error(`User ${user.key} has no id`);
   });
@@ -675,7 +674,7 @@ async function main(argv) {
   } catch (err) {
     error(err.message);
     if (err.stack && process.env.SEED_DEBUG === '1') console.error(err.stack);
-    if (!err.seedPreflight) console.error(RECOVERY);
+    if (args.seedWritten) console.error(RECOVERY);
     return 1;
   }
 }

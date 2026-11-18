@@ -121,28 +121,24 @@ test('tailFile reads the last lines of a log larger than one chunk', () => {
   ]);
 });
 
-test('tailSession stops at the newest header instead of reading older sessions', () => {
+test('tailSession limits reads and does not mistake service output for a header', () => {
   const root = tempRoot();
   const file = logFile('api', root);
   fs.mkdirSync(logsDir(root), { recursive: true });
-  // An older session far beyond one chunk, then the current one at the end.
-  const older = ['=== 2026-01-01T00:00:00.000Z nextdocs agent_one api ==='];
-  for (let index = 0; index < 20_000; index += 1) older.push(`old line ${index}`);
-  fs.writeFileSync(
-    file,
-    [
-      ...older,
-      '=== 2026-01-02T00:00:00.000Z nextdocs agent_one api ===',
-      'new line one',
-      'new line two',
-      '',
-    ].join('\n')
+  const log = beginLog('api', { id: 'agent_one' }, root);
+  fs.writeSync(
+    log.fd,
+    `${'padding line\n'.repeat(20_000)}new line one\n=== recovery nextdocs retry api ===\n`
   );
+  fs.closeSync(log.fd);
   const size = fs.statSync(file).size;
 
-  const text = readTail(file, { boundary: /^=== .* nextdocs .* api ===$/ });
+  const text = readTail(file, { limit: 10 });
   assert.ok(text.length < size / 2, `read ${text.length} of ${size} bytes`);
-  assert.deepEqual(tailSession('api', 10, root).lines, ['new line one', 'new line two']);
+  assert.deepEqual(tailSession('api', 2, root).lines, [
+    'new line one',
+    '=== recovery nextdocs retry api ===',
+  ]);
 });
 
 test('stripAnsi keeps the visible label of an OSC 8 hyperlink', () => {

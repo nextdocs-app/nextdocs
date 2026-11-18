@@ -6,6 +6,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
+const { execFileSync } = require('node:child_process');
 
 const {
   DEFAULT_PORTS,
@@ -43,6 +44,8 @@ function fakeRepository() {
 
 test('the main worktree keeps the historical names and ports', () => {
   const repo = fakeRepository();
+  fs.rmSync(repo.commonDir, { recursive: true });
+  execFileSync('git', ['init', repo.mainWorktree], { stdio: 'ignore' });
   assert.equal(isMainWorktree(repo.mainWorktree, repo.commonDir), true);
   assert.equal(instanceId(repo.mainWorktree, repo.commonDir), 'main');
   assert.deepEqual(databaseNames('main'), {
@@ -50,6 +53,16 @@ test('the main worktree keeps the historical names and ports', () => {
     yhubDatabase: 'nextdocs_yhub',
   });
   assert.equal(redisPrefix('main'), 'yhub');
+});
+
+test('a primary checkout with a separate git directory keeps the main identity', () => {
+  const root = tempDir();
+  const worktree = path.join(root, 'checkout');
+  const gitDir = path.join(root, 'gitdir');
+  fs.mkdirSync(worktree);
+  execFileSync('git', ['init', '--separate-git-dir', gitDir, worktree], { stdio: 'ignore' });
+  assert.equal(peekInstance({ worktree, env: {} }).id, 'main');
+  assert.equal(peekInstance({ worktree, env: {} }).database, 'nextdocs');
 });
 
 test('a linked worktree gets a readable, path-unique id and its own names', () => {
@@ -136,6 +149,22 @@ test('isPortFree sees a bound port and a released one', async () => {
   assert.equal(await isPortFree(port), true);
 });
 
+test('isPortFree detects an IPv6 loopback listener', async (t) => {
+  const server = net.createServer();
+  try {
+    await new Promise((resolve, reject) => server.once('error', reject).listen(0, '::1', resolve));
+  } catch (err) {
+    if (err.code === 'EAFNOSUPPORT' || err.code === 'EADDRNOTAVAIL')
+      return t.skip('IPv6 unavailable');
+    throw err;
+  }
+  try {
+    assert.equal(await isPortFree(server.address().port), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('the first resolution persists ports and later runs reuse them', async () => {
   const repo = fakeRepository();
   const worktree = path.join(repo.root, 'worktrees', 'agent-one', 'nextdocs');
@@ -179,19 +208,22 @@ test('--new-ports replaces the allocation instead of reusing the record', async 
   await new Promise((resolve) => blocker.close(resolve));
 });
 
-test('a pinned port survives later resolution and is reported to db/seed', async () => {
+test('read-only commands reject a pin that differs from saved ports', async () => {
   const repo = fakeRepository();
   const worktree = path.join(repo.root, 'worktrees', 'agent-three', 'nextdocs');
   fs.mkdirSync(worktree, { recursive: true });
 
   const recorded = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
   const pinned = recorded.ports.api === 12000 ? 12001 : 12000;
-  const peeked = peekInstance({
-    worktree,
-    env: { ND_API_PORT: String(pinned) },
-    commonDir: repo.commonDir,
-  });
-  assert.equal(peeked.ports.api, pinned);
+  assert.throws(
+    () =>
+      peekInstance({ worktree, env: { ND_API_PORT: String(pinned) }, commonDir: repo.commonDir }),
+    /different saved ports/
+  );
+  assert.equal(
+    peekInstance({ worktree, env: {}, commonDir: repo.commonDir }).ports.api,
+    recorded.ports.api
+  );
 });
 
 test('worktree records are listed across worktrees and supervisors are tracked', async () => {
@@ -271,6 +303,22 @@ test('detached pids are recorded, filtered by liveness, and clear the supervisor
   assert.deepEqual(
     listRecords(instance.registry).find((entry) => entry.id === instance.id).pids,
     {}
+  );
+});
+
+test('a colliding worktree record is never reused', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'collision');
+  fs.mkdirSync(worktree);
+  const record = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  updateRecord(record.registry, record.id, { worktree: path.join(repo.root, 'other') });
+  assert.throws(
+    () => peekInstance({ worktree, env: {}, commonDir: repo.commonDir }),
+    /another worktree/
+  );
+  await assert.rejects(
+    resolveInstance({ worktree, env: {}, commonDir: repo.commonDir }),
+    /another worktree/
   );
 });
 

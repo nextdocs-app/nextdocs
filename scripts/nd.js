@@ -219,9 +219,7 @@ function buildRealtimeDevEnv(instance, overrides = {}) {
     env.YHUB_SERVICE_TOKEN = getOrCreateDevYhubServiceToken();
   }
 
-  if (isKeyEmptyOrPlaceholder(env.REDIS)) {
-    env.REDIS = `redis://localhost:${REDIS_PORT}`;
-  }
+  env.REDIS = `redis://localhost:${REDIS_PORT}`;
 
   // Identity values are owned by the instance record; see buildApiDevEnv.
   env.PORT = String(instance.ports.realtime);
@@ -245,11 +243,7 @@ function buildRealtimeDevEnv(instance, overrides = {}) {
  * The browser keeps deriving the API/realtime host from the page (so phone testing on
  * a LAN IP still works), while the ports come from this worktree's allocation.
  */
-/**
- * `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_REALTIME_URL` override the port variables in the
- * client, so a value exported for another worktree would make this stack call that one's
- * services. This instance's allocation is the truth here.
- */
+/** The web launcher suppresses full-URL overrides when ND_WEB_PORT is set. */
 function buildWebDevEnv(instance, overrides = {}) {
   const env = {
     ...process.env,
@@ -258,8 +252,6 @@ function buildWebDevEnv(instance, overrides = {}) {
     NEXT_PUBLIC_API_PORT: String(instance.ports.api),
     NEXT_PUBLIC_REALTIME_PORT: String(instance.ports.realtime),
   };
-  delete env.NEXT_PUBLIC_API_URL;
-  delete env.NEXT_PUBLIC_REALTIME_URL;
   return env;
 }
 
@@ -387,8 +379,6 @@ function startApi(instance) {
 function startTurbo(instance, services) {
   const jsServices = services.filter((name) => name !== 'api');
   const filters = jsServices.length === 1 ? ['--filter', jsServices[0]] : [];
-  // Replace, never merge: `buildWebDevEnv` deletes the NEXT_PUBLIC_*_URL keys, and an
-  // Object.assign back into the shell env would resurrect them for the web task.
   let env = { ...process.env, FORCE_COLOR: '1' };
   if (jsServices.includes('realtime')) env = buildRealtimeDevEnv(instance, env);
   if (jsServices.includes('web')) env = buildWebDevEnv(instance, env);
@@ -633,12 +623,7 @@ function spawnDetachedService(instance, name, commandLine, commandArgs, options)
     fs.closeSync(log.fd);
   }
 
-  if (!child.pid) {
-    throw new Error(`Could not start ${name}; see ${path.relative(ROOT, log.file)}.`);
-  }
-  // A spawn failure arrives asynchronously as an 'error' event, after `spawn()` has
-  // returned a pid. Without a listener that event is unhandled and takes the process down
-  // before the rollback above can stop the services that did start.
+  // Spawn failures arrive asynchronously, including when no PID was assigned.
   const spawned = new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', (err) => {
