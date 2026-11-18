@@ -192,6 +192,28 @@
 				</configuration>
 			</plugin>
 			<plugin>
+				<!-- Local migration CLI (`./nd db migrate|info|validate|repair|clean`).
+				     The plugin does not inherit the project's runtime dependencies, so the
+				     PostgreSQL module and driver are declared on the plugin itself. Both
+				     versions come from the Spring Boot parent, keeping the CLI and the
+				     application's Flyway from drifting apart. -->
+				<groupId>org.flywaydb</groupId>
+				<artifactId>flyway-maven-plugin</artifactId>
+				<version>${flyway.version}</version>
+				<dependencies>
+					<dependency>
+						<groupId>org.flywaydb</groupId>
+						<artifactId>flyway-database-postgresql</artifactId>
+						<version>${flyway.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.postgresql</groupId>
+						<artifactId>postgresql</artifactId>
+						<version>${postgresql.version}</version>
+					</dependency>
+				</dependencies>
+			</plugin>
+			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
