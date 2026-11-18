@@ -6,10 +6,13 @@ const { ROOT } = require('./proc');
 
 const SERVICES = ['api', 'web', 'realtime'];
 
+/** Backward scan size for log tails; one read is enough for a normal session tail. */
+const CHUNK_BYTES = 64 * 1024;
+
 // Turbo shows/hides the cursor even when its stdout is a pipe (notably on shutdown).
 // A detached child writes straight to the file descriptor, so strip control sequences
 // on read rather than trying to write a sanitizer between the child and its file.
-const ANSI_ESCAPE = /\u001b\[[0-9;?]*[A-Za-z]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+const ANSI_ESCAPE = /\u001b\[[0-9;?]*[A-Za-z]|\u001b\][^\u0007]*?(?:\u0007|\u001b\\)/g;
 
 function stripAnsi(text) {
   return String(text).replace(ANSI_ESCAPE, '');
@@ -58,11 +61,67 @@ function tailText(text, limit = 100) {
   return lines.length > limit ? lines.slice(-limit) : lines;
 }
 
+/**
+ * One backward read of at most `limit` complete lines, or of everything after the newest
+ * line `boundary` matches. `./nd logs` and the failure diagnostics used to read the whole
+ * file: a session that ran for hours makes that the slow part of a command that prints 30
+ * lines. The scan starts at EOF and stops as soon as it has what it needs.
+ *
+ * The first line of a partial read is dropped, because a chunk boundary can cut it in
+ * half and half a line is worse than one line less. Whole-chunk decoding keeps a UTF-8
+ * sequence that straddles the boundary from turning into replacement characters.
+ */
+function readTail(file, { limit = 100, boundary = null } = {}) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    let size = fs.fstatSync(fd).size;
+    const chunks = [];
+    let read = 0;
+    let restarts = 0;
+    for (;;) {
+      if (read < size) {
+        const length = Math.min(CHUNK_BYTES, size - read);
+        const buffer = Buffer.allocUnsafe(length);
+        const bytes = fs.readSync(fd, buffer, 0, length, size - read - length);
+        if (bytes !== length) {
+          // A new session truncated the file between the stat and this read. Decoding the
+          // unread tail of an allocUnsafe buffer would print heap bytes as log output, so
+          // restart from the new end (bounded, in case the file keeps shrinking).
+          if (restarts >= 3) {
+            throw new Error(`Could not read ${path.basename(file)}: it kept shrinking.`);
+          }
+          restarts += 1;
+          size = fs.fstatSync(fd).size;
+          chunks.length = 0;
+          read = 0;
+          continue;
+        }
+        chunks.unshift(buffer);
+        read += length;
+      }
+      const text = chunks.length === 0 ? '' : Buffer.concat(chunks).toString('utf8');
+      // The whole file, or the whole tail: there is nothing older left to read.
+      if (read >= size) return text;
+      const lines = text.split('\n');
+      lines.shift();
+      if (boundary) {
+        // Older sessions cannot contain the header this search is looking for, and every
+        // line after the newest one is already in the buffer.
+        if (lines.some((line) => boundary.test(line))) return text;
+      } else if (lines.length > limit) {
+        return text;
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /** Never throws for a log that was never written; callers print a "start it" hint. */
 function tailFile(service, limit = 100, root = ROOT) {
   const file = logFile(service, root);
   try {
-    return { service, file, lines: tailText(fs.readFileSync(file, 'utf8'), limit) };
+    return { service, file, lines: tailText(readTail(file, { limit }), limit) };
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
     return { service, file, lines: [], missing: true };
@@ -77,14 +136,14 @@ function tailSession(service, limit = 100, root = ROOT) {
   const file = logFile(service, root);
   let text;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    text = readTail(file, { boundary: sessionHeader(service) });
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
     return { service, file, lines: [], missing: true };
   }
 
   const lines = stripAnsi(text).replace(/\r\n/g, '\n').split('\n');
-  const header = new RegExp(`^=== .* nextdocs .* ${service} ===$`);
+  const header = sessionHeader(service);
   let start = 0;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     if (header.test(lines[index])) {
@@ -95,11 +154,16 @@ function tailSession(service, limit = 100, root = ROOT) {
   return { service, file, lines: tailText(lines.slice(start).join('\n'), limit) };
 }
 
+function sessionHeader(service) {
+  return new RegExp(`^=== .* nextdocs .* ${service} ===$`);
+}
+
 module.exports = {
   SERVICES,
   beginLog,
   logFile,
   logsDir,
+  readTail,
   stripAnsi,
   tailFile,
   tailSession,
