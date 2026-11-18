@@ -1,21 +1,90 @@
 #!/usr/bin/env node
 
-const { spawnSync, spawn } = require('child_process');
+'use strict';
+
+const { spawn } = require('child_process');
 const { randomBytes } = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { ROOT, run, runSilent, sleep, redirectRunStdout } = require('./lib/proc');
+const {
+  POSTGRES_CONTAINER,
+  POSTGRES_PORT,
+  POSTGRES_USER,
+  POSTGRES_PASSWORD,
+  REDIS_CONTAINER,
+  REDIS_PORT,
+  MAILPIT_CONTAINER,
+  MAILPIT_IMAGE,
+  MAILPIT_SMTP_PORT,
+  MAILPIT_WEB_PORT,
+  isKeyEmptyOrPlaceholder,
+  setInstance,
+} = require('./lib/constants');
+const {
+  ensurePostgres,
+  ensureRedis,
+  startSharedContainer,
+  containerRunning,
+  redisPing,
+} = require('./lib/containers');
+const {
+  isPidAlive,
+  isWorktreePresent,
+  listRecords,
+  liveServicePids,
+  peekInstance,
+  resolveInstance,
+  clearServicePids,
+  setServicePids,
+  setSupervisor,
+  clearSupervisor,
+  supervisorServices,
+} = require('./lib/instance');
+const { portOpen } = require('./lib/ports');
+const { beginLog, logFile, tailFile, tailSession } = require('./lib/logs');
 
-const args = process.argv.slice(2);
-const fixIndex = args.indexOf('--fix');
-const isFix = fixIndex !== -1;
-if (isFix) args.splice(fixIndex, 1);
+// --- Arguments -------------------------------------------------------------------
+
+const rawArgs = process.argv.slice(2);
+let isFix = false;
+let newPorts = false;
+let detached = false;
+let wantJson = false;
+let portOffset = null;
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  const arg = rawArgs[index];
+  if (arg === '--fix') {
+    isFix = true;
+  } else if (arg === '--new-ports') {
+    newPorts = true;
+  } else if (arg === '--detach') {
+    detached = true;
+  } else if (arg === '--json') {
+    wantJson = true;
+  } else if (arg === '--port-offset') {
+    portOffset = rawArgs[index + 1];
+    if (portOffset == null || portOffset.startsWith('-')) {
+      console.error('--port-offset requires a number, e.g. --port-offset 100.');
+      process.exit(1);
+    }
+    index += 1;
+  } else if (arg.startsWith('--port-offset=')) {
+    portOffset = arg.slice('--port-offset='.length);
+  } else {
+    args.push(arg);
+  }
+}
 
 const command = args[0];
 const service = args[1];
 
-const ROOT = path.resolve(__dirname, '..');
 const isWin = process.platform === 'win32';
 const ALL_SERVICES = ['api', 'web', 'realtime'];
+const JSON_COMMANDS = new Set(['up', 'status', 'urls', 'logs', 'stop', 'down', 'dev']);
 const WORKSPACE_LOCKFILES = [
   path.join(ROOT, 'web', 'package-lock.json'),
   path.join(ROOT, 'realtime', 'package-lock.json'),
@@ -31,23 +100,6 @@ const REQUIRED_WORKSPACE_PACKAGES = {
 };
 
 const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
-
-const POSTGRES_CONTAINER = 'nextdocs-postgres';
-const POSTGRES_IMAGE = 'postgres:15-alpine';
-const POSTGRES_PORT = '5433'; // 5432 is typically taken by a local PostgreSQL install
-const POSTGRES_USER = 'nextdocs';
-const POSTGRES_PASSWORD = 'nextdocs';
-const POSTGRES_DB = 'nextdocs';
-const YHUB_DB = 'nextdocs_yhub';
-
-const REDIS_CONTAINER = 'nextdocs-redis';
-const REDIS_IMAGE = 'redis:7-alpine';
-const REDIS_PORT = '6379';
-
-const MAILPIT_CONTAINER = 'nextdocs-mailpit';
-const MAILPIT_IMAGE = 'axllent/mailpit:v1.24';
-const MAILPIT_SMTP_PORT = '1025';
-const MAILPIT_WEB_PORT = '8025';
 
 // TODO: If the number of keys that need to be generated this way are more,
 // we may need to find a more generalizable pattern.
@@ -78,11 +130,14 @@ function getOrCreateDevYhubServiceToken() {
   return generatedDevYhubServiceToken;
 }
 
-const PLACEHOLDER = 'CHANGE_ME_IN_PRODUCTION';
+// --- Per-instance service environment --------------------------------------------
 
-const isKeyEmptyOrPlaceholder = (val) => !val || !val.trim() || val === PLACEHOLDER;
-
-function buildApiDevEnv(overrides = {}) {
+/**
+ * The API's links point at this worktree's stack: invite emails, the browser's
+ * websocket URL and CORS all have to name its ports, otherwise a browser opened in
+ * one worktree would read and join another worktree's rooms.
+ */
+function buildApiDevEnv(instance, overrides = {}) {
   const env = {
     ...process.env,
     ...overrides,
@@ -105,15 +160,21 @@ function buildApiDevEnv(overrides = {}) {
     );
   }
 
-  if (isKeyEmptyOrPlaceholder(env.CORS_ALLOWED_ORIGINS)) {
-    // Enable LAN wildcard origins for phone/tablet testing on private networks in dev
-    env.CORS_ALLOWED_ORIGINS = [
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://192.168.*.*:3000',
-      'http://10.*.*.*:3000',
-      ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:3000`),
-    ].join(',');
+  {
+    // Same-instance web origin first, then the LAN wildcards that make phone testing
+    // work. The port comes from the allocation, not a fixed 3000. A value from the
+    // shell is appended rather than replaced, so a tunnel origin keeps working.
+    const webPort = instance.ports.web;
+    const instanceOrigins = [
+      `http://localhost:${webPort}`,
+      `http://127.0.0.1:${webPort}`,
+      `http://192.168.*.*:${webPort}`,
+      `http://10.*.*.*:${webPort}`,
+      ...Array.from({ length: 16 }, (_, i) => `http://172.${i + 16}.*.*:${webPort}`),
+    ];
+    env.CORS_ALLOWED_ORIGINS = [instanceOrigins.join(','), (env.CORS_ALLOWED_ORIGINS || '').trim()]
+      .filter(Boolean)
+      .join(',');
   }
 
   if (isKeyEmptyOrPlaceholder(env.SPRING_MAIL_HOST)) {
@@ -131,14 +192,20 @@ function buildApiDevEnv(overrides = {}) {
     );
   }
 
-  if (isKeyEmptyOrPlaceholder(env.YHUB_BASE_URL)) {
-    env.YHUB_BASE_URL = 'http://localhost:1234';
-  }
+  // Identity values are owned by the instance record, not by whatever the shell
+  // exported: a stray SPRING_DATASOURCE_URL/PORT/YHUB_* from another stack would
+  // otherwise silently point this worktree at the wrong database or rooms. Use
+  // --new-ports/--port-offset/ND_*_PORT to choose different values.
+  env.SERVER_PORT = String(instance.ports.api);
+  env.SPRING_DATASOURCE_URL = `jdbc:postgresql://localhost:${POSTGRES_PORT}/${instance.database}`;
+  env.APP_WEB_BASE_URL = `http://localhost:${instance.ports.web}`;
+  env.YHUB_BASE_URL = `http://localhost:${instance.ports.realtime}`;
+  env.YHUB_WS_URL = `ws://localhost:${instance.ports.realtime}/api/ws/v1/nextdocs`;
 
   return env;
 }
 
-function buildRealtimeDevEnv(overrides = {}) {
+function buildRealtimeDevEnv(instance, overrides = {}) {
   const env = {
     ...process.env,
     ...overrides,
@@ -156,295 +223,708 @@ function buildRealtimeDevEnv(overrides = {}) {
     env.REDIS = `redis://localhost:${REDIS_PORT}`;
   }
 
-  if (isKeyEmptyOrPlaceholder(env.POSTGRES)) {
-    env.POSTGRES = `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`;
-  }
-
-  if (isKeyEmptyOrPlaceholder(env.API_BASE_URL)) {
-    env.API_BASE_URL = 'http://localhost:8080';
-  }
+  // Identity values are owned by the instance record; see buildApiDevEnv.
+  env.PORT = String(instance.ports.realtime);
+  env.POSTGRES = `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${instance.yhubDatabase}`;
+  env.API_BASE_URL = `http://localhost:${instance.ports.api}`;
+  // Every worktree shares one Redis; the prefix is what keeps its rooms and streams
+  // from colliding with another worktree's copy of the same seeded document ids.
+  env.REDIS_PREFIX = instance.redisPrefix;
+  env.CORS_ORIGIN = [
+    `http://localhost:${instance.ports.web}`,
+    `http://127.0.0.1:${instance.ports.web}`,
+    (env.CORS_ORIGIN || '').trim(),
+  ]
+    .filter(Boolean)
+    .join(',');
 
   return env;
 }
 
-function run(cmd, opts = {}) {
-  console.log(`\x1b[34m> ${cmd}\x1b[0m`);
-  const result = spawnSync(cmd, {
-    stdio: 'inherit',
-    shell: true,
-    cwd: opts.cwd || ROOT,
-    env: opts.env || process.env,
-  });
-  if (opts.exitOnError !== false && result.status !== 0) {
-    process.exit(result.status);
-  }
-  return result.status;
+/**
+ * The browser keeps deriving the API/realtime host from the page (so phone testing on
+ * a LAN IP still works), while the ports come from this worktree's allocation.
+ */
+/**
+ * `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_REALTIME_URL` override the port variables in the
+ * client, so a value exported for another worktree would make this stack call that one's
+ * services. This instance's allocation is the truth here.
+ */
+function buildWebDevEnv(instance, overrides = {}) {
+  const env = {
+    ...process.env,
+    ...overrides,
+    ND_WEB_PORT: String(instance.ports.web),
+    NEXT_PUBLIC_API_PORT: String(instance.ports.api),
+    NEXT_PUBLIC_REALTIME_PORT: String(instance.ports.realtime),
+  };
+  delete env.NEXT_PUBLIC_API_URL;
+  delete env.NEXT_PUBLIC_REALTIME_URL;
+  return env;
 }
 
-function runSilent(cmd, opts = {}) {
-  return spawnSync(cmd, { shell: true, cwd: ROOT, stdio: 'pipe', timeout: opts.timeout });
+function servicesForDev() {
+  if (!service) return ALL_SERVICES;
+  validateService(service);
+  return [service];
 }
 
-function verifyWorkspaceLockfilePolicy() {
-  const found = WORKSPACE_LOCKFILES.filter((filePath) => fs.existsSync(filePath));
-  if (found.length === 0) return;
+// --- Instance files and banners --------------------------------------------------
 
-  console.error('\x1b[31m✗ Workspace lockfile policy violation detected\x1b[0m');
-  console.error('Only the root package-lock.json is allowed. Remove these files:');
-  for (const filePath of found) {
-    console.error(`  - ${path.relative(ROOT, filePath)}`);
-  }
-  console.error('Then run: npm run check:lockfiles && npm ci');
-  process.exit(1);
+function envFilePath() {
+  return path.join(ROOT, '.nd', 'instance.env');
 }
 
-function verifyJsWorkspaceInstall(target = 'all') {
-  const missing = [];
-
-  for (const binaryPath of REQUIRED_JS_BINARIES) {
-    if (!fs.existsSync(binaryPath)) {
-      missing.push(path.relative(ROOT, binaryPath));
-    }
-  }
-
-  const targets = target === 'all' ? ['web', 'realtime'] : [target];
-  for (const svc of targets) {
-    const requiredPackages = REQUIRED_WORKSPACE_PACKAGES[svc] || [];
-    for (const packageName of requiredPackages) {
-      const packageCandidates = [
-        path.join(ROOT, 'node_modules', packageName, 'package.json'),
-        path.join(ROOT, svc, 'node_modules', packageName, 'package.json'),
-      ];
-      const found = packageCandidates.some((candidatePath) => fs.existsSync(candidatePath));
-      if (!found) {
-        missing.push(`${svc}:${packageName}`);
-      }
-    }
-  }
-
-  if (missing.length === 0) return;
-
-  console.error('\x1b[31m✗ Missing workspace dependencies\x1b[0m');
-  console.error('The JS workspaces are not installed or are partially installed.');
-  console.error('Run from repository root: npm ci');
-  console.error('Missing artifacts:');
-  for (const item of missing) {
-    console.error(`  - ${item}`);
-  }
-  process.exit(1);
+function renderInstanceEnv(instance) {
+  // The instance record, not NEXTDOCS_*_URL from the shell: this file is the worktree's
+  // source of truth for e2e/agents, and it exports those variables itself.
+  const { web, api, realtime } = instanceUrls(instance);
+  return (
+    [
+      `# NextDocs instance '${instance.id}' — ${instance.worktree}`,
+      '# Generated by ./nd dev. Source it to point e2e/curl at this worktree.',
+      `export ND_INSTANCE='${instance.id}'`,
+      `# Ports: web ${instance.ports.web}, api ${instance.ports.api}, realtime ${instance.ports.realtime}.`,
+      `# Not exported as ND_*_PORT: sourcing another worktree's file would pin them here.`,
+      `export NEXTDOCS_WEB_URL='${web}'`,
+      `export NEXTDOCS_API_URL='${api}'`,
+      `export NEXTDOCS_REALTIME_URL='${realtime}'`,
+      `export E2E_WEB_URL='${web}'`,
+      `export E2E_API_URL='${api}'`,
+      `export E2E_REALTIME_URL='${realtime}'`,
+      `export SPRING_DATASOURCE_URL='jdbc:postgresql://localhost:${POSTGRES_PORT}/${instance.database}'`,
+      `export POSTGRES='postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${instance.yhubDatabase}'`,
+      `export REDIS='redis://localhost:${REDIS_PORT}'`,
+      `export REDIS_PREFIX='${instance.redisPrefix}'`,
+    ].join('\n') + '\n'
+  );
 }
 
-function ensureJsWorkspaceReady(target = 'all') {
-  verifyWorkspaceLockfilePolicy();
-  verifyJsWorkspaceInstall(target);
+function writeInstanceEnvFile(instance) {
+  const file = envFilePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, renderInstanceEnv(instance));
+  return file;
 }
 
-function turbo(task, filter, extraArgs = '') {
-  const filterFlag = filter ? ` --filter=${filter}` : '';
-  return run(`npx turbo run ${task}${filterFlag}${extraArgs}`);
+function printBanner(instance, heading = 'dev') {
+  const urls = instanceUrls(instance);
+  console.log('');
+  console.log(`\x1b[36m▸ NextDocs ${heading} — instance '${instance.id}'\x1b[0m`);
+  console.log(`  web        ${urls.web}`);
+  console.log(`  api        ${urls.api}`);
+  console.log(`  realtime   ${urls.realtime}`);
+  console.log(
+    `  postgres   localhost:${POSTGRES_PORT} · ${instance.database} + ${instance.yhubDatabase}`
+  );
+  console.log(`  redis      localhost:${REDIS_PORT} · prefix '${instance.redisPrefix}'`);
+  console.log(`  mailpit    http://localhost:${MAILPIT_WEB_PORT}`);
+  console.log(`  env file   ${path.relative(ROOT, envFilePath())} (source it for e2e/agents)`);
+  console.log('');
 }
 
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function printReadyBanner(instance) {
+  const urls = instanceUrls(instance);
+  console.log('');
+  console.log(`\x1b[32m✓ NextDocs '${instance.id}' is ready\x1b[0m`);
+  console.log(`  web      ${urls.web}`);
+  console.log(`  api      ${urls.api}`);
+  console.log(`  realtime ${urls.realtime}`);
+  console.log('');
 }
+
+function applyTerminalTitle(instance) {
+  if (!process.stdout.isTTY || process.env.ND_NO_TITLE === '1') return;
+  process.stdout.write(`\x1b]0;nextdocs[${instance.id}] :${instance.ports.web}\x07`);
+}
+
+function resetTerminalTitle() {
+  if (!process.stdout.isTTY || process.env.ND_NO_TITLE === '1') return;
+  process.stdout.write('\x1b]0;\x07');
+}
+
+// --- Dev supervision -------------------------------------------------------------
 
 /**
- * A freshly started container accepts TCP before Postgres can answer a query, and
- * `docker start` on an existing volume returns immediately. Checking for the Yhub
- * database before that point would read as "absent" and then fail to create it.
+ * `./nd dev` starts Maven and Turbo through a shell, and both spawn their own
+ * children. Signalling only the shell leaves the API (and sometimes Next) running
+ * after the CLI exits. Spawn each tree in its own process group and signal the group.
  */
-function waitForPostgresReady(timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    // Force TCP: during init Postgres starts a temporary server on the unix socket
-    // and then restarts; the socket probe succeeds too early and the next step can
-    // still fail on the final server.
-    const ping = runSilent(
-      `docker exec ${POSTGRES_CONTAINER} pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}`
-    );
-    if (ping.status === 0) {
-      return true;
-    }
-    if (Date.now() >= deadline) {
-      return false;
-    }
-    sleepSync(500);
+function stopDevChild(child, signal = 'SIGTERM') {
+  if (!child || !child.pid) return;
+  if (isWin) {
+    runSilent(`taskkill /pid ${child.pid} /T /F`);
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch (_) {
+    try {
+      child.kill(signal);
+    } catch (_) {}
   }
 }
 
-function ensureYhubDatabase(withSchema = true) {
-  if (!waitForPostgresReady()) {
-    console.error(
-      `\x1b[31m✗ Postgres did not become ready in ${POSTGRES_CONTAINER}; cannot provision ${YHUB_DB}.\x1b[0m`
-    );
-    process.exit(1);
-  }
-
-  const checkDb = runSilent(
-    `docker exec ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -tc "SELECT 1 FROM pg_database WHERE datname = '${YHUB_DB}'"`
-  );
-  // A failed query is not "the database is missing": creating on top of a broken
-  // connection only hides the real problem until the schema step fails.
-  if (checkDb.status !== 0) {
-    console.error(`\x1b[31m✗ Could not check for the ${YHUB_DB} database.\x1b[0m`);
-    console.error((checkDb.stderr || checkDb.stdout || '').toString().trim());
-    process.exit(1);
-  }
-
-  if (checkDb.stdout.toString().trim() !== '1') {
-    console.log(`\x1b[34m> Creating ${YHUB_DB} database...\x1b[0m`);
-    const created = runSilent(
-      `docker exec ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "CREATE DATABASE ${YHUB_DB};"`
-    );
-    if (created.status !== 0) {
-      console.error(`\x1b[31m✗ Could not create the ${YHUB_DB} database.\x1b[0m`);
-      console.error((created.stderr || created.stdout || '').toString().trim());
-      process.exit(1);
-    }
-  }
-
-  if (withSchema && !ensureYhubSchema()) {
-    process.exit(1);
-  }
+function spawnDev(commandLine, commandArgs, options) {
+  return spawn(commandLine, commandArgs, {
+    stdio: ['inherit', 'pipe', 'pipe'],
+    shell: true,
+    detached: !isWin,
+    ...options,
+  });
 }
 
-/** The database the realtime service will actually use. */
-function yhubPostgresUrl() {
-  return isKeyEmptyOrPlaceholder(process.env.POSTGRES)
-    ? `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${YHUB_DB}`
-    : process.env.POSTGRES;
-}
-
-// Yhub never runs DDL on boot; init-db.js is the only supported path and is
-// idempotent, so running it here is what makes `./nd dev` work on a fresh volume.
-function ensureYhubSchema() {
-  // Prefer the initializer from the workspace that declares @y/hub: when npm could
-  // not hoist it (a version split), the root copy is the stale one.
-  const initScript = [
-    path.join(ROOT, 'realtime', 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
-    path.join(ROOT, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
-  ].find((candidate) => fs.existsSync(candidate));
-  if (!initScript) {
-    // Realtime cannot boot without the schema, so skipping it here would only move
-    // the failure to the first connection with a less obvious message.
-    console.error(
-      '\x1b[31m✗ Cannot initialize the Yhub schema: @y/hub is not installed. ' +
-        'Run `npm ci` (or `npm install`) from the repo root, then restart `./nd dev`.\x1b[0m'
-    );
-    return false;
-  }
-  const result = spawnSync(process.execPath, [initScript], {
-    cwd: ROOT,
-    stdio: 'pipe',
+function startApi(instance) {
+  return spawnDev(mvnw, ['spring-boot:run', '--no-transfer-progress'], {
+    cwd: path.join(ROOT, 'api'),
     env: {
-      ...process.env,
-      POSTGRES: yhubPostgresUrl(),
+      ...buildApiDevEnv(instance),
+      SPRING_OUTPUT_ANSI_ENABLED: 'ALWAYS',
     },
   });
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || '').toString().trim();
-    console.error(`\x1b[31m✗ Could not initialize the Yhub schema. ${detail}\x1b[0m`);
-    return false;
-  }
-  return true;
 }
 
-function ensurePostgres({ yhubSchema = true } = {}) {
-  // Check if container is already running
-  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${POSTGRES_CONTAINER}`);
-  if (check.status === 0 && check.stdout.toString().trim() === 'true') {
-    console.log(`\x1b[32m✓ Postgres already running\x1b[0m`);
-    ensureYhubDatabase(yhubSchema);
-    return;
-  }
+function startTurbo(instance, services) {
+  const jsServices = services.filter((name) => name !== 'api');
+  const filters = jsServices.length === 1 ? ['--filter', jsServices[0]] : [];
+  // Replace, never merge: `buildWebDevEnv` deletes the NEXT_PUBLIC_*_URL keys, and an
+  // Object.assign back into the shell env would resurrect them for the web task.
+  let env = { ...process.env, FORCE_COLOR: '1' };
+  if (jsServices.includes('realtime')) env = buildRealtimeDevEnv(instance, env);
+  if (jsServices.includes('web')) env = buildWebDevEnv(instance, env);
 
-  // Check if container exists but is stopped
-  const exists = runSilent(`docker inspect ${POSTGRES_CONTAINER}`);
-  if (exists.status === 0) {
-    console.log(`\x1b[34m> Starting existing postgres container...\x1b[0m`);
-    run(`docker start ${POSTGRES_CONTAINER}`);
-    ensureYhubDatabase(yhubSchema);
-    return;
-  }
-
-  // Create and start a new container
-  console.log(`\x1b[34m> Starting postgres...\x1b[0m`);
-  run(
-    [
-      'docker run -d',
-      `--name ${POSTGRES_CONTAINER}`,
-      `-p ${POSTGRES_PORT}:5432`,
-      `-e POSTGRES_USER=${POSTGRES_USER}`,
-      `-e POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
-      `-e POSTGRES_DB=${POSTGRES_DB}`,
-      `-v nextdocs_pgdata:/var/lib/postgresql/data`,
-      POSTGRES_IMAGE,
-    ].join(' ')
-  );
-  ensureYhubDatabase(yhubSchema);
+  return spawnDev('npx', ['turbo', 'run', 'dev', ...filters], {
+    cwd: ROOT,
+    env,
+  });
 }
 
 /**
- * A restarted Redis replays its append-only file before it answers commands; a dev
- * volume that accumulated Yhub rooms takes seconds to do that. Until then every
- * command fails with `LOADING Redis is loading the dataset in memory`, and the
- * realtime server's first command would kill the process instead of retrying.
- * `docker start` returns long before that point, so wait for PONG here the same
- * way Postgres waits for `pg_isready`.
+ * One health probe per service, all in parallel. Web treats any status below 500 as
+ * "answering": Next can return 404/401 for a page while it compiles, and the caller
+ * only needs to know the server is up.
  */
-function waitForRedisReady(timeoutMs = 30_000) {
+async function probeHealth(instance, timeoutMs = 2000) {
+  const urls = instanceUrls(instance);
+  const checks = [
+    ['web', urls.web, (res) => res.status < 500],
+    ['api', `${urls.api}/api/v1/instance/status`, (res) => res.ok],
+    // Readiness, not liveness: `up` promises a stack that can open documents, and
+    // /api/ping/v1 answers without touching Postgres or Redis by design.
+    ['realtime', `${urls.realtime}/api/health/v1`, (res) => res.ok],
+  ];
+
+  const entries = await Promise.all(
+    checks.map(async ([name, url, isHealthy]) => {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+        return [name, isHealthy(res)];
+      } catch {
+        return [name, false];
+      }
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+async function waitForServices(instance, services, timeoutMs = 180_000) {
+  // The instance record, not the shell's NEXTDOCS_*_URL, decides what this run is
+  // waiting for: a sourced env file from another worktree must not pass readiness.
+  const targets = ALL_SERVICES.filter((name) => services.includes(name));
   const deadline = Date.now() + timeoutMs;
-  let announced = false;
+  let health = await probeHealth(instance, 3000);
+
   for (;;) {
-    // A wedged `docker exec` would otherwise block the loop past the deadline;
-    // bound every probe by what is left and count a timeout as a failed attempt.
-    const ping = runSilent(`docker exec ${REDIS_CONTAINER} redis-cli ping`, {
-      timeout: Math.max(1, deadline - Date.now()),
-    });
-    if (ping.status === 0 && ping.stdout.toString().trim() === 'PONG') {
-      return true;
-    }
-    if (!announced) {
-      console.log(`\x1b[34m> Waiting for Redis to finish loading its dataset...\x1b[0m`);
-      announced = true;
-    }
-    if (Date.now() >= deadline) {
-      return false;
-    }
-    sleepSync(250);
+    // Every round is judged on its own answers. Carrying an earlier pass forward would
+    // let `up --json` exit 0 while the same document reports `healthy.web: false`.
+    const pending = targets.filter((name) => !health[name]);
+    if (pending.length === 0) return { ready: true, pending: [], health };
+    if (Date.now() >= deadline) return { ready: false, pending, health };
+    await sleep(1000);
+    health = await probeHealth(instance, 3000);
   }
 }
 
-function ensureRedis() {
-  const check = runSilent(`docker inspect -f "{{.State.Running}}" ${REDIS_CONTAINER}`);
-  if (check.status === 0 && check.stdout.toString().trim() === 'true') {
-    console.log(`\x1b[32m✓ Redis already running\x1b[0m`);
-  } else {
-    const exists = runSilent(`docker inspect ${REDIS_CONTAINER}`);
-    if (exists.status === 0) {
-      console.log(`\x1b[34m> Starting existing redis container...\x1b[0m`);
-      run(`docker start ${REDIS_CONTAINER}`);
+function superviseDev(instance, children, services) {
+  let finalCode = 0;
+  let closed = 0;
+
+  for (const child of children) {
+    child.stdout.pipe(process.stdout);
+    child.stderr.pipe(process.stderr);
+    child.stdout.on('end', () => {
+      closed += 1;
+      if (closed === children.length) process.exit(finalCode);
+    });
+    child.on('exit', (code) => {
+      if (code !== 0 && code !== null) finalCode = code;
+    });
+  }
+
+  const stopAll = (signal) => {
+    for (const child of children) stopDevChild(child, signal);
+  };
+
+  const onSignal = (signal) => {
+    stopAll(signal);
+    process.exit(0);
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+
+  // Ports stay in the instance record (they are the sticky allocation), but the
+  // supervisor slot is released and the containers are left running for other
+  // worktrees. `./nd down` is the explicit teardown.
+  process.on('exit', () => {
+    stopAll('SIGTERM');
+    clearSupervisor(instance);
+    resetTerminalTitle();
+  });
+
+  void waitForServices(instance, services).then(({ ready, pending }) => {
+    if (ready) {
+      printReadyBanner(instance);
     } else {
-      console.log(`\x1b[34m> Starting redis...\x1b[0m`);
-      run(
-        [
-          'docker run -d',
-          `--name ${REDIS_CONTAINER}`,
-          `-p ${REDIS_PORT}:6379`,
-          REDIS_IMAGE,
-          'redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru',
-        ].join(' ')
+      console.log(
+        `\x1b[33m… still waiting on: ${pending.join(', ')}. Check the logs above; ./nd status shows what answers.\x1b[0m`
       );
     }
+  });
+}
+
+async function assertPortsAvailable(instance, requested) {
+  // A second `./nd dev <service>` in this worktree legitimately finds the first one's
+  // ports occupied, so what matters is not that a port answers but that the service
+  // being asked for is already supervised here.
+  if (instance.running) {
+    const running = supervisorServices(instance);
+    const clash = requested.filter((name) => running.includes(name));
+    if (clash.length === 0) {
+      console.log(
+        `\x1b[34m> Instance '${instance.id}' is already running ${running.join(', ')} ` +
+          `(pid ${instance.supervisorPid}); starting ${requested.join(', ')} alongside it.\x1b[0m`
+      );
+      return;
+    }
+
+    const free = ALL_SERVICES.filter((name) => !running.includes(name));
+    throw new Error(
+      `Instance '${instance.id}' is already running ${running.join(', ')} in the foreground ` +
+        `(pid ${instance.supervisorPid}), and ${clash.join(', ')} is part of it. ` +
+        'Starting it again would bind the same port twice: use `./nd logs` to inspect the ' +
+        'running stack, or `./nd stop` first.' +
+        (free.length > 0 ? ` Only ${free.join(', ')} can still be started here.` : '')
+    );
   }
 
-  if (!waitForRedisReady()) {
-    console.error(
-      `\x1b[31m✗ Redis did not become ready in ${REDIS_CONTAINER} (still loading or unreachable).\x1b[0m`
+  const live = liveServicePids(instance);
+  if (Object.keys(live).length > 0) {
+    const details = Object.entries(live)
+      .map(([name, pid]) => `${name} pid ${pid}`)
+      .join(', ');
+    throw new Error(
+      `Instance '${instance.id}' is already running detached (${details}). ` +
+        'Use `./nd logs` to inspect it or `./nd stop` before starting in the foreground.'
     );
+  }
+
+  const busy = [];
+  for (const name of ['web', 'api', 'realtime']) {
+    if (await portOpen(instance.ports[name])) busy.push(`${name} :${instance.ports[name]}`);
+  }
+  if (busy.length === 0) return;
+
+  throw new Error(
+    `Port(s) already in use for this worktree: ${busy.join(', ')}. ` +
+      'Another `./nd dev` (or a leftover process) holds them: `./nd status` shows what ' +
+      'answers, `./nd stop` clears this worktree, and `./nd dev --new-ports` re-rolls a ' +
+      'saved allocation that went stale.'
+  );
+}
+
+async function devCommand() {
+  if (detached) {
+    if (service) {
+      throw new Error(
+        '--detach starts the full stack. Run `./nd up`, or run one service in the foreground.'
+      );
+    }
+    process.exit(await upCommand());
+  }
+
+  const instance = await resolveInstance({ newPorts, portOffset });
+  setInstance(instance);
+  const services = servicesForDev();
+  await assertPortsAvailable(instance, services);
+  clearServicePids(instance);
+
+  const needsPostgres = services.some((name) => name === 'api' || name === 'realtime');
+  const needsRedis = services.includes('realtime');
+
+  // Fail before touching containers: a fresh worktree without `npm ci` should get the
+  // command to run, not spend time starting infrastructure it cannot use.
+  if (service !== 'api') ensureJsWorkspaceReady(service || 'all');
+  if (needsPostgres || devUsesLocalMailpit(service)) preflightDocker();
+
+  // Only a realtime run needs the Yhub schema; API/web-only sessions should not
+  // fail just because @y/hub is missing. These helpers throw instead of exiting so
+  // `db`/`reset` can report their own failure; dev prints the one-line reason here.
+  try {
+    if (needsPostgres) {
+      // `local`: an inherited POSTGRES names another worktree's Yhub database, while the
+      // realtime child always opens this one.
+      ensurePostgres({ yhubSchema: needsRedis, local: true });
+    }
+    if (needsRedis) ensureRedis();
+  } catch (err) {
+    console.error(`\x1b[31m✗ ${err.message}\x1b[0m`);
     process.exit(1);
   }
+
+  if (devUsesLocalMailpit(service)) {
+    ensureMailpit();
+  }
+
+  writeInstanceEnvFile(instance);
+  setSupervisor(instance, process.pid, services);
+  applyTerminalTitle(instance);
+  printBanner(instance);
+
+  const children = [];
+  if (services.includes('api')) children.push(startApi(instance));
+  if (services.some((name) => name !== 'api')) children.push(startTurbo(instance, services));
+
+  superviseDev(instance, children, services);
 }
+
+// --- Detached lifecycle ----------------------------------------------------------
+
+function readinessTimeout() {
+  const raw = process.env.ND_READY_TIMEOUT_MS;
+  if (raw == null || String(raw).trim() === '') return 180_000;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1000) {
+    throw new Error(`ND_READY_TIMEOUT_MS must be an integer >= 1000, received "${raw}".`);
+  }
+  return value;
+}
+
+function plainLogEnv(env) {
+  const next = { ...env, NO_COLOR: '1' };
+  delete next.FORCE_COLOR;
+  return next;
+}
+
+function spawnDetachedService(instance, name, commandLine, commandArgs, options) {
+  const log = beginLog(name, instance);
+  let child;
+  try {
+    child = spawn(commandLine, commandArgs, {
+      cwd: options.cwd,
+      env: { ...options.env, ND_INSTANCE: instance.id },
+      stdio: ['ignore', log.fd, log.fd],
+      shell: true,
+      // Windows needs a new process group too (`detached`), but without a visible
+      // console window. The facade stops it with taskkill /T, which follows the tree.
+      detached: true,
+      windowsHide: isWin,
+    });
+  } finally {
+    fs.closeSync(log.fd);
+  }
+
+  if (!child.pid) {
+    throw new Error(`Could not start ${name}; see ${path.relative(ROOT, log.file)}.`);
+  }
+  // A spawn failure arrives asynchronously as an 'error' event, after `spawn()` has
+  // returned a pid. Without a listener that event is unhandled and takes the process down
+  // before the rollback above can stop the services that did start.
+  const spawned = new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', (err) => {
+      reject(
+        new Error(`Could not start ${name}: ${err.message}; see ${path.relative(ROOT, log.file)}.`)
+      );
+    });
+  });
+  // Marked handled here so a sync failure of a later service does not surface as an
+  // unhandled rejection; awaiting it still rejects.
+  spawned.catch(() => {});
+  child.unref();
+  return { name, pid: child.pid, file: log.file, spawned };
+}
+
+/**
+ * Three direct children, each in its own process group and log file. A supervisor
+ * process would add a second lifecycle to reason about; the instance record already is
+ * the source of truth.
+ */
+async function startDetached(instance) {
+  const started = [];
+  const spawnOne = (name, commandLine, commandArgs, options) => {
+    started.push(spawnDetachedService(instance, name, commandLine, commandArgs, options));
+  };
+
+  try {
+    spawnOne('api', mvnw, ['spring-boot:run', '--no-transfer-progress'], {
+      cwd: path.join(ROOT, 'api'),
+      env: { ...buildApiDevEnv(instance), SPRING_OUTPUT_ANSI_ENABLED: 'NEVER' },
+    });
+    spawnOne('web', 'npx', ['turbo', 'run', 'dev', '--filter', 'web'], {
+      cwd: ROOT,
+      env: plainLogEnv(buildWebDevEnv(instance)),
+    });
+    spawnOne('realtime', 'npx', ['turbo', 'run', 'dev', '--filter', 'realtime'], {
+      cwd: ROOT,
+      env: plainLogEnv(buildRealtimeDevEnv(instance)),
+    });
+    await Promise.all(started.map((service) => service.spawned));
+  } catch (err) {
+    await Promise.all(started.map((service) => stopProcessGroup(service.pid)));
+    throw err;
+  }
+
+  return started;
+}
+
+function printLifecycleHints() {
+  console.log('  logs     ./nd logs [api|web|realtime] -n 50');
+  console.log('  stop     ./nd stop');
+  console.log('');
+}
+
+function printLogTails(services, limit, only = null) {
+  const targets = only ? services.filter((service) => only.includes(service.name)) : services;
+  console.error('');
+  for (const service of targets) {
+    const { file, lines } = tailSession(service.name, limit);
+    console.error(`--- ${service.name} (${path.relative(ROOT, file)}) ---`);
+    console.error(lines.length === 0 ? '(no output)' : lines.join('\n'));
+    console.error('');
+  }
+}
+
+function emitJson(value) {
+  // `process.stdout.write` is asynchronous when stdout is a pipe (the agent contract
+  // case: `./nd logs --json | jq`), and every caller exits as soon as the command
+  // returns. Writing the fd directly flushes the whole document before that exit.
+  writeStdout(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+/** Writes to stdout without leaving anything in the stream buffer for `process.exit`. */
+function writeStdout(text) {
+  try {
+    fs.writeSync(1, text);
+  } catch (err) {
+    // A reader that already closed the pipe (`| head`) has nowhere left to accept it;
+    // the command's own exit status still describes the work it did.
+    if (err.code !== 'EPIPE' && err.code !== 'EBADF') throw err;
+  }
+}
+
+function instanceUrls(instance) {
+  return {
+    web: `http://localhost:${instance.ports.web}`,
+    api: `http://localhost:${instance.ports.api}`,
+    realtime: `http://localhost:${instance.ports.realtime}`,
+  };
+}
+
+function sessionPayload(instance, health, pids) {
+  return {
+    instance: instance.id,
+    worktree: instance.worktree,
+    status: 'running',
+    healthy: health,
+    urls: instanceUrls(instance),
+    ports: { ...instance.ports },
+    database: {
+      api: instance.database,
+      yhub: instance.yhubDatabase,
+      redisPrefix: instance.redisPrefix,
+    },
+    pids: { ...pids },
+    logs: Object.fromEntries(ALL_SERVICES.map((name) => [name, logFile(name)])),
+    envFile: envFilePath(),
+  };
+}
+
+/**
+ * In JSON mode stdout is reserved for the one result document. Banner and setup
+ * progress moves to stderr, including child `docker start` output (via the fd
+ * redirect in proc.run), so a first-time start cannot corrupt the document.
+ */
+function silenceStdout() {
+  const original = console.log;
+  console.log = (...args) => console.error(...args);
+  redirectRunStdout(true);
+
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    console.log = original;
+    redirectRunStdout(false);
+  };
+}
+
+/**
+ * Idempotent, health-gated start. The contract for agents: exit 0 means all three
+ * URLs answer; a failure leaves no half-started stack behind.
+ */
+async function upCommand() {
+  if (service) {
+    throw new Error('`./nd up` starts the full stack; it does not take a service argument.');
+  }
+
+  const timeout = readinessTimeout();
+  const instance = await resolveInstance({ newPorts, portOffset });
+  setInstance(instance);
+
+  const restore = wantJson ? silenceStdout() : () => {};
+  let outcome;
+  try {
+    outcome = await runUp(instance, timeout);
+  } finally {
+    restore();
+  }
+
+  if (outcome.code !== 0) return outcome.code;
+  if (wantJson) emitJson(outcome.session);
+  return 0;
+}
+
+/**
+ * Ctrl+C during the readiness wait used to leave the services this run started listening
+ * on the worktree's ports with no supervisor to stop them, and the next `./nd up` then
+ * reported those ports as busy. The returned function detaches the handlers again.
+ */
+function trapInterrupt(cleanup) {
+  const handler = (signal) => {
+    process.off('SIGINT', handler);
+    process.off('SIGTERM', handler);
+    console.error(`\n\x1b[33m… ${signal}: stopping the services this run started.\x1b[0m`);
+    Promise.resolve()
+      .then(cleanup)
+      .catch(() => {})
+      .finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
+  };
+  process.on('SIGINT', handler);
+  process.on('SIGTERM', handler);
+  return () => {
+    process.off('SIGINT', handler);
+    process.off('SIGTERM', handler);
+  };
+}
+
+async function runUp(instance, timeout) {
+  const live = liveServicePids(instance);
+  if (Object.keys(live).length > 0) {
+    const missing = ALL_SERVICES.filter((name) => !live[name]);
+    if (missing.length > 0) {
+      console.error(
+        `\x1b[31m✗ Instance '${instance.id}' is running detached but ${missing.join(', ')} ` +
+          `${missing.length === 1 ? 'is' : 'are'} not running. No restart was attempted; ` +
+          'check the log, then `./nd stop && ./nd up`.\x1b[0m'
+      );
+      printLogTails(
+        ALL_SERVICES.map((name) => ({ name })),
+        30,
+        missing
+      );
+      return { code: 1 };
+    }
+
+    console.log(
+      `\x1b[34m> Instance '${instance.id}' is already running detached. Waiting for health...\x1b[0m`
+    );
+    const { ready, pending, health } = await waitForServices(instance, ALL_SERVICES, timeout);
+    if (!ready) {
+      console.error(
+        `\x1b[31m✗ Instance '${instance.id}' is running but not ready: ${pending.join(', ')}. ` +
+          'It was left running; check the log below. `ND_READY_TIMEOUT_MS` extends the wait.\x1b[0m'
+      );
+      printLogTails(
+        ALL_SERVICES.map((name) => ({ name })),
+        30,
+        pending
+      );
+      return { code: 1 };
+    }
+    printReadyBanner(instance);
+    printLifecycleHints();
+    return { code: 0, session: sessionPayload(instance, health, live) };
+  }
+
+  if (instance.running) {
+    console.error(
+      `\x1b[31m✗ Instance '${instance.id}' is running in the foreground (pid ${instance.supervisorPid}). ` +
+        'Run `./nd stop` first.\x1b[0m'
+    );
+    return { code: 1 };
+  }
+
+  await assertPortsAvailable(instance, ALL_SERVICES);
+
+  ensureJsWorkspaceReady('all');
+  preflightDocker();
+
+  ensurePostgres({ yhubSchema: true, local: true });
+  ensureRedis();
+  // Only the API sends mail. A detached start includes it, but an external SMTP host
+  // means Mailpit is not wanted (and must not block the start on its ports).
+  if (devUsesLocalMailpit('api')) ensureMailpit();
+
+  writeInstanceEnvFile(instance);
+  clearServicePids(instance);
+  printBanner(instance, 'up');
+
+  const started = await startDetached(instance);
+  const pids = Object.fromEntries(started.map(({ name, pid }) => [name, pid]));
+  try {
+    // `updateRecord` returns null when the record disappeared under us. Without a
+    // record, `./nd stop` cannot see these pids, so a failed write has to stop them.
+    if (!setServicePids(instance, pids)) {
+      throw new Error(`Could not record the started services in ${instance.registry}.`);
+    }
+  } catch (err) {
+    for (const service of started) await stopProcessGroup(service.pid);
+    throw err;
+  }
+
+  console.log(
+    `\x1b[34m> Waiting up to ${Math.round(timeout / 1000)}s for api, web and realtime...\x1b[0m`
+  );
+  const releaseInterrupt = trapInterrupt(async () => {
+    for (const service of started) await stopProcessGroup(service.pid);
+    clearServicePids(instance);
+  });
+  let health;
+  let pending;
+  let ready;
+  try {
+    ({ ready, pending, health } = await waitForServices(instance, ALL_SERVICES, timeout));
+  } finally {
+    releaseInterrupt();
+  }
+  if (!ready) {
+    for (const service of started) await stopProcessGroup(service.pid);
+    clearServicePids(instance);
+    console.error(
+      `\x1b[31m✗ NextDocs '${instance.id}' did not become ready: ${pending.join(', ')}. ` +
+        'Stopped the services this run started. `ND_READY_TIMEOUT_MS` extends the wait; ' +
+        'logs follow.\x1b[0m'
+    );
+    printLogTails(started, 30, pending);
+    return { code: 1 };
+  }
+
+  printReadyBanner(instance);
+  printLifecycleHints();
+  return { code: 0, session: sessionPayload(instance, health, pids) };
+}
+
+// --- Shared local infrastructure -------------------------------------------------
 
 /**
  * Mailpit has no auth and keeps every message it captures, so it is published on the
@@ -489,51 +969,95 @@ function ensureMailpit() {
   }
 
   console.log(`\x1b[34m> Starting mailpit container...\x1b[0m`);
-  run(
+  startSharedContainer(
     [
       'docker run -d',
       `--name ${MAILPIT_CONTAINER}`,
       `-p 127.0.0.1:${MAILPIT_SMTP_PORT}:1025`,
       `-p 127.0.0.1:${MAILPIT_WEB_PORT}:8025`,
       MAILPIT_IMAGE,
-    ].join(' ')
+    ].join(' '),
+    MAILPIT_CONTAINER
   );
   console.log(`\x1b[32m✓ Mailpit web UI available at http://localhost:${MAILPIT_WEB_PORT}\x1b[0m`);
 }
 
 /**
  * Mailpit is a development-only sink, and only the API sends through it: a web or
- * realtime run must not start it, nor stop a container another session's API is
- * using. An external `SPRING_MAIL_HOST` means the API does not want it either.
+ * realtime run must not start it. An external `SPRING_MAIL_HOST` means the API does
+ * not want it either.
  */
-function devUsesLocalMailpit(service) {
-  return (!service || service === 'api') && isKeyEmptyOrPlaceholder(process.env.SPRING_MAIL_HOST);
+function devUsesLocalMailpit(svc) {
+  return (!svc || svc === 'api') && isKeyEmptyOrPlaceholder(process.env.SPRING_MAIL_HOST);
 }
 
-/**
- * A single-service run blocks in a synchronous spawn, so stopping Mailpit from an
- * `exit` hook alone is not enough: interrupt the run and the wrapper may die without
- * one. Cleaning up on the signal keeps the container from outliving the session.
- */
-function registerDevMailpitCleanup() {
-  let stopped = false;
-  const stopMailpit = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
-    runSilent(`docker stop ${MAILPIT_CONTAINER}`);
-  };
+// --- Workspace checks ------------------------------------------------------------
 
-  process.on('exit', stopMailpit);
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      stopMailpit();
-      process.exit(0);
-    });
+function preflightDocker() {
+  const cli = runSilent('docker --version', { timeout: 5000 });
+  if (cli.status !== 0) {
+    throw new Error('Docker is not installed or not on PATH. Install Docker and retry.');
+  }
+
+  const daemon = runSilent('docker info --format "{{.ServerVersion}}"', { timeout: 8000 });
+  if (daemon.status !== 0) {
+    throw new Error('Docker is installed but the daemon is not reachable. Start Docker and retry.');
   }
 }
+
+function verifyWorkspaceLockfilePolicy() {
+  const found = WORKSPACE_LOCKFILES.filter((filePath) => fs.existsSync(filePath));
+  if (found.length === 0) return;
+
+  throw new Error(
+    `Remove ${found.map((filePath) => path.relative(ROOT, filePath)).join(', ')}; ` +
+      'only the root package-lock.json is allowed. Then run `npm run check:lockfiles && npm ci`.'
+  );
+}
+
+function verifyJsWorkspaceInstall(target = 'all') {
+  const missing = [];
+
+  for (const binaryPath of REQUIRED_JS_BINARIES) {
+    if (!fs.existsSync(binaryPath)) {
+      missing.push(path.relative(ROOT, binaryPath));
+    }
+  }
+
+  const targets = target === 'all' ? ['web', 'realtime'] : [target];
+  for (const svc of targets) {
+    const requiredPackages = REQUIRED_WORKSPACE_PACKAGES[svc] || [];
+    for (const packageName of requiredPackages) {
+      const packageCandidates = [
+        path.join(ROOT, 'node_modules', packageName, 'package.json'),
+        path.join(ROOT, svc, 'node_modules', packageName, 'package.json'),
+      ];
+      const found = packageCandidates.some((candidatePath) => fs.existsSync(candidatePath));
+      if (!found) {
+        missing.push(`${svc}:${packageName}`);
+      }
+    }
+  }
+
+  if (missing.length === 0) return;
+
+  throw new Error(
+    `Workspace dependencies are missing (${missing.join(', ')}). ` +
+      'Run `npm ci` from the repository root.'
+  );
+}
+
+function ensureJsWorkspaceReady(target = 'all') {
+  verifyWorkspaceLockfilePolicy();
+  verifyJsWorkspaceInstall(target);
+}
+
+function turbo(task, filter, extraArgs = '') {
+  const filterFlag = filter ? ` --filter=${filter}` : '';
+  return run(`npx turbo run ${task}${filterFlag}${extraArgs}`);
+}
+
+// --- Non-dev commands ------------------------------------------------------------
 
 const API_COMMANDS = {
   lint: isFix
@@ -545,20 +1069,37 @@ const API_COMMANDS = {
   format: `${mvnw} spotless:apply --no-transfer-progress`,
 };
 
-function usage() {
-  console.log('Usage: ./nd <command> [service] [--fix]');
+function usage(exitCode = 1) {
+  console.log(
+    'Usage: ./nd <command> [service|profile] [--fix] [--new-ports] [--port-offset N] [--json]'
+  );
   console.log();
   console.log('Commands:');
-  console.log('  dev [service]       Start dev servers (auto-starts postgres and mailpit)');
+  console.log('  dev [service]       Start dev servers in the foreground (--detach: full stack)');
+  console.log('  up                  Start the full stack detached and wait until it is ready');
+  console.log('  stop [--infra]      Stop this worktree’s foreground or detached stack');
+  console.log('  logs [service]      Recent detached logs (-n N, default 100)');
+  console.log('  status              Show every worktree instance and the shared containers');
+  console.log('  urls [--env]        Print this worktree’s URLs (--env: sourceable exports)');
+  console.log('  down [--infra]      Alias of stop (--infra: also stops shared containers)');
   console.log('  lint [service]      Run linters (--fix to auto-fix)');
   console.log('  format [service]    Run formatters (--fix to auto-fix)');
   console.log('  test [service]      Run tests');
   console.log('  build [service]     Build packages');
-  console.log('  db                  Open psql shell');
+  console.log('  db [command]        Open psql (no argument) or run a db command');
+  console.log('  seed [profile]      Seed a fresh local database (small|regular|large)');
   console.log();
   console.log(`Services: ${ALL_SERVICES.join(', ')}`);
   console.log('Omit service to run across all.');
-  process.exit(1);
+  console.log();
+  console.log('Each git worktree gets its own ports, databases and Redis prefix;');
+  console.log('ports are picked once and reused. --new-ports re-rolls them,');
+  console.log('--port-offset N shifts the base (3000/8080/1234) by N.');
+  console.log();
+  console.log('  --json              Machine-readable output (up, status, urls, logs, stop)');
+  console.log();
+  console.log('Database commands: ./nd db --help');
+  process.exit(exitCode);
 }
 
 function validateService(svc) {
@@ -575,17 +1116,10 @@ function runForService(task, svc) {
       console.error(`Command '${task}' not supported for api`);
       process.exit(1);
     }
-    const opts = { cwd: path.join(ROOT, 'api') };
-    if (task === 'dev') {
-      opts.env = buildApiDevEnv();
-    }
-    return run(API_COMMANDS[task], opts);
+    return run(API_COMMANDS[task], { cwd: path.join(ROOT, 'api') });
   }
 
   ensureJsWorkspaceReady(svc);
-  if (svc === 'realtime' && task === 'dev') {
-    Object.assign(process.env, buildRealtimeDevEnv());
-  }
   return turbo(task, svc);
 }
 
@@ -605,159 +1139,521 @@ function runForAll(task) {
   if (apiStatus !== 0 || turboStatus !== 0) process.exit(1);
 }
 
-if (!command) usage();
-
-switch (command) {
-  case 'dev':
-    // Only a realtime run needs the Yhub schema; API/web-only sessions should not
-    // fail just because @y/hub is missing.
-    ensurePostgres({ yhubSchema: !service || service === 'realtime' });
-    ensureRedis();
-    if (devUsesLocalMailpit(service)) {
-      ensureMailpit();
-      // The all-services branch stops Mailpit from its own exit hook.
-      if (service) {
-        registerDevMailpitCleanup();
-      }
-    }
-    if (service) {
-      runForService('dev', service);
-    } else {
-      ensureJsWorkspaceReady('all');
-      console.log('\x1b[34m> Starting all dev servers...\x1b[0m');
-      const api = spawn(mvnw, ['spring-boot:run', '--no-transfer-progress'], {
-        stdio: ['inherit', 'pipe', 'pipe'],
-        shell: true,
-        cwd: path.join(ROOT, 'api'),
-        env: {
-          ...buildApiDevEnv(),
-          SPRING_OUTPUT_ANSI_ENABLED: 'ALWAYS',
-        },
-      });
-      const turboProc = spawn('npx', ['turbo', 'run', 'dev'], {
-        stdio: ['inherit', 'pipe', 'pipe'],
-        shell: true,
-        cwd: ROOT,
-        env: {
-          ...process.env,
-          ...buildRealtimeDevEnv(),
-          FORCE_COLOR: '1',
-        },
-      });
-
-      // Pipe output manually so Node waits for the actual processes to close pipes
-      api.stdout.pipe(process.stdout);
-      api.stderr.pipe(process.stderr);
-      turboProc.stdout.pipe(process.stdout);
-      turboProc.stderr.pipe(process.stderr);
-
-      let finalCode = 0;
-
-      // Instead of waiting for the wrappers to exit, we wait for their output
-      // streams to close. This guarantees the actual background grandchild
-      // processes have gracefully shutdown before the script exits.
-      let closedAPI = false;
-      let closedTurbo = false;
-
-      api.stdout.on('end', () => {
-        closedAPI = true;
-        if (closedTurbo) process.exit(finalCode);
-      });
-
-      turboProc.stdout.on('end', () => {
-        closedTurbo = true;
-        if (closedAPI) process.exit(finalCode);
-      });
-
-      api.on('exit', (code) => {
-        if (code !== 0 && code !== null) finalCode = code;
-      });
-
-      turboProc.on('exit', (code) => {
-        if (code !== 0 && code !== null) finalCode = code;
-      });
-
-      process.on('SIGINT', () => {
-        if (isWin) {
-          if (api.pid) runSilent(`taskkill /pid ${api.pid} /T /F`);
-          if (turboProc.pid) runSilent(`taskkill /pid ${turboProc.pid} /T /F`);
-        } else {
-          try {
-            if (api.pid) api.kill('SIGINT');
-          } catch (_) {}
-          try {
-            if (turboProc.pid) turboProc.kill('SIGINT');
-          } catch (_) {}
-        }
-        process.exit();
-      });
-
-      process.on('SIGTERM', () => {
-        if (isWin) {
-          runSilent(`taskkill /pid ${api.pid} /T /F`);
-          runSilent(`taskkill /pid ${turboProc.pid} /T /F`);
-        } else {
-          api.kill('SIGTERM');
-          turboProc.kill('SIGTERM');
-        }
-      });
-
-      // Stop postgres and mailpit when exiting dev mode
-      process.on('exit', () => {
-        console.log(`\x1b[34m> Stopping postgres container...\x1b[0m`);
-        runSilent(`docker stop ${POSTGRES_CONTAINER}`);
-        if (devUsesLocalMailpit()) {
-          console.log(`\x1b[34m> Stopping mailpit container...\x1b[0m`);
-          runSilent(`docker stop ${MAILPIT_CONTAINER}`);
-        }
-      });
-    }
-    break;
-
-  case 'lint':
-    if (service) {
-      validateService(service);
-      if (service === 'api' && isFix) {
-        run(`${mvnw} spotless:apply --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
-      } else if (service === 'api') {
-        run(`${mvnw} spotless:check --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
-      } else {
-        turbo('lint', service, isFix ? ' -- --fix' : '');
-      }
-    } else {
-      runForAll('lint');
-    }
-    break;
-
-  case 'format':
-    if (service) {
-      validateService(service);
-      if (service === 'api') {
-        run(`${mvnw} spotless:apply --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
-      } else {
-        turbo(isFix ? 'format:fix' : 'format', service);
-      }
-    } else {
-      runForAll('format');
-    }
-    break;
-
-  case 'test':
-    if (service) runForService('test', service);
-    else runForAll('test');
-    break;
-
-  case 'build':
-    if (service) runForService('build', service);
-    else runForAll('build');
-    break;
-
-  case 'db':
-    ensurePostgres({ yhubSchema: false });
-    run(`docker exec -it ${POSTGRES_CONTAINER} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB}`);
-    break;
-
-  default:
-    console.error(`Unknown command: ${command}`);
-    usage();
+function truncateMiddle(value, width) {
+  if (value.length <= width) return value.padEnd(width);
+  const keep = width - 1;
+  return `…${value.slice(value.length - keep)}`;
 }
+
+function emptyHealth() {
+  return { web: false, api: false, realtime: false };
+}
+
+async function anyPortListening(record) {
+  const ports = Object.values(record.ports || {});
+  const open = await Promise.all(ports.map((port) => portOpen(port)));
+  return open.some(Boolean);
+}
+
+/**
+ * One probe per instance, shared by `--json` and the table so the two cannot disagree.
+ * `health` is the HTTP answer; `listening` is whether any of the instance's ports accept
+ * a connection, which is how a stack started before instances existed is recognised.
+ */
+async function probeRecord(record) {
+  if (!isWorktreePresent(record)) return { health: emptyHealth(), listening: false };
+  const listening = await anyPortListening(record);
+  const maybeRunning =
+    Object.keys(liveServicePids(record)).length > 0 || isPidAlive(record.supervisorPid);
+
+  if (!maybeRunning && !listening) return { health: emptyHealth(), listening };
+  return { health: await probeHealth(record, 1500), listening };
+}
+
+function describeState(record, probe, live) {
+  if (!isWorktreePresent(record)) return 'missing worktree';
+  if (Object.keys(live).length > 0) return 'detached';
+  if (isPidAlive(record.supervisorPid)) return 'foreground';
+  if (probe.listening || probe.health.web || probe.health.api || probe.health.realtime) {
+    return 'running';
+  }
+  return 'stopped';
+}
+
+async function probeInstances(records) {
+  return Promise.all(
+    records.map(async (record) => {
+      const probe = await probeRecord(record);
+      const live = liveServicePids(record);
+      return { record, probe, live, state: describeState(record, probe, live) };
+    })
+  );
+}
+
+function statusPayload(instance, statuses) {
+  const instances = statuses.map(({ record, probe, live, state }) => ({
+    id: record.id,
+    worktree: record.worktree,
+    state,
+    healthy: probe.health,
+    ports: { ...record.ports },
+    database: record.database,
+    yhubDatabase: record.yhubDatabase,
+    redisPrefix: record.redisPrefix,
+    pids: live,
+  }));
+
+  return {
+    worktree: instance.worktree,
+    instance: instance.id,
+    infra: {
+      postgres: { running: containerRunning(POSTGRES_CONTAINER), port: Number(POSTGRES_PORT) },
+      redis: { running: containerRunning(REDIS_CONTAINER), port: Number(REDIS_PORT) },
+      mailpit: { running: containerRunning(MAILPIT_CONTAINER), port: Number(MAILPIT_WEB_PORT) },
+    },
+    instances,
+  };
+}
+
+async function statusCommand() {
+  const instance = peekInstance();
+  const records = listRecords(instance.registry);
+  const statuses = await probeInstances(records);
+
+  if (wantJson) {
+    emitJson(statusPayload(instance, statuses));
+    return 0;
+  }
+
+  console.log('');
+  if (records.length === 0) {
+    console.log('No instances recorded yet. Run `./nd dev` in any worktree.');
+  } else {
+    console.log(
+      `${truncateMiddle('worktree', 38)} ${'id'.padEnd(22)} ${'web'.padEnd(6)} ${'api'.padEnd(6)} ${'rt'.padEnd(6)} state`
+    );
+    for (const { record, state } of statuses) {
+      const marker = record.id === instance.id ? '*' : ' ';
+      console.log(
+        `${marker}${truncateMiddle(record.worktree.replace(os.homedir(), '~'), 37)} ` +
+          `${record.id.padEnd(22)} ${String(record.ports.web).padEnd(6)} ` +
+          `${String(record.ports.api).padEnd(6)} ${String(record.ports.realtime).padEnd(6)} ${state}`
+      );
+    }
+  }
+
+  const postgres = containerRunning(POSTGRES_CONTAINER);
+  const redis = containerRunning(REDIS_CONTAINER);
+  const mailpit = containerRunning(MAILPIT_CONTAINER);
+  console.log('');
+  console.log(
+    `infra  postgres :${POSTGRES_PORT} ${postgres ? 'running' : 'stopped'} · ` +
+      `redis :${REDIS_PORT} ${redis ? (redisPing() ? 'running' : 'unhealthy') : 'stopped'} · ` +
+      `mailpit :${MAILPIT_WEB_PORT} ${mailpit ? 'running' : 'stopped'}`
+  );
+  if (containerRunning(REDIS_CONTAINER)) {
+    console.log(`       this worktree's Yhub prefix is '${instance.redisPrefix}'`);
+  }
+  console.log('');
+  return 0;
+}
+
+async function urlsCommand(argv) {
+  const instance = peekInstance();
+  const wantsEnv = argv.includes('--env');
+
+  if (wantJson) {
+    if (wantsEnv) throw new Error('Choose either --env or --json, not both.');
+    emitJson({
+      instance: instance.id,
+      worktree: instance.worktree,
+      hasRecord: instance.hasRecord,
+      urls: instanceUrls(instance),
+      ports: { ...instance.ports },
+      database: {
+        api: instance.database,
+        yhub: instance.yhubDatabase,
+        redisPrefix: instance.redisPrefix,
+      },
+      envFile: envFilePath(),
+    });
+    return 0;
+  }
+
+  if (wantsEnv) {
+    writeStdout(renderInstanceEnv(instance));
+    return 0;
+  }
+  printBanner(instance, 'urls');
+  if (!instance.hasRecord) {
+    console.log('  These are the defaults; `./nd dev` will allocate and persist them.');
+    console.log('');
+  }
+  return 0;
+}
+
+function parseLogLineCount(raw, flag) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 10_000) {
+    throw new Error(`${flag} requires an integer between 1 and 10000, received "${raw}".`);
+  }
+  return value;
+}
+
+function logsCommand(argv) {
+  let serviceName = null;
+  let limit = 100;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '-n' || arg === '--lines') {
+      limit = parseLogLineCount(argv[index + 1], arg);
+      index += 1;
+    } else if (arg.startsWith('--lines=')) {
+      limit = parseLogLineCount(arg.slice('--lines='.length), '--lines');
+    } else if (arg.startsWith('-n=')) {
+      limit = parseLogLineCount(arg.slice('-n='.length), '-n');
+    } else if (arg.startsWith('-')) {
+      throw new Error(`Unknown option for logs: ${arg}`);
+    } else if (serviceName) {
+      throw new Error(
+        `./nd logs takes at most one service, received '${serviceName}' and '${arg}'.`
+      );
+    } else {
+      serviceName = arg;
+    }
+  }
+
+  if (serviceName) validateService(serviceName);
+  const services = serviceName ? [serviceName] : ALL_SERVICES;
+
+  if (wantJson) {
+    const logs = services.map((name) => {
+      const { file, lines, missing } = tailFile(name, limit);
+      return { service: name, file, lines, ...(missing ? { missing: true } : {}) };
+    });
+    emitJson({ instance: peekInstance().id, logs });
+    return 0;
+  }
+
+  for (const name of services) {
+    const { file, lines: content, missing } = tailFile(name, limit);
+    console.log('');
+    console.log(`--- ${name} — ${path.relative(ROOT, file)} ---`);
+    if (missing) {
+      console.log('(no log yet; start the detached stack with ./nd up)');
+    } else if (content.length === 0) {
+      console.log('(empty)');
+    } else {
+      for (const line of content) console.log(line);
+    }
+  }
+  console.log('');
+  return 0;
+}
+
+/**
+ * Windows has no `ps -o command=`. WMI/CIM gives the command line, which is what the
+ * Linux branch uses to avoid signalling a recycled PID. If PowerShell is unavailable
+ * the caller must skip rather than guess, even though that can leave a stale stack.
+ */
+function windowsCommandLine(pid) {
+  const script = `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`;
+  const result = runSilent(`powershell -NoProfile -NonInteractive -Command "${script}"`, {
+    timeout: 5000,
+  });
+  return result.status === 0 ? result.stdout.toString().trim() : null;
+}
+
+function isNdProcess(pid) {
+  if (!isPidAlive(pid)) return false;
+  if (isWin) {
+    const commandLine = windowsCommandLine(pid);
+    return commandLine != null && /scripts[\\/]nd\.js/.test(commandLine);
+  }
+  const result = runSilent(`ps -p ${pid} -o command=`, { timeout: 3000 });
+  if (result.status !== 0) return false;
+  return /scripts\/nd\.js/.test(result.stdout.toString());
+}
+
+async function stopProcessGroup(pid) {
+  if (isWin) {
+    // process.kill(pid) only terminates the shell on Windows; taskkill /T follows the
+    // mvnw/npx children (java, turbo, next, tsx) as well.
+    runSilent(`taskkill /pid ${pid} /T /F`, { timeout: 15_000 });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && isPidAlive(pid)) {
+      await sleep(200);
+    }
+    return;
+  }
+
+  const signal = (name) => {
+    try {
+      process.kill(-pid, name);
+    } catch {
+      try {
+        process.kill(pid, name);
+      } catch {
+        // Already gone.
+      }
+    }
+  };
+
+  // The recorded pid is a shell (spawn uses `shell: true`) and the server is a descendant
+  // in the same group. Waiting on the leader alone would return while that descendant
+  // still holds the port, and the caller would then clear its record.
+  const groupAlive = () => {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch (err) {
+      return err.code === 'EPERM';
+    }
+  };
+
+  signal('SIGTERM');
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && groupAlive()) {
+    await sleep(200);
+  }
+  if (groupAlive()) signal('SIGKILL');
+}
+
+const SERVICE_PROCESS_PATTERNS = {
+  api: /spring-boot:run|NextdocsApiApplication/,
+  web: /turbo|scripts[/\\]dev\.mjs|next[/\\]dist[/\\]bin[/\\]next/,
+  realtime: /turbo|tsx|src[/\\]main\.ts/,
+};
+
+/** A recorded pid can be reused by an unrelated process; never signal one blindly. */
+function looksLikeService(pid, name) {
+  if (!isPidAlive(pid)) return false;
+  if (isWin) {
+    const commandLine = windowsCommandLine(pid);
+    return commandLine != null && SERVICE_PROCESS_PATTERNS[name].test(commandLine);
+  }
+  const result = runSilent(`ps -p ${pid} -o command=`, { timeout: 3000 });
+  if (result.status !== 0) return false;
+  return SERVICE_PROCESS_PATTERNS[name].test(result.stdout.toString());
+}
+
+async function stopCommand(argv) {
+  const instance = peekInstance();
+  const records = listRecords(instance.registry);
+  const own = records.find((record) => record.id === instance.id);
+  const log = wantJson ? () => {} : (...args) => console.log(...args);
+  const stoppedEntries = [];
+
+  if (own && own.supervisorPid) {
+    if (isNdProcess(own.supervisorPid)) {
+      log(
+        `\x1b[34m> Stopping foreground dev for '${instance.id}' (pid ${own.supervisorPid})...\x1b[0m`
+      );
+      await stopProcessGroup(own.supervisorPid);
+      stoppedEntries.push({ name: 'dev', pid: own.supervisorPid });
+    }
+    clearSupervisor(instance, own.supervisorPid);
+  }
+
+  const toStop = [];
+  for (const [name, pid] of Object.entries(liveServicePids(own || {}))) {
+    if (!looksLikeService(pid, name)) {
+      console.error(
+        `\x1b[33m… Skipping ${name} pid ${pid}: it no longer looks like this service. ` +
+          'Clearing the stale record.\x1b[0m'
+      );
+      continue;
+    }
+    log(`\x1b[34m> Stopping ${name} (pid ${pid})...\x1b[0m`);
+    toStop.push({ name, pid });
+  }
+  await Promise.all(toStop.map((service) => stopProcessGroup(service.pid)));
+  stoppedEntries.push(...toStop);
+  if (own) clearServicePids(instance);
+
+  if (stoppedEntries.length === 0) {
+    log(`No running dev process recorded for '${instance.id}'.`);
+  }
+
+  const stopInfra = argv.includes('--infra') || argv.includes('--all');
+  if (!stopInfra) {
+    log('Shared containers were left running; `./nd stop --infra` stops them.');
+    if (wantJson) {
+      emitJson({ instance: instance.id, stopped: stoppedEntries, infra: 'left running' });
+    }
+    return 0;
+  }
+
+  const others = [];
+  for (const record of records) {
+    if (record.id === instance.id) continue;
+    if (isPidAlive(record.supervisorPid) || Object.keys(liveServicePids(record)).length > 0) {
+      others.push(record.id);
+      continue;
+    }
+    const listening = (
+      await Promise.all(Object.values(record.ports || {}).map((port) => portOpen(port)))
+    ).some(Boolean);
+    if (listening) others.push(record.id);
+  }
+  if (others.length > 0) {
+    console.error(
+      `\x1b[31mRefusing to stop shared containers: instance(s) still running: ${others.join(', ')}.\x1b[0m`
+    );
+    return 1;
+  }
+
+  // A stack started by an older CLI (or by hand) has no record here. Stopping the
+  // containers under it would kill someone else's session, so require --force.
+  const legacy = await Promise.all([3000, 8080, 1234].map((port) => portOpen(port)));
+  if (legacy.some(Boolean) && !argv.includes('--force')) {
+    console.error(
+      '\x1b[31mPorts 3000/8080/1234 are still listening (a stack not started by this CLI?). ' +
+        'Stop it first, or re-run with --force.\x1b[0m'
+    );
+    return 1;
+  }
+
+  log('\x1b[34m> Stopping shared containers...\x1b[0m');
+  const containers = [POSTGRES_CONTAINER, REDIS_CONTAINER, MAILPIT_CONTAINER];
+  const stopped = runSilent(`docker stop ${containers.join(' ')}`, { timeout: 60_000 });
+  if (stopped.status !== 0) {
+    // `docker stop` also fails for a container that was never created; absent is a
+    // no-op. A container that is still running, or a daemon that cannot be reached, is
+    // not: reporting "stopped" there would leave a stack behind.
+    const daemon = runSilent('docker info --format "{{.ServerVersion}}"', { timeout: 8000 });
+    const stillRunning = containers.filter((name) => containerRunning(name));
+    if (daemon.status !== 0 || stillRunning.length > 0) {
+      const detail =
+        (stopped.stderr || '').toString().trim() || `docker stop exited ${stopped.status}`;
+      console.error(
+        `\x1b[31m✗ Could not stop ${
+          stillRunning.length > 0 ? stillRunning.join(', ') : 'the shared containers'
+        }: ${detail}\x1b[0m`
+      );
+      return 1;
+    }
+  }
+  log('\x1b[32m✓ Shared containers stopped.\x1b[0m');
+  if (wantJson) {
+    emitJson({ instance: instance.id, stopped: stoppedEntries, infra: 'stopped' });
+  }
+  return 0;
+}
+
+async function main() {
+  if (!command) usage(1);
+  if (command === '--help' || command === '-h' || command === 'help') usage(0);
+  if (detached && command !== 'dev' && command !== 'up') {
+    console.error('--detach is only valid with `./nd dev`.');
+    process.exit(1);
+  }
+  if (wantJson && command === 'dev' && !detached) {
+    console.error('--json with `./nd dev` requires `--detach`; use `./nd up --json`.');
+    process.exit(1);
+  }
+  if (wantJson && !JSON_COMMANDS.has(command)) {
+    console.error('--json is supported by: up, status, urls, logs, stop, and dev --detach.');
+    process.exit(1);
+  }
+
+  switch (command) {
+    case 'dev':
+      await devCommand();
+      break;
+
+    case 'up':
+      process.exit(await upCommand());
+      break;
+
+    case 'status':
+      process.exit(await statusCommand());
+      break;
+
+    case 'urls':
+      process.exit(await urlsCommand(args.slice(1)));
+      break;
+
+    case 'logs':
+      process.exit(logsCommand(args.slice(1)));
+      break;
+
+    case 'stop':
+    case 'down':
+      process.exit(await stopCommand(args.slice(1)));
+      break;
+
+    case 'lint':
+      if (service) {
+        validateService(service);
+        if (service === 'api' && isFix) {
+          run(`${mvnw} spotless:apply --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
+        } else if (service === 'api') {
+          run(`${mvnw} spotless:check --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
+        } else {
+          turbo('lint', service, isFix ? ' -- --fix' : '');
+        }
+      } else {
+        runForAll('lint');
+      }
+      break;
+
+    case 'format':
+      if (service) {
+        validateService(service);
+        if (service === 'api') {
+          run(`${mvnw} spotless:apply --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
+        } else {
+          turbo(isFix ? 'format:fix' : 'format', service);
+        }
+      } else {
+        runForAll('format');
+      }
+      break;
+
+    case 'test':
+      if (service) runForService('test', service);
+      else runForAll('test');
+      break;
+
+    case 'build':
+      if (service) runForService('build', service);
+      else runForAll('build');
+      break;
+
+    case 'db':
+      setInstance(peekInstance());
+      process.exit(
+        await require('./db')(args.slice(1))
+          .then((code) => code)
+          .catch((err) => {
+            console.error(`\x1b[31m${err.message}\x1b[0m`);
+            return 1;
+          })
+      );
+      break;
+
+    case 'seed':
+      setInstance(peekInstance());
+      process.exit(
+        await require('./seed')(args.slice(1))
+          .then((code) => code)
+          .catch((err) => {
+            console.error(`\x1b[31m${err.message}\x1b[0m`);
+            return 1;
+          })
+      );
+      break;
+
+    default:
+      console.error(`Unknown command: ${command}`);
+      usage(1);
+  }
+}
+
+main().catch((err) => {
+  console.error(`\x1b[31m${err.message}\x1b[0m`);
+  if (process.env.ND_DEBUG === '1') console.error(err.stack);
+  process.exit(1);
+});

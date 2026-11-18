@@ -1,2 +1,3 @@
 @echo off
-node scripts\nd.js %*
+node "%~dp0scripts\nd.js" %*
+exit /b %ERRORLEVEL%

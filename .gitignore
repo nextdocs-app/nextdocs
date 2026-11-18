@@ -14,6 +14,9 @@ config.json
 # Turbo
 .turbo
 
+# Per-worktree ./nd state (instance env, logs)
+.nd/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*
