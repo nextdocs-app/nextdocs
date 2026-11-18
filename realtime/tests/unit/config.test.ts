@@ -9,6 +9,7 @@ describe('Config', () => {
     delete process.env.NODE_ENV;
     delete process.env.PORT;
     delete process.env.REDIS;
+    delete process.env.REDIS_PREFIX;
     delete process.env.POSTGRES;
     delete process.env.API_BASE_URL;
     delete process.env.JWT_SECRET;
@@ -34,6 +35,7 @@ describe('Config', () => {
     expect(config.ORG).toBe('nextdocs');
     expect(config.PORT).toBe(1234);
     expect(config.REDIS_URL).toBe('redis://localhost:6379');
+    expect(config.REDIS_PREFIX).toBe('yhub');
     expect(config.POSTGRES_URL).toBe('postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub');
     expect(config.API_BASE_URL).toBe('http://localhost:8080');
     expect(config.CORS_ORIGINS).toContain('http://localhost:3000');
@@ -65,6 +67,12 @@ describe('Config', () => {
     jest.resetModules();
     process.env.LOG_LEVEL = 'verbose';
     await expect(import('../../src/config.js')).rejects.toThrow(/LOG_LEVEL must be one of/);
+  });
+
+  it('reads the per-worktree Redis prefix', async () => {
+    process.env.REDIS_PREFIX = 'yhub_agent_ab12';
+    const config = await import('../../src/config.js');
+    expect(config.REDIS_PREFIX).toBe('yhub_agent_ab12');
   });
 
   it('reads the recheck concurrency', async () => {

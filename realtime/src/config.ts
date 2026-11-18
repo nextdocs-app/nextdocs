@@ -85,6 +85,12 @@ export const LOG_LEVEL = readLogLevel(process.env.LOG_LEVEL);
 // Port 0 is valid: it asks the OS for an ephemeral port (tests use it).
 export const PORT = readPositiveInt('PORT', process.env.PORT, 1234, 0);
 export const REDIS_URL = process.env.REDIS || 'redis://localhost:6379';
+/**
+ * Keyspace prefix for this instance. Every worktree shares one Redis container, and
+ * seeded fixtures reuse the same document ids, so without a per-instance prefix two
+ * stacks would read and write the same Yhub room streams.
+ */
+export const REDIS_PREFIX = (process.env.REDIS_PREFIX || 'yhub').trim() || 'yhub';
 export const POSTGRES_URL =
   process.env.POSTGRES || 'postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub';
 export const API_BASE_URL = (process.env.API_BASE_URL || 'http://localhost:8080').replace(
