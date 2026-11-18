@@ -18,6 +18,7 @@ import {
   writePendingSyncEdits,
 } from '@/lib/offline-sync.util';
 import { setYDoc } from '@/stores/document/ydoc-holder';
+import { readPreservedLocalCopy } from '@/lib/stale-local-copy.util';
 import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
 import { WebsocketProvider } from '@y/websocket';
 import { useAuth } from '../../../hooks/useAuth.hook';
@@ -1675,7 +1676,7 @@ describe('useDocument', () => {
     });
   });
 
-  it('should discard a local snapshot from a different incarnation of the document', async () => {
+  it('should set aside a local snapshot from a different incarnation before replacing it', async () => {
     const cloudYdoc = new Y.Doc();
     (cloudYdoc as unknown as { clientID: number }).clientID = 1;
     cloudYdoc.get('body').insert(0, ['server copy']);
@@ -1705,12 +1706,55 @@ describe('useDocument', () => {
       expect(text).toContain('server copy');
       expect(text).not.toContain('content from the previous seed');
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Discarding stale local snapshot for cloud-id')
+        expect.stringContaining('Preserved the local snapshot for cloud-id')
+      );
+      // Client ids prove only that the two histories grew independently, so the copy is
+      // kept instead of dropped: dropping it was the last time those edits existed.
+      const preserved = readPreservedLocalCopy('cloud-id');
+      expect(preserved?.meta.title).toBe('Reseeded Document');
+      expect(JSON.stringify(preserved?.ydoc.get('body').toDelta() ?? '')).toContain(
+        'content from the previous seed'
       );
       expect(saveDocumentSpy).toHaveBeenCalledWith('cloud-id', cloudYdoc, meta, {
         touchUpdatedAt: false,
         origin: 'local',
       });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('should merge two independent first writers when the cloud room is still empty', async () => {
+    // Offline creation on this device, before anything reached the cloud: the histories
+    // are independent, but there is no cloud tree to collide with, so the edits merge.
+    const emptyCloudYdoc = new Y.Doc();
+    (emptyCloudYdoc as unknown as { clientID: number }).clientID = 1;
+    const offlineYdoc = new Y.Doc();
+    (offlineYdoc as unknown as { clientID: number }).clientID = 2;
+    offlineYdoc.get('body').insert(0, ['edit written offline']);
+    const meta = {
+      title: 'First writer',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    loadDocumentSpy.mockResolvedValue({ ydoc: offlineYdoc, meta });
+    getCloudDocumentSpy.mockResolvedValue({ ydoc: emptyCloudYdoc, meta });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { result } = renderHook(() => useDocument('cloud-id'), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const text = JSON.stringify(result.current.ydoc?.get('body').toDelta() ?? '');
+      expect(text).toContain('edit written offline');
+      expect(readPreservedLocalCopy('cloud-id')).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('local snapshot for cloud-id')
+      );
     } finally {
       warnSpy.mockRestore();
     }

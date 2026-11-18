@@ -93,25 +93,26 @@ export function decodeYjsState(state: Uint8Array): Y.Doc {
 }
 
 /**
- * Whether two snapshots describe the same Yjs history.
+ * Whether two snapshots can be folded together without producing a second block tree.
  *
- * Every client that ever wrote to a document contributes a client id to its
- * state vector, and those ids survive encoding. A local copy that came from
- * this cloud document therefore shares at least one id with it. Disjoint
- * vectors mean the copy belongs to a different incarnation of the document
- * (typically a reseeded database with new Yjs history under the same row id);
- * merging it would append a second, unrelated block tree and can leave
- * BlockNote unable to build its `doc` node.
+ * Every client that ever wrote to a document contributes a client id to its state
+ * vector, and those ids survive encoding. A local copy that came from this cloud
+ * document therefore shares at least one id with it. Disjoint vectors mean the two
+ * histories grew independently: a reseeded row and an offline copy that never saw the
+ * room look exactly the same, so the ids decide merge *safety*, not document identity.
+ * The union of two independent trees is what leaves BlockNote unable to build its `doc`
+ * node, so the caller must not merge them — and must not silently drop the local side
+ * either (see `preserveStaleLocalCopy`).
  *
- * An empty side has no history to conflict with, so it is always safe to
- * merge: this preserves offline edits for a document whose cloud room is still
- * empty. That case is also the remaining hole in this check — a document whose
- * room is empty after a reseed (created through the API with a title but no
- * `yjsState`) has no client id to compare, so a stale pre-reset local copy is
- * merged back in and rebuilds the same second block tree. A state vector cannot
- * distinguish "this device's first edit" from "this row's previous incarnation";
- * comparing anything stronger would need the server to remember a per-row
- * history identity rather than the room contents.
+ * An empty side has no history to conflict with, so it is always safe to merge: this
+ * preserves offline edits for a document whose cloud room is still empty, including two
+ * independent first writers where only one of them has reached the cloud yet. That is
+ * also the remaining hole here — a room emptied by a reseed (a row created through the
+ * API with a title but no `yjsState`) has no client id to compare, so a stale pre-reset
+ * local copy is merged back in and rebuilds the same second block tree. A state vector
+ * cannot distinguish "this device's first edit" from "this row's previous incarnation";
+ * comparing anything stronger would need the server to remember a per-row history
+ * identity rather than the room contents.
  */
 export function hasRelatedYjsHistory(target: Y.Doc, source: Y.Doc): boolean {
   const targetClients = Y.decodeStateVector(Y.encodeStateVector(target));

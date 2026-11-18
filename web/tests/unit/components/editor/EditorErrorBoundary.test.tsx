@@ -137,6 +137,62 @@ describe('EditorErrorBoundary', () => {
     expect(deleteDocument).not.toHaveBeenCalled();
   });
 
+  it('does not schedule recovery when the tried-marker cannot be saved', async () => {
+    // Without the marker a second crash would schedule another reset after the reload,
+    // so an unsaveable marker must leave the fallback (and its button) in charge.
+    const originalSetItem = Storage.prototype.setItem;
+    jest.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string
+    ) {
+      if (String(key).startsWith('nextdocs:editor-recovered:')) {
+        throw new Error('Storage is disabled');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+
+    renderBroken();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+
+    expect(deleteDocument).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('This page could not be opened');
+    expect(screen.getByRole('button', { name: 'Reset local copy and reload' })).toBeInTheDocument();
+  });
+
+  it('rechecks for queued work when the recovery timer fires', async () => {
+    renderBroken();
+    // The queue can gain work between the catch and the timer.
+    writePendingSyncEdits('doc-1', 1);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+
+    expect(deleteDocument).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('This page could not be opened');
+  });
+
+  it('keeps work queued while the local copy is being deleted', async () => {
+    deleteDocument.mockImplementation(async () => {
+      // A write that lands after the reset decided nothing was queued. Clearing the
+      // markers after the delete would drop it; the reset clears them before.
+      writePendingSyncEdits('doc-1', 2);
+    });
+
+    renderBroken();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+
+    expect(deleteDocument).toHaveBeenCalledWith('doc-1');
+    expect(window.localStorage.getItem('nextdocs:pending-sync:doc-1')).toBe('2');
+  });
+
   it('does not try to recover the same document twice in one session', async () => {
     window.sessionStorage.setItem('nextdocs:editor-recovered:doc-1', '1');
 

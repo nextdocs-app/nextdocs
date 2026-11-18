@@ -33,12 +33,19 @@ function hasAlreadyRecovered(documentId: string): boolean {
   }
 }
 
-function markRecovered(documentId: string): void {
+/**
+ * Remember that this document was already auto-recovered in this session.
+ *
+ * Returns whether the marker was saved. Without it a second crash would schedule another
+ * reset, so an unsaveable marker means no automatic recovery at all: the fallback stays
+ * and its explicit reset button does the same work once, on the reader's word.
+ */
+function markRecovered(documentId: string): boolean {
   try {
     window.sessionStorage.setItem(recoveryKey(documentId), '1');
+    return true;
   } catch {
-    // Storage can be unavailable in private or sandboxed contexts; the reload
-    // still runs, it just cannot remember that it already tried.
+    return false;
   }
 }
 
@@ -114,8 +121,12 @@ export class EditorErrorBoundary extends Component<
       return;
     }
 
-    markRecovered(this.props.documentId);
+    if (!markRecovered(this.props.documentId)) {
+      return;
+    }
     this.recoveryTimer = window.setTimeout(() => {
+      // The queue can gain work in these 300 ms, and `resetLocalCopyAndReload` rechecks
+      // it before touching anything, so an edit made in that window survives.
       void this.resetLocalCopyAndReload();
     }, 300);
   }
@@ -126,11 +137,31 @@ export class EditorErrorBoundary extends Component<
     }
   }
 
-  private resetLocalCopyAndReload = async (): Promise<void> => {
+  /**
+   * Delete the local copy and reload. `force` is the fallback button's explicit reset,
+   * which knowingly drops queued work; automatic recovery rechecks the queue first.
+   */
+  private resetLocalCopyAndReload = async (force = false): Promise<void> => {
+    if (!force && hasQueuedLocalWork(this.props.documentId)) {
+      return;
+    }
+
+    // Clear the queue *before* the delete, never after it: a write queued while
+    // `deleteDocument` is awaited was made after this recovery decided there was none,
+    // and clearing afterwards would silently drop it.
+    for (const clear of [
+      () => clearPendingSyncEdits(this.props.documentId),
+      () => clearPendingIconCoverPatch(this.props.documentId),
+    ]) {
+      try {
+        clear();
+      } catch (error) {
+        console.warn('Failed to clear queued edits for the local document copy:', error);
+      }
+    }
+
     try {
       await documentService.deleteDocument(this.props.documentId);
-      clearPendingSyncEdits(this.props.documentId);
-      clearPendingIconCoverPatch(this.props.documentId);
     } catch (error) {
       console.warn('Failed to clear the local document copy:', error);
     }
@@ -142,9 +173,9 @@ export class EditorErrorBoundary extends Component<
     try {
       window.sessionStorage.removeItem(recoveryKey(this.props.documentId));
     } catch {
-      // See markRecovered.
+      // See markRecovered: the reset still runs, it just cannot be remembered.
     }
-    void this.resetLocalCopyAndReload();
+    void this.resetLocalCopyAndReload(true);
   };
 
   render(): ReactNode {
