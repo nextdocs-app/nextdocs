@@ -5,7 +5,7 @@ Everything runs on a laptop with Docker, Node 24, and Java 21.
 ## Start the stack
 
 ```
-npm ci
+pnpm install --frozen-lockfile
 ./nd dev
 ```
 
@@ -42,7 +42,7 @@ If the realtime server cannot connect, check that Redis is running. If pages sho
 
 ## First run checklist
 
-1. Install the root dependencies with `npm ci`.
+1. Install the root dependencies with `pnpm install --frozen-lockfile`.
 2. Start the services with `./nd dev`.
 3. Seed the local database with `./nd seed`.
 

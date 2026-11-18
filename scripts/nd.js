@@ -53,6 +53,7 @@ const {
 const { describeOwner } = require('./lib/lock');
 const { portOpen } = require('./lib/ports');
 const { beginLog, logFile, tailFile, tailSession } = require('./lib/logs');
+const { findForbiddenLockfiles } = require('./lib/lockfiles');
 
 // --- Arguments -------------------------------------------------------------------
 
@@ -94,10 +95,7 @@ const service = args[1];
 const isWin = process.platform === 'win32';
 const ALL_SERVICES = ['api', 'web', 'realtime'];
 const JSON_COMMANDS = new Set(['up', 'status', 'urls', 'logs', 'stop', 'down', 'dev']);
-const WORKSPACE_LOCKFILES = [
-  path.join(ROOT, 'web', 'package-lock.json'),
-  path.join(ROOT, 'realtime', 'package-lock.json'),
-];
+const ROOT_PACKAGE = require(path.join(ROOT, 'package.json'));
 
 const REQUIRED_JS_BINARIES = [
   path.join(ROOT, 'node_modules', '.bin', isWin ? 'turbo.cmd' : 'turbo'),
@@ -407,7 +405,10 @@ function stopDevChild(child, signal = 'SIGTERM') {
 function spawnDev(commandLine, commandArgs, options) {
   return spawn(commandLine, commandArgs, {
     stdio: ['inherit', 'pipe', 'pipe'],
-    shell: true,
+    // Windows resolves mvnw.cmd/pnpm.cmd through a shell. POSIX commands are
+    // executables with shebangs, and spawning them directly avoids Node's
+    // DEP0190 warning about passing an argument list through `shell: true`.
+    shell: isWin,
     detached: !isWin,
     ...options,
   });
@@ -430,7 +431,7 @@ function startTurbo(instance, services) {
   if (jsServices.includes('realtime')) env = buildRealtimeDevEnv(instance, env);
   if (jsServices.includes('web')) env = buildWebDevEnv(instance, env);
 
-  return spawnDev('npx', ['turbo', 'run', 'dev', ...filters], {
+  return spawnDev('pnpm', ['exec', 'turbo', 'run', 'dev', ...filters], {
     cwd: ROOT,
     env,
   });
@@ -614,8 +615,8 @@ async function devCommand() {
     const needsPostgres = services.some((name) => name === 'api' || name === 'realtime');
     const needsRedis = services.includes('realtime');
 
-    // Fail before touching containers: a fresh worktree without `npm ci` should get the
-    // command to run, not spend time starting infrastructure it cannot use.
+    // Fail before touching containers: a fresh worktree without `pnpm install` should
+    // get the command to run, not spend time starting infrastructure it cannot use.
     if (service !== 'api') ensureJsWorkspaceReady(service || 'all');
     if (needsPostgres || devUsesLocalMailpit(service)) preflightDocker();
 
@@ -684,7 +685,9 @@ function spawnDetachedService(instance, name, commandLine, commandArgs, options)
       cwd: options.cwd,
       env: { ...options.env, ND_INSTANCE: instance.id },
       stdio: ['ignore', log.fd, log.fd],
-      shell: true,
+      // Only Windows needs a shell for .cmd shims. Keeping POSIX direct also avoids
+      // Node's DEP0190 warning for an argument list with `shell: true`.
+      shell: isWin,
       // Windows needs a new process group too (`detached`), but without a visible
       // console window. The facade stops it with taskkill /T, which follows the tree.
       detached: true,
@@ -726,11 +729,11 @@ async function startDetached(instance) {
       cwd: path.join(ROOT, 'api'),
       env: { ...buildApiDevEnv(instance), SPRING_OUTPUT_ANSI_ENABLED: 'NEVER' },
     });
-    spawnOne('web', 'npx', ['turbo', 'run', 'dev', '--filter', 'web'], {
+    spawnOne('web', 'pnpm', ['exec', 'turbo', 'run', 'dev', '--filter', 'web'], {
       cwd: ROOT,
       env: plainLogEnv(buildWebDevEnv(instance)),
     });
-    spawnOne('realtime', 'npx', ['turbo', 'run', 'dev', '--filter', 'realtime'], {
+    spawnOne('realtime', 'pnpm', ['exec', 'turbo', 'run', 'dev', '--filter', 'realtime'], {
       cwd: ROOT,
       env: plainLogEnv(buildRealtimeDevEnv(instance)),
     });
@@ -1126,13 +1129,20 @@ function preflightDocker() {
 }
 
 function verifyWorkspaceLockfilePolicy() {
-  const found = WORKSPACE_LOCKFILES.filter((filePath) => fs.existsSync(filePath));
-  if (found.length === 0) return;
+  const found = findForbiddenLockfiles(ROOT);
+  const missingRootLockfile = !fs.existsSync(path.join(ROOT, 'pnpm-lock.yaml'));
+  if (found.length === 0 && !missingRootLockfile) return;
 
-  throw new Error(
-    `Remove ${found.map((filePath) => path.relative(ROOT, filePath)).join(', ')}; ` +
-      'only the root package-lock.json is allowed. Then run `npm run check:lockfiles && npm ci`.'
-  );
+  const parts = [];
+  if (found.length > 0) {
+    parts.push(
+      `Remove ${found.map((filePath) => path.relative(ROOT, filePath)).join(', ')}; ` +
+        'only the root pnpm-lock.yaml is allowed.'
+    );
+  }
+  if (missingRootLockfile) parts.push('The root pnpm-lock.yaml is missing.');
+
+  throw new Error(`${parts.join(' ')} Then run \`pnpm install --frozen-lockfile\`.`);
 }
 
 function verifyJsWorkspaceInstall(target = 'all') {
@@ -1163,18 +1173,31 @@ function verifyJsWorkspaceInstall(target = 'all') {
 
   throw new Error(
     `Workspace dependencies are missing (${missing.join(', ')}). ` +
-      'Run `npm ci` from the repository root.'
+      'Run `pnpm install --frozen-lockfile` from the repository root.'
+  );
+}
+
+function ensurePnpm() {
+  const probe = runSilent('pnpm --version', { timeout: 10_000 });
+  if (probe.status === 0) return;
+
+  throw new Error(
+    `pnpm is not on PATH (running Node ${process.version} at ${process.execPath}). ` +
+      `This workspace pins ${ROOT_PACKAGE.packageManager || 'pnpm'}. ` +
+      'Run `nvm use` to load the version from .nvmrc, install pnpm globally, ' +
+      'or enable Corepack, then retry.'
   );
 }
 
 function ensureJsWorkspaceReady(target = 'all') {
+  ensurePnpm();
   verifyWorkspaceLockfilePolicy();
   verifyJsWorkspaceInstall(target);
 }
 
 function turbo(task, filter, extraArgs = '') {
   const filterFlag = filter ? ` --filter=${filter}` : '';
-  return run(`npx turbo run ${task}${filterFlag}${extraArgs}`);
+  return run(`pnpm exec turbo run ${task}${filterFlag}${extraArgs}`);
 }
 
 // --- Non-dev commands ------------------------------------------------------------
@@ -1561,7 +1584,7 @@ async function stopProcessGroup(pid) {
   if (isWin) {
     if (!isPidAlive(pid)) return true;
     // process.kill(pid) only terminates the shell on Windows; taskkill /T follows the
-    // mvnw/npx children (java, turbo, next, tsx) as well.
+    // mvnw/pnpm children (java, turbo, next, tsx) as well.
     runSilent(`taskkill /pid ${pid} /T /F`, { timeout: 15_000 });
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline && isPidAlive(pid)) {
@@ -1584,10 +1607,10 @@ async function stopProcessGroup(pid) {
     }
   };
 
-  // The recorded pid is a shell (spawn uses `shell: true`) and the server is a descendant
-  // in the same group. Waiting on the leader alone would return while that descendant
-  // still holds the port, and the caller would then clear its record. A foreground
-  // supervisor is not a group leader, so the pid itself has to be checked too.
+  // The recorded pid is the spawned process (a shell on Windows) and the server is a
+  // descendant in the same group. Waiting on the leader alone would return while that
+  // descendant still holds the port, and the caller would then clear its record. A
+  // foreground supervisor is not a group leader, so the pid itself has to be checked too.
   const groupAlive = () => {
     try {
       process.kill(-pid, 0);
@@ -1828,6 +1851,7 @@ async function main() {
         } else if (service === 'api') {
           run(`${mvnw} spotless:check --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
         } else {
+          ensureJsWorkspaceReady(service);
           turbo('lint', service, isFix ? ' -- --fix' : '');
         }
       } else {
@@ -1841,6 +1865,7 @@ async function main() {
         if (service === 'api') {
           run(`${mvnw} spotless:apply --no-transfer-progress`, { cwd: path.join(ROOT, 'api') });
         } else {
+          ensureJsWorkspaceReady(service);
           turbo(isFix ? 'format:fix' : 'format', service);
         }
       } else {

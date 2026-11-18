@@ -20,7 +20,11 @@ config.json
 # Logs
 npm-debug.log*
 yarn-debug.log*
+pnpm-debug.log*
 *.log
+
+# pnpm
+.pnpm-store/
 
 # Local attachment storage (default dev path for the API)
 api/data/

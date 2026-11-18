@@ -10,8 +10,9 @@ a dev session and are stopped only by `./nd stop --infra` (alias `./nd down --in
 
 ## Layout decisions that are easy to misread
 
-- npm workspaces are only `web` and `realtime`, orchestrated from the root by Turborepo 2. `api/` is a Maven module and **not** an npm workspace.
-- Exactly one lockfile: the root `package-lock.json`. `web/package-lock.json` / `realtime/package-lock.json` are rejected by `npm run check:lockfiles`, by `./nd`, and by CI. Add JS deps from the repo root, e.g. `npm install <pkg> -w web`.
+- pnpm workspaces are only `web` and `realtime`, orchestrated from the root by Turborepo 2. `api/` is a Maven module and **not** a pnpm workspace.
+- Exactly one lockfile: the root `pnpm-lock.yaml`. `web/pnpm-lock.yaml` / `realtime/pnpm-lock.yaml` are rejected by `pnpm run check:lockfiles`, by `./nd`, and by CI. Add JS deps from the repo root, e.g. `pnpm --filter web add <pkg>`.
+- `typescript` is aliased to `@typescript/typescript6` so ESLint and ts-jest can use the TS 6 JS compiler API; `@typescript/native` (`npm:typescript@7`) supplies the `tsc` binary. Do not point `typescript` back at 7: typescript-eslint refuses to start without the 6 API.
 - `web/types/document.types.ts` imports block types from `../realtime/src/types/blocks.ts` through the alias `@/../../realtime/src/types/blocks`; `web/Dockerfile` copies `realtime/src/types` before building web. Block-type changes affect both services.
 - `realtime/` is ESM (`"type": "module"`, `moduleResolution: NodeNext`): relative imports inside `src/` must use the `.js` extension even though the files are `.ts` (`import config from './config.js'`).
 - **Parallel worktrees** — `./nd dev` allocates three ports per worktree and persists them in `<git-common-dir>/nextdocs/instances/<id>.json`. Each worktree then gets `nextdocs_<id>` / `nextdocs_<id>_yhub` databases, a `yhub_<id>` Redis prefix and its own api/web/realtime processes; the main worktree keeps `nextdocs`, `nextdocs_yhub`, prefix `yhub` and 3000/8080/1234. Ports are sticky (`--new-ports`, `--port-offset N`, `ND_WEB_PORT`/`ND_API_PORT`/`ND_REALTIME_PORT`), `.nd/instance.env` carries this worktree's URLs for agents and e2e, and `./nd status` / `./nd urls` reprint them. Ports in this file and in the READMEs are the main worktree's; ask `./nd urls` instead of assuming. `./nd db reset` is scoped to the current worktree; shared containers are stopped only by `./nd stop --infra`.
@@ -48,13 +49,13 @@ the portable machine-readable interface, while `.nd/instance.env` is POSIX shell
 ./nd db prune        # drop databases of worktrees that no longer exist
 ./nd seed regular    # seed an empty local database; small|regular|large, --verify
 # seeded logins: <key>@nextdocs.test / NextDocs!2026; alice is the workspace owner
-npm run test:scripts # node:test for the nd/seed scripts (no database needed)
-npm run verify:instances # two-worktree concurrency/isolation check (Docker; several minutes)
-npm run verify        # git-hook checks (format/lint/test) against the branch diff
-npm run verify:all    # force every service, like a push to main (needs local Postgres)
-npm run e2e           # Playwright browser suite; needs the full stack on the E2E
-                      # database (e2e/README.md documents the exact env)
-npm run check:runtime-versions  # .nvmrc / .java-version / Dockerfile drift guard
+pnpm run test:scripts # node:test for the nd/seed scripts (no database needed)
+pnpm run verify:instances # two-worktree concurrency/isolation check (Docker; several minutes)
+pnpm run verify        # git-hook checks (format/lint/test) against the branch diff
+pnpm run verify:all    # force every service, like a push to main (needs local Postgres)
+pnpm run e2e           # Playwright browser suite; needs the full stack on the E2E
+                       # database (e2e/README.md documents the exact env)
+pnpm run check:runtime-versions  # .nvmrc / .java-version / Dockerfile drift guard
 ```
 
 `./nd --help` (also `-h` / `help`) prints usage and exits 0; an unknown command prints the
@@ -75,19 +76,19 @@ file of each pending service and never silently restarts a running stack.
 Single test / focused run (args after `--` are forwarded to Jest):
 
 ```bash
-npx turbo run test --filter=web -- tests/unit/lib/yjs.util.test.ts
-npx turbo run test --filter=realtime -- tests/unit/config.test.ts
+pnpm exec turbo run test --filter=web -- tests/unit/lib/yjs.util.test.ts
+pnpm exec turbo run test --filter=realtime -- tests/unit/config.test.ts
 cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 ```
 
 - Use Node 24.14.1 (`nvm use`); `engines` require `>=24.14.1`. A host default of Node 20 still runs tests but is below the required version.
-- `realtime` tests are ESM ts-jest and its `test` script sets `NODE_OPTIONS=--experimental-vm-modules`; run them via `npm`/`turbo`, never bare `jest`.
+- `realtime` tests are ESM ts-jest and its `test` script sets `NODE_OPTIONS=--experimental-vm-modules`; run them via `pnpm`/`turbo`, never bare `jest`.
 - No `.env` is needed for local dev: web/realtime fall back to localhost URLs, the API defaults to postgres on `localhost:5433`. The root `.env.example` is for containerized/API runs only. `./nd dev` generates ephemeral `JWT_SECRET` / OAuth keys per session, so sessions do not survive a restart unless you export them.
 
 ## CI and verification gotchas
 
 - CI is one `CI` workflow that calls the reusable per-service workflows. Pull requests stay path-filtered (`web/**`, `realtime/**`, `api/**`, plus shared JS/realtime types and root config), but every push to `main`, merge-queue batch, manual run, and nightly schedule runs the full suite. The browser suite (`ci-e2e`) runs on every non-PR event and on PRs that touch `web/**`, `realtime/**`, `api/**`, `e2e/**` or shared root config: it needs Postgres, Redis, Mailpit, the API, the realtime server and the web dev server at once, so it is path-filtered rather than unconditional on PRs. The only status branch protection should require is `CI / Required checks`; path-filtered workflows do not report a status when they are skipped.
-- Each service pipeline runs code checks and Docker image checks in separate parallel jobs. Web smoke-tests the image over HTTP; API starts the image against Postgres with Flyway and `ddl-auto=validate`; realtime runs the image-level integration tests. Dockerfiles must match `.nvmrc` / `.java-version`; `npm run check:runtime-versions` (part of CI) fails on drift.
+- Each service pipeline runs code checks and Docker image checks in separate parallel jobs. Web smoke-tests the image over HTTP; API starts the image against Postgres with Flyway and `ddl-auto=validate`; realtime runs the image-level integration tests. Dockerfiles must match `.nvmrc` / `.java-version`; `pnpm run check:runtime-versions` (part of CI) fails on drift.
 - Java formatting is **not** checked by `mvn test`: `spotless:check` is bound to `verify`, which CI runs in the API checks job. Run `./nd lint api` (or `./nd format api --fix`, Spotless + palantirJavaFormat) before pushing; do not hand-format Java.
 - Flyway migrations in `api/src/main/resources/db/migration` are never applied by the H2 tests (test properties disable Flyway; the local suite uses Hibernate `create-drop`). The PostgreSQL-backed migration suites in CI do apply Flyway, and the API Docker job boots the real image with `ddl-auto=validate`, so a migration/entity mismatch fails CI. Exercise new SQL against the `./nd` Postgres container too. Hibernate must not manage the schema — every schema change needs a migration file.
 - API tests run on H2 locally, while CI starts a Postgres service with `SPRING_DATASOURCE_*` overrides for the same suite — avoid H2-only SQL in repositories.
@@ -96,7 +97,7 @@ cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 
 ## Conventions
 
-- Git hooks live in `.husky/*` (thin sh wrappers around `scripts/hooks.js`) and are installed by `npm ci` through the root `prepare` script: `pre-commit` runs lint-staged (Prettier + ESLint `--fix` per workspace, Spotless per staged Java file), `commit-msg` validates the subject. `npm run verify` runs the format/lint/test checks manually against the branch diff (tests otherwise run in CI); bypass a hook with `SKIP_HOOKS=1`, `SKIP_HOOKS=<hook>`, `HUSKY=0`, or `--no-verify`.
+- Git hooks live in `.husky/*` (thin sh wrappers around `scripts/hooks.js`) and are installed by `pnpm install` through the root `prepare` script: `pre-commit` runs lint-staged (Prettier + ESLint `--fix` per workspace, Spotless per staged Java file), `commit-msg` validates the subject. `pnpm run verify` runs the format/lint/test checks manually against the branch diff (tests otherwise run in CI); bypass a hook with `SKIP_HOOKS=1`, `SKIP_HOOKS=<hook>`, `HUSKY=0`, or `--no-verify`.
 - lint-staged leaves its `lint-staged automatic backup` stash behind when it cannot restore the tree (the hook prints recovery commands).
 - Commit subjects use an area prefix: `editor:`, `sidebar:`, `layout:`, `api:`, `readme:`, `build(deps):` (enforced by the `commit-msg` hook; max 100 characters, blank line before the body).
 - Icons are hand-written SVG components in `web/icons` (`IconBase` + barrel export); there is no icon library dependency — add a component rather than a package.

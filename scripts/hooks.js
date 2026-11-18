@@ -21,7 +21,7 @@ const ROOT = path.resolve(__dirname, '..');
 const API_DIR = path.join(ROOT, 'api');
 const isWin = process.platform === 'win32';
 const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
-const LOCKFILE_SCRIPT = path.join(ROOT, 'scripts', 'check-workspace-lockfiles.js');
+const LOCKFILE_SCRIPT = path.join(ROOT, 'scripts', 'check-lockfiles.js');
 
 // Commit subject convention: "<area>: <description>", e.g.
 // "editor: Add alert block", "build(deps): bump jest", "api/schema: Add migration".
@@ -31,7 +31,9 @@ const GENERATED_SUBJECTS = [/^Merge\b/, /^Revert\b/, /^fixup!/, /^squash!/];
 
 // Root files that can change how the JS workspaces build or verify.
 const ROOT_JS_PATTERNS = [
-  /^package(-lock)?\.json$/,
+  /^package\.json$/,
+  /^pnpm-lock\.yaml$/,
+  /^pnpm-workspace\.ya?ml$/,
   /^turbo\.json$/,
   /^tsconfig\.base\.json$/,
   /^\.prettierrc$/,
@@ -124,6 +126,16 @@ function checkWorkspaceLockfiles() {
   return run(process.execPath, [LOCKFILE_SCRIPT]).status;
 }
 
+function hasPnpm() {
+  const result = spawnSync('pnpm', ['--version'], {
+    stdio: 'ignore',
+    cwd: ROOT,
+    shell: isWin,
+    timeout: 10_000,
+  });
+  return !result.error && result.status === 0;
+}
+
 function runPreCommit() {
   const skip = shouldSkip('pre-commit');
   if (skip) {
@@ -136,9 +148,19 @@ function runPreCommit() {
     return 1;
   }
 
+  if (!hasPnpm()) {
+    error(
+      `✖ pre-commit blocked: pnpm is not on PATH (running Node ${process.version}). ` +
+        'Run `nvm use`, install pnpm 12.21.0, or enable Corepack, then retry.'
+    );
+    return 1;
+  }
+
   const lintStaged = binary('lint-staged');
   if (!fs.existsSync(lintStaged)) {
-    error('✖ pre-commit blocked: dependencies are not installed. Run `npm ci` from the repo root.');
+    error(
+      '✖ pre-commit blocked: dependencies are not installed. Run `pnpm install --frozen-lockfile` from the repo root.'
+    );
     return 1;
   }
 
@@ -315,7 +337,9 @@ function runChecks(files, forceAll = false) {
   if (jsPackages.length > 0) {
     const turbo = binary('turbo');
     if (!fs.existsSync(turbo)) {
-      warn('Skipping JS checks: dependencies are not installed. Run `npm ci` from the repo root.');
+      warn(
+        'Skipping JS checks: dependencies are not installed. Run `pnpm install --frozen-lockfile` from the repo root.'
+      );
       failures.push(`${jsPackages.join(' + ')} (turbo not installed)`);
     } else {
       const filters = jsPackages.map((pkg) => `--filter=${pkg}`);
@@ -335,7 +359,7 @@ function runChecks(files, forceAll = false) {
 
   if (failures.length > 0) {
     error(`✖ checks failed: ${failures.join(', ')}`);
-    info('  Fix them and run `npm run verify` again.');
+    info('  Fix them and run `pnpm run verify` again.');
     return 1;
   }
 
@@ -363,8 +387,8 @@ function usage() {
   info('Usage: node scripts/hooks.js <pre-commit|commit-msg <file>|verify [base] [--all]>');
   info('  pre-commit    lint-staged for staged files (run by .husky/pre-commit)');
   info('  commit-msg    validate a commit message file (run by .husky/commit-msg)');
-  info('  verify [base] format/lint/test the services the branch touches (npm run verify)');
-  info('  verify --all  force every service, like a push to main (npm run verify:all)');
+  info('  verify [base] format/lint/test the services the branch touches (pnpm run verify)');
+  info('  verify --all  force every service, like a push to main (pnpm run verify:all)');
   info('  java-spotless <files...>  internal: Spotless runner used by lint-staged.config.js');
 }
 

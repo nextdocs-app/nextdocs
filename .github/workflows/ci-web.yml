@@ -23,24 +23,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.21.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate workspace lockfile policy
-        run: npm run check:lockfiles
+        run: pnpm run check:lockfiles
 
       - name: Install dependencies
-        run: npm ci --no-audit --fund=false
+        run: pnpm install --frozen-lockfile
 
       - name: Check formatting and lint
-        run: npx turbo run format lint --filter=web
+        run: pnpm exec turbo run format lint --filter=web
 
       - name: Run tests with coverage
-        run: npm run test:coverage -w web -- --ci
+        run: pnpm --filter web run test:coverage --ci
 
       - name: Rebase coverage paths to the repository root
         if: ${{ !cancelled() }}
@@ -58,7 +63,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Build
-        run: npx turbo run build --filter=web
+        run: pnpm exec turbo run build --filter=web
 
   docker:
     name: Docker image

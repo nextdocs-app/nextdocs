@@ -22,7 +22,7 @@ function setupDom() {
     jsdom = require('jsdom');
   } catch {
     throw new Error(
-      'The seed needs jsdom to load the BlockNote editor. Run `npm ci` from the repo root, then retry.'
+      'The seed needs jsdom to load the BlockNote editor. Run `pnpm install` from the repo root, then retry.'
     );
   }
   const dom = new jsdom.JSDOM('<!doctype html><html><body></body></html>', {
@@ -81,7 +81,7 @@ async function getConverter() {
   } catch (err) {
     throw new Error(
       `The seed resolves BlockNote, @y/y and jsdom through web/package.json, and one is missing (${err.message}). ` +
-        'Run `npm ci` from the repo root, then retry.'
+        'Run `pnpm install` from the repo root, then retry.'
     );
   }
 

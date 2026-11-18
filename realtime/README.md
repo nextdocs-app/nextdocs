@@ -6,10 +6,10 @@ the permissions the API reports.
 
 ## Setup
 
-Run commands from the repository root so npm workspaces use the single root lockfile.
+Run commands from the repository root so pnpm workspaces use the single root lockfile.
 
 ```bash
-npm ci
+pnpm install --frozen-lockfile
 ./nd dev            # starts Postgres, Redis, API, web and realtime
 ```
 
@@ -18,7 +18,7 @@ Its schema is created by the only DDL path in the package:
 
 ```bash
 POSTGRES=postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub \
-  node node_modules/@y/hub/bin/init-db.js
+  node realtime/node_modules/@y/hub/bin/init-db.js
 ```
 
 `./nd dev` and the Docker image run this for you. It is idempotent.
@@ -214,14 +214,14 @@ frame looked exactly like a network fault to every client.
 ## Development
 
 ```bash
-npm run dev  -w realtime
-npm run test -w realtime
-npm run lint -w realtime
+pnpm --filter realtime dev
+pnpm --filter realtime test
+pnpm --filter realtime lint
 ```
 
-`npm run test:integration -w realtime` runs the suite that needs real stores. It expects
+`pnpm --filter realtime test:integration` runs the suite that needs real stores. It expects
 Postgres and Redis (defaults to `localhost:5433` and `localhost:6379`, overridable with
-`POSTGRES` and `REDIS`) and a built `dist/` (`npm run build -w realtime`). The global
+`POSTGRES` and `REDIS`) and a built `dist/` (`pnpm --filter realtime build`). The global
 setup creates the Yhub database and applies its schema. Set `DOCKER_TESTS=1` with
 `REALTIME_IMAGE` pointing at a built image to include the PID 1 and schema-bootstrap
 checks; CI builds the image before that run.

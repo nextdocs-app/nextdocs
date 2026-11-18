@@ -1,4 +1,4 @@
-# Keep the Java line in sync with .java-version; `npm run check:runtime-versions` fails otherwise.
+# Keep the Java line in sync with .java-version; `pnpm run check:runtime-versions` fails otherwise.
 FROM maven:3.10-eclipse-temurin-21-alpine AS build
 WORKDIR /app
 COPY pom.xml .

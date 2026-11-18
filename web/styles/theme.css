@@ -1,7 +1,7 @@
 /* Tailwind directives and the design tokens (light + dark) every surface reads. */
 
 /* Code needed for ShadCN with BlockNote - from official example */
-@source "../../node_modules/@blocknote/shadcn";
+@source "../node_modules/@blocknote/shadcn";
 
 @custom-variant dark (&:is(.dark *));
 

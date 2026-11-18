@@ -1,0 +1,59 @@
+packages:
+  - web
+  - realtime
+
+# pnpm 10+ blocks dependency lifecycle scripts by default. These are the packages in
+# this tree that genuinely need a build step; keep the list minimal and reviewed.
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+  fsevents: true
+  unrs-resolver: true
+
+# @y/hub 0.10.1 depends on uws from a pinned GitHub tag (v20.69.0). pnpm's default
+# rejects exotic transitive sources; the realtime server cannot install without this.
+blockExoticSubdeps: false
+
+# Security fixes for transitive advisories. Keep each entry scoped to the major
+# line it is replacing; a bare name would force unrelated consumers onto a new
+# API. Versions are the first patched releases (or the latest patch of that line).
+overrides:
+  '@babel/core': 7.29.13
+  'baseline-browser-mapping': 2.11.38
+  'browserslist': 4.29.6
+  'brace-expansion@1': 1.1.22
+  'brace-expansion@2': 2.1.7
+  'brace-expansion@5': 5.0.13
+  dompurify: 3.4.18
+  glob: 14.0.6
+  'js-yaml@3': 3.15.2
+  'katex@0.16': 0.18.10
+  'minimatch@3': 3.1.5
+  'minimatch@10': 11.0.9
+  'picomatch@2': 2.3.2
+  'source-map-js': 1.2.2
+  # eslint-config-next's ^8.56 range kept a second 8.72.2 copy whose
+  # typescript-estree pulls vulnerable minimatch 10. Release the whole
+  # coordinated set together; mixing plugin/parser versions is unsupported.
+  typescript-eslint: 8.73.0
+  '@typescript-eslint/eslint-plugin': 8.73.0
+  '@typescript-eslint/parser': 8.73.0
+  '@typescript-eslint/type-utils': 8.73.0
+  '@typescript-eslint/typescript-estree': 8.73.0
+  '@typescript-eslint/utils': 8.73.0
+  '@typescript-eslint/project-service': 8.73.0
+  '@typescript-eslint/tsconfig-utils': 8.73.0
+
+# Advisories reviewed and accepted as unreachable in this codebase. They are
+# transitive to packages we do not call on those paths, so an override would only
+# trade a real API break for a scanner warning.
+auditConfig:
+  ignoreGhsas:
+    # minio calls query-string.stringify only; decode-uri-component parses input.
+    - GHSA-qr28-fpjm-wq7f
+    - GHSA-vcc3-ghjq-m6fr
+    # The S3 notification parser is not mounted; stream-json is unused.
+    - GHSA-hqr4-qq8f-hg3x
+    - GHSA-mjw6-4jj6-33hc
+    - GHSA-528h-pc64-c93x
+

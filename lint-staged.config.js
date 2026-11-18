@@ -25,8 +25,8 @@ module.exports = {
   'web/**/*.{ts,tsx,js,mjs,cjs,json,md}': prettier,
   'realtime/**/*.{ts,js,mjs,cjs,json,md}': prettier,
 
-  'web/**/*.{ts,tsx,js,mjs,cjs}': 'npm run lint -w web -- --fix',
-  'realtime/**/*.{ts,js,mjs,cjs}': 'npm run lint -w realtime -- --fix',
+  'web/**/*.{ts,tsx,js,mjs,cjs}': 'pnpm --filter web exec eslint --fix',
+  'realtime/**/*.{ts,js,mjs,cjs}': 'pnpm --filter realtime exec eslint --fix',
 
   'api/**/*.java': spotless,
 };

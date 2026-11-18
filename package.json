@@ -2,17 +2,14 @@
   "name": "nextdocs-root",
   "private": true,
   "license": "AGPL-3.0-only",
-  "packageManager": "npm@11.6.2",
+  "packageManager": "pnpm@12.21.0",
   "engines": {
     "node": ">=24.14.1",
-    "npm": ">=11.6.2"
+    "pnpm": ">=12.21.0"
   },
-  "workspaces": [
-    "web",
-    "realtime"
-  ],
   "scripts": {
-    "check:lockfiles": "node scripts/check-workspace-lockfiles.js",
+    "audit": "pnpm audit --audit-level=high",
+    "check:lockfiles": "node scripts/check-lockfiles.js",
     "check:runtime-versions": "node scripts/check-runtime-versions.js",
     "verify": "node scripts/hooks.js verify",
     "verify:all": "node scripts/hooks.js verify --all",
