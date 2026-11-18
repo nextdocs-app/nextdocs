@@ -9,6 +9,8 @@ const { spawn } = require('node:child_process');
 
 const {
   acquireLock,
+  acquireLockSync,
+  breakStaleLock,
   createOwner,
   processIdentity,
   readLockOwner,
@@ -126,4 +128,103 @@ test('withLock reports the holder when it times out', async () => {
   } finally {
     releaseLock(holder);
   }
+});
+
+test('a lock that changes hands before the cleanup is put back, not deleted', async () => {
+  const file = lockPath();
+  const child = liveChild();
+  try {
+    // The caller decided "stale" from an earlier read; by the time it acts, a live owner
+    // has taken the lock. Deleting on the old token would delete that owner's lock.
+    const live = {
+      ...createOwner('new owner'),
+      pid: child.pid,
+      identity: processIdentity(child.pid),
+    };
+    fs.writeFileSync(file, `${JSON.stringify(live)}\n`);
+
+    assert.equal(breakStaleLock(file), false);
+    assert.equal(readLockOwner(file).token, live.token, 'the live owner keeps its lock');
+    assert.equal(fs.existsSync(file), true);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a stale lock is captured and removed so the next acquisition starts clean', async () => {
+  const file = lockPath();
+  fs.writeFileSync(file, `${JSON.stringify(deadOwner())}\n`);
+
+  assert.equal(breakStaleLock(file), true);
+  assert.equal(fs.existsSync(file), false);
+
+  // Nothing else holds it now, so the next acquisition simply creates one.
+  const handle = await acquireLock(file, { waitMs: 0, label: 'next' });
+  assert.ok(handle);
+  releaseLock(handle);
+});
+
+test('the synchronous lock is exclusive, recovers a dead owner and can wait', async () => {
+  const file = lockPath();
+  const first = acquireLockSync(file, { label: 'first' });
+  assert.ok(first);
+  assert.equal(
+    acquireLockSync(file, { waitMs: 0, label: 'second' }),
+    null,
+    'a held lock must refuse a synchronous second owner'
+  );
+  releaseLock(first);
+
+  fs.writeFileSync(file, `${JSON.stringify(deadOwner())}\n`);
+  const recovered = acquireLockSync(file, { waitMs: 0, label: 'recovered' });
+  assert.ok(recovered, 'the synchronous path must recover a dead owner without an age wait');
+  releaseLock(recovered);
+
+  const holder = acquireLockSync(file, { label: 'holder' });
+  const startedAt = Date.now();
+  assert.equal(acquireLockSync(file, { waitMs: 120, pollMs: 10 }), null);
+  assert.ok(Date.now() - startedAt >= 100, 'the wait is bounded but real');
+  releaseLock(holder);
+});
+
+test('concurrent recoverers delete one stale lock exactly once', async () => {
+  const file = lockPath();
+  const start = path.join(path.dirname(file), 'start');
+  fs.writeFileSync(file, `${JSON.stringify(deadOwner())}\n`);
+
+  // Real processes, released together: the rename is what decides which one may remove the
+  // captured lock, and the others must see it already gone instead of deleting a new one.
+  const script = `
+    const fs = require('fs');
+    const { breakStaleLock } = require(${JSON.stringify(require.resolve('../lock'))});
+    const [file, start] = process.argv.slice(1);
+    while (!fs.existsSync(start)) {}
+    process.stdout.write(breakStaleLock(file) ? 'true' : 'false');
+  `;
+  const children = Array.from({ length: 5 }, () =>
+    spawn(process.execPath, ['-e', script, file, start], { stdio: ['ignore', 'pipe', 'ignore'] })
+  );
+  const results = children.map(
+    (child) =>
+      new Promise((resolve) => {
+        let out = '';
+        child.stdout.on('data', (chunk) => {
+          out += chunk;
+        });
+        child.on('close', () => resolve(out.trim()));
+      })
+  );
+  fs.writeFileSync(start, '');
+  const removed = await Promise.all(results);
+  assert.equal(
+    removed.filter((value) => value === 'true').length,
+    1,
+    'exactly one recoverer may own the removal'
+  );
+  assert.equal(fs.existsSync(file), false);
+  // The captured copy is removed by the recoverer, never left behind.
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(file)).filter((name) => name.endsWith('.stale')),
+    []
+  );
 });

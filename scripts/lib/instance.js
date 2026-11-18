@@ -9,6 +9,7 @@ const { PORT_NAMES, allocatePorts } = require('./ports');
 const {
   LOCK_TIMEOUT_MS,
   acquireLock,
+  acquireLockSync,
   describeOwner,
   readLockOwner,
   releaseLock,
@@ -34,6 +35,14 @@ const DEFAULT_PORTS = { web: 3000, api: 8080, realtime: 1234 };
 const SERVICE_NAMES = ['web', 'api', 'realtime'];
 const RECORD_VERSION = 2;
 const MAX_ID_LENGTH = 24;
+/**
+ * How long a new supervisor waits for the registry lock. A start can afford to wait: the
+ * lock is held for a short read-modify-write, and failing here would start services that
+ * `./nd stop` cannot find.
+ */
+const SUPERVISOR_START_WAIT_MS = 10_000;
+/** How long an exiting supervisor waits: long enough for a real RMW, short enough to exit. */
+const SUPERVISOR_CLEAR_WAIT_MS = 2_000;
 
 const PINNED_PORT_ENV = {
   web: 'ND_WEB_PORT',
@@ -512,29 +521,79 @@ function recordIsRunning(record) {
 /**
  * Add or replace this process's supervisor entry. Other supervisors in the worktree are
  * left alone: a second terminal's start must not erase the first one from the record.
+ *
+ * The read-modify-write runs under the registry lock, like every other write to the
+ * record: a start that registers while another supervisor exits would otherwise be
+ * overwritten by a clear that still had the older list in hand.
  */
-function setSupervisor(instance, pid = process.pid, services = null) {
-  const record = readRecord(instance.registry, instance.id);
-  if (!record) return null;
+function setSupervisor(instance, pid = process.pid, services = null, { waitMs } = {}) {
   const owned = Array.isArray(services)
     ? SERVICE_NAMES.filter((name) => services.includes(name))
     : [];
-  const supervisors = record.supervisors.filter((entry) => Number(entry.pid) !== Number(pid));
-  supervisors.push({
-    pid: Number(pid),
-    services: owned.length > 0 ? owned : null,
-    startedAt: Date.now(),
-  });
-  return updateRecord(instance.registry, instance.id, { supervisors });
+  const written = mutateSupervisors(
+    instance,
+    (supervisors) => [
+      ...supervisors.filter((entry) => Number(entry.pid) !== Number(pid)),
+      {
+        pid: Number(pid),
+        services: owned.length > 0 ? owned : null,
+        startedAt: Date.now(),
+      },
+    ],
+    { waitMs: waitMs ?? SUPERVISOR_START_WAIT_MS }
+  );
+  if (written === undefined) {
+    throw new Error(
+      `Could not record the foreground start of '${instance.id}': another ./nd process ` +
+        `holds ${registryLockPath(instance.registry)}. Retry when it finishes.`
+    );
+  }
+  if (written === null) {
+    throw new Error(
+      `No instance record for '${instance.id}' in ${instance.registry}; run ./nd dev from ` +
+        'its worktree instead of one that writes that registry.'
+    );
+  }
+  return written;
 }
 
-/** Clear only the exiting supervisor's entry. */
-function clearSupervisor(instance, pid = process.pid) {
-  const record = readRecord(instance.registry, instance.id);
-  if (!record) return null;
-  const supervisors = record.supervisors.filter((entry) => Number(entry.pid) !== Number(pid));
-  if (supervisors.length === record.supervisors.length) return record;
-  return updateRecord(instance.registry, instance.id, { supervisors });
+/** Clear only the exiting supervisor's entry, under the same lock as a registration. */
+function clearSupervisor(instance, pid = process.pid, { waitMs } = {}) {
+  const written = mutateSupervisors(
+    instance,
+    (supervisors) => {
+      const next = supervisors.filter((entry) => Number(entry.pid) !== Number(pid));
+      return next.length === supervisors.length ? null : next;
+    },
+    // A clear runs on the way out of `./nd dev`, in an `exit` handler where a long wait
+    // would hang the terminal. Giving up leaves this process's own entry behind, which
+    // `status` and `stop` already ignore once the pid is gone.
+    { waitMs: waitMs ?? SUPERVISOR_CLEAR_WAIT_MS }
+  );
+  return written === undefined ? null : written;
+}
+
+/**
+ * Apply one supervisor change to the record under the registry lock. `undefined` means
+ * the lock could not be taken, `null` that the record is gone, the record otherwise.
+ * Synchronous on purpose: the exit handler cannot await, and the registry lock is only
+ * ever held for a short read-modify-write.
+ */
+function mutateSupervisors(instance, mutate, { waitMs }) {
+  const handle = acquireLockSync(registryLockPath(instance.registry), {
+    waitMs,
+    label: 'nd supervisors',
+  });
+  if (!handle) return undefined;
+  try {
+    const record = readRecord(instance.registry, instance.id);
+    if (!record) return null;
+    const supervisors = mutate(record.supervisors);
+    if (!supervisors) return record;
+    return updateRecord(instance.registry, instance.id, { supervisors });
+  } finally {
+    releaseLock(handle);
+  }
 }
 
 /**

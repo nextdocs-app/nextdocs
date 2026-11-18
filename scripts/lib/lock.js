@@ -103,26 +103,66 @@ function createOwnerFile(file, owner) {
 }
 
 /**
- * Remove a lock whose owner is verified gone. The token is re-read immediately before
- * unlinking so two recoverers cannot remove a lock that a third process just took.
+ * Whether the captured copy belongs to an owner that is gone. The captured file has a
+ * name only this process knows, so its contents cannot change under the decision, unlike
+ * the lock path itself.
  */
-function breakStaleLock(file) {
-  const observed = readLockOwner(file);
-  if (observed) {
-    if (ownerIsAlive(observed)) return false;
-    const current = readLockOwner(file);
-    if (!current || current.token !== observed.token) return false;
-    fs.rmSync(file, { force: true });
-    return true;
-  }
-  let age;
+function capturedOwnerIsGone(captured) {
+  const owner = readLockOwner(captured);
+  if (owner) return !ownerIsAlive(owner);
+  // No readable owner: a creator may still be filling the file. Leave it alone until the
+  // grace period passes, then recover it like a dead owner.
   try {
-    age = Date.now() - fs.statSync(file).mtimeMs;
+    return Date.now() - fs.statSync(captured).mtimeMs >= OWNER_GRACE_MS;
   } catch {
     return false;
   }
-  if (age < OWNER_GRACE_MS) return false;
-  fs.rmSync(file, { force: true });
+}
+
+/**
+ * Put a captured lock back under its canonical name, without replacing a lock created
+ * while it was aside. `link` is create-if-absent, so whichever writer loses keeps its
+ * file intact and the other one is not duplicated.
+ */
+function restoreCapturedLock(captured, file) {
+  try {
+    fs.linkSync(captured, file);
+    return true;
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    return false;
+  } finally {
+    fs.rmSync(captured, { force: true });
+  }
+}
+
+/**
+ * Remove a lock whose owner is gone, or put it back when it turned out to be live.
+ *
+ * The lock path is captured with `rename`, not deleted after a token comparison: another
+ * process can replace the lock between the check and the delete, and the delete then
+ * removes a lock its new owner is holding. After the rename the contents belong to this
+ * process alone, so the owner is decided on the same bytes the delete would have removed.
+ * A lock that changed hands in that window is restored untouched; the empty window left
+ * by the rename is closed by `link` refusing to overwrite a lock created in it.
+ */
+function breakStaleLock(file) {
+  const captured = `${file}.${crypto.randomBytes(6).toString('hex')}.stale`;
+  try {
+    fs.renameSync(file, captured);
+  } catch (err) {
+    // Another recoverer captured (and removed) it first; it may also have been released.
+    if (err.code === 'ENOENT') return false;
+    // Windows reports an open-by-another-process rename as EPERM. That is a sharing
+    // violation, not a broken lock: leave it and let the caller retry or wait.
+    if (err.code === 'EPERM') return false;
+    throw err;
+  }
+  if (!capturedOwnerIsGone(captured)) {
+    restoreCapturedLock(captured, file);
+    return false;
+  }
+  fs.rmSync(captured, { force: true });
   return true;
 }
 
@@ -156,6 +196,43 @@ async function acquireLock(file, { waitMs = 0, pollMs = 50, label = 'nd', onWait
   }
 }
 
+/**
+ * Block the thread. The synchronous lock path has to sleep without promises: it runs in
+ * the `exit` handler, where awaiting anything would let the process finish first.
+ */
+function sleepSync(ms) {
+  // `Atomics.wait` is a real sleep, not a spin, and needs no child process.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Synchronous sibling of {@link acquireLock}, for callers that cannot await (an `exit`
+ * handler). `waitMs` bounds the wait, like the async version. Node permits
+ * `Atomics.wait` on the main thread; the event loop is blocked only by the caller that
+ * chose this path.
+ */
+function acquireLockSync(file, { waitMs = 0, pollMs = 25, label = 'nd' } = {}) {
+  const owner = createOwner(label);
+  const deadline = Date.now() + waitMs;
+  let recoveries = 0;
+
+  for (;;) {
+    if (createOwnerFile(file, owner)) return { file, owner, label };
+
+    const holder = readLockOwner(file);
+    if (!(holder && ownerIsAlive(holder)) && recoveries < MAX_STALE_RECOVERIES) {
+      if (breakStaleLock(file)) {
+        recoveries += 1;
+        continue;
+      }
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    sleepSync(Math.min(pollMs, remaining));
+  }
+}
+
 function releaseLock(handle) {
   if (!handle) return;
   const current = readLockOwner(handle.file);
@@ -185,6 +262,7 @@ async function withLock(file, options, fn) {
 module.exports = {
   LOCK_TIMEOUT_MS,
   acquireLock,
+  acquireLockSync,
   breakStaleLock,
   createOwner,
   describeOwner,

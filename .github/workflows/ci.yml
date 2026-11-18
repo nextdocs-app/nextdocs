@@ -108,6 +108,11 @@ jobs:
               - "docker/**"
               - "docker-compose.yml"
               - ".github/workflows/**"
+            # The CLI's tests cover its own scripts only; a change elsewhere cannot break
+            # them, and they need neither Docker nor the services.
+            cli:
+              - "scripts/**"
+              - "package.json"
             # The browser suite drives all three services, so it follows the union
             # of the paths that can change what they serve. Formatting-only files
             # and dev tooling are left out: they cannot change the running app.
@@ -135,25 +140,33 @@ jobs:
           REALTIME: ${{ steps.filter.outputs.realtime }}
           API: ${{ steps.filter.outputs.api }}
           E2E: ${{ steps.filter.outputs.e2e }}
+          CLI: ${{ steps.filter.outputs.cli }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             web=${WEB:-false}
             realtime=${REALTIME:-false}
             api=${API:-false}
             e2e=${E2E:-false}
+            cli=${CLI:-false}
           else
             # main pushes, merge queues, schedules, and manual runs get everything.
             web=true
             realtime=true
             api=true
             e2e=true
+            cli=true
           fi
           {
             echo "web=$web"
             echo "realtime=$realtime"
             echo "api=$api"
             echo "e2e=$e2e"
+            echo "cli=$cli"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Test development CLI
+        if: steps.resolve.outputs.cli == 'true'
+        run: npm run test:scripts
 
   web:
     name: Web

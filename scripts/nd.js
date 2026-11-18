@@ -49,7 +49,6 @@ const {
   clearSupervisor,
   servicesOf,
   readRecord,
-  withRegistryLock,
 } = require('./lib/instance');
 const { describeOwner } = require('./lib/lock');
 const { portOpen } = require('./lib/ports');
@@ -634,9 +633,9 @@ async function devCommand() {
     // Claimed before the children bind: a reset that arrives later sees this process in
     // the record and refuses, even during the cold start before the first answer.
     writeInstanceEnvFile(instance);
-    // Under the registry lock: two terminals that start at the same time must both end
-    // up in the supervisor list instead of overwriting each other.
-    await withRegistryLock(instance.registry, () => setSupervisor(instance, process.pid, services));
+    // Records this terminal's supervisor entry under the registry lock; throwing here
+    // fails the start before any child is spawned, so nothing runs unrecorded.
+    setSupervisor(instance, process.pid, services);
   } catch (err) {
     // Collected rather than printed: `process.exit` inside the try would skip the
     // release below and leave the worktree claimed.

@@ -37,6 +37,7 @@ const {
   withRegistryLock,
 } = require('../instance');
 const { allocatePorts, ephemeralPort, isPortFree } = require('../ports');
+const { acquireLock, releaseLock } = require('../lock');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'nd-instance-'));
@@ -326,6 +327,135 @@ test('two foreground supervisors are kept side by side and cleared independently
     stopChild(api);
     stopChild(web);
   }
+});
+
+test('a supervisor clear waits for the registry lock instead of overwriting it', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'clear-race', 'nextdocs');
+  fs.mkdirSync(worktree, { recursive: true });
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  const read = () => listRecords(instance.registry).find((entry) => entry.id === instance.id);
+  const api = liveChild();
+  const web = liveChild();
+
+  try {
+    setSupervisor(instance, api.pid, ['api']);
+    setSupervisor(instance, web.pid, ['web']);
+
+    // Simulate the interleaving: another process holds the registry lock while it
+    // registers a supervisor. A clear that writes from its own stale read would drop
+    // that registration; taking the lock makes it wait instead.
+    const handle = await acquireLock(path.join(path.dirname(instance.registry), 'lock'), {
+      label: 'concurrent start',
+    });
+    try {
+      const during = clearSupervisor(instance, api.pid, { waitMs: 100 });
+      assert.equal(during, null, 'a contended clear must not write');
+      assert.deepEqual(
+        read()
+          .supervisors.map((entry) => entry.pid)
+          .sort((left, right) => left - right),
+        [api.pid, web.pid].sort((left, right) => left - right),
+        'the record is untouched while another process owns the lock'
+      );
+    } finally {
+      releaseLock(handle);
+    }
+
+    clearSupervisor(instance, api.pid);
+    assert.deepEqual(
+      read().supervisors.map((entry) => entry.pid),
+      [web.pid]
+    );
+  } finally {
+    stopChild(api);
+    stopChild(web);
+  }
+});
+
+test('a start that cannot record its supervisor fails before anything runs', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'set-race', 'nextdocs');
+  fs.mkdirSync(worktree, { recursive: true });
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  const read = () => listRecords(instance.registry).find((entry) => entry.id === instance.id);
+
+  const handle = await acquireLock(path.join(path.dirname(instance.registry), 'lock'), {
+    label: 'db reset',
+  });
+  try {
+    assert.throws(
+      () => setSupervisor(instance, process.pid, ['api'], { waitMs: 100 }),
+      /registry|another \.\/nd process/i
+    );
+    assert.deepEqual(read().supervisors, [], 'a refused registration must not be half-written');
+  } finally {
+    releaseLock(handle);
+  }
+
+  setSupervisor(instance, process.pid, ['api']);
+  assert.deepEqual(
+    read().supervisors.map((entry) => entry.pid),
+    [process.pid]
+  );
+});
+
+test('supervisors starting and exiting in parallel keep every registration', async () => {
+  const repo = fakeRepository();
+  const worktree = path.join(repo.root, 'worktrees', 'parallel-supervisors', 'nextdocs');
+  fs.mkdirSync(worktree, { recursive: true });
+  const instance = await resolveInstance({ worktree, env: {}, commonDir: repo.commonDir });
+  const read = () => listRecords(instance.registry).find((entry) => entry.id === instance.id);
+  const ready = path.join(tempDir(), 'ready');
+  fs.mkdirSync(ready);
+
+  // Each child registers itself, waits until all of them are recorded, then clears only
+  // its own entry. A lost registration makes the barrier time out and a lost clear leaves
+  // an entry behind, so both halves of the race are observable.
+  const agents = 4;
+  const script = `
+    const fs = require('fs');
+    const path = require('path');
+    const { setSupervisor, clearSupervisor, listRecords } = require(${JSON.stringify(
+      require.resolve('../instance')
+    )});
+    const [registryAndId, readyDir, expected] = process.argv.slice(1);
+    const instance = JSON.parse(registryAndId);
+    setSupervisor(instance, process.pid, ['api']);
+    fs.writeFileSync(path.join(readyDir, String(process.pid)), '');
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const peers = fs.readdirSync(readyDir).length;
+      const record = listRecords(instance.registry).find((entry) => entry.id === instance.id);
+      const live = record ? record.supervisors.filter((entry) => entry.pid !== process.pid) : [];
+      if (peers >= Number(expected) && live.length >= Number(expected) - 1) break;
+      if (Date.now() > deadline) process.exit(4);
+    }
+    clearSupervisor(instance, process.pid);
+  `;
+  const children = Array.from({ length: agents }, () =>
+    spawn(
+      process.execPath,
+      [
+        '-e',
+        script,
+        JSON.stringify({ registry: instance.registry, id: instance.id }),
+        ready,
+        String(agents),
+      ],
+      { stdio: 'ignore' }
+    )
+  );
+  const codes = await Promise.all(
+    children.map(
+      (child) =>
+        new Promise((resolve) => {
+          child.on('close', (code) => resolve(code));
+        })
+    )
+  );
+  assert.deepEqual(codes, [0, 0, 0, 0], 'every child must see all four registrations and clear');
+  assert.deepEqual(read().supervisors, [], 'a clear removes only its own entry');
 });
 
 test('detached pids are recorded, filtered by liveness, and leave supervisors alone', async () => {
