@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="260" viewBox="0 0 640 260" role="img" aria-label="Escalation flow after a page">
+  <rect width="640" height="260" fill="#FFFFFF"/>
+  <g font-family="Inter, Arial, sans-serif" font-size="14" fill="#101828">
+    <rect x="24" y="40" width="150" height="56" rx="10" fill="#EFF4FF" stroke="#1D4ED8"/>
+    <text x="46" y="74">Page primary</text>
+    <rect x="234" y="40" width="170" height="56" rx="10" fill="#FFFFFF" stroke="#D0D5DD"/>
+    <text x="256" y="74">Ack within 15 min?</text>
+    <rect x="464" y="40" width="150" height="56" rx="10" fill="#ECFDF3" stroke="#12B76A"/>
+    <text x="486" y="74">Working it</text>
+    <rect x="234" y="150" width="170" height="56" rx="10" fill="#FFFAEB" stroke="#FEC84B"/>
+    <text x="256" y="184">Page secondary</text>
+    <rect x="464" y="150" width="150" height="56" rx="10" fill="#FEF3F2" stroke="#F04438"/>
+    <text x="486" y="184">Lead joins at 30 min</text>
+  </g>
+  <g stroke="#667085" stroke-width="2" fill="none" marker-end="url(#a)">
+    <path d="M174 68h50"/><path d="M404 56h50"/><path d="M310 96v46"/>
+  </g>
+  <text x="412" y="48" font-family="Inter, Arial, sans-serif" font-size="12" fill="#027A48">yes</text>
+  <text x="318" y="126" font-family="Inter, Arial, sans-serif" font-size="12" fill="#B54708">no</text>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0l10 5-10 5z" fill="#667085"/>
+    </marker>
+  </defs>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="200" viewBox="0 0 520 200" role="img" aria-label="Color token swatches">
+  <rect width="520" height="200" fill="#FFFFFF"/>
+  <g font-family="Inter, Arial, sans-serif" font-size="13" fill="#101828">
+    <rect x="24" y="24" width="100" height="64" rx="8" fill="#101828"/><text x="24" y="112">ink</text>
+    <rect x="148" y="24" width="100" height="64" rx="8" fill="#1D4ED8"/><text x="148" y="112">signal</text>
+    <rect x="272" y="24" width="100" height="64" rx="8" fill="#F2F4F7" stroke="#D0D5DD"/><text x="272" y="112">fog</text>
+    <rect x="396" y="24" width="100" height="64" rx="8" fill="#B54708"/><text x="396" y="112">warning</text>
+  </g>
+  <text x="24" y="156" font-family="Inter, Arial, sans-serif" font-size="13" fill="#475467">Signal blue is for action. Warning amber is for data problems, never decoration.</text>
+</svg>
