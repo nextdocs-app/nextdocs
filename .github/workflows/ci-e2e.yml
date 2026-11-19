@@ -99,7 +99,7 @@ jobs:
           cache-dependency-path: api/pom.xml
 
       - name: Validate workspace lockfile policy
-        run: pnpm run check:lockfiles
+        run: node scripts/check-lockfiles.js
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
