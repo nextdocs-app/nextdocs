@@ -1,5 +1,5 @@
 # Keep the Node line in sync with .nvmrc; `pnpm run check:runtime-versions` fails otherwise.
-FROM node:24.14.1-alpine AS base
+FROM node:26.13.1-alpine AS base
 RUN npm install -g pnpm@12.21.0
 
 FROM base AS deps
@@ -23,7 +23,7 @@ WORKDIR /app/web
 RUN pnpm run build
 
 # The standalone server does not use pnpm, so skip the global install from base.
-FROM node:24.14.1-alpine AS runner
+FROM node:26.13.1-alpine AS runner
 WORKDIR /app/web
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
