@@ -1140,7 +1140,14 @@ function verifyWorkspaceLockfilePolicy() {
         'only the root pnpm-lock.yaml is allowed.'
     );
   }
-  if (missingRootLockfile) parts.push('The root pnpm-lock.yaml is missing.');
+  if (missingRootLockfile) {
+    // A frozen install refuses to run without the lockfile, so restore the committed one
+    // instead of letting a plain `pnpm install` create a new one from the manifests.
+    parts.push(
+      'The root pnpm-lock.yaml is missing; restore the committed lockfile ' +
+        '(`git checkout -- pnpm-lock.yaml`).'
+    );
+  }
 
   throw new Error(`${parts.join(' ')} Then run \`pnpm install --frozen-lockfile\`.`);
 }
