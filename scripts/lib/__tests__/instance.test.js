@@ -409,9 +409,11 @@ test('supervisors starting and exiting in parallel keep every registration', asy
   const ready = path.join(tempDir(), 'ready');
   fs.mkdirSync(ready);
 
-  // Each child registers itself, waits until all of them are recorded, then clears only
-  // its own entry. A lost registration makes the barrier time out and a lost clear leaves
-  // an entry behind, so both halves of the race are observable.
+  // Each child registers itself, waits until the registry holds all four entries, and only
+  // then clears its own. Clearing straight after seeing the registration would hide it from
+  // a peer that had not looked yet, so the ready directory is a second barrier: no child
+  // exits before every other child has also seen all of them. A lost registration times the
+  // first barrier out, a lost clear leaves an entry behind, so both halves stay observable.
   const agents = 4;
   const script = `
     const fs = require('fs');
@@ -421,15 +423,21 @@ test('supervisors starting and exiting in parallel keep every registration', asy
     )});
     const [registryAndId, readyDir, expected] = process.argv.slice(1);
     const instance = JSON.parse(registryAndId);
-    setSupervisor(instance, process.pid, ['api']);
-    fs.writeFileSync(path.join(readyDir, String(process.pid)), '');
+    const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     const deadline = Date.now() + 8000;
+    setSupervisor(instance, process.pid, ['api']);
     for (;;) {
-      const peers = fs.readdirSync(readyDir).length;
       const record = listRecords(instance.registry).find((entry) => entry.id === instance.id);
-      const live = record ? record.supervisors.filter((entry) => entry.pid !== process.pid) : [];
-      if (peers >= Number(expected) && live.length >= Number(expected) - 1) break;
+      const pids = new Set(record ? record.supervisors.map((entry) => entry.pid) : []);
+      if (pids.size >= Number(expected)) break;
       if (Date.now() > deadline) process.exit(4);
+      pause();
+    }
+    fs.writeFileSync(path.join(readyDir, String(process.pid)), '');
+    for (;;) {
+      if (fs.readdirSync(readyDir).length >= Number(expected)) break;
+      if (Date.now() > deadline) process.exit(4);
+      pause();
     }
     clearSupervisor(instance, process.pid);
   `;
