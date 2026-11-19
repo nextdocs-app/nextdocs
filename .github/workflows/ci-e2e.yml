@@ -15,6 +15,9 @@ env:
   # Test-only AES-256 key; the API rejects only the shipped placeholder value.
   OAUTH_TOKEN_ENCRYPTION_KEY_BASE64: IdjyIdChmW8Yv4AMcT+nYw7HPFaSQcKj2iK+47mkVVo=
   POSTGRES: postgres://nextdocs:nextdocs@127.0.0.1:5432/nextdocs_e2e_yhub
+  # Keep the suite's Yhub queues out of any shared local `yhub` prefix. CI's Redis
+  # is fresh, but the same env is the documented local recipe.
+  REDIS_PREFIX: yhub_e2e
   SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/nextdocs_e2e
   SPRING_DATASOURCE_USERNAME: nextdocs
   SPRING_DATASOURCE_PASSWORD: nextdocs
@@ -75,12 +78,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.21.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Set up Java
         uses: actions/setup-java@v6
@@ -91,23 +99,23 @@ jobs:
           cache-dependency-path: api/pom.xml
 
       - name: Validate workspace lockfile policy
-        run: npm run check:lockfiles
+        run: node scripts/check-lockfiles.js
 
       - name: Install dependencies
-        run: npm ci --no-audit --fund=false
+        run: pnpm install --frozen-lockfile
 
       - name: Create the E2E databases and the Yhub schema
         run: |
           PGPASSWORD=nextdocs psql -h 127.0.0.1 -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e;'
           PGPASSWORD=nextdocs psql -h 127.0.0.1 -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e_yhub;'
-          node node_modules/@y/hub/bin/init-db.js
+          node realtime/node_modules/@y/hub/bin/init-db.js
 
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-playwright-
 
@@ -117,8 +125,8 @@ jobs:
         run: |
           set +e
           (cd api && ./mvnw -q -DskipTests package) & api_build=$!
-          npm run build -w realtime & realtime_build=$!
-          npx playwright install --with-deps chromium & playwright_install=$!
+          pnpm --filter realtime build & realtime_build=$!
+          pnpm exec playwright install --with-deps chromium & playwright_install=$!
           wait "$api_build"; api_status=$?
           wait "$realtime_build"; realtime_status=$?
           wait "$playwright_install"; playwright_status=$?
@@ -133,7 +141,7 @@ jobs:
           mkdir -p /tmp/e2e
           java -jar api/target/app.jar > /tmp/e2e/api.log 2>&1 &
           PORT=1234 node realtime/dist/main.js > /tmp/e2e/realtime.log 2>&1 &
-          npm run dev -w web -- -p 3000 > /tmp/e2e/web.log 2>&1 &
+          pnpm --filter web dev -p 3000 > /tmp/e2e/web.log 2>&1 &
 
       - name: Warm the first-request routes
         run: |
@@ -146,7 +154,7 @@ jobs:
           done
 
       - name: Run the browser suite
-        run: npm run e2e
+        run: pnpm run e2e
 
       - name: Upload traces, video and screenshots
         if: failure()

@@ -30,7 +30,7 @@ and the suites are about convergence, not throughput.
 ## Prerequisites
 
 ```bash
-npm run e2e:install   # Chromium for Playwright
+pnpm run e2e:install   # Chromium for Playwright
 ```
 
 The stack must be running against a **dedicated E2E database**, never the dev
@@ -44,7 +44,7 @@ docker start nextdocs-postgres nextdocs-redis nextdocs-mailpit
 docker exec nextdocs-postgres psql -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e;'
 docker exec nextdocs-postgres psql -U nextdocs -d postgres -c 'CREATE DATABASE nextdocs_e2e_yhub;'
 POSTGRES=postgres://nextdocs:nextdocs@localhost:5433/nextdocs_e2e_yhub \
-  node node_modules/@y/hub/bin/init-db.js
+  node realtime/node_modules/@y/hub/bin/init-db.js
 ```
 
 Start the three services in one terminal:
@@ -54,6 +54,7 @@ export JWT_SECRET=e2e-local-jwt-secret-0123456789abcdef \
   YHUB_SERVICE_TOKEN=e2e-local-service-token-0123456789abcdef \
   OAUTH_TOKEN_ENCRYPTION_KEY_BASE64="$(openssl rand -base64 32)" \
   POSTGRES=postgres://nextdocs:nextdocs@localhost:5433/nextdocs_e2e_yhub \
+  REDIS_PREFIX=yhub_e2e \
   SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5433/nextdocs_e2e \
   SPRING_DATASOURCE_USERNAME=nextdocs SPRING_DATASOURCE_PASSWORD=nextdocs \
   API_BASE_URL=http://localhost:8080 CORS_ALLOWED_ORIGINS=http://localhost:3000 \
@@ -66,8 +67,8 @@ export JWT_SECRET=e2e-local-jwt-secret-0123456789abcdef \
   RATE_LIMIT_AUTH_MAX_REQUESTS=1000
 
 (cd api && ./mvnw spring-boot:run --no-transfer-progress) &
-PORT=1234 npm run dev -w realtime &
-npm run dev -w web -- -p 3000 &
+PORT=1234 pnpm --filter realtime dev &
+pnpm --filter web dev -p 3000 &
 wait
 ```
 
@@ -79,18 +80,21 @@ the link in that email.
 
 `PORT=1234` is explicit because the realtime server defaults to `1234` only when
 the variable is unset; a stray `PORT` from another shell silently moves it.
-`RATE_LIMIT_AUTH_MAX_REQUESTS` raises the API's login/refresh budget for the
-suite, which signs in several times per minute from loopback. Keep the app URLs
-on `localhost`: Next's dev server blocks its own dev resources when a page is
-loaded from another origin, so `127.0.0.1` would leave the editor unhydrated.
+`REDIS_PREFIX=yhub_e2e` isolates the suite's Yhub queues and locks from the dev
+instance's `yhub` prefix; sharing it lets the worker compact dev rooms against
+the E2E database. `RATE_LIMIT_AUTH_MAX_REQUESTS` raises the API's login/refresh
+budget for the suite, which signs in several times per minute from loopback.
+Keep the app URLs on `localhost`: Next's dev server blocks its own dev
+resources when a page is loaded from another origin, so `127.0.0.1` would
+leave the editor unhydrated.
 
 ## Run
 
 ```bash
-npm run e2e                       # headless, one worker
-npm run e2e -- --headed           # watch the browser
-npm run e2e -- -g "comments"      # single area
-npm run e2e -- e2e/tests/editor.spec.ts
+pnpm run e2e                       # headless, one worker
+pnpm run e2e --headed              # watch the browser
+pnpm run e2e -g "comments"         # single area
+pnpm run e2e e2e/tests/editor.spec.ts
 ```
 
 `global-setup.ts` fails with the missing service and URL when the stack is not
@@ -120,7 +124,7 @@ nightly schedule, manual dispatches, and on every pull request that touches
 change the editor, the socket or the API contract has to pass it before merging.
 
 The job builds the API jar, builds `realtime`, installs Chromium, starts the same
-stack against service containers, and runs `npm run e2e`; the local recipe above
+stack against service containers, and runs `pnpm run e2e`; the local recipe above
 is that job's equivalent (see the workflow for the exact env). The three installs
 run concurrently, Playwright's browser download is cached, and the dev server's
 first-compile routes are warmed before the suite starts, because the suite itself
@@ -147,5 +151,5 @@ kill covers a dropped connection, not the process going away).
 ## Debugging
 
 Traces, video and screenshots are kept only on failure under
-`e2e/test-results/` (`npm run e2e -- --trace on` keeps them always). Open a
-trace with `npx playwright show-trace <trace.zip>`.
+`e2e/test-results/` (`pnpm run e2e --trace on` keeps them always). Open a
+trace with `pnpm exec playwright show-trace <trace.zip>`.

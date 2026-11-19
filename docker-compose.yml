@@ -93,7 +93,7 @@ services:
       - ./.prettierrc:/app/.prettierrc
       - /app/web/node_modules
       - /app/web/.next
-    command: npm run dev
+    command: pnpm run dev
     networks:
       - nextdocs-network
 
@@ -122,7 +122,7 @@ services:
       - ./.prettierrc:/app/.prettierrc
       - /app/realtime/node_modules
       - /app/realtime/dist
-    command: npm run dev
+    command: pnpm run dev
     # The server drains for 5s and force-exits at 8s, so the stop grace must sit
     # above both. Docker's 10s default would SIGKILL at the same moment the forced
     # exit runs, turning a bounded shutdown into a 137.
@@ -166,7 +166,7 @@ services:
       - -c
       - >-
         node /app/realtime/scripts/init-yhub-db.mjs &&
-        node /app/node_modules/@y/hub/bin/init-db.js
+        node /app/realtime/node_modules/@y/hub/bin/init-db.js
     depends_on:
       postgres:
         condition: service_healthy

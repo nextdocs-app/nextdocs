@@ -1,39 +1,41 @@
 # uWS ships a prebuilt binding that requires glibc >= 2.38. Debian bookworm (node:24-slim)
 # has 2.36 and the image dies at import; trixie has 2.41. Keep all stages on the same
 # libc so the native binding installed in deps matches the runner.
-# Keep the Node line in sync with .nvmrc; `npm run check:runtime-versions` fails otherwise.
-FROM node:24.14.1-trixie-slim AS deps
+# Keep the Node line in sync with .nvmrc; `pnpm run check:runtime-versions` fails otherwise.
+FROM node:24.14.1-trixie-slim AS base
+RUN npm install -g pnpm@12.21.0
+
+FROM base AS deps
 WORKDIR /app
 ENV HUSKY=0
-COPY package.json package-lock.json ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY realtime/package.json ./realtime/package.json
 COPY web/package.json ./web/package.json
-# npm ci runs the root prepare script even when the root workspace is excluded,
-# and husky is a devDependency this stage does not install. Remove only that
-# script; dependency lifecycle scripts still have to run.
-RUN npm pkg delete scripts.prepare
-RUN npm ci --workspace realtime --include-workspace-root=false
+RUN pnpm install --frozen-lockfile --filter realtime
 
-FROM node:24.14.1-trixie-slim AS builder
+FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/ ./
 COPY tsconfig.base.json ./tsconfig.base.json
 COPY realtime/ ./realtime/
 WORKDIR /app/realtime
-RUN npm run build
+RUN pnpm run build
 
+FROM base AS prod-deps
+WORKDIR /app
+ENV HUSKY=0
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY realtime/package.json ./realtime/package.json
+COPY web/package.json ./web/package.json
+RUN pnpm install --frozen-lockfile --prod --filter realtime
+
+# The runtime needs the production install, not pnpm or its store: copying only
+# /app drops the global pnpm from base and the caches pnpm keeps under /root.
 FROM node:24.14.1-trixie-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HUSKY=0
-COPY package.json package-lock.json ./
-COPY realtime/package.json ./realtime/package.json
-COPY web/package.json ./web/package.json
-# The root prepare script installs git hooks and needs dev-only tooling this stage
-# omits. Remove it from the manifest instead of turning lifecycle scripts off:
-# @y/hub's own install scripts still have to run.
-RUN npm pkg delete scripts.prepare
-RUN npm ci --omit=dev --workspace realtime --include-workspace-root=false
+COPY --from=prod-deps /app/ ./
 WORKDIR /app/realtime
 COPY --from=builder /app/realtime/dist ./dist
 # The same advisory-locked initializer compose runs, so several replicas starting
@@ -48,7 +50,7 @@ EXPOSE 1234
 # window in which a stop waits for SIGKILL. Both steps are idempotent and short,
 # and the drain path only matters once the server is accepting sockets, so the
 # window is accepted rather than adding an init binary to the runtime image.
-CMD ["sh", "-c", "node ./init-yhub-db.mjs && node /app/node_modules/@y/hub/bin/init-db.js && exec node dist/main.js"]
+CMD ["sh", "-c", "node ./init-yhub-db.mjs && node ./node_modules/@y/hub/bin/init-db.js && exec node dist/main.js"]
 # Nothing in the runtime image needs to write, so it does not run as root.
 # The init steps only read; @y/hub/init-db.js needs no filesystem writes either.
 USER node

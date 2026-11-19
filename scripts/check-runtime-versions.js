@@ -54,6 +54,50 @@ if (!nodeVersion) {
   }
 }
 
+const packageManager = String(packageJson.packageManager || '');
+const pnpmPin = /^pnpm@(\d+\.\d+\.\d+)$/.exec(packageManager);
+const pnpmVersion = pnpmPin ? pnpmPin[1] : null;
+if (!pnpmPin) {
+  errors.push('package.json packageManager must pin pnpm@<major.minor.patch>');
+} else {
+  const engineMatch = String((packageJson.engines && packageJson.engines.pnpm) || '').match(
+    />=\s*(\d+\.\d+\.\d+)/
+  );
+  if (!engineMatch) {
+    errors.push('package.json engines.pnpm must pin a minimum like ">=12.21.0"');
+  } else if (engineMatch[1] !== pnpmPin[1]) {
+    errors.push(
+      `package.json engines.pnpm (${engineMatch[1]}) does not match packageManager (pnpm@${pnpmPin[1]})`
+    );
+  }
+}
+
+if (Array.isArray(packageJson.workspaces) && packageJson.workspaces.length > 0) {
+  errors.push(
+    'package.json#workspaces is ignored by pnpm; declare packages in pnpm-workspace.yaml'
+  );
+}
+
+if (fs.existsSync(path.join(root, 'package-lock.json'))) {
+  errors.push('package-lock.json must not exist; pnpm-lock.yaml is the only lockfile');
+}
+
+if (pnpmVersion) {
+  for (const file of ['web/Dockerfile', 'realtime/Dockerfile']) {
+    const pins = [...read(file).matchAll(/pnpm@(\d+\.\d+\.\d+)/g)].map((match) => match[1]);
+    if (pins.length === 0) {
+      errors.push(`${file} does not install pnpm@${pnpmVersion}`);
+    }
+    for (const pin of pins) {
+      if (pin !== pnpmVersion) {
+        errors.push(
+          `${file} installs pnpm@${pin}; package.json packageManager is pnpm@${pnpmVersion}`
+        );
+      }
+    }
+  }
+}
+
 if (!javaVersion) {
   errors.push('.java-version is empty');
 } else {
@@ -104,13 +148,42 @@ for (const file of fs.readdirSync(workflowDir).filter((name) => /\.ya?ml$/.test(
       `.github/workflows/${file} hardcodes java-version; use java-version-file: .java-version`
     );
   }
+
+  const lines = contents.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/uses:\s*pnpm\/action-setup@/.test(lines[index])) continue;
+    const versionLine = lines
+      .slice(index + 1, index + 6)
+      .find((line) => /^\s*version:\s*/.test(line));
+    const pin = versionLine && /version:\s*['"]?(\d+\.\d+\.\d+)/.exec(versionLine);
+    if (!pin) {
+      errors.push(
+        `.github/workflows/${file} pnpm/action-setup has no pinned version; expected ${pnpmVersion || '<packageManager>'}`
+      );
+    } else if (pnpmVersion && pin[1] !== pnpmVersion) {
+      errors.push(
+        `.github/workflows/${file} sets up pnpm@${pin[1]}; package.json packageManager is pnpm@${pnpmVersion}`
+      );
+    }
+  }
+
+  if (
+    /(^|\s)pnpm\s+(run|exec|install|--filter)/m.test(contents) &&
+    !/uses:\s*pnpm\/action-setup@/.test(contents)
+  ) {
+    errors.push(`.github/workflows/${file} runs pnpm without pnpm/action-setup`);
+  }
 }
 
 if (errors.length > 0) {
   console.error('Runtime version drift detected:\n');
   for (const error of errors) console.error(`- ${error}`);
-  console.error('\nUpdate .nvmrc / .java-version and the Dockerfiles together.');
+  console.error(
+    '\nUpdate .nvmrc / .java-version / package.json and the Dockerfiles/workflows together.'
+  );
   process.exit(1);
 }
 
-console.log(`Runtime pins OK: Node ${nodeVersion}, Java ${javaVersion}`);
+console.log(
+  `Runtime pins OK: Node ${nodeVersion}, pnpm ${pnpmVersion || 'unpinned'}, Java ${javaVersion}`
+);

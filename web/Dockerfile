@@ -1,13 +1,14 @@
-# Keep the Node line in sync with .nvmrc; `npm run check:runtime-versions` fails otherwise.
+# Keep the Node line in sync with .nvmrc; `pnpm run check:runtime-versions` fails otherwise.
 FROM node:24.14.1-alpine AS base
+RUN npm install -g pnpm@12.21.0
 
 FROM base AS deps
 WORKDIR /app
 ENV HUSKY=0
-COPY package.json package-lock.json ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY web/package.json ./web/package.json
 COPY realtime/package.json ./realtime/package.json
-RUN npm ci --workspace web --include-workspace-root=false --ignore-scripts
+RUN pnpm install --frozen-lockfile --filter web
 
 FROM base AS builder
 WORKDIR /app
@@ -19,9 +20,10 @@ COPY realtime/src/types/ /app/realtime/src/types/
 
 WORKDIR /app/web
 
-RUN npm run build
+RUN pnpm run build
 
-FROM base AS runner
+# The standalone server does not use pnpm, so skip the global install from base.
+FROM node:24.14.1-alpine AS runner
 WORKDIR /app/web
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -31,8 +33,8 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 # Next writes the monorepo standalone output as ./web/server.js because the
-# workspace root is /app. Keep that layout so server.js can resolve the hoisted
-# node_modules at /app/web/node_modules.
+# workspace root is /app. The standalone folder carries the traced node_modules
+# it needs, so the image does not depend on the install layout.
 COPY --from=builder /app/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/web/.next/static ./web/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/web/public ./web/public

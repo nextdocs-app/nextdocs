@@ -42,24 +42,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.21.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate workspace lockfile policy
-        run: npm run check:lockfiles
+        run: node scripts/check-lockfiles.js
 
       - name: Install dependencies
-        run: npm ci --no-audit --fund=false
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit dependencies
+        run: pnpm run audit
 
       - name: Check root formatting
-        run: npm run format:root
+        run: pnpm run format:root
 
       - name: Check runtime version pins
-        run: npm run check:runtime-versions
+        run: pnpm run check:runtime-versions
 
       - name: Lint GitHub Actions workflows
         run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
@@ -74,7 +82,8 @@ jobs:
               - "web/**"
               - "realtime/src/types/**"
               - "package.json"
-              - "package-lock.json"
+              - "pnpm-lock.yaml"
+              - "pnpm-workspace.yaml"
               - "turbo.json"
               - "tsconfig.base.json"
               - ".prettierrc"
@@ -89,7 +98,8 @@ jobs:
             realtime:
               - "realtime/**"
               - "package.json"
-              - "package-lock.json"
+              - "pnpm-lock.yaml"
+              - "pnpm-workspace.yaml"
               - "turbo.json"
               - "tsconfig.base.json"
               - ".prettierrc"
@@ -122,7 +132,8 @@ jobs:
               - "realtime/**"
               - "api/**"
               - "package.json"
-              - "package-lock.json"
+              - "pnpm-lock.yaml"
+              - "pnpm-workspace.yaml"
               - "turbo.json"
               - "tsconfig.base.json"
               - ".nvmrc"
@@ -166,7 +177,7 @@ jobs:
 
       - name: Test development CLI
         if: steps.resolve.outputs.cli == 'true'
-        run: npm run test:scripts
+        run: pnpm run test:scripts
 
   web:
     name: Web

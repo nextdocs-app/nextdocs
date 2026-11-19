@@ -1,7 +1,14 @@
 version: 2
 
+# Dependabot security updates are a repository setting, not a key in this file:
+# Settings -> Code security -> Dependabot security updates. They complement the
+# `pnpm run audit` CI gate by opening a fix PR when an advisory lands, instead of
+# waiting for the weekly grouped version update. Alerts accepted in
+# pnpm-workspace.yaml#auditConfig.ignoreGhsas must also be dismissed in GitHub,
+# or Dependabot will keep trying to patch them.
+
 updates:
-  # npm dependencies (root monorepo + workspaces)
+  # pnpm dependencies (root workspace + web/realtime); dependabot reads pnpm-lock.yaml
   - package-ecosystem: 'npm'
     directory: '/'
     schedule:
@@ -14,7 +21,7 @@ updates:
         update-types: ['minor', 'patch']
     labels:
       - 'dependencies'
-      - 'npm'
+      - 'pnpm'
     commit-message:
       prefix: 'build'
       include: 'scope'

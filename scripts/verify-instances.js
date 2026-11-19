@@ -26,6 +26,7 @@ const { POSTGRES_CONTAINER, POSTGRES_USER, REDIS_CONTAINER } = require('./lib/co
 const { dropDatabase, redisFlushPrefix } = require('./lib/containers');
 const { listRecords, liveServicePids, peekInstance, removeRecord } = require('./lib/instance');
 const { acquireLock, releaseLock } = require('./lib/lock');
+const { findForbiddenLockfiles } = require('./lib/lockfiles');
 const { portOpen } = require('./lib/ports');
 
 const isWin = process.platform === 'win32';
@@ -200,9 +201,10 @@ function checkTools() {
       `${command} is required for this check but was not found on PATH.`
     );
   }
-  // npm is a .cmd shim on Windows, so resolve it through the platform shell.
-  const npm = run('npm', ['--version'], { allowFail: true, shell: true });
-  assert.equal(npm.status, 0, 'npm is required for this check but was not found on PATH.');
+  // pnpm is a .cmd shim on Windows. Pass the whole command through the shell so
+  // Node does not warn about an argument list combined with `shell: true`.
+  const pnpm = run('pnpm --version', [], { allowFail: true, shell: true });
+  assert.equal(pnpm.status, 0, 'pnpm is required for this check but was not found on PATH.');
   const daemon = run('docker', ['info', '--format', '{{.ServerVersion}}'], { allowFail: true });
   assert.equal(
     daemon.status,
@@ -210,10 +212,7 @@ function checkTools() {
     'Docker is installed but the daemon is not reachable; start Docker first.'
   );
 
-  const strayLockfiles = [
-    path.join(ROOT, 'web', 'package-lock.json'),
-    path.join(ROOT, 'realtime', 'package-lock.json'),
-  ].filter((file) => fs.existsSync(file));
+  const strayLockfiles = findForbiddenLockfiles(ROOT);
   assert.equal(
     strayLockfiles.length,
     0,
@@ -340,6 +339,13 @@ function setupWorktrees() {
     '.env',
     '.dev.vars',
   ]);
+  // A worktree starts at HEAD, so files deleted only in the working tree (such as
+  // the retired package-lock.json) survive the file copy: cpSync never removes a
+  // destination entry. Compare against HEAD so both staged and unstaged deletions
+  // are removed; `git ls-files --deleted` misses a deletion once it is staged.
+  const deleted = run('git', ['diff', '--name-only', '--diff-filter=D', '-z', 'HEAD'])
+    .stdout.split('\0')
+    .filter(Boolean);
 
   for (const agent of AGENTS) {
     run('git', ['worktree', 'add', '--detach', agent.dir, 'HEAD']);
@@ -359,6 +365,9 @@ function setupWorktrees() {
         },
       });
     }
+    for (const relative of deleted) {
+      fs.rmSync(path.join(agent.dir, relative), { force: true });
+    }
     assert.ok(
       fs.existsSync(path.join(agent.dir, 'scripts', 'nd.js')),
       `${agent.name} worktree is missing scripts/nd.js`
@@ -367,17 +376,17 @@ function setupWorktrees() {
 }
 
 async function installWorktrees() {
-  log('Installing both worktrees (npm ci)');
+  log('Installing both worktrees (pnpm install)');
   const results = await Promise.all(
     AGENTS.map(
       (agent) =>
         new Promise((resolve) => {
-          const child = spawn('npm', ['ci', '--no-audit', '--no-fund'], {
+          const child = spawn('pnpm', ['install', '--frozen-lockfile'], {
             cwd: agent.dir,
             env: process.env,
             stdio: ['ignore', 'pipe', 'pipe'],
-            // npm is npm.cmd on Windows; a shell resolves it on both platforms.
-            shell: true,
+            // pnpm is pnpm.cmd on Windows; POSIX resolves the executable directly.
+            shell: isWin,
           });
           let stderr = '';
           child.stderr.on('data', (chunk) => {
@@ -390,12 +399,16 @@ async function installWorktrees() {
   );
 
   for (const result of results) {
-    assert.equal(result.code, 0, `npm ci failed in ${result.agent.name}: ${tail(result.stderr)}`);
+    assert.equal(
+      result.code,
+      0,
+      `pnpm install failed in ${result.agent.name}: ${tail(result.stderr)}`
+    );
   }
   for (const agent of AGENTS) {
     assert.ok(
       fs.existsSync(path.join(agent.dir, 'node_modules', '.bin', isWin ? 'turbo.cmd' : 'turbo')),
-      `${agent.name} has no local turbo after npm ci`
+      `${agent.name} has no local turbo after pnpm install`
     );
   }
 }

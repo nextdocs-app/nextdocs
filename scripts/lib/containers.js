@@ -104,8 +104,8 @@ function ensureDatabases({ yhubSchema = true, local = false } = {}) {
 // Yhub never runs DDL on boot; init-db.js is the only supported path and is
 // idempotent, so running it here is what makes `./nd dev` work on a fresh volume.
 function yhubInitializerPath() {
-  // Prefer the initializer from the workspace that declares @y/hub: when npm could
-  // not hoist it (a version split), the root copy is the stale one.
+  // Prefer the initializer from the workspace that declares @y/hub: the root copy
+  // can be stale when the dependency graph resolves a different version.
   const initScript = [
     path.join(ROOT, 'realtime', 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
     path.join(ROOT, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
@@ -115,7 +115,7 @@ function yhubInitializerPath() {
     // the failure to the first connection with a less obvious message.
     throw new Error(
       'Cannot initialize the Yhub schema: @y/hub is not installed. ' +
-        'Run `npm ci` (or `npm install`) from the repo root, then retry.'
+        'Run `pnpm install` from the repo root, then retry.'
     );
   }
   return initScript;

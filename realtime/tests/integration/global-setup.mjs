@@ -14,7 +14,7 @@ const POSTGRES_URL =
   process.env.POSTGRES || 'postgres://nextdocs:nextdocs@localhost:5433/nextdocs_yhub';
 const REDIS_URL = process.env.REDIS || 'redis://localhost:6379';
 
-// npm hoists @y/hub to the root in this workspace; the image keeps it under /app.
+// pnpm links @y/hub into realtime/node_modules; the image keeps it under /app/realtime.
 const HUB_INIT_DB = [
   path.join(REALTIME_DIR, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
   path.join(ROOT_DIR, 'node_modules', '@y', 'hub', 'bin', 'init-db.js'),
@@ -65,13 +65,13 @@ export default async function globalSetup() {
 
   if (!fs.existsSync(DIST_MAIN)) {
     throw new Error(
-      'dist/main.js is missing; run "npm run build -w realtime" before the integration suite.'
+      'dist/main.js is missing; run "pnpm --filter realtime build" before the integration suite.'
     );
   }
 
   runNode(path.join(REALTIME_DIR, 'scripts', 'init-yhub-db.mjs'));
   if (!HUB_INIT_DB) {
-    throw new Error('@y/hub init-db.js is missing; run npm ci at the repo root.');
+    throw new Error('@y/hub init-db.js is missing; run pnpm install at the repo root.');
   }
   runNode(HUB_INIT_DB);
 }

@@ -32,7 +32,7 @@
 - [Node.js](https://nodejs.org/) 24.14.1 (LTS)
 - [Java](https://openjdk.org/) 21
 - [Docker](https://www.docker.com/) (for PostgreSQL)
-- [npm](https://www.npmjs.com/) (comes with Node.js)
+- [pnpm](https://pnpm.io/) 12.21.0 (pinned in `package.json`; run `corepack enable` once, or install it with `npm install -g pnpm@12.21.0`)
 
 ### Quick Start
 
@@ -125,20 +125,20 @@ cp .env.example .env
 # SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5433/nextdocs
 
 # 3. Install JS workspace dependencies (from repository root)
-npm ci
+pnpm install --frozen-lockfile
 
 # 4. Start the API (from api/ directory; use mvnw.cmd on Windows)
 ./mvnw spring-boot:run
 
 # 5. Start the web + realtime servers (uses Turborepo)
-npm run dev
+pnpm run dev
 ```
 
-The `npm run dev` command at the root uses [Turborepo](https://turbo.build/) to run both the web frontend and realtime WebSocket server in parallel with a single command. To start them individually:
+The `pnpm run dev` command at the root uses [Turborepo](https://turbo.build/) to run both the web frontend and realtime WebSocket server in parallel with a single command. To start them individually:
 
 ```bash
-npm run dev -- --filter=web       # Web frontend only
-npm run dev -- --filter=realtime  # Realtime server only
+pnpm --filter web dev       # Web frontend only
+pnpm --filter realtime dev  # Realtime server only
 ```
 
 ## Roadmap
