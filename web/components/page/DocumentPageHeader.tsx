@@ -138,53 +138,53 @@ export function DocumentPageHeader({
 
           {/*
             Hover-only on pointer devices, always visible on touch, which has no
-            hover. Placed above title. The row is always rendered when editing
-            so the title never jumps: full `min-h` while an action is offered,
-            a slimmer spacer once icon and cover are both set and it is invisible.
+            hover. Placed above title. The row is always rendered — including
+            for a reader who may not edit, whose buttons are simply absent — so
+            the title sits at the same height in every mode: full `min-h` while
+            an action is offered, a slimmer spacer once icon and cover are both
+            set.
 
             `-ml-2` borrows back each button's own `px-2` so the labels sit on the
             title's left edge rather than 8px inside it — the same trick the page
             icon button above plays with `-ml-1`, keeping the whole column flush.
           */}
-          {canEdit && (
-            <div
-              className={`
-                -ml-2 flex items-center gap-1 mb-1.5
-                ${!icon || !cover ? 'min-h-[28px]' : 'min-h-[12px]'}
-                ${cover ? 'mt-3' : ''}
-                opacity-0 transition-opacity duration-150
-                group-hover/title:opacity-100 group-focus-within/title:opacity-100 focus-within:opacity-100
-                pointer-coarse:opacity-100
-              `}
-            >
-              {!icon && (
-                <button
-                  type="button"
-                  ref={iconPanel.triggerRef}
-                  onClick={iconPanel.toggle}
-                  aria-haspopup="dialog"
-                  aria-expanded={iconPanel.isOpen}
-                  className={ACTION_BUTTON_CLASS_NAME}
-                >
-                  <Smile size={15} />
-                  Add icon
-                </button>
-              )}
-              {!cover && (
-                <button
-                  type="button"
-                  ref={coverPanel.triggerRef}
-                  onClick={coverPanel.toggle}
-                  aria-haspopup="dialog"
-                  aria-expanded={coverPanel.isOpen}
-                  className={ACTION_BUTTON_CLASS_NAME}
-                >
-                  <ImageIcon size={15} />
-                  Add cover
-                </button>
-              )}
-            </div>
-          )}
+          <div
+            className={`
+              -ml-2 flex items-center gap-1 mb-1.5
+              ${!icon || !cover ? 'min-h-[28px]' : 'min-h-[12px]'}
+              ${cover ? 'mt-3' : ''}
+              opacity-0 transition-opacity duration-150
+              group-hover/title:opacity-100 group-focus-within/title:opacity-100 focus-within:opacity-100
+              pointer-coarse:opacity-100
+            `}
+          >
+            {canEdit && !icon && (
+              <button
+                type="button"
+                ref={iconPanel.triggerRef}
+                onClick={iconPanel.toggle}
+                aria-haspopup="dialog"
+                aria-expanded={iconPanel.isOpen}
+                className={ACTION_BUTTON_CLASS_NAME}
+              >
+                <Smile size={15} />
+                Add icon
+              </button>
+            )}
+            {canEdit && !cover && (
+              <button
+                type="button"
+                ref={coverPanel.triggerRef}
+                onClick={coverPanel.toggle}
+                aria-haspopup="dialog"
+                aria-expanded={coverPanel.isOpen}
+                className={ACTION_BUTTON_CLASS_NAME}
+              >
+                <ImageIcon size={15} />
+                Add cover
+              </button>
+            )}
+          </div>
 
           <textarea
             ref={textareaRef}
