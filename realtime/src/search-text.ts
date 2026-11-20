@@ -1,5 +1,5 @@
 import * as Y from '@y/y';
-import { MAX_TEXT_BYTES } from './config.js';
+import { MAX_TEXT_BYTES, UUID_REGEX } from './config.js';
 
 /** Re-exported so callers and tests keep one import site for extraction limits. */
 export { MAX_TEXT_BYTES };
@@ -9,7 +9,20 @@ export type ExtractedText = {
   truncated: boolean;
 };
 
+/** One mention found in the document. Only the stable id is needed downstream. */
+export type MentionRef = {
+  userId: string;
+};
+
+/** Text plus the mentions it contains, collected in one schema-aware walk. */
+export type ExtractedDocument = ExtractedText & {
+  mentions: MentionRef[];
+};
+
 export type ExtractedTextResult = ExtractedText;
+
+/** A runaway document must not turn a compaction notification into a huge request. */
+export const MAX_MENTIONS = 500;
 
 /**
  * Structural wrappers around blocks. They add no separator of their own: the blocks
@@ -47,6 +60,9 @@ const MENTION_ELEMENTS = new Set(['mention', 'reference']);
 
 const MENTION_LABEL_ATTRIBUTES = ['name', 'label', 'title'] as const;
 
+/** The stable user id prop; `name`/`label` are display snapshots only. */
+const MENTION_USER_ID_ATTRIBUTES = ['userId', 'user'] as const;
+
 /** NUL and control characters except tab and newline: Postgres text cannot hold NUL. */
 // eslint-disable-next-line no-control-regex -- stripping control characters is the point
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
@@ -68,6 +84,19 @@ export function extractDocumentText(
   update: Uint8Array | null | undefined,
   maxBytes = MAX_TEXT_BYTES
 ): ExtractedText {
+  const { text, truncated } = extractDocument(update, maxBytes);
+  return { text, truncated };
+}
+
+/**
+ * Extracts the text projection and the user mentions in one walk. Search text and the
+ * mention index are both derived from the same Y.Doc, so doing them separately would
+ * walk (and allocate) the whole document twice on every compaction.
+ */
+export function extractDocument(
+  update: Uint8Array | null | undefined,
+  maxBytes = MAX_TEXT_BYTES
+): ExtractedDocument {
   const doc = new Y.Doc();
   try {
     // An empty or absent update is a legitimate empty document, not a failure.
@@ -75,20 +104,24 @@ export function extractDocumentText(
       Y.applyUpdate(doc, update);
     }
     const parts: string[] = [];
+    const mentions = new Map<string, MentionRef>();
     for (const child of doc.get('blocknote').toArray()) {
       if (typeof child === 'string') {
         parts.push(child);
       } else if (child instanceof Y.Node) {
-        walk(child, parts);
+        walk(child, parts, mentions);
       }
     }
-    return capText(normalize(parts.join('')), maxBytes);
+    return {
+      ...capText(normalize(parts.join('')), maxBytes),
+      mentions: Array.from(mentions.values()),
+    };
   } finally {
     doc.destroy();
   }
 }
 
-function walk(node: Y.Node, out: string[]): void {
+function walk(node: Y.Node, out: string[], mentions: Map<string, MentionRef>): void {
   const name = node.name ?? '';
 
   if (name === 'tableRow') {
@@ -105,7 +138,7 @@ function walk(node: Y.Node, out: string[]): void {
         out.push(' | ');
       }
       firstCell = false;
-      visitChildren(cell, out);
+      visitChildren(cell, out, mentions);
     }
     out.push('\n');
     return;
@@ -113,7 +146,7 @@ function walk(node: Y.Node, out: string[]): void {
 
   // Cells are separated by the row, so they must not append a break of their own.
   if (name === 'tableCell') {
-    visitChildren(node, out);
+    visitChildren(node, out, mentions);
     return;
   }
 
@@ -127,6 +160,15 @@ function walk(node: Y.Node, out: string[]): void {
   }
 
   if (MENTION_ELEMENTS.has(name)) {
+    const userId = firstAttribute(node, MENTION_USER_ID_ATTRIBUTES);
+    if (
+      userId &&
+      UUID_REGEX.test(userId) &&
+      !mentions.has(userId) &&
+      mentions.size < MAX_MENTIONS
+    ) {
+      mentions.set(userId, { userId });
+    }
     const label = firstAttribute(node, MENTION_LABEL_ATTRIBUTES);
     if (label) {
       out.push(label);
@@ -134,7 +176,7 @@ function walk(node: Y.Node, out: string[]): void {
     return;
   }
 
-  visitChildren(node, out);
+  visitChildren(node, out, mentions);
 
   if (CONTAINER_ELEMENTS.has(name)) {
     return;
@@ -145,14 +187,14 @@ function walk(node: Y.Node, out: string[]): void {
 }
 
 /** Recurses in document order, appending the text runs of string children as-is. */
-function visitChildren(node: Y.Node, out: string[]): void {
+function visitChildren(node: Y.Node, out: string[], mentions: Map<string, MentionRef>): void {
   for (const child of node.toArray()) {
     if (typeof child === 'string') {
       // Formats (bold, link, …) never reach the projection: only the character
       // content is indexed, so a signed link target cannot leak into a snippet.
       out.push(child);
     } else if (child instanceof Y.Node) {
-      walk(child, out);
+      walk(child, out, mentions);
     }
   }
 }

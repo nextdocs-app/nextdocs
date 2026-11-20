@@ -332,8 +332,11 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireReadAccessIncludingTrash(linkOnlyId, documentId))
                 .thenReturn(doc);
-        when(accessGrantRepository.hasPositiveIdentityGrant(linkOnlyId, documentId))
-                .thenReturn(false);
+        // The identity rule itself lives in PermissionService (and is pinned there); this
+        // asserts the roster stops as soon as that gate refuses a link-only reader.
+        doThrow(new ApiException(ErrorCode.NOT_FOUND))
+                .when(permissionService)
+                .requireIdentityGrantForRoster(linkOnlyId, doc);
 
         assertThrows(ApiException.class, () -> sharingService.listCollaborators(linkOnlyId, documentId));
     }
@@ -357,10 +360,8 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireReadAccessIncludingTrash(memberId, documentId))
                 .thenReturn(doc);
-        // The SQL regression test covers ancestor ALLOW + page DENY. The gate receives
-        // its positive identity result while the independent live link grants page read.
-        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
-                .thenReturn(true);
+        // The SQL regression test covers ancestor ALLOW + page DENY. The independent live
+        // link grants page read while the identity gate admits the member.
 
         User memberUser = User.builder()
                 .id(memberId)
@@ -401,8 +402,6 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireReadAccessIncludingTrash(memberId, documentId))
                 .thenReturn(doc);
-        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
-                .thenReturn(true);
         when(accessGrantRepository.findUserGrantsByDocumentId(documentId)).thenReturn(List.of());
         when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
         when(permissionService.resolveAccessForUsers(documentId, List.of(ownerId), false))
@@ -2678,10 +2677,11 @@ class DocumentSharingServicesTest {
 
         when(permissionService.requireReadAccessIncludingTrash(creatorId, documentId))
                 .thenReturn(document);
-        when(permissionService.resolveSpace(document)).thenReturn(space);
-        when(accessGrantRepository.hasPositiveIdentityGrant(creatorId, documentId))
-                .thenReturn(false);
-        when(spaceAccessService.load(creatorId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+        // A live public link grants read, but the removed creator has no space standing
+        // left to turn that read into roster visibility.
+        doThrow(new ApiException(ErrorCode.NOT_FOUND))
+                .when(permissionService)
+                .requireIdentityGrantForRoster(creatorId, document);
 
         assertThrows(ApiException.class, () -> sharingService.listCollaborators(creatorId, documentId));
     }
@@ -2744,8 +2744,6 @@ class DocumentSharingServicesTest {
         when(permissionService.requireReadAccessIncludingTrash(requesterId, documentId))
                 .thenReturn(doc);
         when(permissionService.resolveSpace(doc)).thenReturn(space);
-        when(accessGrantRepository.hasPositiveIdentityGrant(requesterId, documentId))
-                .thenReturn(true);
         when(spaceMemberRepository.existsBySpace_IdAndUser_Id(spaceId, requesterId))
                 .thenReturn(false);
         when(spaceAccessService.load(requesterId, spaceId))

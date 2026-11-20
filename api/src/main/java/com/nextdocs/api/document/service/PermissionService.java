@@ -9,6 +9,7 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -322,6 +323,53 @@ public class PermissionService {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
         return new DocumentCommentAccess(doc, access);
+    }
+
+    /**
+     * Roster visibility requires an identity grant (owner, user/group grant, space
+     * baseline, or workspace audience). Link-only readers can open the document but must
+     * not enumerate member names or emails. Masked as not found so link holders cannot
+     * distinguish a private document from a hidden roster.
+     *
+     * <p>Shared by every surface that renders the member roster: the collaborator list
+     * and the mention picker both disclose people, so both use this one rule.
+     */
+    @Transactional(readOnly = true)
+    public void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
+        Space space = resolveSpace(doc);
+        if (space == null && doc.getUser().getId().equals(requesterId)) {
+            return;
+        }
+        if (accessGrantRepository.hasPositiveIdentityGrant(requesterId, doc.getId())) {
+            return;
+        }
+        if (hasSpaceGrant(requesterId, doc)) {
+            return;
+        }
+        throw new ApiException(ErrorCode.NOT_FOUND);
+    }
+
+    /**
+     * A space grant is an identity grant: a space member already sees the space roster, so
+     * hiding a page's roster from them would be theatre. Space administrators count too,
+     * even without a content level, because sharing is their call. In a public space, workspace
+     * members pass here to inspect direct document collaborators. Anonymous or external
+     * link-only readers outside the workspace have no workspace identity and are refused.
+     */
+    private boolean hasSpaceGrant(UUID userId, Document doc) {
+        Space space = resolveSpace(doc);
+        if (space == null) {
+            return false;
+        }
+        try {
+            SpaceContext context = spaceAccessService.load(userId, space.getId());
+            return context != null && (context.accessLevel() != null || context.canAdminister());
+        } catch (ApiException ex) {
+            if (ex.getErrorCode() == ErrorCode.NOT_FOUND) {
+                return false;
+            }
+            throw ex;
+        }
     }
 
     /**

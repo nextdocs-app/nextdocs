@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -21,6 +22,7 @@ import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.mention.service.MentionService;
 import com.nextdocs.api.realtime.dto.request.ContentUpdatedRequest;
 import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
 import com.nextdocs.api.search.config.SearchProperties;
@@ -79,6 +81,9 @@ class InternalRealtimeControllerTest {
     private SearchProperties searchProperties;
 
     @MockitoBean
+    private MentionService mentionService;
+
+    @MockitoBean
     private com.nextdocs.api.workspace.repository.WorkspaceMemberRepository workspaceMemberRepository;
 
     @Test
@@ -92,7 +97,8 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
@@ -102,7 +108,8 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
@@ -112,7 +119,8 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService));
     }
 
     @Test
@@ -124,7 +132,8 @@ class InternalRealtimeControllerTest {
                 workspaceAccessService,
                 contentUpdatedThrottle,
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService);
         UUID docId = UUID.randomUUID();
 
         assertEquals(
@@ -288,6 +297,23 @@ class InternalRealtimeControllerTest {
     }
 
     @Test
+    void contentUpdatedBodyWithoutTextSkipsMentionsAndAdvancesTheContentVersion() throws Exception {
+        UUID docId = UUID.randomUUID();
+
+        // Same case as above, but a body without a text field: the mention guard must not
+        // treat a missing extraction as an empty mention set.
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\"}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(searchIndexService).recordContentVersion(eq(docId), any());
+        verify(searchIndexService, never()).indexContent(any(), any(), anyBoolean(), any(), any());
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean());
+    }
+
+    @Test
     void contentUpdatedClipsAnOversizedProjectionAndFlagsIt() throws Exception {
         UUID docId = UUID.randomUUID();
         when(searchProperties.getMaxContentBytes()).thenReturn(4);
@@ -332,9 +358,10 @@ class InternalRealtimeControllerTest {
                 workspaceAccessService,
                 new ContentUpdatedThrottle(documentRepository),
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService);
 
-        fresh.contentUpdated(null, new ContentUpdatedRequest(docId, "hello", false, null, false), SERVICE_TOKEN);
+        fresh.contentUpdated(null, new ContentUpdatedRequest(docId, "hello", false, null, false, null), SERVICE_TOKEN);
 
         ArgumentCaptor<OffsetDateTime> sortKey = ArgumentCaptor.forClass(OffsetDateTime.class);
         ArgumentCaptor<Instant> projection = ArgumentCaptor.forClass(Instant.class);
@@ -342,6 +369,77 @@ class InternalRealtimeControllerTest {
         verify(searchIndexService).indexContent(eq(docId), eq("hello"), eq(false), any(), projection.capture());
         // The crawl compares the two; a later sort key would make every edit look stale.
         assertEquals(sortKey.getValue().toInstant(), projection.getValue());
+    }
+
+    @Test
+    void contentUpdatedReconcilesDocumentMentions() throws Exception {
+        UUID docId = UUID.randomUUID();
+        UUID mentionedId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"mentions\":[{\"userId\":\"" + mentionedId + "\"}]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(false));
+    }
+
+    @Test
+    void contentUpdatedReindexRepairsMentionsWithoutNotifying() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"reindex\":true,\"mentions\":[]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(true));
+    }
+
+    @Test
+    void contentUpdatedSkipsMentionsWhenTheTextWasStale() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        // The ordering guard rejected this payload as older than the stored projection.
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(false);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"mentions\":[{\"userId\":\"" + UUID.randomUUID() + "\"}]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean());
+    }
+
+    @Test
+    void contentUpdatedWithoutMentionsLeavesTheMentionIndexAlone() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        // A payload accepted by the ordering guard but carrying no mention list is not a
+        // clear: an older sender could not extract them, so the index must stay put.
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\"}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean());
     }
 
     @Test
@@ -390,7 +488,8 @@ class InternalRealtimeControllerTest {
                 // A fresh throttle: this test needs an empty window for the failing write.
                 new ContentUpdatedThrottle(documentRepository),
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService);
 
         when(documentRepository.markContentUpdated(eq(docId), any()))
                 .thenThrow(new IllegalStateException("database unavailable"))
