@@ -15,9 +15,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.comment.dto.response.CommentAbilitiesResponse;
 import com.nextdocs.api.comment.dto.response.CommentAuthorResponse;
 import com.nextdocs.api.comment.dto.response.CommentResponse;
@@ -26,6 +23,9 @@ import com.nextdocs.api.comment.dto.response.ThreadResponse;
 import com.nextdocs.api.comment.service.CommentService;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -41,9 +41,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(CommentController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class CommentControllerTest {
 
@@ -72,6 +72,7 @@ class CommentControllerTest {
                 .displayName("Alice")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);

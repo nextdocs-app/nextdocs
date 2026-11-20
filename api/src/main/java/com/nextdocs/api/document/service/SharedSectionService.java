@@ -1,7 +1,5 @@
 package com.nextdocs.api.document.service;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.SharedEntry;
@@ -12,6 +10,8 @@ import com.nextdocs.api.document.repository.SharedSectionCandidate;
 import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.document.util.OrderInterval;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;

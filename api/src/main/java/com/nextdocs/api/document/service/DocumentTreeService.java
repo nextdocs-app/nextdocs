@@ -2,8 +2,6 @@ package com.nextdocs.api.document.service;
 
 import static com.nextdocs.api.document.config.DocumentProperties.MAX_TREE_DEPTH;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
@@ -27,6 +25,8 @@ import com.nextdocs.api.document.util.OrderPositionConflict;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import java.util.ArrayList;
 import java.util.HashSet;

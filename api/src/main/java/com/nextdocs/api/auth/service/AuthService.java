@@ -3,14 +3,13 @@ package com.nextdocs.api.auth.service;
 import com.nextdocs.api.auth.dto.request.LoginRequest;
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
-import com.nextdocs.api.auth.dto.response.UserResponse;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.util.EmailNormalizer;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.user.dto.response.UserResponse;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.WorkspaceInvite;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import com.nextdocs.api.workspace.service.WorkspaceInviteService;
@@ -65,8 +64,8 @@ public class AuthService {
             // win it: bootstrapFirstUser inserts the account and re-checks under the
             // instance lock, so only one call wins. The loser rolls back without an
             // account row and answers like any other registration without an invite.
-            // Ownership is unproven either way: the account stays email_verified = false
-            // and can still sign in and administer the instance.
+            // Ownership is unproven either way: the account can still sign in and
+            // administer the instance.
             if (!workspaceService.bootstrapFirstUser(bootstrapUser)) {
                 throw new ApiException(ErrorCode.REGISTRATION_INVITE_REQUIRED);
             }
@@ -87,9 +86,6 @@ public class AuthService {
             throw new ApiException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
         User user = existing.map(u -> reactivate(u, request)).orElseGet(() -> buildUser(request, normalizedEmail));
-        // Accepting the invitation link is proof of the invited mailbox: the only place
-        // the flag becomes true in V1.
-        user.setEmailVerified(true);
         userRepository.save(user);
 
         // Claim before granting the membership: a registration that loses the race for
@@ -137,17 +133,12 @@ public class AuthService {
     public AuthResponse refresh(HttpServletRequest req, HttpServletResponse res) {
         User user = tokenService.rotateRefreshToken(req, res);
         String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail());
-        return AuthResponse.of(accessToken, jwtTokenProvider.getAccessTokenExpiryMs() / 1000, toUserResponse(user));
+        return AuthResponse.of(accessToken, jwtTokenProvider.getAccessTokenExpiryMs() / 1000, UserResponse.from(user));
     }
 
     @Transactional
     public void logout(HttpServletRequest req, HttpServletResponse res) {
         tokenService.revokeRefreshToken(req, res);
-    }
-
-    public UserResponse getMe(UserPrincipal principal) {
-        User user = userRepository.findById(principal.getId()).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-        return toUserResponse(user);
     }
 
     private User buildUser(RegisterRequest request, String normalizedEmail) {
@@ -173,11 +164,6 @@ public class AuthService {
     private AuthResponse buildAuthResponse(User user, HttpServletRequest req, HttpServletResponse res) {
         String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail());
         tokenService.issueRefreshToken(user, req, res);
-        return AuthResponse.of(accessToken, jwtTokenProvider.getAccessTokenExpiryMs() / 1000, toUserResponse(user));
-    }
-
-    static UserResponse toUserResponse(User user) {
-        return new UserResponse(
-                user.getId(), user.getEmail(), user.getDisplayName(), user.getAvatarUrl(), user.isEmailVerified());
+        return AuthResponse.of(accessToken, jwtTokenProvider.getAccessTokenExpiryMs() / 1000, UserResponse.from(user));
     }
 }

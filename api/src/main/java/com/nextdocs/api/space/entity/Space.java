@@ -1,8 +1,8 @@
 package com.nextdocs.api.space.entity;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.pageicon.PageIconType;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.Workspace;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;

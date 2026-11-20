@@ -148,7 +148,6 @@ describe('SpaceTree component', () => {
             email: 'test@example.com',
             displayName: 'Test',
             avatarUrl: null,
-            emailVerified: true,
           },
           accessToken: 'test-token',
           expiresAt: Date.now() + 60_000,

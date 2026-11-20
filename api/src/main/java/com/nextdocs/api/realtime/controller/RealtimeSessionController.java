@@ -1,13 +1,13 @@
 package com.nextdocs.api.realtime.controller;
 
-import com.nextdocs.api.auth.security.BearerTokens;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.realtime.dto.response.RealtimeSessionResponse;
+import com.nextdocs.api.security.BearerTokens;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

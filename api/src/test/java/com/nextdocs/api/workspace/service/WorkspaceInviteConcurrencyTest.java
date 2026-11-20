@@ -6,10 +6,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
@@ -73,6 +73,7 @@ class WorkspaceInviteConcurrencyTest {
         actor = userRepository.saveAndFlush(User.builder()
                 .email("invite-race-admin@example.com")
                 .displayName("Admin")
+                .passwordHash("$2a$12$hash")
                 .build());
         workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("Race").build());

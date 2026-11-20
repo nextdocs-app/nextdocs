@@ -2,8 +2,8 @@ package com.nextdocs.api.workspace.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceInvite;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -44,10 +44,18 @@ class WorkspaceInviteRepositoryTest {
 
     @BeforeEach
     void setUp() {
-        owner = userRepository.saveAndFlush(
-                User.builder().email("owner@example.com").displayName("Owner").build());
-        invitee = userRepository.saveAndFlush(
-                User.builder().email("jane@example.com").displayName("Jane").build());
+        owner = userRepository.saveAndFlush(User.builder()
+                .email("owner@example.com")
+                .displayName("Owner")
+                .passwordHash("$2a$12$hash")
+                .build());
+
+        invitee = userRepository.saveAndFlush(User.builder()
+                .email("jane@example.com")
+                .displayName("Jane")
+                .passwordHash("$2a$12$hash")
+                .build());
+
         workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
     }

@@ -7,12 +7,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.Workspace;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,18 +42,32 @@ class AccessGrantSyncServiceTest {
         document = Document.builder()
                 .id(UUID.randomUUID())
                 .workspace(workspace)
-                .user(User.builder().id(UUID.randomUUID()).build())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .build();
-        target =
-                User.builder().id(UUID.randomUUID()).email("target@example.com").build();
-        actor = User.builder().id(UUID.randomUUID()).email("actor@example.com").build();
+        target = User.builder()
+                .id(UUID.randomUUID())
+                .email("target@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
+        actor = User.builder()
+                .id(UUID.randomUUID())
+                .email("actor@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
     }
 
     @Test
     void upsertUserGrant_rejectsDocumentsWithoutWorkspace() {
         Document noWorkspaceDoc = Document.builder()
                 .id(UUID.randomUUID())
-                .user(User.builder().id(UUID.randomUUID()).build())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .build();
 
         assertThrows(
@@ -85,7 +99,9 @@ class AccessGrantSyncServiceTest {
 
     @Test
     void upsertUserGrant_updatesExistingGrantAndPreservesCreatedBy() {
-        User originalAuthor = User.builder().id(UUID.randomUUID()).build();
+
+        User originalAuthor =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         AccessGrant existing = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .workspace(workspace)

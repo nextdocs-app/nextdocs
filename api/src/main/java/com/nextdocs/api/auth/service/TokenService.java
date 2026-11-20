@@ -1,12 +1,12 @@
 package com.nextdocs.api.auth.service;
 
 import com.nextdocs.api.auth.entity.RefreshToken;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.security.ClientIpResolver;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.util.SecureTokens;
+import com.nextdocs.api.security.ClientIpResolver;
+import com.nextdocs.api.user.entity.User;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

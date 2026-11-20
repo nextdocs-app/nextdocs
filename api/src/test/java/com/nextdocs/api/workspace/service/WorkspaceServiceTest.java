@@ -16,9 +16,7 @@ import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.attachment.storage.StoredAttachment;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -32,6 +30,8 @@ import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -134,11 +134,13 @@ class WorkspaceServiceTest {
     }
 
     private static User user(String email, String displayName) {
+
         User user = User.builder()
                 .email(email)
                 .displayName(displayName)
                 .passwordHash("$2a$12$hash")
                 .build();
+
         user.setId(UUID.randomUUID());
         return user;
     }

@@ -4,8 +4,6 @@ import com.nextdocs.api.auth.dto.request.InvitePreviewRequest;
 import com.nextdocs.api.auth.dto.request.LoginRequest;
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
-import com.nextdocs.api.auth.dto.response.UserResponse;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.auth.service.AuthService;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInvitePreviewResponse;
@@ -19,10 +17,9 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "Authentication", description = "Register, login, token refresh, logout and profile")
+@Tag(name = "Authentication", description = "Register, login, token refresh and logout")
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
@@ -134,22 +131,5 @@ public class AuthController {
     public ResponseEntity<Void> logout(HttpServletRequest req, HttpServletResponse res) {
         authService.logout(req, res);
         return ResponseEntity.noContent().build();
-    }
-
-    @Operation(
-            summary = "Get current user profile",
-            description = "Returns the authenticated user's profile. Requires a valid access token.",
-            security = @SecurityRequirement(name = "bearerAuth"),
-            responses = {
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "200",
-                        description = "User profile returned"),
-                @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                        responseCode = "401",
-                        description = "Not authenticated")
-            })
-    @GetMapping("/me")
-    public ResponseEntity<ApiResponse<UserResponse>> me(@AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(ApiResponse.ok(authService.getMe(principal)));
     }
 }

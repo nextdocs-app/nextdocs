@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -37,7 +37,13 @@ class WorkspaceAccessServiceTest {
         userId = UUID.randomUUID();
         Workspace workspace =
                 Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
-        User user = User.builder().email("user@example.com").displayName("User").build();
+
+        User user = User.builder()
+                .email("user@example.com")
+                .displayName("User")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         user.setId(userId);
         member = WorkspaceMember.builder()
                 .workspace(workspace)

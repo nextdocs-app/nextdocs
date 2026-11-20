@@ -110,16 +110,8 @@ const mvnw = isWin ? 'mvnw.cmd' : './mvnw';
 
 // TODO: If the number of keys that need to be generated this way are more,
 // we may need to find a more generalizable pattern.
-let generatedDevOAuthTokenKey = null;
 let generatedDevJwtSecret = null;
 let generatedDevYhubServiceToken = null;
-
-function getOrCreateDevOAuthTokenEncryptionKey() {
-  if (!generatedDevOAuthTokenKey) {
-    generatedDevOAuthTokenKey = randomBytes(32).toString('base64');
-  }
-  return generatedDevOAuthTokenKey;
-}
 
 function getOrCreateDevJwtSecret() {
   if (!generatedDevJwtSecret) {
@@ -151,14 +143,6 @@ function buildApiDevEnv(instance, overrides = {}) {
   };
 
   // Keep required API dev env defaults in one place so ./nd dev is zero-setup.
-  if (isKeyEmptyOrPlaceholder(env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64)) {
-    env.OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 = getOrCreateDevOAuthTokenEncryptionKey();
-    console.warn(
-      '\x1b[33mWARNING: OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 was not set. Using an ephemeral dev key for this ./nd session.\n' +
-        '  Set OAUTH_TOKEN_ENCRYPTION_KEY_BASE64 for stable token decryption across restarts.\x1b[0m'
-    );
-  }
-
   if (isKeyEmptyOrPlaceholder(env.JWT_SECRET)) {
     env.JWT_SECRET = getOrCreateDevJwtSecret();
     console.warn(

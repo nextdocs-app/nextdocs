@@ -15,7 +15,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
@@ -26,6 +25,7 @@ import com.nextdocs.api.realtime.dto.request.ContentUpdatedRequest;
 import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
 import com.nextdocs.api.search.config.SearchProperties;
 import com.nextdocs.api.search.service.SearchIndexService;
+import com.nextdocs.api.security.JwtTokenProvider;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -42,9 +42,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(InternalRealtimeController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class,
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class,
     ContentUpdatedThrottle.class
 })
 class InternalRealtimeControllerTest {

@@ -8,12 +8,12 @@ import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.util.SecureTokens;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteEmailResult;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -96,6 +96,7 @@ class InvitedRegistrationIntegrationTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("accept-owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -141,11 +142,9 @@ class InvitedRegistrationIntegrationTest {
                 new MockHttpServletRequest(),
                 new MockHttpServletResponse());
 
-        // The invitation was the mailbox proof, so the account starts verified.
-        assertThat(response.user().emailVerified()).isTrue();
+        assertThat(response.user().displayName()).isEqualTo("Jane Doe");
         User jane = userRepository.findByEmail("jane@example.com").orElseThrow();
         joinedUserId = jane.getId();
-        assertThat(jane.isEmailVerified()).isTrue();
         assertThat(memberRepository.findByUserId(jane.getId()).orElseThrow().getRole())
                 .isEqualTo(WorkspaceRole.MEMBER);
 

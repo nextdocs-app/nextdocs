@@ -1,6 +1,5 @@
 package com.nextdocs.api.document.controller;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
@@ -8,6 +7,7 @@ import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.dto.response.DocumentContentResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.realtime.service.DocumentContentService;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;

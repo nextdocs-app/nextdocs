@@ -1165,6 +1165,40 @@ describe('document.service', () => {
       expect(rows[0].inheritedAccessLevel).toBeNull();
     });
 
+    it('should carry the uploaded photo through the mapping', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              userId: 'u-1',
+              email: 'a@example.com',
+              displayName: 'A',
+              avatarUrl: '/api/v1/users/u-1/avatar?v=abc123',
+              accessLevel: 'OWNER',
+              addedAt: '2024-01-01T00:00:00.000Z',
+            },
+            {
+              userId: 'u-2',
+              email: 'b@example.com',
+              displayName: 'B',
+              accessLevel: 'EDIT',
+              addedAt: '2024-01-01T00:00:00.000Z',
+            },
+          ],
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const rows = await documentService.listCollaborators('doc-1', 'tok');
+
+      // Dropping this on the way through is what makes a populated row render initials.
+      expect(rows[0].avatarUrl).toBe('/api/v1/users/u-1/avatar?v=abc123');
+      expect(rows[1].avatarUrl).toBeNull();
+    });
+
     it('should map effective levels and treat malformed ones as blocked', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,

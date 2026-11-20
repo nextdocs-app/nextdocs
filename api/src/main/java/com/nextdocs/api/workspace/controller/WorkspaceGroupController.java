@@ -1,7 +1,7 @@
 package com.nextdocs.api.workspace.controller;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.workspace.dto.request.WorkspaceGroupRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceGroupResponse;
 import com.nextdocs.api.workspace.service.WorkspaceGroupService;

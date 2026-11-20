@@ -52,7 +52,6 @@ Start the three services in one terminal:
 ```bash
 export JWT_SECRET=e2e-local-jwt-secret-0123456789abcdef \
   YHUB_SERVICE_TOKEN=e2e-local-service-token-0123456789abcdef \
-  OAUTH_TOKEN_ENCRYPTION_KEY_BASE64="$(openssl rand -base64 32)" \
   POSTGRES=postgres://nextdocs:nextdocs@localhost:5433/nextdocs_e2e_yhub \
   REDIS_PREFIX=yhub_e2e \
   SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5433/nextdocs_e2e \
@@ -72,10 +71,9 @@ pnpm --filter web dev -p 3000 &
 wait
 ```
 
-The API refuses to start without `OAUTH_TOKEN_ENCRYPTION_KEY_BASE64`, and it
-requires a JWT secret of at least 32 bytes; both services must share the same
-`JWT_SECRET` and `YHUB_SERVICE_TOKEN`, or every socket and every content read is
-rejected. Mailpit's SMTP port is the invite channel, and `APP_WEB_BASE_URL` is
+The API requires a JWT secret of at least 32 bytes; both services must share the
+same `JWT_SECRET` and `YHUB_SERVICE_TOKEN`, or every socket and every content
+read is rejected. Mailpit's SMTP port is the invite channel, and `APP_WEB_BASE_URL` is
 the link in that email.
 
 `PORT=1234` is explicit because the realtime server defaults to `1234` only when

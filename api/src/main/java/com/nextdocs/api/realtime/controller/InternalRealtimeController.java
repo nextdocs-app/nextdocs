@@ -1,6 +1,5 @@
 package com.nextdocs.api.realtime.controller;
 
-import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
@@ -11,6 +10,7 @@ import com.nextdocs.api.realtime.dto.response.InternalAccessResponse;
 import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
 import com.nextdocs.api.search.config.SearchProperties;
 import com.nextdocs.api.search.service.SearchIndexService;
+import com.nextdocs.api.security.JwtTokenProvider;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

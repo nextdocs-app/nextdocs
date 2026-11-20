@@ -12,8 +12,6 @@ import static org.mockito.Mockito.when;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.attachment.storage.AttachmentStorage;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
@@ -37,6 +35,8 @@ import com.nextdocs.api.pageicon.validation.PageIconValidator;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -339,6 +339,7 @@ class DocumentServiceIconCoverTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
     }
 

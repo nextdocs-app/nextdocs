@@ -30,6 +30,7 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 
 import { NewDocument, Search, ChevronDown, Close, CloseSidebar, UserCircle } from '@/icons';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { UserAvatar } from '@/components/UserAvatar';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
@@ -146,10 +147,6 @@ function Sidebar() {
   const workspaceName = workspace?.name ?? 'NextDocs';
   const workspaceIcon = sanitizeDocumentIcon(workspace?.icon);
   const hasManagePeopleAccess = Boolean(workspace && canManageMembers(workspace.role));
-  const userInitial =
-    user?.displayName?.trim()?.charAt(0)?.toUpperCase() ||
-    user?.email?.charAt(0)?.toUpperCase() ||
-    'U';
   const accountLabel = isInitializing
     ? 'Loading account...'
     : isAuthenticated && user
@@ -1334,18 +1331,21 @@ function Sidebar() {
             aria-expanded={isAccountMenuOpen}
             className="group/account flex min-w-0 flex-1 items-center overflow-hidden rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-sidebar-accent cursor-pointer"
           >
-            <span
-              aria-hidden="true"
-              className="inline-flex h-[25px] w-[25px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
-            >
-              {isAuthenticated && user ? (
-                <span className="text-[13px] font-semibold leading-none select-none">
-                  {userInitial}
-                </span>
-              ) : (
+            {isAuthenticated && user ? (
+              <UserAvatar
+                seed={user.id}
+                name={user.displayName || user.email}
+                src={user.avatarUrl}
+                size="xs"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="inline-flex h-[25px] w-[25px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
+              >
                 <UserCircle className="h-[16px] w-[16px]" />
-              )}
-            </span>
+              </span>
+            )}
             <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-3">
               <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
               <ChevronDown

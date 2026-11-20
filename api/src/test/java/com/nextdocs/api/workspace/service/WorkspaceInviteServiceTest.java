@@ -12,11 +12,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.util.SecureTokens;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteCreatedResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteEmailResult;
@@ -99,11 +99,13 @@ class WorkspaceInviteServiceTest {
     }
 
     private static User user(String email, String displayName) {
+
         User user = User.builder()
                 .email(email)
                 .displayName(displayName)
                 .passwordHash("$2a$12$hash")
                 .build();
+
         user.setId(UUID.randomUUID());
         return user;
     }

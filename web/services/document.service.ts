@@ -204,6 +204,7 @@ interface ApiCollaborator {
   userId: string;
   email: string;
   displayName: string;
+  avatarUrl?: string | null;
   accessLevel: CollaboratorAccessLevel;
   addedAt: string;
   owner?: boolean;
@@ -296,6 +297,8 @@ export interface Collaborator {
   userId: string;
   email: string;
   displayName: string;
+  /** Uploaded photo, or `null` for generated initials. Same projection as member rows. */
+  avatarUrl?: string | null;
   accessLevel: CollaboratorAccessLevel;
   addedAt: string;
   owner: boolean;
@@ -985,6 +988,7 @@ class DocumentService {
       userId: item.userId,
       email: item.email,
       displayName: item.displayName,
+      avatarUrl: item.avatarUrl ?? null,
       accessLevel: sanitizeCollaboratorAccessLevel(item.accessLevel),
       addedAt: item.addedAt,
       owner: item.owner ?? false,

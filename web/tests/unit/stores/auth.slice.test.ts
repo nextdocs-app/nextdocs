@@ -2,12 +2,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import authReducer, {
   refreshSessionThunk,
   logoutThunk,
+  updateProfileThunk,
   authListenerMiddleware,
   AUTH_SESSION_STORAGE_KEY,
 } from '../../../stores/auth/auth.slice';
 import { authApiService, ApiError } from '../../../services/auth.service';
+import { profileApiService } from '../../../services/profile.service';
 import { attachmentService } from '../../../services/attachment.service';
-import type { AuthApiResponse } from '../../../types/auth.types';
+import type { AuthApiResponse, AuthUser } from '../../../types/auth.types';
 import type { AuthState } from '../../../stores/auth/auth.types';
 
 jest.mock('../../../services/auth.service', () => ({
@@ -16,6 +18,14 @@ jest.mock('../../../services/auth.service', () => ({
   authApiService: {
     refresh: jest.fn(),
     logout: jest.fn(),
+  },
+}));
+
+jest.mock('../../../services/profile.service', () => ({
+  profileApiService: {
+    updateDisplayName: jest.fn(),
+    uploadAvatar: jest.fn(),
+    removeAvatar: jest.fn(),
   },
 }));
 
@@ -39,12 +49,11 @@ import { clearLocalUserData } from '../../../lib/idb-isolation.util';
 import { indexedDBService } from '../../../services/indexed-db.service';
 import { documentService } from '../../../services/document.service';
 
-const mockUser = {
+const mockUser: AuthUser = {
   id: 'user-1',
   email: 'test@example.com',
   displayName: 'Test User',
   avatarUrl: null,
-  emailVerified: false,
 };
 
 const mockAuthResponse: AuthApiResponse = {
@@ -628,6 +637,403 @@ describe('auth slice', () => {
         expect(store.getState().auth.user?.id).toBe(mockUser.id);
         expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).not.toBeNull();
       });
+    });
+  });
+
+  describe('updateProfileThunk', () => {
+    it('refuses to call the API without a session', async () => {
+      const store = makeStore({ user: null, accessToken: null, isInitializing: false });
+
+      const result = await store.dispatch(updateProfileThunk({ displayName: 'Ada' }));
+
+      expect(result.meta.requestStatus).toBe('rejected');
+      expect(result.payload).toBe('You need to be signed in to change your profile.');
+      expect(profileApiService.updateDisplayName).not.toHaveBeenCalled();
+    });
+
+    it('replaces the account and persists the new snapshot', async () => {
+      const renamed = { ...mockUser, displayName: 'Ada Lovelace' };
+      (profileApiService.updateDisplayName as jest.Mock).mockResolvedValue(renamed);
+      window.sessionStorage.clear();
+      const store = makeStore({
+        user: mockUser,
+        accessToken: 'tok',
+        expiresAt: Date.now() + 60_000,
+        isInitializing: false,
+      });
+
+      const result = await store.dispatch(updateProfileThunk({ displayName: 'Ada Lovelace' }));
+
+      expect(result.meta.requestStatus).toBe('fulfilled');
+      expect(profileApiService.updateDisplayName).toHaveBeenCalledWith('tok', 'Ada Lovelace');
+      expect(store.getState().auth.user?.displayName).toBe('Ada Lovelace');
+      // The sidebar chip and the next page load read the same store, and the
+      // snapshot is what survives a reload.
+      expect(window.sessionStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toContain('Ada Lovelace');
+    });
+
+    it('uploads a photo and removes it through the same thunk', async () => {
+      const withPhoto = {
+        ...mockUser,
+        avatarUrl: '/api/v1/users/user-1/avatar?v=abc123',
+      };
+      (profileApiService.uploadAvatar as jest.Mock).mockResolvedValue(withPhoto);
+      (profileApiService.removeAvatar as jest.Mock).mockResolvedValue({
+        ...mockUser,
+      });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      const file = new File(['png'], 'a.png', { type: 'image/png' });
+
+      await store.dispatch(updateProfileThunk({ avatar: file }));
+      expect(profileApiService.uploadAvatar).toHaveBeenCalledWith('tok', file);
+      expect(store.getState().auth.user?.avatarUrl).toBe(withPhoto.avatarUrl);
+
+      await store.dispatch(updateProfileThunk({ removeAvatar: true }));
+      expect(profileApiService.removeAvatar).toHaveBeenCalledWith('tok');
+      expect(store.getState().auth.user?.avatarUrl).toBeNull();
+    });
+
+    it('surfaces the API message and keeps the current account', async () => {
+      (profileApiService.uploadAvatar as jest.Mock).mockRejectedValue(
+        new ApiError('Profile photos must be at most 2.0 MB.', 413)
+      );
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const result = await store.dispatch(
+        updateProfileThunk({ avatar: new File(['x'], 'a.png', { type: 'image/png' }) })
+      );
+
+      expect(result.meta.requestStatus).toBe('rejected');
+      expect(result.payload).toBe('Profile photos must be at most 2.0 MB.');
+      expect(store.getState().auth.user).toEqual(mockUser);
+    });
+
+    it('ignores an answer that belongs to an account the session already left', async () => {
+      let resolveProfile!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveProfile = resolve;
+          })
+      );
+      const other = { ...mockUser, id: 'user-2', displayName: 'Bob' };
+      (authApiService.refresh as jest.Mock).mockResolvedValue({ ...mockAuthResponse, user: other });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const pending = store.dispatch(updateProfileThunk({ displayName: 'Late Answer' }));
+      // A different account takes over while the rename is in flight.
+      await store.dispatch(refreshSessionThunk());
+      resolveProfile({ ...mockUser, displayName: 'Late Answer' });
+      await pending;
+
+      expect(store.getState().auth.user?.displayName).toBe('Bob');
+    });
+
+    it('does not resurrect the account when signing out wins the race', async () => {
+      let resolveProfile!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveProfile = resolve;
+          })
+      );
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const pending = store.dispatch(updateProfileThunk({ displayName: 'Late Answer' }));
+      await store.dispatch(logoutThunk());
+      resolveProfile({ ...mockUser, displayName: 'Late Answer' });
+      await pending;
+
+      const { user, accessToken } = store.getState().auth;
+      expect(user).toBeNull();
+      expect(accessToken).toBeNull();
+    });
+
+    it('does not start a second profile write until the first answers', async () => {
+      let resolveName!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveName = resolve;
+          })
+      );
+      const photoUrl = '/api/v1/users/user-1/avatar?v=new';
+      (profileApiService.uploadAvatar as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        displayName: 'Ada Lovelace',
+        avatarUrl: photoUrl,
+      });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      const file = new File(['png'], 'a.png', { type: 'image/png' });
+
+      const name = store.dispatch(updateProfileThunk({ displayName: 'Ada Lovelace' }));
+      const photo = store.dispatch(updateProfileThunk({ avatar: file }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The name answer carries the account before the photo, so the photo must not
+      // be sent until it has been applied.
+      expect(profileApiService.uploadAvatar).not.toHaveBeenCalled();
+      resolveName({ ...mockUser, displayName: 'Ada Lovelace' });
+      await name;
+
+      expect(profileApiService.uploadAvatar).toHaveBeenCalledWith('tok', file);
+      await photo;
+
+      const { user } = store.getState().auth;
+      expect(user?.displayName).toBe('Ada Lovelace');
+      expect(user?.avatarUrl).toBe(photoUrl);
+    });
+
+    it('ignores an answer from a session that signed out and back in', async () => {
+      let resolveProfile!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveProfile = resolve;
+          })
+      );
+      (authApiService.refresh as jest.Mock).mockResolvedValue({
+        ...mockAuthResponse,
+        user: { ...mockUser, displayName: 'Fresh Session' },
+      });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const pending = store.dispatch(updateProfileThunk({ displayName: 'Old Session' }));
+      // Let the queued write start before the session changes under it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await store.dispatch(logoutThunk());
+      await store.dispatch(refreshSessionThunk());
+      resolveProfile({ ...mockUser, displayName: 'Old Session' });
+      await pending;
+
+      // The id matches, but this answer belongs to the login that just ended.
+      expect(store.getState().auth.user?.displayName).toBe('Fresh Session');
+    });
+
+    it('keeps a rename when a second refresh joins one that predates it', async () => {
+      let resolveRefresh!: (response: AuthApiResponse) => void;
+      (authApiService.refresh as jest.Mock).mockImplementation(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+      (profileApiService.updateDisplayName as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        displayName: 'Renamed',
+      });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const first = store.dispatch(refreshSessionThunk());
+      await store.dispatch(updateProfileThunk({ displayName: 'Renamed' }));
+      // Dispatched after the rename, but it joins the request that predates it,
+      // so the shared answer is older than the store for both waiters.
+      const second = store.dispatch(refreshSessionThunk());
+      expect(authApiService.refresh).toHaveBeenCalledTimes(1);
+
+      resolveRefresh({
+        ...mockAuthResponse,
+        accessToken: 'rotated',
+        user: { ...mockUser, displayName: 'Stale Name' },
+      });
+      await Promise.all([first, second]);
+
+      expect(store.getState().auth.accessToken).toBe('rotated');
+      expect(store.getState().auth.user?.displayName).toBe('Renamed');
+    });
+
+    it('drops a queued write whose session ended while it waited', async () => {
+      let resolveName!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveName = resolve;
+          })
+      );
+      (authApiService.logout as jest.Mock).mockResolvedValue(undefined);
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const rename = store.dispatch(updateProfileThunk({ displayName: 'Ada' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const photo = store.dispatch(
+        updateProfileThunk({ avatar: new File(['png'], 'a.png', { type: 'image/png' }) })
+      );
+      await store.dispatch(logoutThunk());
+
+      resolveName({ ...mockUser, displayName: 'Ada' });
+      const [, photoResult] = await Promise.all([rename, photo]);
+
+      // The token captured before the wait stays usable until it expires, so the
+      // request would still change the account that just signed out.
+      expect(profileApiService.uploadAvatar).not.toHaveBeenCalled();
+      expect(updateProfileThunk.rejected.match(photoResult)).toBe(true);
+    });
+
+    it('sends a queued write with the token a rotation put in place', async () => {
+      let resolveName!: (user: typeof mockUser) => void;
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveName = resolve;
+          })
+      );
+      (authApiService.refresh as jest.Mock).mockResolvedValue({
+        ...mockAuthResponse,
+        accessToken: 'rotated',
+        user: mockUser,
+      });
+      (profileApiService.uploadAvatar as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        avatarUrl: '/api/v1/users/user-1/avatar?v=new',
+      });
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      const file = new File(['png'], 'a.png', { type: 'image/png' });
+
+      const rename = store.dispatch(updateProfileThunk({ displayName: 'Ada' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const photo = store.dispatch(updateProfileThunk({ avatar: file }));
+      await store.dispatch(refreshSessionThunk());
+      resolveName({ ...mockUser, displayName: 'Ada' });
+      await Promise.all([rename, photo]);
+
+      expect(profileApiService.uploadAvatar).toHaveBeenCalledWith('rotated', file);
+    });
+
+    it('adopts a profile change committed by another tab', async () => {
+      (authApiService.refresh as jest.Mock).mockResolvedValue({
+        ...mockAuthResponse,
+        user: { ...mockUser, displayName: 'Renamed Elsewhere' },
+      });
+      const store = makeStore({
+        user: mockUser,
+        accessToken: 'tok',
+        isInitializing: false,
+      });
+
+      await store.dispatch(refreshSessionThunk());
+
+      // No local write raced this refresh, so its snapshot is the newer one.
+      expect(store.getState().auth.user?.displayName).toBe('Renamed Elsewhere');
+    });
+
+    it('lets a refresh rotate the token without rolling the profile back', async () => {
+      let resolveRefresh!: (response: AuthApiResponse) => void;
+      let resolveRename!: (user: typeof mockUser) => void;
+      (authApiService.refresh as jest.Mock).mockImplementation(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRename = resolve;
+          })
+      );
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+
+      const rename = store.dispatch(updateProfileThunk({ displayName: 'Renamed' }));
+      const refresh = store.dispatch(refreshSessionThunk());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The rename commits after the refresh started but before it answers.
+      resolveRename({ ...mockUser, displayName: 'Renamed' });
+      await rename;
+      resolveRefresh({
+        ...mockAuthResponse,
+        accessToken: 'rotated',
+        user: { ...mockUser, displayName: 'Stale Name' },
+      });
+      await refresh;
+
+      expect(store.getState().auth.accessToken).toBe('rotated');
+      expect(store.getState().auth.user?.displayName).toBe('Renamed');
+    });
+
+    it('never pairs another account’s token with this tab’s local profile', async () => {
+      let resolveRefresh!: (response: AuthApiResponse) => void;
+      let resolveRename!: (user: typeof mockUser) => void;
+      (authApiService.refresh as jest.Mock).mockImplementation(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRename = resolve;
+          })
+      );
+      const store = makeStore({ user: mockUser, accessToken: 'tok', isInitializing: false });
+      const bob: AuthUser = {
+        ...mockUser,
+        id: 'user-2',
+        email: 'bob@example.com',
+        displayName: 'Bob',
+      };
+
+      const refresh = store.dispatch(refreshSessionThunk());
+      const rename = store.dispatch(updateProfileThunk({ displayName: 'Renamed' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The rename commits while the refresh is in flight, but the shared cookie
+      // now belongs to Bob, who signed in from a sibling tab.
+      resolveRename({ ...mockUser, displayName: 'Renamed' });
+      await rename;
+      resolveRefresh({ ...mockAuthResponse, accessToken: 'rotated', user: bob });
+      await refresh;
+
+      expect(store.getState().auth.accessToken).toBe('rotated');
+      expect(store.getState().auth.user).toEqual(bob);
+    });
+
+    it('ignores a signed-out account’s write while the next account refreshes', async () => {
+      let resolveRefresh!: (response: AuthApiResponse) => void;
+      let resolveRename!: (user: typeof mockUser) => void;
+      (authApiService.refresh as jest.Mock).mockImplementation(
+        () =>
+          new Promise<AuthApiResponse>((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+      (profileApiService.updateDisplayName as jest.Mock).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRename = resolve;
+          })
+      );
+      const bob: AuthUser = {
+        ...mockUser,
+        id: 'user-2',
+        email: 'bob@example.com',
+        displayName: 'Bob',
+      };
+      const aliceStore = makeStore({
+        user: mockUser,
+        accessToken: 'tok',
+        isInitializing: false,
+      });
+      const bobStore = makeStore({ user: bob, accessToken: 'bob-token', isInitializing: false });
+
+      // Alice's write is still in flight when her session ends; it belongs to the
+      // account that asked for it, not to the one the browser moved on to.
+      const rename = aliceStore.dispatch(updateProfileThunk({ displayName: 'Renamed' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await aliceStore.dispatch(logoutThunk());
+      const refresh = bobStore.dispatch(refreshSessionThunk());
+
+      resolveRename({ ...mockUser, displayName: 'Renamed' });
+      await rename;
+      resolveRefresh({
+        ...mockAuthResponse,
+        accessToken: 'rotated',
+        user: { ...bob, displayName: 'Renamed Elsewhere' },
+      });
+      await refresh;
+
+      expect(bobStore.getState().auth.user?.displayName).toBe('Renamed Elsewhere');
     });
   });
 });

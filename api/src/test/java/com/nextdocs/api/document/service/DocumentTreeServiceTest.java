@@ -13,8 +13,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
@@ -35,6 +33,8 @@ import com.nextdocs.api.document.util.FractionalIndex;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -94,6 +94,7 @@ class DocumentTreeServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         documentTreeService = new DocumentTreeService(
                 documentRepository,
@@ -196,7 +197,9 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(docId)
@@ -249,7 +252,9 @@ class DocumentTreeServiceTest {
     void move_sharedNestedPageReorder_preservesTheRealParent() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document parent =
                 Document.builder().id(parentId).user(owner).title("Parent").build();
         Document doc = Document.builder()
@@ -292,7 +297,9 @@ class DocumentTreeServiceTest {
         UUID parentId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         // A child of a shared page has a readable parent, so the Shared listing never
         // contains it even though the client renders it in the Shared tree and tags the
@@ -352,7 +359,9 @@ class DocumentTreeServiceTest {
     void move_sharedReorderUsesTheKeysEnsureOrdersCreatedForKeylessSiblings() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(docId)
                 .user(owner)
@@ -392,7 +401,9 @@ class DocumentTreeServiceTest {
     @Test
     void move_sharedReorderCollision_reindexesAndRetries() {
         UUID docId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(docId)
                 .user(owner)
@@ -433,7 +444,9 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
         UUID hostParentId = UUID.randomUUID();
-        User host = User.builder().id(UUID.randomUUID()).build();
+
+        User host =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(docId)
@@ -788,7 +801,9 @@ class DocumentTreeServiceTest {
     void move_nestedCollaboratorPageToRoot_rejectsInsteadOfWritingAPrivateRow() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document parent =
                 Document.builder().id(parentId).user(owner).title("Owner root").build();
         Document doc = Document.builder()
@@ -832,7 +847,8 @@ class DocumentTreeServiceTest {
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
-        User collaboratorUser = User.builder().id(collaboratorId).build();
+        User collaboratorUser =
+                User.builder().id(collaboratorId).passwordHash("$2a$12$hash").build();
         AccessGrant collaborator = AccessGrant.builder()
                 .user(collaboratorUser)
                 .document(doc)
@@ -873,7 +889,9 @@ class DocumentTreeServiceTest {
     @Test
     void move_rootReorderByLinkOnlyUser_throwsForbidden() {
         UUID docId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(docId)
@@ -1076,7 +1094,9 @@ class DocumentTreeServiceTest {
     void move_frontReorderCollision_retryLandsInReindexedGapWithoutConflict() {
         UUID docId = UUID.randomUUID();
         UUID siblingId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(docId)
@@ -1152,7 +1172,9 @@ class DocumentTreeServiceTest {
     void move_unauthorizedSiblingReference_throwsNotFound() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
         Document secretSibling = Document.builder()
@@ -1410,7 +1432,9 @@ class DocumentTreeServiceTest {
     void move_privateReorderWithANonOwnedSibling_rejectsInsteadOfWritingAPrivateRow() {
         UUID docId = UUID.randomUUID();
         UUID siblingId = UUID.randomUUID();
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder().id(docId).user(user).title("Mine").build();
         Document sibling = Document.builder()
                 .id(siblingId)
@@ -1439,8 +1463,12 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
         UUID childId = UUID.randomUUID();
-        User author = User.builder().id(UUID.randomUUID()).build();
-        User childAuthor = User.builder().id(UUID.randomUUID()).build();
+
+        User author =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
+
+        User childAuthor =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
         Document parentDoc = Document.builder()
                 .id(parentId)
@@ -1531,7 +1559,9 @@ class DocumentTreeServiceTest {
     void move_editorMovesDocumentUnderParentWithCollaborators_throwsForbidden() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
                 Document.builder().id(docId).user(owner).title("Shared Doc").build();
@@ -1558,7 +1588,9 @@ class DocumentTreeServiceTest {
     void move_editorMovesDocumentUnderParentWithPublicAccess_throwsForbidden() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User owner = User.builder().id(UUID.randomUUID()).build();
+
+        User owner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
                 Document.builder().id(docId).user(owner).title("Shared Doc").build();
@@ -1585,8 +1617,12 @@ class DocumentTreeServiceTest {
     void move_editorMovesDocumentToDifferentOwnerTree_throwsForbidden() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User owner1 = User.builder().id(UUID.randomUUID()).build();
-        User owner2 = User.builder().id(UUID.randomUUID()).build();
+
+        User owner1 =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
+
+        User owner2 =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
                 Document.builder().id(docId).user(owner1).title("Shared Doc").build();
@@ -1610,7 +1646,9 @@ class DocumentTreeServiceTest {
     void move_ownerMovesDocumentUnderAnotherTree_succeeds() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
         Document parent = Document.builder()
@@ -1678,7 +1716,9 @@ class DocumentTreeServiceTest {
         UUID parentId = UUID.randomUUID();
         UUID spaceId = UUID.randomUUID();
         Space space = Space.builder().id(spaceId).name("Engineering").build();
-        User parentAuthor = User.builder().id(UUID.randomUUID()).build();
+
+        User parentAuthor =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentId)
@@ -1719,8 +1759,12 @@ class DocumentTreeServiceTest {
         UUID parentId = UUID.randomUUID();
         UUID spaceId = UUID.randomUUID();
         Space space = Space.builder().id(spaceId).name("Engineering").build();
-        User author = User.builder().id(UUID.randomUUID()).build();
-        User parentAuthor = User.builder().id(UUID.randomUUID()).build();
+
+        User author =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
+
+        User parentAuthor =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(docId)

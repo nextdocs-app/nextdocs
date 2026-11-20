@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { UserAvatar } from '@/components/UserAvatar';
 import { ApiError } from '@/services/api-client';
 import { workspaceApiService } from '@/services/workspace.service';
 import type { WorkspaceRole } from '@/types/auth.types';
@@ -255,18 +256,12 @@ export function WorkspacePendingInvites({
               const expiry = formatExpiry(invite.expiresAt);
               const isResending = busyInvite === `resend:${invite.id}`;
               const isRevoking = busyInvite === `revoke:${invite.id}`;
-              const initial = (invite.email[0] ?? '?').toUpperCase();
 
               return (
                 <tr key={invite.id} className="group transition-colors hover:bg-muted/30">
                   <td className="py-3 pl-1 pr-4 align-middle">
                     <div className="flex items-center gap-3">
-                      <div
-                        aria-hidden="true"
-                        className="size-8 rounded-full bg-muted/60 flex items-center justify-center text-muted-foreground font-medium text-[12px] border border-border/50 shrink-0 select-none"
-                      >
-                        {initial}
-                      </div>
+                      <UserAvatar seed={invite.email} name={invite.email} />
                       <div className="min-w-0">
                         <p className="truncate text-[13.5px] font-medium leading-snug">
                           {invite.email}

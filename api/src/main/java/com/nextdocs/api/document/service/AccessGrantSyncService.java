@@ -1,11 +1,11 @@
 package com.nextdocs.api.document.service;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
+import com.nextdocs.api.user.entity.User;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

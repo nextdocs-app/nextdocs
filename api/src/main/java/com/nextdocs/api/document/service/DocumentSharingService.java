@@ -2,8 +2,6 @@ package com.nextdocs.api.document.service;
 
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
@@ -26,6 +24,8 @@ import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -81,6 +81,7 @@ public class DocumentSharingService {
                     owner.getId(),
                     owner.getEmail(),
                     owner.getDisplayName(),
+                    owner.getAvatarUrl(),
                     DocumentAccessLevel.OWNER,
                     doc.getCreatedAt(),
                     true,
@@ -133,6 +134,7 @@ public class DocumentSharingService {
                             ancestorOwner.getId(),
                             ancestorOwner.getEmail(),
                             ancestorOwner.getDisplayName(),
+                            ancestorOwner.getAvatarUrl(),
                             DocumentAccessLevel.OWNER,
                             ancestor.getCreatedAt(),
                             false,
@@ -157,6 +159,7 @@ public class DocumentSharingService {
                             grant.getUser().getId(),
                             grant.getUser().getEmail(),
                             grant.getUser().getDisplayName(),
+                            grant.getUser().getAvatarUrl(),
                             level,
                             grant.getCreatedAt(),
                             false,
@@ -188,6 +191,7 @@ public class DocumentSharingService {
                             sm.getUser().getId(),
                             sm.getUser().getEmail(),
                             sm.getUser().getDisplayName(),
+                            sm.getUser().getAvatarUrl(),
                             sm.getAccessLevel(),
                             sm.getCreatedAt(),
                             false,
@@ -218,6 +222,7 @@ public class DocumentSharingService {
                     uid,
                     grant.getUser().getEmail(),
                     grant.getUser().getDisplayName(),
+                    grant.getUser().getAvatarUrl(),
                     levelOf(grant),
                     grant.getCreatedAt(),
                     false,
@@ -262,6 +267,7 @@ public class DocumentSharingService {
                             row.userId(),
                             row.email(),
                             row.displayName(),
+                            row.avatarUrl(),
                             row.accessLevel(),
                             row.addedAt(),
                             row.owner(),
@@ -348,6 +354,7 @@ public class DocumentSharingService {
                 saved.getUser().getId(),
                 saved.getUser().getEmail(),
                 saved.getUser().getDisplayName(),
+                saved.getUser().getAvatarUrl(),
                 levelOf(saved),
                 saved.getCreatedAt(),
                 false);

@@ -19,7 +19,6 @@ const successBody = {
       email: 'a@b.com',
       displayName: 'Alice',
       avatarUrl: null,
-      emailVerified: false,
     },
   },
   error: null,

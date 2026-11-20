@@ -6,12 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.repository.AttachmentUsageRepository;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -59,6 +59,7 @@ class AttachmentQuotaPersistenceTest {
         user = userRepository.saveAndFlush(User.builder()
                 .email("quota-" + UUID.randomUUID() + "@example.com")
                 .displayName("Quota User")
+                .passwordHash("$2a$12$hash")
                 .build());
         document = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())

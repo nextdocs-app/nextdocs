@@ -6,6 +6,7 @@ import { useTheme } from '../../../hooks/useTheme.hook';
 import { getFocusableElements } from '../../../lib/focus-trap.util';
 
 jest.mock('../../../hooks/useTheme.hook', () => ({ useTheme: jest.fn() }));
+jest.mock('../../../stores/hooks', () => ({ useAppDispatch: () => jest.fn() }));
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
 jest.mock('../../../components/settings/panels/WorkspaceGeneralPanel', () => ({
   WorkspaceGeneralPanel: () => <div>Workspace general panel</div>,
@@ -29,7 +30,6 @@ beforeEach(() => {
       email: 'santhosh@example.com',
       displayName: 'Santhosh Kumar',
       avatarUrl: null,
-      emailVerified: true,
     },
     isAuthenticated: true,
     isInitializing: false,
@@ -169,14 +169,14 @@ it('switches to the Profile page and shows the signed-in account', async () => {
   expect(screen.getByDisplayValue('Santhosh Kumar')).toBeInTheDocument();
 });
 
-it('renders the display name input as disabled while profile edits are read-only', async () => {
+it('lets the account edit its display name and photo', async () => {
   const user = userEvent.setup();
   render(<SettingsDialog onClose={mockOnClose} />);
 
   await user.click(screen.getByRole('button', { name: 'Profile' }));
 
-  const input = screen.getByDisplayValue('Santhosh Kumar');
-  expect(input).toBeDisabled();
+  expect(screen.getByDisplayValue('Santhosh Kumar')).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Change profile photo' })).toBeEnabled();
 });
 
 it('shows the guest state on the Profile page', async () => {

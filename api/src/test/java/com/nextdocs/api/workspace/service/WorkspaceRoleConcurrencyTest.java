@@ -3,11 +3,11 @@ package com.nextdocs.api.workspace.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doAnswer;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
@@ -70,10 +70,12 @@ class WorkspaceRoleConcurrencyTest {
         actor = userRepository.saveAndFlush(User.builder()
                 .email("race-actor@example.com")
                 .displayName("Actor")
+                .passwordHash("$2a$12$hash")
                 .build());
         target = userRepository.saveAndFlush(User.builder()
                 .email("race-target@example.com")
                 .displayName("Target")
+                .passwordHash("$2a$12$hash")
                 .build());
         workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("Race").build());

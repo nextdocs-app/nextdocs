@@ -31,7 +31,6 @@ beforeEach(() => {
       email: 'santhosh@example.com',
       displayName: 'Santhosh Kumar',
       avatarUrl: null,
-      emailVerified: true,
     },
     isAuthenticated: true,
     isInitializing: false,

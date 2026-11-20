@@ -1,14 +1,14 @@
 package com.nextdocs.api.comment.controller;
 
-import static com.nextdocs.api.auth.security.BearerTokens.rejectInvalidBearer;
+import static com.nextdocs.api.security.BearerTokens.rejectInvalidBearer;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.comment.dto.request.CommentBodyRequest;
 import com.nextdocs.api.comment.dto.request.ReactionRequest;
 import com.nextdocs.api.comment.dto.response.CommentResponse;
 import com.nextdocs.api.comment.dto.response.ThreadResponse;
 import com.nextdocs.api.comment.service.CommentService;
 import com.nextdocs.api.common.response.ApiResponse;
+import com.nextdocs.api.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
