@@ -602,7 +602,14 @@ export function SpacesSection({
     : null;
 
   return (
-    <div className={`group flex flex-col ${className ?? ''}`.trim()}>
+    <div
+      // Sticky rows can only stay put if their resting offset already equals the
+      // offset they pin at: the header has to be exactly `--nd-sticky-header`
+      // tall, and nothing may sit between it and the first row. The row pitch
+      // is measured once on the scroll container (useStickyRowMetrics), so this
+      // wrapper must not shadow it with a constant.
+      className={`group flex flex-col [--nd-sticky-header:30px] ${className ?? ''}`.trim()}
+    >
       {/* Same shell as the document sections, minus a trailing action. */}
       <div
         role="button"
@@ -616,7 +623,7 @@ export function SpacesSection({
             onToggle();
           }
         }}
-        className="group/header mx-1.5 flex items-center justify-between rounded-sm py-[5px] pl-2 pr-2 text-[13.5px] text-muted-foreground transition-colors duration-100 hover:bg-sidebar-accent cursor-pointer select-none"
+        className="group/header sticky top-0 z-30 bg-sidebar mx-1.5 flex items-center justify-between rounded-sm py-[5px] pl-2 pr-2 text-[13.5px] leading-[20px] text-muted-foreground transition-colors duration-100 hover:bg-sidebar-accent cursor-pointer select-none"
       >
         <span className="flex min-w-0 items-center gap-1">
           <SectionHeading
@@ -635,7 +642,7 @@ export function SpacesSection({
       </div>
 
       {isOpen && (
-        <nav className="px-1.5 pt-px pb-2">
+        <nav className="px-1.5 pb-2">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -671,6 +678,7 @@ export function SpacesSection({
                             tabIndex={0}
                             aria-expanded={isExpanded}
                             aria-label={`${space.name} space`}
+                            data-sidebar-space-row=""
                             onClick={() => toggleSpace(space.id)}
                             onKeyDown={(event) => {
                               // The row is its own button, but the hover actions inside
@@ -683,7 +691,14 @@ export function SpacesSection({
                                 toggleSpace(space.id);
                               }
                             }}
-                            className="group/space relative flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sidebar-foreground/90 transition-colors duration-100 hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer"
+                            className={`w-full group/space relative flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sidebar-foreground/90 transition-colors duration-100 hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer ${
+                              isExpanded
+                                ? 'sticky z-20 bg-sidebar [box-shadow:0_1px_0_0_var(--color-sidebar)]'
+                                : ''
+                            }`}
+                            style={
+                              isExpanded ? { top: 'var(--nd-sticky-header, 30px)' } : undefined
+                            }
                           >
                             <span
                               style={tile.style}
@@ -761,7 +776,7 @@ export function SpacesSection({
                           </div>
 
                           {isExpanded && (
-                            <div className="relative flex flex-col">
+                            <div className="relative flex flex-col z-10">
                               {/* Spine from the space glyph down through its documents: the
                           visual mark that separates a container from a document. */}
                               <span
@@ -770,7 +785,18 @@ export function SpacesSection({
                                 className="pointer-events-none absolute top-0 bottom-1 left-[20px] z-[1] w-px bg-sidebar-border"
                               />
 
-                              <div className="pb-1 pl-6">
+                              <div
+                                className="pb-1 pl-6"
+                                style={
+                                  {
+                                    // A space row is 33px tall on a mouse and does not
+                                    // take the coarse-pointer padding its documents do,
+                                    // so its height -- not the doc pitch -- sets the base.
+                                    '--nd-sticky-base':
+                                      'calc(var(--nd-sticky-header, 30px) + var(--nd-sticky-row-height, 33px))',
+                                  } as React.CSSProperties
+                                }
+                              >
                                 {showSkeleton ? (
                                   <ul className="flex flex-col gap-px">
                                     {[0, 1].map((index) => (

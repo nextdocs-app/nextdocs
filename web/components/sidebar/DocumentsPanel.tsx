@@ -5,6 +5,7 @@ import { DocumentsPanelSkeleton } from './DocumentsPanelSkeleton';
 import { DocumentActionsButton } from './DocumentActionsButton';
 import { SidebarTreeItem } from './SidebarTreeItem';
 import { SidebarTreeDndContext } from './SidebarTreeDndContext';
+import { useStickyRowMetrics } from './useStickyRowMetrics';
 import type { TreeApi } from './SidebarTreeDndContext';
 import type {
   DocumentsPanelMode,
@@ -92,6 +93,7 @@ export function DocumentsPanel({
   onLoadMore,
 }: DocumentsPanelProps) {
   const documentsPanelScrollRef = useRef<HTMLDivElement>(null);
+  const setDocumentsPanelScrollRef = useStickyRowMetrics(documentsPanelScrollRef);
   const treeSentinelRef = useRef<HTMLLIElement>(null);
   const trashSentinelRef = useRef<HTMLLIElement>(null);
 
@@ -328,7 +330,11 @@ export function DocumentsPanel({
         </div>
       </div>
 
-      <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-1.5 py-2">
+      <div
+        ref={setDocumentsPanelScrollRef}
+        className="flex-1 overflow-y-auto px-1.5 pt-2 pb-10"
+        style={{ '--nd-sticky-header': '0px' } as React.CSSProperties}
+      >
         {isLoadingInitial ? (
           <DocumentsPanelSkeleton rows={6} />
         ) : isTreePanel && treeApi ? (
@@ -336,7 +342,7 @@ export function DocumentsPanel({
             renderEmptyState()
           ) : (
             <SidebarTreeDndContext treeApi={treeApi}>
-              <ul className="flex flex-col gap-px">
+              <ul className="flex flex-col gap-px relative z-0">
                 {visibleRootIds.map((rootId) => (
                   <SidebarTreeItem
                     key={rootId}

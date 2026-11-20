@@ -125,7 +125,7 @@ export function SpaceTree({
 
   return (
     <SidebarTreeDndContext treeApi={treeApi}>
-      <ul className="flex flex-col gap-px">
+      <ul className="flex flex-col gap-px relative z-0">
         {tree.rootIds.map((nodeId) => (
           <SidebarTreeItem
             key={nodeId}

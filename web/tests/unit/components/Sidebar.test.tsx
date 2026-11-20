@@ -1640,9 +1640,9 @@ it('moves a child document to trash in shared tree when user has edit access', a
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
-        expandedSpaceIds: [],
         panelMode: null,
         searchQuery: '',
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -2918,4 +2918,17 @@ it('marks guest shared rows as non-draggable', () => {
     'aria-disabled',
     'true'
   );
+});
+
+it('renders the account menu outside the scrollable tree container', () => {
+  render(<Sidebar />);
+
+  const accountButton = screen.getByRole('button', { name: /Alice/i });
+  const accountFooter = accountButton.closest('div.border-t');
+  expect(accountFooter).toBeInTheDocument();
+
+  // The scrollable container is a preceding sibling, not an ancestor of the profile footer
+  const scrollContainer = accountFooter?.previousElementSibling;
+  expect(scrollContainer).toHaveClass('overflow-y-auto');
+  expect(scrollContainer?.contains(accountButton)).toBe(false);
 });
