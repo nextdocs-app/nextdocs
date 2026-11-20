@@ -1,4 +1,5 @@
-import { getCollaboratorRowOptions } from '@/components/share/CollaboratorRow';
+import { render, screen } from '@testing-library/react';
+import { CollaboratorRow, getCollaboratorRowOptions } from '@/components/share/CollaboratorRow';
 import type { Collaborator } from '@/services/document.service';
 
 function createCollaborator(overrides: Partial<Collaborator> = {}): Collaborator {
@@ -71,5 +72,47 @@ describe('getCollaboratorRowOptions', () => {
     const values = options.map((o) => o.value);
     expect(values).not.toContain('INHERIT');
     expect(values).not.toContain('REMOVE');
+  });
+});
+
+describe('CollaboratorRow', () => {
+  function renderRow(overrides: Partial<Collaborator> = {}, detail?: string) {
+    return render(
+      <CollaboratorRow
+        collab={createCollaborator(overrides)}
+        isSelf={false}
+        canEditRow={false}
+        detail={detail}
+        hasEffectivePublicLink={false}
+        effectiveLinkAction="view"
+        onAccessSelect={jest.fn()}
+      />
+    );
+  }
+
+  it('draws the uploaded photo when the grantee has one', () => {
+    const { container } = renderRow({
+      avatarUrl: '/api/v1/users/user-1/avatar?v=abc123',
+    });
+
+    expect(container.querySelector('img')?.getAttribute('src')).toContain(
+      '/api/v1/users/user-1/avatar?v=abc123'
+    );
+  });
+
+  it('falls back to initials and the address when there is no display name', () => {
+    const { container } = renderRow({ displayName: '' });
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('text')).toHaveTextContent('U');
+    expect(screen.getAllByText('user1@example.com').length).toBeGreaterThan(0);
+  });
+
+  it('renders without an inherited-from badge', () => {
+    renderRow();
+
+    // No ancestor to name, so the row is just the person.
+    expect(screen.queryByText(/inherited/i)).not.toBeInTheDocument();
+    expect(screen.getByText('User One')).toBeInTheDocument();
   });
 });

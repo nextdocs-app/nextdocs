@@ -42,7 +42,6 @@ const renderHook = <Result, Props>(
             email: 'mock@example.com',
             displayName: 'Mock User',
             avatarUrl: null,
-            emailVerified: true,
           }
         : null,
       accessToken: authMock?.accessToken || null,

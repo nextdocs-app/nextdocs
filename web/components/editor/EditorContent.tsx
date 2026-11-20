@@ -82,8 +82,8 @@ import { useAppDispatch } from '@/stores/hooks';
 import { addToast } from '@/stores/toasts/toasts.slice';
 import { useIsTouchInput } from '@/hooks/useMediaQuery.hook';
 import { useDocumentToolbarInset } from '@/hooks/useDocumentToolbarInset.hook';
-import { getPresenceColor } from '@/lib/realtime.util';
 import { getRealtimeUrl } from '@/lib/api-url.util';
+import { getAvatarBackground } from '@/lib/avatar.util';
 import { buildYHubApiBaseUrl, YHUB_ORG } from '@/lib/version-history.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
@@ -95,8 +95,8 @@ import type { WebsocketProvider } from '@y/websocket';
 import type { Awareness } from '@y/protocols/awareness';
 import {
   COMMENT_USER_CACHE_TTL_MS,
+  commentAvatarUrl,
   createCommentThreadFloatingOptions,
-  buildFallbackAvatar,
 } from './comment.utils';
 import { CommentThreadStore, CommentThreadStoreAuth } from '@/lib/comment-thread.store';
 import { useAttachmentHandlers } from './useAttachmentHandlers';
@@ -447,8 +447,8 @@ export function EditorContent({
     return {
       id,
       username,
-      avatarUrl: user?.avatarUrl || buildFallbackAvatar(id, username),
-      color: getPresenceColor(id),
+      avatarUrl: commentAvatarUrl(id, username, user?.avatarUrl),
+      color: getAvatarBackground(id),
     };
   }, [user?.id, user?.displayName, user?.email, user?.avatarUrl]);
 
@@ -574,8 +574,8 @@ export function EditorContent({
             nextCollaborators.set(collaborator.userId, {
               id: collaborator.userId,
               username,
-              avatarUrl: buildFallbackAvatar(collaborator.userId, username),
-              color: getPresenceColor(collaborator.userId),
+              avatarUrl: commentAvatarUrl(collaborator.userId, username, collaborator.avatarUrl),
+              color: getAvatarBackground(collaborator.userId),
             });
           }
 
@@ -613,8 +613,8 @@ export function EditorContent({
           return {
             id,
             username: profile.displayName,
-            avatarUrl: profile.avatarUrl || buildFallbackAvatar(id, profile.displayName),
-            color: getPresenceColor(id),
+            avatarUrl: commentAvatarUrl(id, profile.displayName, profile.avatarUrl),
+            color: getAvatarBackground(id),
           };
         }
 
@@ -622,8 +622,8 @@ export function EditorContent({
         return {
           id,
           username: fallbackName,
-          avatarUrl: buildFallbackAvatar(id, fallbackName),
-          color: getPresenceColor(id),
+          avatarUrl: commentAvatarUrl(id, fallbackName),
+          color: getAvatarBackground(id),
         };
       });
     },
@@ -727,7 +727,7 @@ export function EditorContent({
           : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`;
       awarenessInstance.setLocalStateField('user', {
         name: activeCommentUser.username,
-        color: getPresenceColor(colorSeed),
+        color: getAvatarBackground(colorSeed),
       });
     }
   }, [
@@ -759,7 +759,7 @@ export function EditorContent({
         user: {
           id: activeCommentUser.id,
           name: activeCommentUser.username,
-          color: getPresenceColor(
+          color: getAvatarBackground(
             activeCommentUser.id !== 'anonymous'
               ? activeCommentUser.id
               : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`

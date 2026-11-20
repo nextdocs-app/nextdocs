@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Portal } from '@/components/Portal';
 import { AccessDropdown } from '@/components/share/AccessDropdown';
-import { ShareAvatar } from '@/components/share/CollaboratorRow';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useAnchoredPanel } from '@/hooks/useAnchoredPanel.hook';
 import { CircleCheck, Plus, Search } from '@/icons';
 import { ApiError } from '@/services/api-client';
@@ -255,19 +255,7 @@ export function AddSpaceMembersPopover({
                         key={member.userId}
                         className="flex items-center gap-2 rounded-md px-1.5 py-1.5"
                       >
-                        {member.avatarUrl ? (
-                          // Avatar URLs come from the user's profile; a 32px crop
-                          // does not need an optimizer hop.
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={member.avatarUrl}
-                            alt=""
-                            referrerPolicy="no-referrer"
-                            className="h-8 w-8 flex-shrink-0 rounded-full object-cover"
-                          />
-                        ) : (
-                          <ShareAvatar seed={member.userId} label={name} />
-                        )}
+                        <UserAvatar seed={member.userId} name={name} src={member.avatarUrl} />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[13px] font-medium leading-snug">{name}</p>
                           <p className="truncate text-[11.5px] leading-snug text-muted-foreground/70">

@@ -120,7 +120,6 @@ function renderSection(spaceOrSpaces: Space | Space[] = makeSpace()) {
       displayName: 'Alice',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
   };
   const store = configureStore({

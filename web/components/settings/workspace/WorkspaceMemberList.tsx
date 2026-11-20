@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { AccessDropdown } from '@/components/share/AccessDropdown';
-import { ShareAvatar } from '@/components/share/CollaboratorRow';
+import { UserAvatar } from '@/components/UserAvatar';
 import { ApiError } from '@/services/api-client';
 import { workspaceApiService } from '@/services/workspace.service';
 import type { WorkspaceRole } from '@/types/auth.types';
@@ -36,24 +36,6 @@ function formatJoinedAt(value: string): string | null {
 
 function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function MemberAvatar({ member }: { member: WorkspaceMember }) {
-  if (member.avatarUrl) {
-    return (
-      // Avatars are user-provided URLs; next/image would add a proxy hop for a
-      // 32px crop. `no-referrer` keeps the workspace host out of their logs.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={member.avatarUrl}
-        alt=""
-        referrerPolicy="no-referrer"
-        className="h-8 w-8 flex-shrink-0 rounded-full object-cover"
-      />
-    );
-  }
-
-  return <ShareAvatar seed={member.userId} label={displayName(member)} />;
 }
 
 /**
@@ -222,7 +204,7 @@ export function WorkspaceMemberList({
                     {/* User */}
                     <td className="py-3 pl-1 pr-4 align-middle">
                       <div className="flex items-center gap-3">
-                        <MemberAvatar member={member} />
+                        <UserAvatar seed={member.userId} name={name} src={member.avatarUrl} />
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-[13.5px] font-medium leading-snug">

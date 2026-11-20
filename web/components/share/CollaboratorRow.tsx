@@ -1,7 +1,7 @@
 'use client';
 
 import { Badge } from '@/components/Badge';
-import { getPresenceColor } from '@/lib/realtime.util';
+import { UserAvatar } from '@/components/UserAvatar';
 import type { Collaborator } from '@/services/document.service';
 import { AccessDropdown } from './AccessDropdown';
 import {
@@ -10,30 +10,6 @@ import {
   type CollaboratorDropdownValue,
   type DropdownOption,
 } from './shareOptions';
-
-export function ShareAvatar({
-  seed,
-  label,
-  size = 'md',
-}: {
-  seed: string;
-  label: string;
-  size?: 'sm' | 'md';
-}) {
-  const normalizedLabel = (label ?? '').trim();
-  const initial = (normalizedLabel || '?').charAt(0).toUpperCase();
-  const bg = getPresenceColor(seed);
-  const dimension = size === 'sm' ? 'h-7 w-7 text-[11.5px]' : 'h-8 w-8 text-[13px]';
-  return (
-    <span
-      aria-hidden="true"
-      className={`inline-flex ${dimension} flex-shrink-0 items-center justify-center rounded-full font-semibold text-white select-none shadow-xs`}
-      style={{ backgroundColor: bg }}
-    >
-      {initial}
-    </span>
-  );
-}
 
 export function getCollaboratorRowOptions(
   collab: Collaborator
@@ -112,7 +88,12 @@ export function CollaboratorRow({
   return (
     <li className="flex flex-col py-1 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors group/collab">
       <div className="flex items-center gap-2.5">
-        <ShareAvatar size="sm" seed={collab.userId} label={collab.displayName || collab.email} />
+        <UserAvatar
+          size="sm"
+          seed={collab.userId}
+          name={collab.displayName || collab.email}
+          src={collab.avatarUrl}
+        />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-[13px] font-medium text-card-foreground truncate leading-snug min-w-0 shrink">

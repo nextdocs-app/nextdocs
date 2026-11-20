@@ -1,7 +1,7 @@
 import type { FloatingUIOptions } from '@blocknote/react';
 import { flip, offset, shift, size } from '@floating-ui/react';
 import { createViewportBounds } from '@/lib/viewport-bounds.util';
-import { getPresenceColor } from '@/lib/realtime.util';
+import { buildInitialsAvatarDataUrl, resolveAvatarUrl } from '@/lib/avatar.util';
 import type { CommentThreadStats } from '@/components/comments/CommentsSidebar';
 
 export const EMPTY_COMMENT_STATS: CommentThreadStats = { open: 0, resolved: 0, all: 0 };
@@ -63,9 +63,17 @@ export function createCommentThreadFloatingOptions(toolbarInset: number): Floati
 
 export const COMMENT_USER_CACHE_TTL_MS = 20_000;
 
-export function buildFallbackAvatar(seed: string, username: string): string {
-  const initial = (username.trim()[0] ?? 'U').toUpperCase();
-  const fill = getPresenceColor(seed || initial);
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'><rect width='96' height='96' rx='48' fill='${fill}'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' fill='white' font-family='ui-sans-serif, system-ui, -apple-system' font-size='39' font-weight='600'>${initial}</text></svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+/**
+ * The avatar BlockNote's comment UI draws for one person.
+ *
+ * It needs an image source, not an element, so a photo is resolved against the API
+ * origin here; only an account without one gets the generated initials. Anything the
+ * resolver refuses falls back the same way, which keeps a malformed value out of the card.
+ */
+export function commentAvatarUrl(
+  userId: string,
+  username: string,
+  avatarUrl?: string | null
+): string {
+  return resolveAvatarUrl(avatarUrl) || buildInitialsAvatarDataUrl(userId, username);
 }
