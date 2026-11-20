@@ -6,6 +6,7 @@ export { Settings } from './Settings';
 export { Login } from './Login';
 export { Logout } from './Logout';
 export { MoreHorizontal } from './MoreHorizontal';
+export { History } from './History';
 export { Trash } from './Trash';
 export { Restore } from './Restore';
 export { Hamburger } from './Hamburger';

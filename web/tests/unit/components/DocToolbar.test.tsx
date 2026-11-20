@@ -9,6 +9,7 @@ import sidebarTreeReducer from '../../../stores/sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from '../../../stores/sharedTree/sharedTree.slice';
 import spaceTreeReducer from '../../../stores/spaceTree/spaceTree.slice';
 import authReducer from '../../../stores/auth/auth.slice';
+import themeReducer from '../../../stores/theme/theme.slice';
 import { documentService } from '../../../services/document.service';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 
@@ -39,12 +40,28 @@ jest.mock('../../../services/document.service', () => ({
   },
 }));
 
+// The toolbar reads the resolved theme for its menu surface.
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+});
+
 const testReducers = {
   sidebar: sidebarReducer,
   sidebarTree: sidebarTreeReducer,
   sharedTree: sharedTreeReducer,
   spaceTree: spaceTreeReducer,
   auth: authReducer,
+  theme: themeReducer,
 };
 
 const testRootReducer = combineReducers(testReducers);
@@ -390,6 +407,34 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     // Click intermediate document in menu
     await user.click(screen.getByRole('menuitem', { name: /Project X/i }));
     expect(onNavigateDocument).toHaveBeenCalledWith('doc-3');
+  });
+
+  it('closes the collapsed ancestor menu on Escape', async () => {
+    const user = userEvent.setup();
+
+    (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
+      { id: 'doc-1', title: 'Workspace Root', parentId: null },
+      { id: 'doc-2', title: 'Department', parentId: 'doc-1' },
+      { id: 'doc-3', title: 'Project X', parentId: 'doc-2' },
+      { id: 'doc-4', title: 'Specifications', parentId: 'doc-3' },
+      { id: 'doc-5', title: 'Current Page', parentId: 'doc-4' },
+    ]);
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-5"
+        documentTitle="Current Page"
+        isShareEnabled={false}
+        isOffline={false}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('Workspace Root')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Show intermediate parent documents' }));
+    expect(screen.getByRole('menuitem', { name: /Department/i })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menuitem', { name: /Department/i })).not.toBeInTheDocument();
   });
 
   it('updates the active document title reactively in breadcrumbs', () => {
@@ -744,5 +789,87 @@ describe('DocToolbar share panel integration', () => {
 
     const sharePanel = screen.getByTestId('share-panel');
     expect(sharePanel).toHaveAttribute('data-can-manage-sharing', 'false');
+  });
+});
+
+describe('DocToolbar document actions menu', () => {
+  it('opens from the top-right and offers version history only', async () => {
+    const user = userEvent.setup();
+    const onVersionHistoryToggle = jest.fn();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        onVersionHistoryToggle={onVersionHistoryToggle}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+
+    const menu = screen.getByRole('menu', { name: 'Document actions' });
+    expect(menu).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+
+    await user.click(screen.getByRole('menuitem', { name: /Version history/ }));
+    expect(onVersionHistoryToggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu', { name: 'Document actions' })).not.toBeInTheDocument();
+  });
+
+  it('keeps version history disabled when history cannot open', async () => {
+    const user = userEvent.setup();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory={false}
+        onVersionHistoryToggle={jest.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    expect(screen.getByRole('menuitem', { name: /Version history/ })).toBeDisabled();
+  });
+
+  it('replaces the actions menu with the history controls slot', () => {
+    const versionHistoryActionsRef = jest.fn();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        isVersionHistoryOpen
+        onVersionHistoryToggle={jest.fn()}
+        versionHistoryActionsRef={versionHistoryActionsRef}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'More document actions' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('version-history-toolbar-actions')).toBeInTheDocument();
+    expect(versionHistoryActionsRef).toHaveBeenCalledWith(expect.any(HTMLDivElement));
+  });
+
+  it('closes the actions menu on Escape', async () => {
+    const user = userEvent.setup();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        onVersionHistoryToggle={jest.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Document actions' })).not.toBeInTheDocument();
   });
 });
