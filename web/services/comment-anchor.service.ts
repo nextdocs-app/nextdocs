@@ -1,4 +1,5 @@
 import { getRealtimeUrl } from '@/lib/api-url.util';
+import { YHUB_ORG } from '@/lib/version-history.util';
 import { ApiError } from '@/services/api-client';
 import type {
   AnchorCreateRequest,
@@ -26,7 +27,7 @@ function realtimeHttpUrl(): string {
 }
 
 function anchorUrl(documentId: string): string {
-  return `${realtimeHttpUrl()}/api/anchor/v1/nextdocs/${encodeURIComponent(documentId)}`;
+  return `${realtimeHttpUrl()}/api/anchor/v1/${YHUB_ORG}/${encodeURIComponent(documentId)}`;
 }
 
 function authHeaders(accessToken: string | null): Record<string, string> {

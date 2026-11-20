@@ -1,0 +1,385 @@
+/* Version history rail: replaces the navigation sidebar while a version is open. */
+
+.nd-version-history-rail {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: var(--nd-sidebar-width, 256px);
+  max-width: var(--nd-sidebar-width, 256px);
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
+  border-right: 1px solid var(--sidebar-border);
+  animation: nd-version-history-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes nd-version-history-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* RenderInPortalElement keeps the editor's theme and extension context; make the
+   themed wrapper the rail's full-height column. */
+.nd-version-history-rail > .bn-root {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.nd-version-history-rail .bn-root .bn-versioning-sidebar {
+  height: 100%;
+  padding-inline: 10px;
+}
+
+/* The header shares the document toolbar's top strip: both rows start 8px from
+   the top and are 28px tall, so the title sits on the toolbar's line. */
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header {
+  min-height: 44px;
+  padding: 8px 4px;
+  gap: 8px;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+
+/* Title left, view toggles right: the same header rhythm as the comments rail. */
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header > div:first-child {
+  flex: 1;
+  min-width: 0;
+  justify-content: space-between;
+}
+
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header h2 {
+  margin: 0;
+  color: var(--sidebar-foreground);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+}
+
+/* Header toggles use our icon-button chrome instead of BlockNote's floating
+   card with its own border, background and shadow. */
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header-actions button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--sidebar-foreground);
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-header-actions button:hover {
+  color: var(--sidebar-foreground);
+  background: var(--sidebar-accent);
+}
+
+.nd-version-history-rail
+  .bn-root
+  .bn-versioning-sidebar-header-actions
+  button[aria-pressed='true'] {
+  color: var(--editor-toolbar-active-color);
+  background: var(--editor-toolbar-active-bg);
+}
+
+/* The toolbar's close button is the only X: the rail's header is a title row. */
+.nd-version-history-rail
+  .bn-root
+  .bn-versioning-sidebar-header-actions:has(button[aria-label='Close']) {
+  display: none;
+}
+
+/* Rows start on the same 14px gutter as the title. */
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-list {
+  margin: 0 -4px;
+  padding: 6px 4px 16px;
+  overscroll-behavior: contain;
+}
+
+/* A version row is a navigation row, not a raised card: transparent until
+   hovered, sidebar-accent when selected, exactly like the document tree. */
+.nd-version-history-rail .bn-root .bn-snapshot {
+  margin: 0 0 2px;
+  padding: 9px 10px;
+  gap: 2px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sidebar-foreground);
+  box-shadow: none;
+  transition: background-color 0.12s ease;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot:hover {
+  background: var(--sidebar-accent);
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot.selected,
+.nd-version-history-rail .bn-root .bn-snapshot.selected:hover {
+  border-color: transparent !important;
+  color: var(--sidebar-foreground) !important;
+  background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot.selected:hover {
+  background: var(--sidebar-accent) !important;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot.comparing {
+  border-color: color-mix(in srgb, var(--nd-brand) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--nd-brand) 10%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-comparing-to {
+  color: var(--nd-brand-active);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-body {
+  gap: 2px;
+  font-size: 13px;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-title-row {
+  min-height: 20px;
+  padding-right: 22px;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-date,
+.nd-version-history-rail .bn-root .bn-snapshot-original-date {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-users {
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot-user {
+  gap: 6px;
+}
+
+/* The author's presence colour, as a compact badge beside the name. */
+.nd-version-history-rail .bn-root .bn-snapshot-user-color {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background-color: currentColor;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sidebar-foreground) 12%, transparent);
+}
+
+/* In-place rename keeps the row's own surface instead of BlockNote's white
+   input on the selected dark card. */
+.nd-version-history-rail .bn-root .bn-snapshot-name-sizer > .bn-snapshot-name:focus {
+  color: var(--foreground);
+  background: var(--background);
+  border-color: var(--ring);
+}
+
+/* The row trigger is a bare icon inside the toolbar; BlockNote's action-toolbar
+   shadow would otherwise paint a halo around it. */
+.nd-version-history-rail .bn-root .bn-snapshot-menu .bn-action-toolbar {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Row menu trigger: full-strength toolbar icon colour, not a faded overlay. */
+.nd-version-history-rail .bn-root .bn-snapshot .bn-snapshot-menu-trigger,
+.nd-version-history-rail .bn-root .bn-snapshot.selected .bn-snapshot-menu-trigger {
+  color: var(--sidebar-foreground);
+  opacity: 1;
+}
+
+.nd-version-history-rail .bn-root .bn-snapshot .bn-snapshot-menu-trigger:hover,
+.nd-version-history-rail .bn-root .bn-snapshot .bn-snapshot-menu-trigger[data-selected],
+.nd-version-history-rail .bn-root .bn-snapshot .bn-snapshot-menu-trigger[aria-expanded='true'] {
+  color: var(--sidebar-foreground);
+  background: color-mix(in srgb, var(--sidebar-foreground) 8%, transparent);
+}
+
+/* The open menu is placed by VersionSnapshotMenuPositioner at the row's end,
+   straddling the rail edge like the navigation sidebar's document menu. The
+   positioner hides it inline until it has been measured, and leaves BlockNote's
+   own placement in charge if the rail or the trigger cannot be found. */
+.nd-version-history-rail [data-nd-version-menu-positioned='true'] {
+  position: fixed !important;
+  top: var(--nd-version-menu-top) !important;
+  left: var(--nd-version-menu-left) !important;
+  transform: none !important;
+}
+
+/* BlockNote's global dropdown rules are !important, so the shared surface
+   values have to be asserted again on its menu. The variables come from
+   `.nd-menu-surface`, keeping the two containers on the same dimensions. */
+.nd-version-history-rail .bn-version-menu.nd-menu-surface {
+  min-width: var(--nd-menu-surface-min-width) !important;
+  padding: var(--nd-menu-surface-padding) !important;
+  border: 1px solid var(--sidebar-border) !important;
+  border-radius: var(--nd-menu-surface-radius) !important;
+  background: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  box-shadow: var(--nd-menu-surface-shadow) !important;
+}
+
+.dark .nd-version-history-rail .bn-version-menu.nd-menu-surface,
+.nd-version-history-rail .bn-root[data-color-scheme='dark'] .bn-version-menu.nd-menu-surface {
+  background: #303030 !important;
+  color: #fff !important;
+}
+
+/* Only the BlockNote item chrome needs normalizing here. */
+.nd-version-history-rail .bn-version-menu .bn-menu-item {
+  min-height: 30px !important;
+  padding: 6px 8px !important;
+  margin: 0 !important;
+  gap: 8px !important;
+  border-radius: 6px !important;
+  color: inherit !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 20px !important;
+  white-space: nowrap !important;
+}
+
+.nd-version-history-rail .bn-version-menu .bn-menu-item svg {
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  opacity: 0.8;
+}
+
+.nd-version-history-rail .bn-version-menu .bn-menu-item:hover,
+.nd-version-history-rail .bn-version-menu .bn-menu-item:focus,
+.nd-version-history-rail .bn-version-menu .bn-menu-item[data-highlighted] {
+  color: var(--foreground) !important;
+  background: color-mix(in srgb, var(--foreground) 7%, transparent) !important;
+}
+
+.dark .nd-version-history-rail .bn-version-menu .bn-menu-item:hover,
+.dark .nd-version-history-rail .bn-version-menu .bn-menu-item:focus,
+.nd-version-history-rail .bn-root[data-color-scheme='dark'] .bn-version-menu .bn-menu-item:hover,
+.nd-version-history-rail .bn-root[data-color-scheme='dark'] .bn-version-menu .bn-menu-item:focus {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.nd-version-history-rail .bn-root .bn-versioning-sidebar-empty {
+  padding: 16px 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+/* Restore stays on the brand colour in every state; only its label recedes
+   while the selected row has nothing to restore. */
+.nd-version-restore {
+  background: var(--nd-brand);
+}
+
+.nd-version-restore:hover:not(:disabled) {
+  background: var(--nd-brand-hover);
+}
+
+.nd-version-restore:active:not(:disabled) {
+  background: var(--nd-brand-active);
+}
+
+.nd-version-restore:disabled {
+  background: var(--nd-brand);
+  cursor: not-allowed;
+}
+
+/* BlockNote leaves its icon buttons on the default cursor. Every enabled
+   control in the history rail and its toolbar is clickable. */
+.nd-version-history-rail button:not(:disabled),
+[data-testid='version-history-toolbar-actions'] button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* The two controls are portaled together inside BlockNote's themed wrapper, so
+   the toolbar's flex gap has to live there rather than on the empty mount. */
+[data-testid='version-history-toolbar-actions'] > .bn-root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The navigation rail is replaced, not covered: hidden so the fixed history rail
+   can use its width and background. The document toolbar stays visible because
+   it owns Restore and Close. */
+body[data-version-history-open='true'] .nd-left-sidebar,
+body[data-version-history-open='true'] .nd-shell-nav-toggle {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  body[data-version-history-open='true'] .nd-app-shell-main {
+    padding-left: var(--nd-sidebar-width, 256px);
+  }
+}
+
+@media (max-width: 767px) {
+  .nd-version-history-rail {
+    top: 3.25rem;
+    width: 100vw;
+    max-width: 100vw;
+    border-right: none;
+  }
+
+  /* The rail owns the screen below the toolbar row. Breadcrumbs would only
+     duplicate the history view's title over the panel. */
+  body[data-version-history-open='true'] .nd-doc-toolbar-left {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nd-version-history-rail {
+    animation: none;
+  }
+}

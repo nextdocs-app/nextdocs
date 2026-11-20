@@ -13,9 +13,26 @@
 @import './comments-sidebar.css';
 @import './comments-threads.css';
 @import './comments-activity.css';
+@import './version-history.css';
 @import './layout-responsive.css';
 @import './editor-toolbar.css';
 @import './editor-menus.css';
 @import './editor-popovers.css';
 @import './editor-media.css';
 @import './search-dialog.css';
+
+/* Floating-menu surface shared by the navigation rail, its document menu, the
+   toolbar menu and the version-history row menu. One radius, elevation and
+   padding for every menu (the rail's two menus used to disagree on radius). */
+.nd-menu-surface {
+  --nd-menu-surface-min-width: 11.5rem;
+  --nd-menu-surface-padding: 6px;
+  --nd-menu-surface-radius: var(--radius-sm, 6px);
+  --nd-menu-surface-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  min-width: var(--nd-menu-surface-min-width);
+  padding: var(--nd-menu-surface-padding);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--nd-menu-surface-radius);
+  box-shadow: var(--nd-menu-surface-shadow);
+}

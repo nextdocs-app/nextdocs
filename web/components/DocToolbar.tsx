@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { SharePanel } from '@/components/SharePanel';
 import { Comments, MoreHorizontal, Share } from '@/icons/index';
@@ -10,6 +10,8 @@ import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useDocumentBreadcrumbs } from '@/hooks/useDocumentBreadcrumbs.hook';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '@/lib/offline-navigation.util';
 import { PageIcon } from '@/components/page/PageIcon';
+import { ToolbarHistoryMenu } from '@/components/ToolbarHistoryMenu';
+import { useDismissableMenu } from '@/components/sidebar/useDismissableMenu';
 import {
   WorkspaceIconTile,
   workspaceIconTileStyle,
@@ -80,6 +82,14 @@ interface DocToolbarProps {
   documentSpace?: DocumentSpaceSummary | null;
   /** Callback to restore the document from trash */
   onRestore?: () => void;
+  /** Whether version history can be opened (signed in, online, not trashed, realtime available) */
+  canViewVersionHistory?: boolean;
+  /** Whether the version history rail is currently open */
+  isVersionHistoryOpen?: boolean;
+  /** Callback to toggle the version history rail */
+  onVersionHistoryToggle?: () => void;
+  /** Receives the element where the history panel mounts Restore/Close. */
+  versionHistoryActionsRef?: (node: HTMLDivElement | null) => void;
 }
 
 export function DocToolbar({
@@ -102,6 +112,10 @@ export function DocToolbar({
   canManageSharing = false,
   documentSpace = null,
   onRestore,
+  canViewVersionHistory = false,
+  isVersionHistoryOpen = false,
+  onVersionHistoryToggle,
+  versionHistoryActionsRef,
 }: DocToolbarProps) {
   const router = useRouter();
   const isMobileLayout = useIsMobileLayout();
@@ -156,30 +170,12 @@ export function DocToolbar({
     [documentId, onNavigateDocument, isOffline, router]
   );
 
-  // Close overflow dropdown on outside click or escape
-  useEffect(() => {
-    if (!isOverflowMenuOpen) return;
-
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target as Node)) {
-        setIsOverflowMenuOpen(false);
-      }
-    };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsOverflowMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOverflowMenuOpen]);
+  useDismissableMenu({
+    isOpen: isOverflowMenuOpen,
+    triggerRef: overflowMenuRef,
+    popupRef: overflowMenuRef,
+    onDismiss: () => setIsOverflowMenuOpen(false),
+  });
 
   const lastEditedLabel = formatLastEdited(updatedAt);
   const offlineTooltipId = 'doc-offline-tooltip';
@@ -209,14 +205,15 @@ export function DocToolbar({
   const spaceTile = workspaceIconTileStyle(space?.icon);
 
   // Left offset tracking: aligns pixel-perfectly with the left sidebar edge.
-  // When the rail is closed (or off-canvas on mobile), the shell's navigation
-  // toggle leads the row, so the toolbar clears it.
+  // While history is open that rail replaces the navigation sidebar, so the
+  // toolbar follows the history width even when the navigation was collapsed.
+  const showsExpandedLeftRail = isVersionHistoryOpen || !isSidebarCollapsed;
   const leftPositionStyle = {
     left: isMobileLayout
       ? 'calc(0.5rem + env(safe-area-inset-left, 0px) + 2.375rem)'
-      : isSidebarCollapsed
-        ? 'calc(0.5rem + 1.875rem)'
-        : 'calc(var(--nd-sidebar-width, 256px) + 12px)',
+      : showsExpandedLeftRail
+        ? 'calc(var(--nd-sidebar-width, 256px) + 12px)'
+        : 'calc(0.5rem + 1.875rem)',
   };
 
   return (
@@ -228,7 +225,7 @@ export function DocToolbar({
           flex items-center gap-0.5 min-w-0
           max-w-[calc(100vw-6.5rem)]
           ${
-            isSidebarCollapsed
+            isSidebarCollapsed && !isVersionHistoryOpen
               ? 'md:max-w-[calc(100vw-17rem)]'
               : 'md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]'
           }
@@ -332,7 +329,7 @@ export function DocToolbar({
                   focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring
                 "
               >
-                <MoreHorizontal size={16} className="opacity-80" />
+                <MoreHorizontal size={16} />
               </button>
 
               {isOverflowMenuOpen && (
@@ -555,7 +552,7 @@ export function DocToolbar({
         notice pushing the controls off the screen edge.
       */}
       <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5 h-7">
-        {showTrashNotice && canManageTrash && (
+        {!isVersionHistoryOpen && showTrashNotice && canManageTrash && (
           <div
             className="
               order-2 md:order-1
@@ -591,7 +588,7 @@ export function DocToolbar({
           </div>
         )}
 
-        {showTrashNotice && !canManageTrash && (
+        {!isVersionHistoryOpen && showTrashNotice && !canManageTrash && (
           <div
             className="
               order-2 md:order-1
@@ -614,7 +611,7 @@ export function DocToolbar({
           </div>
         )}
 
-        {shouldShowGuestNotice && (
+        {!isVersionHistoryOpen && shouldShowGuestNotice && (
           <div
             className="
               order-2 md:order-1
@@ -647,8 +644,9 @@ export function DocToolbar({
         )}
 
         <div className="order-1 md:order-2 flex items-center gap-0.5 md:gap-1.5 shrink-0">
-          {/* Last edited */}
-          {lastEditedLabel && (
+          {/* Last edited: history previews a frozen version, so the live
+              "edited" timestamp would describe the wrong content. */}
+          {!isVersionHistoryOpen && lastEditedLabel && (
             <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block">
               {lastEditedLabel}
             </span>
@@ -676,8 +674,8 @@ export function DocToolbar({
             </button>
           )}
 
-          {/* Share button */}
-          {isShareEnabled && (
+          {/* Share button (history owns the toolbar's right side) */}
+          {isShareEnabled && !isVersionHistoryOpen && (
             <button
               ref={shareButtonRef}
               id="doc-share-btn"
@@ -701,6 +699,21 @@ export function DocToolbar({
               <Share />
               <span className="hidden md:inline">Share</span>
             </button>
+          )}
+
+          {isVersionHistoryOpen ? (
+            // Restore / close are portaled here from the editor so they can read
+            // the Yhub version controller without mounting a second editor view.
+            <div
+              ref={versionHistoryActionsRef}
+              data-testid="version-history-toolbar-actions"
+              className="flex items-center gap-1.5"
+            />
+          ) : (
+            <ToolbarHistoryMenu
+              canViewVersionHistory={canViewVersionHistory}
+              onVersionHistoryToggle={onVersionHistoryToggle}
+            />
           )}
         </div>
       </div>

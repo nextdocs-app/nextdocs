@@ -56,6 +56,9 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
   } = useDocument(effectiveDocumentId, { isSharedDocument });
   const [showLoading, setShowLoading] = useState(false);
   const [showCommentsSidebar, setShowCommentsSidebar] = useState(false);
+  const [versionHistoryDocumentId, setVersionHistoryDocumentId] = useState<string | null>(null);
+  const [versionHistoryActionsTarget, setVersionHistoryActionsTarget] =
+    useState<HTMLDivElement | null>(null);
   const [commentsFilter, setCommentsFilter] = useState<CommentsFilter>('open');
   const [commentsSort, setCommentsSort] = useState<CommentsSort>('position');
   const [commentStatsByDocument, setCommentStatsByDocument] = useState<
@@ -142,11 +145,41 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
   // authorizes them against the link, so the button must not require an account.
   const showCommentsButton =
     accessLevel === 'COMMENT' || accessLevel === 'EDIT' || accessLevel === 'OWNER';
-  const isCommentsSidebarOpen = showCommentsButton ? showCommentsSidebar : false;
   const activeCommentStats = commentStatsByDocument[documentId] ?? EMPTY_COMMENT_STATS;
 
+  // History needs the live room to fork its preview, Yhub to answer its activity
+  // requests, and the browser's JWT to authorize them. Trashed documents are
+  // REST-only, the version endpoint refuses a soft-deleted room, and a share-link
+  // guest has no JWT for those requests: hide the entry point instead of opening
+  // a panel that can only fail.
+  const canViewVersionHistory =
+    isAuthenticated && isOnline && !isTrashedDocument && !!realtimeProvider;
+  // Deriving from the document id means navigating to another page closes the
+  // panel without showing the old document's history over the new one. Clearing
+  // the state on that navigation also keeps it closed if the user comes back.
+  if (versionHistoryDocumentId !== null && versionHistoryDocumentId !== documentId) {
+    setVersionHistoryDocumentId(null);
+  }
+  const isVersionHistoryOpen = versionHistoryDocumentId === documentId;
+  const isCommentsSidebarOpen =
+    showCommentsButton && !isVersionHistoryOpen ? showCommentsSidebar : false;
+
+  const handleVersionHistoryToggle = useCallback(() => {
+    const opening = versionHistoryDocumentId !== documentId;
+    if (opening) {
+      // The two panels are mutually exclusive: the history preview freezes the
+      // editor, so a comments rail beside live comment controls is misleading.
+      setShowCommentsSidebar(false);
+    }
+    setVersionHistoryDocumentId(opening ? documentId : null);
+  }, [documentId, versionHistoryDocumentId]);
+
+  const handleVersionHistoryClose = useCallback(() => {
+    setVersionHistoryDocumentId(null);
+  }, []);
+
   useEffect(() => {
-    if (!showCommentsButton) {
+    if (!showCommentsButton || isVersionHistoryOpen) {
       return;
     }
 
@@ -169,7 +202,7 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showCommentsButton]);
+  }, [showCommentsButton, isVersionHistoryOpen]);
 
   const handleCommentsClose = useCallback(() => {
     setShowCommentsSidebar(false);
@@ -255,10 +288,14 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         canManageSharing={canManageSharing}
         documentSpace={documentSpace}
         onRestore={handleRestore}
-        showCommentsButton={showCommentsButton}
+        showCommentsButton={showCommentsButton && !isVersionHistoryOpen}
         isCommentsSidebarOpen={isCommentsSidebarOpen}
         openCommentsCount={activeCommentStats.open}
         onCommentsToggle={() => setShowCommentsSidebar((prev) => !prev)}
+        canViewVersionHistory={canViewVersionHistory}
+        isVersionHistoryOpen={isVersionHistoryOpen}
+        onVersionHistoryToggle={handleVersionHistoryToggle}
+        versionHistoryActionsRef={setVersionHistoryActionsTarget}
       />
       <EditorErrorBoundary key={documentId} documentId={documentId}>
         <EditorContent
@@ -271,12 +308,16 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
           updateIcon={updateIcon}
           updateCover={updateCover}
           isReadOnly={isReadOnly}
+          isVersionHistoryOpen={isVersionHistoryOpen}
+          onVersionHistoryClose={handleVersionHistoryClose}
+          versionHistoryActionsTarget={versionHistoryActionsTarget}
+          canManageVersionHistory={accessLevel === 'EDIT' || accessLevel === 'OWNER'}
           accessLevel={accessLevel}
           realtimeProvider={realtimeProvider}
           user={user}
           isAuthenticated={isAuthenticated}
           accessToken={accessToken}
-          commentsUiEnabled={showCommentsButton}
+          commentsUiEnabled={showCommentsButton && !isVersionHistoryOpen}
           commentsSidebarOpen={isCommentsSidebarOpen}
           commentsFilter={commentsFilter}
           commentsSort={commentsSort}

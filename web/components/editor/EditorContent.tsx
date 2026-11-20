@@ -8,7 +8,11 @@ import {
 } from '@blocknote/core';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { filterSuggestionItems } from '@blocknote/core/extensions';
-import { withCollaboration } from '@blocknote/core/y';
+import {
+  createYHubVersionStorage,
+  YVersioningExtension,
+  withCollaboration,
+} from '@blocknote/core/y';
 import { en } from '@blocknote/core/locales';
 import {
   AddCommentButton,
@@ -29,6 +33,7 @@ import {
   FormattingToolbarController,
   getDefaultReactSlashMenuItems,
   NestBlockButton,
+  RenderInPortalElement,
   SideMenuController,
   SuggestionMenuController,
   TableCellMergeButton,
@@ -37,6 +42,7 @@ import {
   useCreateBlockNote,
 } from '@blocknote/react';
 import { BlockNoteView, ShadCNDefaultComponents, type ShadCNComponents } from '@blocknote/shadcn';
+import { VersioningSidebar } from '@blocknote/react/versioning';
 import '@blocknote/shadcn/style.css';
 import {
   getMultiColumnSlashMenuItems,
@@ -68,6 +74,7 @@ import { MobileFormattingToolbarController } from './MobileFormattingToolbar';
 import { MobileAddBlockButton } from './MobileAddBlockButton';
 import { MobileDeleteBlockButton } from './MobileDeleteBlockButton';
 import { createAlert, getAlertBlockTypeSelectItem, getAlertSlashMenuItem } from './alert';
+import { VersionHistoryToolbarActions, VersionSnapshotMenu } from './VersionHistoryRail';
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommentsSidebar, type CommentThreadStats } from '@/components/comments/CommentsSidebar';
 import { useTheme } from '@/hooks/useTheme.hook';
@@ -76,6 +83,8 @@ import { addToast } from '@/stores/toasts/toasts.slice';
 import { useIsTouchInput } from '@/hooks/useMediaQuery.hook';
 import { useDocumentToolbarInset } from '@/hooks/useDocumentToolbarInset.hook';
 import { getPresenceColor } from '@/lib/realtime.util';
+import { getRealtimeUrl } from '@/lib/api-url.util';
+import { buildYHubApiBaseUrl, YHUB_ORG } from '@/lib/version-history.util';
 import { documentService } from '@/services/document.service';
 import type { DocumentAccessLevel } from '@/services/document.service';
 import type { AuthUser } from '@/types/auth.types';
@@ -341,6 +350,10 @@ export function EditorContent({
   updateIcon,
   updateCover,
   isReadOnly,
+  isVersionHistoryOpen,
+  onVersionHistoryClose,
+  versionHistoryActionsTarget,
+  canManageVersionHistory,
   accessLevel,
   realtimeProvider,
   user,
@@ -365,6 +378,11 @@ export function EditorContent({
   /** Applies (or clears, with null) the page cover, position included. */
   updateCover: (cover: DocumentCover | null) => void;
   isReadOnly: boolean;
+  isVersionHistoryOpen: boolean;
+  onVersionHistoryClose: () => void;
+  /** Toolbar element outside BlockNoteView that receives Restore / Close. */
+  versionHistoryActionsTarget: HTMLDivElement | null;
+  canManageVersionHistory: boolean;
   accessLevel: DocumentAccessLevel | null;
   realtimeProvider: WebsocketProvider | null;
   user: AuthUser | null;
@@ -415,6 +433,10 @@ export function EditorContent({
         ...en.comments,
         save_button_text: 'Comment',
       },
+      versioning: {
+        ...en.versioning,
+        title: 'Version history',
+      },
     }),
     []
   );
@@ -426,6 +448,7 @@ export function EditorContent({
       id,
       username,
       avatarUrl: user?.avatarUrl || buildFallbackAvatar(id, username),
+      color: getPresenceColor(id),
     };
   }, [user?.id, user?.displayName, user?.email, user?.avatarUrl]);
 
@@ -552,6 +575,7 @@ export function EditorContent({
               id: collaborator.userId,
               username,
               avatarUrl: buildFallbackAvatar(collaborator.userId, username),
+              color: getPresenceColor(collaborator.userId),
             });
           }
 
@@ -566,12 +590,22 @@ export function EditorContent({
       const usersById = new Map<string, CommentUser>(collaboratorCache.current);
       usersById.set(activeUser.id, activeUser);
 
+      // Yhub records earlier activity under the author label it stored at write
+      // time, which is a display name on deployments that do not expose ids.
+      // Resolve those labels too, so a version row keeps its presence colour.
+      const usersByName = new Map<string, CommentUser>();
+      for (const collaborator of usersById.values()) {
+        usersByName.set(collaborator.username.trim().toLowerCase(), collaborator);
+      }
+
       return userIds.map((rawId) => {
         const id = rawId || 'anonymous';
-        const cached = usersById.get(id);
+        const cached = usersById.get(id) ?? usersByName.get(id.trim().toLowerCase());
 
         if (cached) {
-          return cached;
+          // Keep the requested key so the shared user store can look the
+          // snapshot author up by the value Yhub returned.
+          return cached.id === id ? cached : { ...cached, id };
         }
 
         const profile = threadStore.getProfile(id);
@@ -580,6 +614,7 @@ export function EditorContent({
             id,
             username: profile.displayName,
             avatarUrl: profile.avatarUrl || buildFallbackAvatar(id, profile.displayName),
+            color: getPresenceColor(id),
           };
         }
 
@@ -588,6 +623,7 @@ export function EditorContent({
           id,
           username: fallbackName,
           avatarUrl: buildFallbackAvatar(id, fallbackName),
+          color: getPresenceColor(id),
         };
       });
     },
@@ -597,17 +633,76 @@ export function EditorContent({
   const isTouchInputRef = useRef(isTouchInput);
   isTouchInputRef.current = isTouchInput;
 
+  // Yhub history is addressed over HTTP on the realtime origin. The token is
+  // read through a getter so a silent refresh — or an in-place sign-in on a
+  // share link — does not rebuild the editor (and lose the live collaboration
+  // binding) just to update one header.
+  const versioningAuthHeaders = useMemo<Record<string, string>>(() => {
+    const headers: Record<string, string> = {};
+    Object.defineProperty(headers, 'Authorization', {
+      enumerable: true,
+      get: () => {
+        const token = accessTokenRef.current;
+        return token ? `Bearer ${token}` : '';
+      },
+    });
+    return headers;
+  }, []);
+
+  // The editor is created once per document, so the capability cannot be baked
+  // into the storage at mount: an access change while the page is open (a share
+  // grant, the 30s recheck) has to reach the controller. These getters are read
+  // by canRestore/canCreate/canRename/canRemove on every render and again when an
+  // action runs, so viewers never receive a mutator and an upgraded editor does
+  // not need a remount to use one.
+  const canManageVersioningRef = useRef(canManageVersionHistory);
+  canManageVersioningRef.current = canManageVersionHistory;
+
+  const versioningStorage = useMemo(() => {
+    const storage = createYHubVersionStorage({
+      baseUrl: buildYHubApiBaseUrl(getRealtimeUrl()),
+      org: YHUB_ORG,
+      docId: documentId,
+      headers: versioningAuthHeaders,
+      fragment: ydoc.get('blocknote'),
+      beforeRestoreName: en.versioning.before_restore,
+    });
+
+    return {
+      ...storage,
+      get create() {
+        return canManageVersioningRef.current ? storage.create : undefined;
+      },
+      get restore() {
+        return canManageVersioningRef.current ? storage.restore : undefined;
+      },
+      get rename() {
+        return canManageVersioningRef.current ? storage.rename : undefined;
+      },
+      get remove() {
+        return canManageVersioningRef.current ? storage.remove : undefined;
+      },
+    };
+  }, [documentId, ydoc, versioningAuthHeaders]);
+
+  const versioningExtension = useMemo(
+    () => YVersioningExtension({ storage: versioningStorage, scrollToFirstChange: true }),
+    [versioningStorage]
+  );
+
   const editorExtensions = useMemo(() => {
     // Custom Shiki highlighter (github-dark/light, extended language set from
-    // codeBlockHighlighter.ts) alongside the comments extension and mobile draggable blocks.
+    // codeBlockHighlighter.ts) alongside the comments extension, mobile
+    // draggable blocks, and Yhub's activity-backed version history.
     return [
       CommentsExtension({ threadStore, resolveUsers }),
       syntaxHighlighter,
       MobileDraggableBlocksExtension({
         isTouchInput: () => isTouchInputRef.current,
       }),
+      versioningExtension,
     ];
-  }, [resolveUsers, threadStore]);
+  }, [resolveUsers, threadStore, versioningExtension]);
 
   // Use the continuous awareness instance tied to ydoc (or fallback to realtimeProvider)
   // so the collaboration provider object remains stable across WebSocket connects/reconnects.
@@ -662,6 +757,7 @@ export function EditorContent({
         provider: collaborationProvider,
         fragment: ydoc.get('blocknote'),
         user: {
+          id: activeCommentUser.id,
           name: activeCommentUser.username,
           color: getPresenceColor(
             activeCommentUser.id !== 'anonymous'
@@ -669,6 +765,9 @@ export function EditorContent({
               : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`
           ),
         },
+        // Resolves the author ids Yhub attributes edits to (the JWT subject) in
+        // the version history and diff tooltips. The same cache the comments UI uses.
+        resolveUsers,
       },
       dictionary: commentsDictionary,
       extensions: editorExtensions,
@@ -787,6 +886,21 @@ export function EditorContent({
   // `editor.mount`/`editor.unmount`.
   // Parent keys EditorContent by documentId, so the initial value is per-document.
   const initialEditableRef = useRef(!isReadOnly);
+
+  const [versionPanel, setVersionPanel] = useState<HTMLDivElement | null>(null);
+
+  // The rail is fixed and reserves space in the shell, so the shell needs to know
+  // whether it is open (and whether the nav rail currently occupies the left edge).
+  useEffect(() => {
+    if (!isVersionHistoryOpen) {
+      return;
+    }
+
+    document.body.setAttribute('data-version-history-open', 'true');
+    return () => {
+      document.body.removeAttribute('data-version-history-open');
+    };
+  }, [isVersionHistoryOpen]);
 
   const focusRequested = useRef(false);
 
@@ -947,9 +1061,9 @@ export function EditorContent({
         title={meta.title}
         icon={meta.icon}
         cover={meta.cover}
-        isReadOnly={isReadOnly}
-        canEdit={canEditPageMedia}
-        canUpload={canUploadPageMedia}
+        isReadOnly={isReadOnly || isVersionHistoryOpen}
+        canEdit={canEditPageMedia && !isVersionHistoryOpen}
+        canUpload={canUploadPageMedia && !isVersionHistoryOpen}
         accessToken={accessToken}
         onTitleChange={handleTitleChange}
         onTitleBlur={handleTitleBlur}
@@ -960,8 +1074,27 @@ export function EditorContent({
         onRemoveCover={handleRemoveCover}
         onCoverPositionChange={handleCoverPositionChange}
       />
-      {isEditorVisible && (
-        <div className="w-full max-w-4xl mx-auto px-2 sm:px-4 animate-in fade-in duration-300">
+      {/* Portal target for the history rail. It lives outside BlockNoteView so
+          the panel can fixed-position itself, while RenderInPortalElement keeps
+          the editor context (extension store, theme, user store). */}
+      {isVersionHistoryOpen && (
+        <div
+          ref={setVersionPanel}
+          className="nd-version-history-rail"
+          data-testid="version-history-rail"
+        />
+      )}
+      {/* Version history needs BlockNoteView's context (extension store, theme,
+          user store) for its portals, so an empty document still mounts it while
+          the rail is open — hidden, because the body has nothing to show. */}
+      {(isEditorVisible || isVersionHistoryOpen) && (
+        <div
+          className={
+            isEditorVisible
+              ? 'w-full max-w-4xl mx-auto px-2 sm:px-4 animate-in fade-in duration-300'
+              : 'hidden'
+          }
+        >
           <BlockNoteView
             editor={editor}
             theme={resolvedTheme}
@@ -1046,6 +1179,22 @@ export function EditorContent({
                 onThreadStatsChange={onCommentsThreadStatsChange}
                 canComment={canComment}
               />
+            )}
+            {isVersionHistoryOpen && versionPanel && (
+              <RenderInPortalElement target={versionPanel}>
+                <VersioningSidebar
+                  onClose={onVersionHistoryClose}
+                  onError={(error) =>
+                    console.warn('Failed to load document version history:', error)
+                  }
+                  snapshotMenu={<VersionSnapshotMenu />}
+                />
+              </RenderInPortalElement>
+            )}
+            {isVersionHistoryOpen && versionHistoryActionsTarget && (
+              <RenderInPortalElement target={versionHistoryActionsTarget}>
+                <VersionHistoryToolbarActions onClose={onVersionHistoryClose} />
+              </RenderInPortalElement>
             )}
           </BlockNoteView>
         </div>

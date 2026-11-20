@@ -1,6 +1,7 @@
 // Mock BlockNote BEFORE importing Editor
 jest.mock('@blocknote/react', () => {
   const actualReact = jest.requireActual<typeof import('react')>('react');
+  const { createPortal } = jest.requireActual<typeof import('react-dom')>('react-dom');
   return {
     useCreateBlockNote: jest.fn((options, deps) => {
       return actualReact.useMemo(
@@ -18,7 +19,15 @@ jest.mock('@blocknote/react', () => {
     blockTypeSelectItems: jest.fn(() => []),
     getFormattingToolbarItems: jest.fn(() => []),
     useBlockNoteEditor: jest.fn(() => ({
-      getExtension: jest.fn(() => undefined),
+      getExtension: jest.fn((key?: string) =>
+        key === 'versioning'
+          ? {
+              canRestore: true,
+              restore: jest.fn(async () => ({ status: 'done' })),
+              store: {},
+            }
+          : undefined
+      ),
     })),
     useComponentsContext: jest.fn(() => ({
       FormattingToolbar: {
@@ -70,6 +79,21 @@ jest.mock('@blocknote/react', () => {
     })),
     useThreads: jest.fn(() => new Map()),
     ThreadsSidebar: () => <div data-testid="threads-sidebar" />,
+    // Portals into the target like the real component, so tests can assert where
+    // portalled children land; without a target they render inline.
+    RenderInPortalElement: ({
+      children,
+      target,
+    }: {
+      children?: ReactNode;
+      target?: HTMLElement | null;
+    }) => (target ? createPortal(children, target) : <>{children}</>),
+    useStore: jest.fn(() => ({
+      mode: 'versions',
+      displayed: { type: 'snapshot', id: '100-200' },
+      restoring: false,
+      history: { status: 'success', data: [] },
+    })),
     createReactBlockSpec: jest.fn((config, implementation) => () => ({
       type: config?.type || 'alert',
       config,
@@ -101,7 +125,9 @@ jest.mock('@blocknote/diagram-block', () => ({
 }));
 
 jest.mock('@blocknote/shadcn', () => ({
-  BlockNoteView: jest.fn(() => <div data-testid="blocknote-view" />),
+  BlockNoteView: jest.fn(({ children }: { children?: ReactNode }) => (
+    <div data-testid="blocknote-view">{children}</div>
+  )),
   ShadCNDefaultComponents: {
     DropdownMenu: {
       DropdownMenuTrigger: ({
@@ -223,6 +249,34 @@ jest.mock('@blocknote/core/extensions', () => ({
 jest.mock('@blocknote/core/y', () => ({
   YjsThreadStore: jest.fn(),
   withCollaboration: jest.fn((options) => options),
+  YVersioningExtension: jest.fn(() => ({ key: 'versioning' })),
+  createYHubVersionStorage: jest.fn(() => ({
+    list: jest.fn(async () => ({ ok: true, value: { snapshots: [] } })),
+    getContent: jest.fn(),
+    restore: jest.fn(),
+    create: jest.fn(),
+    rename: jest.fn(),
+    remove: jest.fn(),
+  })),
+}));
+
+jest.mock('@blocknote/react/versioning', () => ({
+  VersioningSidebar: ({
+    onClose,
+    onError,
+  }: {
+    onClose?: () => void;
+    onError?: (error: Error) => void;
+  }) => (
+    <div data-testid="versioning-sidebar">
+      <button type="button" onClick={onClose}>
+        Close history panel
+      </button>
+      <button type="button" onClick={() => onError?.(new Error('history unavailable'))}>
+        Fail history panel
+      </button>
+    </div>
+  ),
 }));
 
 jest.mock('@blocknote/code-block', () => ({
@@ -279,7 +333,9 @@ import {
   act,
   cleanup,
   waitFor,
+  within,
 } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import uiReducer from '../../../stores/ui/ui.slice';
@@ -289,7 +345,8 @@ import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
 import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCreateBlockNote } from '@blocknote/react';
+import { useCreateBlockNote, useStore } from '@blocknote/react';
+import { createYHubVersionStorage, YVersioningExtension } from '@blocknote/core/y';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { createCodeBlockSpec } from '@blocknote/core';
 import { syntaxHighlighter } from '../../../components/editor/codeBlockHighlighter';
@@ -303,6 +360,7 @@ import {
   UnsupportedUrlError,
 } from '../../../services/attachment.service';
 import toastsReducer from '../../../stores/toasts/toasts.slice';
+import { documentService } from '../../../services/document.service';
 import { CommentsExtension } from '@blocknote/core/comments';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 import * as Y from '@y/y';
@@ -423,6 +481,12 @@ describe('Editor Component', () => {
   afterEach(() => {
     jest.useRealTimers();
     clearTouchInputStub();
+    (useStore as unknown as jest.Mock).mockReturnValue({
+      mode: 'versions',
+      displayed: { type: 'snapshot', id: '100-200' },
+      restoring: false,
+      history: { status: 'success', data: [] },
+    });
   });
 
   it('should show loading state after delay', async () => {
@@ -1014,7 +1078,7 @@ describe('Editor Component', () => {
     const useCreateBlockNoteMock = useCreateBlockNote as unknown as jest.Mock;
     const lastConfig =
       useCreateBlockNoteMock.mock.calls[useCreateBlockNoteMock.mock.calls.length - 1][0];
-    expect(lastConfig.extensions).toHaveLength(3);
+    expect(lastConfig.extensions).toHaveLength(4);
     expect(CommentsExtension).toHaveBeenCalled();
   });
 
@@ -2640,5 +2704,257 @@ describe('Editor Component', () => {
       ).resolves.toBe('https://example.com/image.png');
       expect(resolveSpy).toHaveBeenCalledWith('https://example.com/image.png', 'token');
     });
+  });
+
+  function mockVersionHistorySession(accessLevel: 'EDIT' | 'VIEW' = 'EDIT') {
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token',
+      user: { id: 'user-1', email: 'user@example.com', displayName: 'User' },
+    });
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: { ...mockMeta, title: 'Versioned document' },
+      accessLevel,
+      isReadOnly: accessLevel === 'VIEW',
+      isRealtimeConnected: true,
+      realtimeProvider: { on: jest.fn(), off: jest.fn(), awareness: null },
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+  }
+
+  async function openVersionHistory(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Version history/ }));
+  }
+
+  it('opens version history from the actions menu and closes it on navigation', async () => {
+    const user = userEvent.setup();
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      accessToken: 'token',
+      user: { id: 'user-1', email: 'user@example.com', displayName: 'User' },
+    });
+    const document = (documentId: string) => ({
+      documentId,
+      ydoc: mockYdoc,
+      meta: { ...mockMeta, title: 'Versioned document' },
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: true,
+      realtimeProvider: { on: jest.fn(), off: jest.fn(), awareness: null },
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+    (useDocument as jest.Mock).mockReturnValue(document('test-doc-id'));
+
+    const { rerender } = render(<Editor />);
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Version history/ }));
+    expect(screen.getByTestId('version-history-rail')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Restore version' })).toBeEnabled();
+
+    // The X lives in the toolbar where the actions menu used to be.
+    await user.click(screen.getByRole('button', { name: 'Close version history' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('version-history-rail')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Version history/ }));
+    expect(screen.getByTestId('version-history-rail')).toBeInTheDocument();
+
+    // History is per document: leave it behind instead of replaying it when the
+    // user returns to the previous page.
+    (useDocument as jest.Mock).mockReturnValue(document('other-doc-id'));
+    rerender(<Editor />);
+    expect(screen.queryByTestId('version-history-rail')).not.toBeInTheDocument();
+
+    (useDocument as jest.Mock).mockReturnValue(document('test-doc-id'));
+    rerender(<Editor />);
+    expect(screen.queryByTestId('version-history-rail')).not.toBeInTheDocument();
+  });
+
+  it('mounts the history portals for an empty document without showing the body', async () => {
+    const user = userEvent.setup();
+    mockVersionHistorySession();
+    (useCreateBlockNote as jest.Mock).mockReturnValue({
+      document: [{ content: [] }],
+      focus: jest.fn(),
+      mount: jest.fn(),
+      unmount: jest.fn(),
+      isEditable: true,
+      onChange: jest.fn(() => jest.fn()),
+    });
+    // Empty body and an untitled page: the live editor stays hidden, so only the
+    // BlockNoteView context (not its content) may mount for the rail's portals.
+    (useDocument as jest.Mock).mockReturnValue({
+      documentId: 'test-doc-id',
+      ydoc: mockYdoc,
+      meta: mockMeta,
+      accessLevel: 'EDIT',
+      isReadOnly: false,
+      isRealtimeConnected: true,
+      realtimeProvider: { on: jest.fn(), off: jest.fn(), awareness: null },
+      errorState: null,
+      isLoading: false,
+      error: null,
+      updateMeta: mockUpdateMeta,
+    });
+
+    render(<Editor />);
+
+    expect(screen.queryByTestId('blocknote-view')).not.toBeInTheDocument();
+
+    await openVersionHistory(user);
+
+    // Each portal lands in its own toolbar/rail slot, not inside the editor body.
+    const rail = screen.getByTestId('version-history-rail');
+    expect(within(rail).getByTestId('versioning-sidebar')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('version-history-toolbar-actions')).getByRole('button', {
+        name: 'Restore version',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('blocknote-view').parentElement).toHaveClass('hidden');
+
+    await user.click(screen.getByRole('button', { name: 'Close version history' }));
+
+    // Closing restores the empty-document presentation: no editor at all.
+    await waitFor(() => {
+      expect(screen.queryByTestId('blocknote-view')).not.toBeInTheDocument();
+    });
+  });
+
+  it('disables Restore for the Current checkpoint', async () => {
+    const user = userEvent.setup();
+    mockVersionHistorySession();
+    (useStore as unknown as jest.Mock).mockReturnValue({
+      mode: 'versions',
+      showCurrentVersion: false,
+      displayed: { type: 'snapshot', id: '100-200' },
+      restoring: false,
+      history: { status: 'success', data: [{ id: '100-200' }, { id: '90-100' }] },
+    });
+
+    render(<Editor />);
+    await openVersionHistory(user);
+
+    // The newest checkpoint is the live content; restoring it is a no-op.
+    expect(screen.getByRole('button', { name: 'Restore version' })).toBeDisabled();
+  });
+
+  it('enables Restore for an earlier checkpoint', async () => {
+    const user = userEvent.setup();
+    mockVersionHistorySession();
+    (useStore as unknown as jest.Mock).mockReturnValue({
+      mode: 'versions',
+      showCurrentVersion: false,
+      displayed: { type: 'snapshot', id: '90-100' },
+      restoring: false,
+      history: { status: 'success', data: [{ id: '100-200' }, { id: '90-100' }] },
+    });
+
+    render(<Editor />);
+    await openVersionHistory(user);
+
+    expect(screen.getByRole('button', { name: 'Restore version' })).toBeEnabled();
+  });
+
+  it('warns instead of crashing when the history panel fails to load', async () => {
+    const user = userEvent.setup();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockVersionHistorySession();
+
+    render(<Editor />);
+    await openVersionHistory(user);
+    await user.click(screen.getByRole('button', { name: 'Fail history panel' }));
+
+    expect(warn).toHaveBeenCalledWith(
+      'Failed to load document version history:',
+      expect.any(Error)
+    );
+    expect(screen.getByTestId('versioning-sidebar')).toBeInTheDocument();
+  });
+
+  it('reads the Yhub access token lazily so a refresh keeps the same storage', () => {
+    mockVersionHistorySession();
+    const { rerender } = render(<Editor />);
+
+    const storage = (createYHubVersionStorage as unknown as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(storage.headers.Authorization).toBe('Bearer token');
+
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: false,
+      accessToken: null,
+      user: null,
+    });
+    rerender(<Editor />);
+
+    expect((createYHubVersionStorage as unknown as jest.Mock).mock.calls.at(-1)?.[0]).toBe(storage);
+    expect(storage.headers.Authorization).toBe('');
+  });
+
+  it('resolves version authors by id and by the display name Yhub recorded', async () => {
+    mockVersionHistorySession();
+    (documentService.listCollaborators as jest.Mock).mockResolvedValueOnce([
+      { userId: 'user-2', displayName: 'Bob Smith', email: 'bob@example.com' },
+    ]);
+
+    render(<Editor />);
+
+    const commentsCall = (CommentsExtension as jest.Mock).mock.calls
+      .slice()
+      .reverse()
+      .find((call) => call[0]?.resolveUsers);
+    const resolveUsers = commentsCall[0].resolveUsers as (
+      ids: string[]
+    ) => Promise<Array<{ id: string; username: string; color?: string }>>;
+
+    const users = await resolveUsers(['user-2', ' bob smith ', '', 'stranger-id']);
+
+    // Ids keep their key; a stored display name resolves to the same person but
+    // keeps the label Yhub returned so the user store can find it again.
+    expect(users.map((user) => user.id)).toEqual([
+      'user-2',
+      ' bob smith ',
+      'anonymous',
+      'stranger-id',
+    ]);
+    expect(users[1]).toMatchObject({ id: ' bob smith ', username: 'Bob Smith' });
+    expect(users[0].color).toBeDefined();
+    expect(users[3].username).toBe('User strang');
+  });
+
+  it('grants history mutators only while the session can edit', () => {
+    const extensionMock = YVersioningExtension as unknown as jest.Mock;
+
+    mockVersionHistorySession('VIEW');
+    const { rerender } = render(<Editor />);
+
+    const storage = extensionMock.mock.calls.at(-1)?.[0].storage;
+    expect(typeof storage.list).toBe('function');
+    expect(storage.restore).toBeUndefined();
+    expect(storage.create).toBeUndefined();
+    expect(storage.rename).toBeUndefined();
+    expect(storage.remove).toBeUndefined();
+
+    mockVersionHistorySession('EDIT');
+    rerender(<Editor />);
+
+    // The editor is created once per document, so the same storage object has to
+    // open the mutators when access is upgraded (and close them on a downgrade).
+    expect(extensionMock.mock.calls.at(-1)?.[0].storage).toBe(storage);
+    expect(typeof storage.restore).toBe('function');
+    expect(typeof storage.create).toBe('function');
+    expect(typeof storage.rename).toBe('function');
+    expect(typeof storage.remove).toBe('function');
   });
 });
