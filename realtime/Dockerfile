@@ -2,7 +2,7 @@
 # has 2.36 and the image dies at import; trixie has 2.41. Keep all stages on the same
 # libc so the native binding installed in deps matches the runner.
 # Keep the Node line in sync with .nvmrc; `pnpm run check:runtime-versions` fails otherwise.
-FROM node:24.14.1-trixie-slim AS base
+FROM node:26.13.1-trixie-slim AS base
 RUN npm install -g pnpm@12.21.0
 
 FROM base AS deps
@@ -31,7 +31,7 @@ RUN pnpm install --frozen-lockfile --prod --filter realtime
 
 # The runtime needs the production install, not pnpm or its store: copying only
 # /app drops the global pnpm from base and the caches pnpm keeps under /root.
-FROM node:24.14.1-trixie-slim AS runner
+FROM node:26.13.1-trixie-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HUSKY=0
