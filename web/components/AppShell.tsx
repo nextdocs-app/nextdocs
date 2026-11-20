@@ -223,6 +223,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             aria-expanded={isMobileLayout ? isMobileNavOpen : false}
             title={isMobileLayout ? 'Open navigation' : 'Open sidebar'}
             className="
+              nd-shell-nav-toggle
               fixed top-2 z-40 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm
               md:h-7 md:w-7
               text-muted-foreground hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
