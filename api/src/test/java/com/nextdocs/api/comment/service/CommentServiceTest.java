@@ -26,6 +26,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.mention.service.MentionService;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.user.repository.UserRepository;
 import java.time.OffsetDateTime;
@@ -78,6 +79,9 @@ class CommentServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private MentionService mentionService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private CommentService commentService;
@@ -97,6 +101,7 @@ class CommentServiceTest {
                 reactionRepository,
                 userRepository,
                 permissionService,
+                mentionService,
                 objectMapper);
         userId = UUID.randomUUID();
         documentId = UUID.randomUUID();

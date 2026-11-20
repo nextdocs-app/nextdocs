@@ -61,10 +61,15 @@ public class SearchIndexService {
      *     content-updated request passes the same instant it records as
      *     {@code documents.updated_at}, so the reconcile crawl does not select a document
      *     that this very request just indexed.
+     * @return false when the ordering guard rejected this write as older than the
+     *     projection already stored. Callers that carry another projection of the same
+     *     content (mentions) must skip it as well, or a retried older event could
+     *     resurrect a mention the newer body removed.
      */
-    public void indexContent(UUID documentId, String text, boolean truncated, Instant producedAt, Instant indexedAt) {
+    public boolean indexContent(
+            UUID documentId, String text, boolean truncated, Instant producedAt, Instant indexedAt) {
         if (!properties.isEnabled()) {
-            return;
+            return true;
         }
         OffsetDateTime produced = producedAt == null
                 ? OffsetDateTime.now(ZoneOffset.UTC)
@@ -72,6 +77,6 @@ public class SearchIndexService {
         OffsetDateTime indexed = indexedAt == null
                 ? OffsetDateTime.now(ZoneOffset.UTC)
                 : OffsetDateTime.ofInstant(indexedAt, ZoneOffset.UTC);
-        repository.upsertContent(documentId, text == null ? "" : text, truncated, produced, indexed);
+        return repository.upsertContent(documentId, text == null ? "" : text, truncated, produced, indexed) > 0;
     }
 }

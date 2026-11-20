@@ -18,6 +18,7 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.mention.service.MentionService;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
@@ -73,6 +74,7 @@ public class CommentService {
     private final CommentReactionRepository reactionRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final MentionService mentionService;
     private final ObjectMapper objectMapper;
 
     /** The resolved caller plus the document and level that admitted them. */
@@ -128,6 +130,7 @@ public class CommentService {
                 .createdAt(createdAt)
                 .updatedAt(createdAt)
                 .build());
+        mentionService.reconcileCommentMentions(savedComment, caller.document(), caller.user(), request.body());
 
         return toThreadResponse(caller, savedThread, List.of(savedComment), Map.of());
     }
@@ -150,6 +153,7 @@ public class CommentService {
                 .updatedAt(createdAt)
                 .build();
         Comment saved = commentRepository.saveAndFlush(comment);
+        mentionService.reconcileCommentMentions(saved, caller.document(), caller.user(), request.body());
         touchThread(thread);
         return toCommentResponse(caller, saved, List.of());
     }
@@ -167,6 +171,7 @@ public class CommentService {
         comment.setBody(normalizeBody(request.body()));
         comment.setUpdatedAt(now());
         commentRepository.save(comment);
+        mentionService.reconcileCommentMentions(comment, caller.document(), caller.user(), request.body());
         touchThread(thread);
     }
 
