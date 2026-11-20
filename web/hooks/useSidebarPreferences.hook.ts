@@ -38,6 +38,32 @@ function collectNodeIds(
   }
 }
 
+/**
+ * True when a queued write forgets an id this pass cannot see. A tree reset or
+ * an unloaded branch leaves the id unknown rather than closed, and
+ * `mergeExpandedIds` keeps the stored entry for an unknown id, so the pass
+ * looks settled while the queued removal is still the only record of the
+ * reader's collapse. A queued removal of a loaded id is different: whatever
+ * loaded it again (usually a restore) has superseded that snapshot.
+ */
+function forgetsUnknownIds(
+  queued: SidebarTreePreferences,
+  stored: SidebarTreePreferences,
+  loadedDocuments: ReadonlySet<string>,
+  loadedSpaces: ReadonlySet<string>
+): boolean {
+  const someUnknown = (
+    storedIds: readonly string[],
+    queuedIds: readonly string[],
+    loaded: ReadonlySet<string>
+  ) => storedIds.some((id) => !queuedIds.includes(id) && !loaded.has(id));
+
+  return (
+    someUnknown(stored.documents, queued.documents, loadedDocuments) ||
+    someUnknown(stored.spaces, queued.spaces, loadedSpaces)
+  );
+}
+
 function toUiPreferences(state: RootState): SidebarUiPreferences {
   return {
     collapsed: state.sidebar.isCollapsed,
@@ -156,6 +182,7 @@ export function useSidebarPreferences(userId: string | null | undefined) {
       }
 
       const previous = treePreference.read();
+      const loadedSpaces = new Set(Object.keys(state.spaceTree.spaces ?? {}));
       const documents = mergeExpandedIds(
         previous.documents,
         expanded,
@@ -168,7 +195,7 @@ export function useSidebarPreferences(userId: string | null | undefined) {
         ? mergeExpandedIds(
             previous.spaces,
             new Set(expandedSpaceIds),
-            new Set(Object.keys(state.spaceTree.spaces ?? {})),
+            loadedSpaces,
             MAX_REMEMBERED_SPACES
           )
         : previous.spaces;
@@ -180,10 +207,17 @@ export function useSidebarPreferences(userId: string | null | undefined) {
         // The value that is about to be written is already what storage holds,
         // so a write queued by an earlier pass is stale (it was computed before
         // a restore re-expanded the branch) and must not overwrite this one.
-        pendingTree = null;
-        if (treeTimer !== null) {
-          clearTimeout(treeTimer);
-          treeTimer = null;
+        // Unless it forgets a node the trees no longer hold: that removal is
+        // the only record of the collapse, so let it flush.
+        if (
+          pendingTree === null ||
+          !forgetsUnknownIds(pendingTree, previous, loaded, loadedSpaces)
+        ) {
+          pendingTree = null;
+          if (treeTimer !== null) {
+            clearTimeout(treeTimer);
+            treeTimer = null;
+          }
         }
         return;
       }

@@ -84,6 +84,12 @@ async function settle() {
 describe('useRestoredSidebarExpansion', () => {
   beforeEach(() => {
     localStorage.clear();
+    // The store is a module singleton whose read is cached, so a fresh page
+    // load has to be simulated in memory too, not just by clearing storage.
+    sidebarTreePreference(USER_ID).applyExternal(
+      { v: 1, documents: [], spaces: [] },
+      { persist: false }
+    );
     jest.clearAllMocks();
     mockedDocumentService.listChildTreeNodes.mockResolvedValue({
       items: [],

@@ -11,6 +11,8 @@ import sidebarReducer, {
 } from '@/stores/sidebar/sidebar.slice';
 import sidebarTreeReducer, {
   addNode,
+  resetTree,
+  setNodeExpanded,
   toggleExpanded,
 } from '@/stores/sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from '@/stores/sharedTree/sharedTree.slice';
@@ -324,6 +326,47 @@ describe('useSidebarPreferences', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(storedTree().documents).toEqual(['doc-1']);
+  });
+
+  it('remembers a collapse that a tree reset outruns', async () => {
+    // Storage says the page is open and the node is loaded as open, so the pass
+    // is settled. The collapse queues the removal, and the reset drops the node
+    // before the debounce fires: the next pass cannot see it any more, but the
+    // queued removal is still what the reader asked for.
+    sidebarTreePreference(USER_ID).set({ documents: ['doc-1'], spaces: [] });
+    const store = renderHarness();
+
+    act(() => {
+      store.dispatch(addNode(page()));
+      store.dispatch(setNodeExpanded({ id: 'doc-1', expanded: true }));
+    });
+    act(() => {
+      store.dispatch(toggleExpanded('doc-1'));
+      store.dispatch(resetTree());
+    });
+
+    await waitFor(() => expect(storedTree().documents).toEqual([]));
+  });
+
+  it('remembers a space collapse that a tree reset outruns', async () => {
+    sidebarTreePreference(USER_ID).set({ documents: [], spaces: ['space-1'] });
+    const store = renderHarness(makeStore('token-1'));
+
+    act(() => {
+      store.dispatch(setStoredSpaces([{ id: 'space-1', name: 'Space' }]));
+      store.dispatch(setSpaceExpanded({ spaceId: 'space-1', expanded: true }));
+    });
+    act(() => {
+      store.dispatch(setSpaceExpanded({ spaceId: 'space-1', expanded: false }));
+    });
+    act(() => {
+      // The spaces list empties without touching the trees, so the pass that
+      // follows (here: a document arriving) is the first to miss the space.
+      store.dispatch(setStoredSpaces([]));
+      store.dispatch(addNode(page()));
+    });
+
+    await waitFor(() => expect(storedTree().spaces).toEqual([]));
   });
 
   it('does not need the debounce when the page is being left', () => {
