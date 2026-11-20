@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
+import { SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT } from '@/lib/sidebar-preferences.util';
 import '@/styles/globals.css';
 
 const inter = Inter({
@@ -82,6 +83,12 @@ export default function RootLayout({
             __html: `(function(){try{var t=localStorage.getItem('theme')||'system';var d=document.documentElement;var dark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(dark)d.classList.add('dark');d.setAttribute('data-theme',t);}catch(e){}})();`,
           }}
         />
+        {/* The rail's collapsed state has to be resolved before React unmounts
+            it: the server's expanded markup would paint first. Resolving it
+            into `data-nd-sidebar` lets CSS hide the rail on the first frame,
+            and the store follows in an effect without moving what is on
+            screen. */}
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT }} />
       </head>
       <body>{children}</body>
     </html>

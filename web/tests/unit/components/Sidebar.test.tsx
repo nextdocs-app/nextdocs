@@ -306,6 +306,7 @@ it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -665,10 +666,36 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
     logout: mockLogout,
   });
   const user = userEvent.setup();
-  render(<Sidebar />);
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebar: {
+        ...sidebarReducer(undefined, { type: '@@init' }),
+        expandedSpaceIds: ['space-1'],
+      },
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+  render(<Sidebar />, store);
   await user.click(screen.getByRole('button', { name: /Alice/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log out/i }));
   expect(mockLogout).toHaveBeenCalledTimes(1);
+  expect(store.getState().sidebar.expandedSpaceIds).toEqual([]);
   // Signed out there is no private root to resolve; the home route prompts
   // for sign-in instead of creating a guest document.
   expect(resolveRootDocumentId).not.toHaveBeenCalled();
@@ -1615,6 +1642,7 @@ it('moves a child document to trash in shared tree when user has edit access', a
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
+        expandedSpaceIds: [],
         panelMode: null,
         searchQuery: '',
         docActionsAnchor: null,

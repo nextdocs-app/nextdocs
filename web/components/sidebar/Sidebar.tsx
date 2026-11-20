@@ -17,6 +17,7 @@ import {
   toggleSharedOpen,
   toggleSpacesOpen,
   setDocActionsAnchor,
+  clearExpandedSpaces,
 } from '@/stores/sidebar/sidebar.slice';
 import {
   closeSettingsDialog,
@@ -1406,6 +1407,9 @@ function Sidebar() {
             dispatch(resetSharedTree());
             dispatch(resetSpaceTrees());
             await logout();
+            // The account's space listing stays active until logout resolves,
+            // so clearing earlier only lets it repopulate the next key.
+            dispatch(clearExpandedSpaces());
             await navigateToResolvedRootDocument({
               isAuthenticated: false,
               accessToken: null,

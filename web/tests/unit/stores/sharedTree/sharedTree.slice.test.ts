@@ -5,6 +5,7 @@ import sharedTreeReducer, {
   fetchPublicChildrenThunk,
   insertSharedNode,
   moveDocumentThunk,
+  setNodeExpanded,
   syncSharedRoots,
   syncPublicRoots,
   updateNodeMeta,
@@ -24,6 +25,34 @@ const entry = (
   parentId,
   accessLevel,
   meta: { title, updatedAt: '2024-01-01T11:00:00Z', createdAt: '2024-01-01T10:00:00Z' },
+});
+
+describe('sharedTree.slice setNodeExpanded', () => {
+  const initialState: SharedTreeState = { nodes: {}, rootIds: [] };
+
+  it('restores an expansion without flipping it, and ignores an unknown page', () => {
+    const loaded = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([entry('shared-1', 'collaborator', null)])
+    );
+    expect(loaded.nodes['shared-1'].isExpanded).toBe(false);
+
+    const restored = sharedTreeReducer(loaded, setNodeExpanded({ id: 'shared-1', expanded: true }));
+    expect(restored.nodes['shared-1'].isExpanded).toBe(true);
+    // A second restore pass must not toggle the branch the reader just opened.
+    expect(
+      sharedTreeReducer(restored, setNodeExpanded({ id: 'shared-1', expanded: true })).nodes[
+        'shared-1'
+      ].isExpanded
+    ).toBe(true);
+
+    const unknown = sharedTreeReducer(
+      restored,
+      setNodeExpanded({ id: 'not-loaded', expanded: true })
+    );
+    expect(unknown.nodes['not-loaded']).toBeUndefined();
+    expect(unknown.rootIds).toEqual(restored.rootIds);
+  });
 });
 
 describe('sharedTree.slice insertSharedNode', () => {

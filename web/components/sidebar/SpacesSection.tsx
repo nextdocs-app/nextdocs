@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -36,6 +36,7 @@ import { documentService } from '@/services/document.service';
 import { spaceApiService } from '@/services/space.service';
 import { addToast } from '@/stores/toasts/toasts.slice';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { setSpaceExpanded as setSpaceExpandedAction } from '@/stores/sidebar/sidebar.slice';
 import {
   fetchSpaceChildrenThunk,
   fetchSpaceRootsThunk,
@@ -196,9 +197,10 @@ export function SpacesSection({
   const dispatch = useAppDispatch();
   const spaceTrees = useAppSelector((state) => state.spaceTree.trees);
   const [spaces, setSpaces] = useState<Space[] | null>(null);
-  const [expandedSpaceIds, setExpandedSpaceIds] = useState<ReadonlySet<string>>(
-    () => new Set<string>()
-  );
+  // Kept in the store rather than in this component: the rail remembers which
+  // spaces the reader left unfolded, and one subscriber persists that list.
+  const expandedSpaceIdList = useAppSelector((state) => state.sidebar.expandedSpaceIds);
+  const expandedSpaceIds = useMemo(() => new Set(expandedSpaceIdList), [expandedSpaceIdList]);
   const [menuAnchor, setMenuAnchor] = useState<SpaceActionsAnchor | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [settingsView, setSettingsView] = useState<{
@@ -353,17 +355,12 @@ export function SpacesSection({
 
   useTreeMetaSync(dispatch, updateNodeMeta);
 
-  const setSpaceExpanded = useCallback((spaceId: string, isExpanded: boolean) => {
-    setExpandedSpaceIds((previous) => {
-      const next = new Set(previous);
-      if (isExpanded) {
-        next.add(spaceId);
-      } else {
-        next.delete(spaceId);
-      }
-      return next;
-    });
-  }, []);
+  const setSpaceExpanded = useCallback(
+    (spaceId: string, isExpanded: boolean) => {
+      dispatch(setSpaceExpandedAction({ spaceId, expanded: isExpanded }));
+    },
+    [dispatch]
+  );
 
   const toggleSpace = useCallback(
     (spaceId: string) => {
@@ -541,11 +538,7 @@ export function SpacesSection({
 
       // An archived or unjoined space must not keep a tree (or an expansion) around.
       if (next.archivedAt || next.myAccessLevel == null) {
-        setExpandedSpaceIds((previous) => {
-          const remaining = new Set(previous);
-          remaining.delete(next.id);
-          return remaining;
-        });
+        dispatch(setSpaceExpandedAction({ spaceId: next.id, expanded: false }));
         dispatch(resetTree(next.id));
       }
     },
@@ -555,11 +548,7 @@ export function SpacesSection({
   const handleSpaceRemoved = useCallback(
     (spaceId: string) => {
       setSpaces((previous) => previous?.filter((space) => space.id !== spaceId) ?? previous);
-      setExpandedSpaceIds((previous) => {
-        const next = new Set(previous);
-        next.delete(spaceId);
-        return next;
-      });
+      dispatch(setSpaceExpandedAction({ spaceId, expanded: false }));
       setSettingsView((previous) => (previous?.space.id === spaceId ? null : previous));
       dispatch(resetTree(spaceId));
     },

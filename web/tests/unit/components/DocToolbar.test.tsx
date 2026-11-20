@@ -686,6 +686,7 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: false,
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -741,6 +742,7 @@ describe('DocToolbar sidebar toggle', () => {
     isPrivateOpen: true,
     isSharedOpen: true,
     isSpacesOpen: true,
+    expandedSpaceIds: [],
     docActionsAnchor: null,
     isMobileNavOpen: false,
   };

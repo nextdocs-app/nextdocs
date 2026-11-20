@@ -189,6 +189,15 @@ const sharedTreeSlice = createSlice({
       }
     },
 
+    /** Restores a remembered expansion without depending on the current flag. */
+    setNodeExpanded(state, action: PayloadAction<{ id: string; expanded: boolean }>) {
+      const { id, expanded } = action.payload;
+      const node = state.nodes[id];
+      if (node) {
+        node.isExpanded = expanded;
+      }
+    },
+
     /**
      * Adds a page the caller just grafted into a Shared parent from their Private tree.
      * The parent is already in this tree (it hosted the drop), so the node belongs under
@@ -572,6 +581,7 @@ const sharedTreeSlice = createSlice({
 
 export const {
   toggleExpanded,
+  setNodeExpanded,
   syncSharedRoots,
   syncPublicRoots,
   insertSharedNode,
