@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Logout, Trash } from '@/icons';
 import { PopupMenuItem } from '@/components/PopupMenuItem';
+import { SidebarPopup } from './SidebarPopup';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { computeMenuPosition, type MenuPosition } from '@/lib/menu-position.util';
 import type { DocActionsAnchor } from './types';
@@ -18,7 +19,7 @@ export function DocumentActionsMenu({
   onLeaveShared,
   onMoveToTrash,
 }: DocumentActionsMenuProps) {
-  const isDark = resolvedTheme === 'dark';
+  const theme = resolvedTheme === 'dark' ? 'dark' : 'light';
   const menuRef = useRef<HTMLDivElement>(null);
   const isMobileLayout = useIsMobileLayout();
   const [position, setPosition] = useState<MenuPosition | null>(null);
@@ -56,23 +57,22 @@ export function DocumentActionsMenu({
   }, [anchor, isMobileLayout]);
 
   return (
-    <div
-      ref={menuRef}
-      data-doc-actions-root={anchor.documentId}
-      data-placement={position?.placement}
+    <SidebarPopup
+      theme={theme}
+      label="Document actions"
       style={
         position
           ? { left: position.left, top: position.top }
           : { left: anchor.trigger.left, top: anchor.trigger.bottom, visibility: 'hidden' }
       }
-      className={`fixed z-50 min-w-[11.5rem] rounded-sm border border-sidebar-border p-1.5 shadow-xl ${
-        isDark ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
-      }`}
-      role="menu"
-      aria-label="Document actions"
+      popupRef={menuRef}
+      dataAttributes={{
+        'data-doc-actions-root': anchor.documentId,
+        'data-placement': position?.placement,
+      }}
     >
       <PopupMenuItem
-        theme={isDark ? 'dark' : 'light'}
+        theme={theme}
         icon={
           anchor.actionType === 'leave-shared' ? (
             <Logout className="opacity-90" />
@@ -89,11 +89,13 @@ export function DocumentActionsMenu({
           void onMoveToTrash(anchor.documentId);
         }}
         className={
-          isDark ? 'text-white/90 hover:text-red-400' : 'text-popover-foreground hover:text-red-600'
+          theme === 'dark'
+            ? 'text-white/90 hover:text-red-400'
+            : 'text-popover-foreground hover:text-red-600'
         }
       >
         {anchor.actionType === 'leave-shared' ? 'Leave shared document' : 'Move to Trash'}
       </PopupMenuItem>
-    </div>
+    </SidebarPopup>
   );
 }

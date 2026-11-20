@@ -1,4 +1,10 @@
 import type { CSSProperties, ReactNode, RefObject } from 'react';
+import { menuSurfaceClassName } from '@/components/menu-surface';
+
+const sidebarMenuThemeClassName = {
+  dark: 'bg-[#303030] text-white',
+  light: 'bg-popover text-popover-foreground',
+} as const;
 
 type SidebarPopupProps = {
   theme: 'dark' | 'light';
@@ -7,20 +13,24 @@ type SidebarPopupProps = {
   style: CSSProperties;
   popupRef: RefObject<HTMLDivElement | null>;
   children: ReactNode;
+  /** Extra data-* hooks used by the rail to track its document menu. */
+  dataAttributes?: Record<`data-${string}`, string | undefined>;
 };
 
-/**
- * The rail's floating menu surface. Both menu contents are wrapped in it so
- * width, elevation and theming stay identical instead of being copied per menu.
- */
-export function SidebarPopup({ theme, label, style, popupRef, children }: SidebarPopupProps) {
+export function SidebarPopup({
+  theme,
+  label,
+  style,
+  popupRef,
+  children,
+  dataAttributes,
+}: SidebarPopupProps) {
   return (
     <div
+      {...dataAttributes}
       ref={popupRef}
       style={style}
-      className={`fixed text-[15px] z-50 rounded-lg border border-sidebar-border p-1.5 shadow-xl ${
-        theme === 'dark' ? 'bg-[#303030] text-white' : 'bg-popover text-popover-foreground'
-      }`}
+      className={`fixed z-50 ${menuSurfaceClassName} ${sidebarMenuThemeClassName[theme]}`}
       role="menu"
       aria-label={label}
     >
