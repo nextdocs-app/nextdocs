@@ -2,8 +2,6 @@ package com.nextdocs.api.space.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.entity.AccessGrant;
 import com.nextdocs.api.document.entity.AccessGrantEffect;
 import com.nextdocs.api.document.entity.Document;
@@ -16,6 +14,8 @@ import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.entity.UserSpaceOrder;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -88,6 +88,7 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-listing-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -124,6 +125,7 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("workspace-audience-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -162,10 +164,12 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-shared-owner-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         User viewer = userRepository.saveAndFlush(User.builder()
                 .email("space-shared-viewer-" + UUID.randomUUID() + "@example.com")
                 .displayName("Viewer")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -219,10 +223,12 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("offboard-owner-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         User member = userRepository.saveAndFlush(User.builder()
                 .email("offboard-member-" + UUID.randomUUID() + "@example.com")
                 .displayName("Member")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -268,10 +274,12 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("shared-parent-owner-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         User viewer = userRepository.saveAndFlush(User.builder()
                 .email("shared-parent-viewer-" + UUID.randomUUID() + "@example.com")
                 .displayName("Viewer")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -308,6 +316,7 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-count-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -334,6 +343,7 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-archive-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
@@ -374,6 +384,7 @@ class SpaceRootListingPersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-order-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());

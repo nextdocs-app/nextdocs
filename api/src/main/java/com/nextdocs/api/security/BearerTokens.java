@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;

@@ -7,7 +7,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -21,6 +20,7 @@ import com.nextdocs.api.document.repository.SharedDocumentCandidate;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
 import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -76,6 +76,7 @@ class DocumentListQueryHelperTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
     }
 
@@ -109,7 +110,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_rootShared_returnsSharedRootsWithBatchPermissions() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document sharedWithMe = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)
@@ -173,7 +176,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_rootShared_reportsAnOwnerLevelGrantAsNotOwned() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         UUID unreadableParentId = UUID.randomUUID();
         Document ownerLevelGrant = Document.builder()
                 .id(UUID.randomUUID())
@@ -205,7 +210,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_flatShared_returnsUserDocumentOrderForNestedFloatedSharedDocuments() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         UUID privateParentId = UUID.randomUUID();
         Document privateParent = Document.builder()
                 .id(privateParentId)
@@ -254,7 +261,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_flatShared_returnsNullOrderKeyForFloatedDocumentWithoutUserDocumentOrder() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         UUID privateParentId = UUID.randomUUID();
         Document privateParent = Document.builder()
                 .id(privateParentId)
@@ -303,7 +312,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_flatShared_returnsSiblingOrderKeyForChildOfAccessibleSharedParent() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         UUID sharedParentId = UUID.randomUUID();
         Document sharedParent = Document.builder()
                 .id(sharedParentId)
@@ -526,7 +537,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_sharedScope_paginatesServiceEntriesAndLoadsOnlyThePage() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document allowedDoc1 = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)
@@ -568,7 +581,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_sharedScope_keepsPersonalOrderRegardlessOfRequestedSort() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document docB = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)
@@ -603,7 +618,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_flatShared_appliesSortOrderToFilteredCandidates() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document docB = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)
@@ -643,7 +660,9 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_flatShared_loadsOnlyTheRequestedPageOfEntities() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document newest = Document.builder()
                 .id(UUID.randomUUID())
                 .user(otherOwner)

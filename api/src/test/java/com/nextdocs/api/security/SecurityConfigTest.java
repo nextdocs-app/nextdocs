@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -32,9 +32,9 @@ import org.springframework.web.cors.CorsConfigurationSource;
 @WebMvcTest(SecurityConfigTest.AttachmentProbeController.class)
 @Import({
     SecurityConfigTest.AttachmentProbeController.class,
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class SecurityConfigTest {
 

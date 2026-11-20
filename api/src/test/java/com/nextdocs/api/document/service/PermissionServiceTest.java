@@ -3,7 +3,6 @@ package com.nextdocs.api.document.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.AccessExplainResponse;
@@ -13,6 +12,7 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -290,7 +290,8 @@ class PermissionServiceTest {
     void requireOwnerAccess_isOwner_returnsDocument() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(userId).build();
+
+        User owner = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder().id(documentId).user(owner).build();
 
         when(documentRepository.findByIdAndUser_IdAndDeletedAtIsNull(documentId, userId))

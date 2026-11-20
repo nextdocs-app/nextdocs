@@ -16,9 +16,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
@@ -30,6 +27,9 @@ import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.document.service.DocumentSharingSettingsService;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -47,9 +47,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(DocumentSharingController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class DocumentSharingControllerTest {
 
@@ -83,6 +83,7 @@ class DocumentSharingControllerTest {
                 .displayName("Owner")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);
@@ -93,7 +94,13 @@ class DocumentSharingControllerTest {
     @Test
     void listCollaborators_success_returns200() throws Exception {
         List<CollaboratorResponse> response = List.of(new CollaboratorResponse(
-                userId, "owner@example.com", "Owner", DocumentAccessLevel.OWNER, OffsetDateTime.now(), true));
+                userId,
+                "owner@example.com",
+                "Owner",
+                "/api/v1/users/" + userId + "/avatar?v=" + userId,
+                DocumentAccessLevel.OWNER,
+                OffsetDateTime.now(),
+                true));
 
         when(sharingService.listCollaborators(userId, documentId)).thenReturn(response);
 
@@ -127,6 +134,7 @@ class DocumentSharingControllerTest {
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
+                null,
                 DocumentAccessLevel.EDIT,
                 OffsetDateTime.now(),
                 false);
@@ -152,7 +160,13 @@ class DocumentSharingControllerTest {
     @Test
     void upsertCollaborator_ownerPayload_success_returns201() throws Exception {
         CollaboratorResponse saved = new CollaboratorResponse(
-                collaboratorUserId, "bob@example.com", "Bob", DocumentAccessLevel.OWNER, OffsetDateTime.now(), false);
+                collaboratorUserId,
+                "bob@example.com",
+                "Bob",
+                null,
+                DocumentAccessLevel.OWNER,
+                OffsetDateTime.now(),
+                false);
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
                 .thenReturn(saved);
@@ -183,6 +197,7 @@ class DocumentSharingControllerTest {
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
+                null,
                 DocumentAccessLevel.VIEW,
                 OffsetDateTime.now(),
                 false);
@@ -222,6 +237,7 @@ class DocumentSharingControllerTest {
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
+                null,
                 DocumentAccessLevel.VIEW,
                 OffsetDateTime.now(),
                 false,

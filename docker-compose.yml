@@ -17,8 +17,6 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set to the same value for api and realtime}
       - JWT_ACCESS_EXPIRY_MS=${JWT_ACCESS_EXPIRY_MS:-900000}
       - JWT_REFRESH_EXPIRY_MS=${JWT_REFRESH_EXPIRY_MS:-604800000}
-      # OAuth token encryption at rest (AES-GCM) — must be overridden in production
-      - OAUTH_TOKEN_ENCRYPTION_KEY_BASE64=${OAUTH_TOKEN_ENCRYPTION_KEY_BASE64:-CHANGE_ME_IN_PRODUCTION}
       # CORS
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Set COOKIE_SECURE=true behind HTTPS in production

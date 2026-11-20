@@ -1,8 +1,8 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;

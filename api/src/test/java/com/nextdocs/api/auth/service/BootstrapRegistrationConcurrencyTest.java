@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.InstanceLock;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -124,9 +124,7 @@ class BootstrapRegistrationConcurrencyTest {
             WorkspaceMember membership = memberRepository.findByUserId(winnerId).orElseThrow();
             assertThat(membership.getRole()).isEqualTo(WorkspaceRole.OWNER);
             assertThat(userRepository.findByEmail(loserEmail)).isEmpty();
-            assertThat(userRepository.findByEmail(winnerEmail))
-                    .hasValueSatisfying(
-                            user -> assertThat(user.isEmailVerified()).isFalse());
+            assertThat(userRepository.findByEmail(winnerEmail)).isPresent();
         } finally {
             pool.shutdownNow();
         }

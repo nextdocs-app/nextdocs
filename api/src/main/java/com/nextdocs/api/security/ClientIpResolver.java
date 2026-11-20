@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;

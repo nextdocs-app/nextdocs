@@ -1,16 +1,17 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.nextdocs.api.auth.security.ratelimit.RateLimiter;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.ratelimit.RateLimiter;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -69,7 +70,8 @@ class RateLimitFilterTest {
                 60,
                 30,
                 45,
-                MAX_TEST_UPLOAD_REQUEST_SIZE);
+                MAX_TEST_UPLOAD_REQUEST_SIZE,
+                org.springframework.util.unit.DataSize.ofMegabytes(2));
         mockMvc = MockMvcBuilders.standaloneSetup(new StubController())
                 .addFilters(filter)
                 .build();
@@ -78,7 +80,7 @@ class RateLimitFilterTest {
     private static final String DOCUMENT_ID = "11111111-1111-1111-1111-111111111111";
 
     private static UUID authenticate() {
-        com.nextdocs.api.auth.entity.User user = com.nextdocs.api.auth.entity.User.builder()
+        com.nextdocs.api.user.entity.User user = com.nextdocs.api.user.entity.User.builder()
                 .id(UUID.randomUUID())
                 .email("user@example.com")
                 .displayName("Test User")
@@ -374,6 +376,115 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void profileAvatarUpload_consumesCallerAndAddressBuckets() throws Exception {
+        UUID callerId = authenticate();
+
+        mockMvc.perform(put("/api/v1/users/me/avatar").remoteAddress("10.0.9.1"))
+                .andExpect(status().isOk());
+
+        // /api/v1/users is not under /auth: a photo upload must not share the sign-in
+        // budget, but it can fill disk, so it still pays the upload buckets.
+        assertThat(rateLimiter.keys).containsExactly("upload-ip:10.0.9.1", "upload:" + callerId);
+    }
+
+    @Test
+    void profileAvatarUpload_enforcesItsOwnDeclaredLimitBeforeParsing() throws Exception {
+        RateLimitFilter avatarFilter = new RateLimitFilter(
+                rateLimiter,
+                new ObjectMapper(),
+                clientIpResolver,
+                120,
+                60,
+                20,
+                60,
+                MAX_TEST_BODY_BYTES,
+                20,
+                60,
+                MAX_TEST_BODY_BYTES,
+                20,
+                60,
+                600,
+                60,
+                60,
+                60,
+                30,
+                45,
+                "30MB",
+                org.springframework.util.unit.DataSize.ofMegabytes(2));
+        authenticate();
+        for (long size : new long[] {2L * 1024 * 1024 + 64 * 1024, 20L * 1024 * 1024}) {
+            org.springframework.mock.web.MockHttpServletRequest request =
+                    new org.springframework.mock.web.MockHttpServletRequest("PUT", "/api/v1/users/me/avatar") {
+                        @Override
+                        public long getContentLengthLong() {
+                            return size;
+                        }
+                    };
+            request.setContentType("multipart/form-data; boundary=----test");
+            request.setRemoteAddr("10.0.9.1");
+            var response = new org.springframework.mock.web.MockHttpServletResponse();
+            jakarta.servlet.FilterChain chain = org.mockito.Mockito.mock(jakarta.servlet.FilterChain.class);
+            avatarFilter.doFilter(request, response, chain);
+            if (size < 20L * 1024 * 1024) {
+                assertThat(response.getStatus()).isEqualTo(200);
+                org.mockito.Mockito.verify(chain).doFilter(request, response);
+            } else {
+                assertThat(response.getStatus()).isEqualTo(413);
+                org.mockito.Mockito.verifyNoInteractions(chain);
+            }
+        }
+    }
+
+    @Test
+    void profileAvatarRead_isAnonymousAndUsesTheReadBucket() throws Exception {
+        // Share-link visitors render comment authors, and an <img> tag cannot send a
+        // token: the route must be reachable anonymously without falling through to
+        // the unlimited branch.
+        mockMvc.perform(get("/api/v1/users/{id}/avatar", DOCUMENT_ID).remoteAddress("10.0.9.2"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.9.2");
+        assertThat(rateLimiter.lastMaxRequests).isEqualTo(120);
+    }
+
+    @Test
+    void profileNameChange_staysUnlimited() throws Exception {
+        authenticate();
+
+        mockMvc.perform(patch("/api/v1/users/me")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}")
+                        .remoteAddress("10.0.9.3"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
+    void profilePhotoUploadOfAnotherAccount_isNotTheUploadRoute() throws Exception {
+        authenticate();
+
+        // Only the caller's own photo is a bounded write; every other path under the
+        // users prefix keeps the ordinary unlimited budget.
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
+                                "/api/v1/users/{id}/avatar", DOCUMENT_ID)
+                        .remoteAddress("10.0.9.4"))
+                .andExpect(status().isMethodNotAllowed());
+
+        assertThat(rateLimiter.invocationCount).isZero();
+    }
+
+    @Test
+    void profileAvatarHead_isAlsoARead() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head(
+                                "/api/v1/users/{id}/avatar", DOCUMENT_ID)
+                        .remoteAddress("10.0.9.5"))
+                .andExpect(status().isOk());
+
+        assertThat(rateLimiter.lastKey).isEqualTo("public-read:10.0.9.5");
+    }
+
+    @Test
     void spaceAdministrationPaths_stayUnlimited() throws Exception {
         mockMvc.perform(get("/api/v1/spaces/{id}", UUID.randomUUID()).remoteAddress("10.0.7.3"))
                 .andExpect(status().isOk());
@@ -611,7 +722,7 @@ class RateLimitFilterTest {
     void accessCheck_whenAuthenticated_isNotRateLimited() throws Exception {
         String id = "11111111-1111-1111-1111-111111111111";
 
-        com.nextdocs.api.auth.entity.User user = com.nextdocs.api.auth.entity.User.builder()
+        com.nextdocs.api.user.entity.User user = com.nextdocs.api.user.entity.User.builder()
                 .id(UUID.randomUUID())
                 .email("user@example.com")
                 .displayName("Test User")
@@ -1181,6 +1292,21 @@ class RateLimitFilterTest {
 
         @PostMapping("/api/v1/spaces/attachments")
         ResponseEntity<String> uploadSpaceIcon() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @org.springframework.web.bind.annotation.PutMapping("/api/v1/users/me/avatar")
+        ResponseEntity<String> uploadProfileAvatar() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @org.springframework.web.bind.annotation.PatchMapping("/api/v1/users/me")
+        ResponseEntity<String> updateProfile() {
+            return ResponseEntity.ok("ok");
+        }
+
+        @GetMapping("/api/v1/users/{id}/avatar")
+        ResponseEntity<String> avatar(@PathVariable String id) {
             return ResponseEntity.ok("ok");
         }
 

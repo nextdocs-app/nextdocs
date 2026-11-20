@@ -1,9 +1,9 @@
 package com.nextdocs.api.search.controller;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.search.dto.response.SearchResponse;
 import com.nextdocs.api.search.service.SearchService;
+import com.nextdocs.api.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Min;

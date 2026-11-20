@@ -2,10 +2,10 @@ package com.nextdocs.api.document.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.UserDocumentOrder;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -29,8 +29,11 @@ class UserDocumentOrderRepositoryTest {
 
     @Test
     void findAllForReindex_includesRowsForTrashedDocuments() {
-        User user = userRepository.saveAndFlush(
-                User.builder().email("alice@example.com").displayName("Alice").build());
+        User user = userRepository.saveAndFlush(User.builder()
+                .email("alice@example.com")
+                .displayName("Alice")
+                .passwordHash("$2a$12$hash")
+                .build());
 
         Document active = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
@@ -66,10 +69,17 @@ class UserDocumentOrderRepositoryTest {
 
     @Test
     void findAllForReindex_isScopedToSingleUser() {
-        User user = userRepository.saveAndFlush(
-                User.builder().email("alice@example.com").displayName("Alice").build());
-        User other = userRepository.saveAndFlush(
-                User.builder().email("bob@example.com").displayName("Bob").build());
+        User user = userRepository.saveAndFlush(User.builder()
+                .email("alice@example.com")
+                .displayName("Alice")
+                .passwordHash("$2a$12$hash")
+                .build());
+
+        User other = userRepository.saveAndFlush(User.builder()
+                .email("bob@example.com")
+                .displayName("Bob")
+                .passwordHash("$2a$12$hash")
+                .build());
 
         Document userDoc = documentRepository.saveAndFlush(
                 Document.builder().id(UUID.randomUUID()).user(user).title("Doc").build());

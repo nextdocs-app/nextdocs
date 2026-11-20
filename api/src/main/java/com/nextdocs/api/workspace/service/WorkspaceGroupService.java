@@ -2,10 +2,10 @@ package com.nextdocs.api.workspace.service;
 
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceGroupRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceGroupResponse;
 import com.nextdocs.api.workspace.entity.WorkspaceGroup;

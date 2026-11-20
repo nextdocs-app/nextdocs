@@ -1,12 +1,12 @@
 package com.nextdocs.api.workspace.service;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.util.EmailNormalizer;
 import com.nextdocs.api.common.util.SecureTokens;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteCreatedResponse;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteEmailResult;

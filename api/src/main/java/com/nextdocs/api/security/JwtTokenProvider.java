@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;

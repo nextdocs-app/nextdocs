@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security.ratelimit;
+package com.nextdocs.api.security.ratelimit;
 
 import java.time.Duration;
 

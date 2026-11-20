@@ -1,6 +1,6 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;

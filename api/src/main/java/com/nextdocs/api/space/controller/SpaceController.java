@@ -1,9 +1,9 @@
 package com.nextdocs.api.space.controller;
 
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.space.dto.request.SpaceAttachPageRequest;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;

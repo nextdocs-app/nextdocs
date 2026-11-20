@@ -19,8 +19,6 @@ import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
@@ -48,6 +46,8 @@ import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -224,7 +224,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .space(Space.builder()
                         .id(UUID.randomUUID())
                         .name("Archived")
@@ -248,7 +248,10 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(UUID.randomUUID()).build())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .space(Space.builder()
                         .id(UUID.randomUUID())
                         .name("Archived")
@@ -273,7 +276,7 @@ class DocumentSharingServicesTest {
         UUID collaboratorUserId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
@@ -297,6 +300,7 @@ class DocumentSharingServicesTest {
                         .id(ownerId)
                         .email("owner@example.com")
                         .displayName("Owner")
+                        .passwordHash("$2a$12$hash")
                         .build())
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -322,6 +326,7 @@ class DocumentSharingServicesTest {
                         .id(ownerId)
                         .email("owner@example.com")
                         .displayName("Owner")
+                        .passwordHash("$2a$12$hash")
                         .build())
                 .build();
 
@@ -344,6 +349,7 @@ class DocumentSharingServicesTest {
                         .id(ownerId)
                         .email("owner@example.com")
                         .displayName("Owner")
+                        .passwordHash("$2a$12$hash")
                         .build())
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
@@ -360,6 +366,7 @@ class DocumentSharingServicesTest {
                 .id(memberId)
                 .email("member@example.com")
                 .displayName("Member")
+                .passwordHash("$2a$12$hash")
                 .build();
         AccessGrant pageDeny = AccessGrant.builder()
                 .user(memberUser)
@@ -387,7 +394,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document doc = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
                 .workspaceAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
@@ -416,6 +423,7 @@ class DocumentSharingServicesTest {
                 .id(ownerId)
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document document = Document.builder()
@@ -432,6 +440,7 @@ class DocumentSharingServicesTest {
                 .id(UUID.randomUUID())
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -454,7 +463,7 @@ class DocumentSharingServicesTest {
         UUID collaboratorId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -481,7 +490,7 @@ class DocumentSharingServicesTest {
         UUID descendantId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -515,6 +524,7 @@ class DocumentSharingServicesTest {
                 .id(ownerId)
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document parent = Document.builder()
@@ -535,6 +545,7 @@ class DocumentSharingServicesTest {
                 .id(UUID.randomUUID())
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -553,7 +564,13 @@ class DocumentSharingServicesTest {
         CollaboratorUpsertRequest request =
                 new CollaboratorUpsertRequest("alice@example.com", DocumentAccessLevel.EDIT);
         CollaboratorResponse response = new CollaboratorResponse(
-                UUID.randomUUID(), "alice@example.com", "Alice", DocumentAccessLevel.EDIT, OffsetDateTime.now(), false);
+                UUID.randomUUID(),
+                "alice@example.com",
+                "Alice",
+                null,
+                DocumentAccessLevel.EDIT,
+                OffsetDateTime.now(),
+                false);
 
         DocumentSharingService spy = Mockito.spy(sharingService);
         doThrow(
@@ -593,11 +610,18 @@ class DocumentSharingServicesTest {
     void upsertCollaborator_allowsOwnerLevelForCollaborators() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document document = Document.builder().id(documentId).user(owner).build();
         User targetUser = User.builder()
                 .id(UUID.randomUUID())
                 .email("fullaccess@example.com")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -616,11 +640,26 @@ class DocumentSharingServicesTest {
         UUID docOwnerId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User docOwner = User.builder().id(docOwnerId).email("owner@example.com").build();
+
+        User docOwner = User.builder()
+                .id(docOwnerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document document = Document.builder().id(documentId).user(docOwner).build();
-        User actor = User.builder().id(actorId).email("actor@example.com").build();
-        User targetUser =
-                User.builder().id(UUID.randomUUID()).email("newbie@example.com").build();
+
+        User actor = User.builder()
+                .id(actorId)
+                .email("actor@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
+        User targetUser = User.builder()
+                .id(UUID.randomUUID())
+                .email("newbie@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("newbie@example.com")).thenReturn(Optional.of(targetUser));
@@ -639,7 +678,13 @@ class DocumentSharingServicesTest {
         UUID docOwnerId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User docOwner = User.builder().id(docOwnerId).email("owner@example.com").build();
+
+        User docOwner = User.builder()
+                .id(docOwnerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document document = Document.builder().id(documentId).user(docOwner).build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
@@ -659,9 +704,20 @@ class DocumentSharingServicesTest {
         UUID docOwnerId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User docOwner = User.builder().id(docOwnerId).email("owner@example.com").build();
+
+        User docOwner = User.builder()
+                .id(docOwnerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document document = Document.builder().id(documentId).user(docOwner).build();
-        User actor = User.builder().id(actorId).email("actor@example.com").build();
+
+        User actor = User.builder()
+                .id(actorId)
+                .email("actor@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(userRepository.findByEmail("actor@example.com")).thenReturn(Optional.of(actor));
@@ -680,10 +736,17 @@ class DocumentSharingServicesTest {
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID ancestorDocId = UUID.randomUUID();
-        User actor = User.builder().id(actorId).email("owner@example.com").build();
+
+        User actor = User.builder()
+                .id(actorId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         User ancestorOwner = User.builder()
                 .id(UUID.randomUUID())
                 .email("ancestor@example.com")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document ancestor = Document.builder()
                 .id(ancestorDocId)
@@ -709,7 +772,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(docOwnerId).build())
+                .user(User.builder().id(docOwnerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
@@ -731,7 +794,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(docOwnerId).build())
+                .user(User.builder().id(docOwnerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
@@ -750,7 +813,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(docOwnerId).build())
+                .user(User.builder().id(docOwnerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
@@ -767,7 +830,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(docOwnerId).build())
+                .user(User.builder().id(docOwnerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
@@ -786,6 +849,7 @@ class DocumentSharingServicesTest {
                 .id(ownerId)
                 .email("owner@example.com")
                 .displayName("Doc Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document doc = Document.builder()
                 .id(documentId)
@@ -797,6 +861,7 @@ class DocumentSharingServicesTest {
                 .id(collabOwnerRoleId)
                 .email("collab@example.com")
                 .displayName("Collab Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
         AccessGrant collaborator = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -831,6 +896,7 @@ class DocumentSharingServicesTest {
                 .id(ownerId)
                 .email("owner@example.com")
                 .displayName("Doc Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document doc = Document.builder()
                 .id(documentId)
@@ -838,6 +904,7 @@ class DocumentSharingServicesTest {
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
 
+        UUID demotedAvatarId = UUID.randomUUID();
         AccessGrant demotedOwner = AccessGrant.builder()
                 .id(UUID.randomUUID())
                 .document(doc)
@@ -845,6 +912,9 @@ class DocumentSharingServicesTest {
                         .id(demotedOwnerId)
                         .email("demoted@example.com")
                         .displayName("Demoted Owner")
+                        .passwordHash("$2a$12$hash")
+                        .avatarId(demotedAvatarId)
+                        .avatarContentType("image/png")
                         .build())
                 .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.OWNER)
@@ -857,6 +927,7 @@ class DocumentSharingServicesTest {
                         .id(blockedId)
                         .email("blocked@example.com")
                         .displayName("Blocked")
+                        .passwordHash("$2a$12$hash")
                         .build())
                 .effect(AccessGrantEffect.ALLOW)
                 .accessLevel(DocumentAccessLevel.EDIT)
@@ -883,6 +954,10 @@ class DocumentSharingServicesTest {
         assertEquals(DocumentAccessLevel.VIEW, result.get(1).effectiveAccessLevel());
         // A missing map entry means blocked, not "not queried".
         assertEquals(DocumentAccessLevel.NO_ACCESS, result.get(2).effectiveAccessLevel());
+        // Rebuilding the row for its effective level must not drop the photo with it.
+        assertEquals(
+                "/api/v1/users/" + demotedOwnerId + "/avatar?v=" + demotedAvatarId,
+                result.get(1).avatarUrl());
     }
 
     @Test
@@ -892,7 +967,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(docOwnerId).build())
+                .user(User.builder().id(docOwnerId).passwordHash("$2a$12$hash").build())
                 .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
@@ -926,6 +1001,7 @@ class DocumentSharingServicesTest {
                 .id(ownerId)
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document parent = Document.builder()
@@ -948,6 +1024,7 @@ class DocumentSharingServicesTest {
                 .id(directCollabUserId)
                 .email("direct@example.com")
                 .displayName("Direct Collab")
+                .passwordHash("$2a$12$hash")
                 .build();
         AccessGrant directCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -963,6 +1040,7 @@ class DocumentSharingServicesTest {
                 .id(parentCollabUserId)
                 .email("parentcollab@example.com")
                 .displayName("Parent Collab")
+                .passwordHash("$2a$12$hash")
                 .build();
         AccessGrant parentCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -1011,7 +1089,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1047,7 +1125,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1083,7 +1161,7 @@ class DocumentSharingServicesTest {
         UUID trashedParentDocId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
@@ -1133,7 +1211,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1214,7 +1292,7 @@ class DocumentSharingServicesTest {
         UUID parentDocId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
@@ -1262,7 +1340,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1301,7 +1379,7 @@ class DocumentSharingServicesTest {
         UUID blockedParentDocId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
@@ -1344,7 +1422,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1388,7 +1466,7 @@ class DocumentSharingServicesTest {
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document doc = Document.builder()
                 .id(documentId)
@@ -1424,7 +1502,8 @@ class DocumentSharingServicesTest {
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         OffsetDateTime expiry = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
-        User owner = User.builder().id(actorId).build();
+
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(documentId)
                 .user(owner)
@@ -1465,7 +1544,8 @@ class DocumentSharingServicesTest {
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         OffsetDateTime expiry = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
-        User owner = User.builder().id(actorId).build();
+
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(documentId)
                 .user(owner)
@@ -1501,7 +1581,8 @@ class DocumentSharingServicesTest {
     void updateSharingSettings_workspaceLevelAndBlockPatchAppliesBothFields() {
         UUID actorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(actorId).build();
+
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(documentId)
                 .user(owner)
@@ -1528,7 +1609,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
 
         Document parent = Document.builder()
                 .id(parentDocId)
@@ -1565,7 +1646,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document parent = Document.builder()
                 .id(parentDocId)
                 .user(owner)
@@ -1599,7 +1680,7 @@ class DocumentSharingServicesTest {
 
         Document doc = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(actorId).build())
+                .user(User.builder().id(actorId).passwordHash("$2a$12$hash").build())
                 .generalAccessMode(DocumentGeneralAccessMode.RESTRICTED)
                 .workspaceAccessMode(DocumentWorkspaceAccessMode.RESTRICTED)
                 .workspaceInheritBlocked(true)
@@ -1632,7 +1713,7 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(actorId).build();
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document parent = Document.builder()
                 .id(parentDocId)
                 .user(owner)
@@ -1666,7 +1747,12 @@ class DocumentSharingServicesTest {
         UUID childDocId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document parent = Document.builder()
                 .id(parentDocId)
                 .user(owner)
@@ -1680,7 +1766,12 @@ class DocumentSharingServicesTest {
                 .build();
 
         UUID bobId = UUID.randomUUID();
-        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        User bob = User.builder()
+                .id(bobId)
+                .email("bob@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         AccessGrant directCollab = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -1722,7 +1813,12 @@ class DocumentSharingServicesTest {
         UUID parentDocId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
                 .user(owner)
@@ -1742,7 +1838,12 @@ class DocumentSharingServicesTest {
                 .build();
 
         UUID bobId = UUID.randomUUID();
-        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        User bob = User.builder()
+                .id(bobId)
+                .email("bob@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         AccessGrant parentNoAccess = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -1777,7 +1878,12 @@ class DocumentSharingServicesTest {
         UUID parentDocId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
                 .user(owner)
@@ -1797,7 +1903,12 @@ class DocumentSharingServicesTest {
                 .build();
 
         UUID bobId = UUID.randomUUID();
-        User bob = User.builder().id(bobId).email("bob@example.com").build();
+
+        User bob = User.builder()
+                .id(bobId)
+                .email("bob@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         AccessGrant directView = AccessGrant.builder()
                 .id(UUID.randomUUID())
@@ -1848,7 +1959,7 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -1868,8 +1979,9 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
-        User bob = User.builder().id(bobId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder().id(documentId).user(owner).build();
         AccessGrant existing = AccessGrant.builder()
                 .document(document)
@@ -1896,8 +2008,9 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
-        User bob = User.builder().id(bobId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder().id(documentId).user(owner).build();
         AccessGrant existing = AccessGrant.builder()
                 .document(document)
@@ -1924,8 +2037,9 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
-        User bob = User.builder().id(bobId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder().id(documentId).user(owner).build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(document);
@@ -1947,11 +2061,12 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        User ancestorOwner =
+                User.builder().id(ancestorOwnerId).passwordHash("$2a$12$hash").build();
         Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
         Document child = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(actorId).build())
+                .user(User.builder().id(actorId).passwordHash("$2a$12$hash").build())
                 .parent(parent)
                 .build();
 
@@ -1976,14 +2091,16 @@ class DocumentSharingServicesTest {
         UUID actorId = UUID.randomUUID();
         UUID memberId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(actorId).build();
+
+        User owner = User.builder().id(actorId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder()
                 .id(documentId)
                 .user(owner)
                 .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
                 .workspaceAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
-        User member = User.builder().id(memberId).build();
+
+        User member = User.builder().id(memberId).passwordHash("$2a$12$hash").build();
 
         when(permissionService.requireSharingAdminAccess(actorId, documentId)).thenReturn(document);
         when(accessGrantRepository.hasPositiveIdentityGrant(memberId, documentId))
@@ -2006,9 +2123,10 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder().id(documentId).user(owner).build();
-        User bob = User.builder().id(bobId).build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
 
         when(permissionService.requireSharingAdminAccess(ownerId, documentId)).thenReturn(doc);
         when(accessGrantRepository.hasPositiveIdentityGrant(bobId, documentId)).thenReturn(true);
@@ -2031,9 +2149,10 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder().id(documentId).user(owner).build();
-        User bob = User.builder().id(bobId).build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         AccessGrant existing = AccessGrant.builder()
                 .document(doc)
                 .user(bob)
@@ -2062,14 +2181,15 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(documentId)
                 .user(owner)
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
-        User bob = User.builder().id(bobId).build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         AccessGrant existing = AccessGrant.builder()
                 .document(doc)
                 .user(bob)
@@ -2102,11 +2222,12 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        User ancestorOwner =
+                User.builder().id(ancestorOwnerId).passwordHash("$2a$12$hash").build();
         Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
         Document child = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(actorId).build())
+                .user(User.builder().id(actorId).passwordHash("$2a$12$hash").build())
                 .parent(parent)
                 .build();
 
@@ -2124,11 +2245,12 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
 
-        User ancestorOwner = User.builder().id(ancestorOwnerId).build();
+        User ancestorOwner =
+                User.builder().id(ancestorOwnerId).passwordHash("$2a$12$hash").build();
         Document parent = Document.builder().id(parentDocId).user(ancestorOwner).build();
         Document child = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(actorId).build())
+                .user(User.builder().id(actorId).passwordHash("$2a$12$hash").build())
                 .parent(parent)
                 .build();
 
@@ -2151,10 +2273,10 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
 
-        User user = User.builder().id(userId).build();
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .build();
 
         when(permissionService.requireReadAccessIncludingTrash(userId, documentId))
@@ -2179,7 +2301,7 @@ class DocumentSharingServicesTest {
         UUID ownerId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
@@ -2202,10 +2324,11 @@ class DocumentSharingServicesTest {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(DocumentAccessLevel.VIEW)
                 .build();
@@ -2240,7 +2363,12 @@ class DocumentSharingServicesTest {
         UUID trashedParentId = UUID.randomUUID();
         UUID grandparentDocId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(ownerId)
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document grandparent = Document.builder()
                 .id(grandparentDocId)
                 .user(owner)
@@ -2302,6 +2430,7 @@ class DocumentSharingServicesTest {
                 .id(UUID.randomUUID())
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         return Document.builder()
@@ -2331,12 +2460,14 @@ class DocumentSharingServicesTest {
                 .id(requesterId)
                 .email("creator@example.com")
                 .displayName("Creator")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         User memberUser = User.builder()
                 .id(UUID.randomUUID())
                 .email("member@example.com")
                 .displayName("Member")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document doc = Document.builder()
@@ -2393,12 +2524,14 @@ class DocumentSharingServicesTest {
                 .id(requesterId)
                 .email("creator@example.com")
                 .displayName("Creator")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         User memberUser = User.builder()
                 .id(memberId)
                 .email("member@example.com")
                 .displayName("Member")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document doc = Document.builder()
@@ -2529,7 +2662,13 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID spaceId = UUID.randomUUID();
         Space space = Space.builder().id(spaceId).name("Engineering").build();
-        User creator = User.builder().id(creatorId).email("creator@example.com").build();
+
+        User creator = User.builder()
+                .id(creatorId)
+                .email("creator@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document document = Document.builder()
                 .id(documentId)
                 .user(creator)
@@ -2592,6 +2731,7 @@ class DocumentSharingServicesTest {
                 .id(memberId)
                 .email("space-member@example.com")
                 .displayName("Space Member")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document doc = Document.builder()
@@ -2722,8 +2862,9 @@ class DocumentSharingServicesTest {
         UUID documentId = UUID.randomUUID();
         UUID bobId = UUID.randomUUID();
 
-        User owner = User.builder().id(ownerId).build();
-        User bob = User.builder().id(bobId).build();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+
+        User bob = User.builder().id(bobId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder().id(documentId).user(owner).build();
         AccessGrant existing = AccessGrant.builder()
                 .id(UUID.randomUUID())

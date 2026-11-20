@@ -20,11 +20,11 @@ import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.attachment.service.AttachmentService.AttachmentDownload;
 import com.nextdocs.api.attachment.storage.StoredAttachment;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.io.FileNotFoundException;
 import java.nio.charset.StandardCharsets;
@@ -46,9 +46,9 @@ import org.springframework.test.web.servlet.request.AbstractMockHttpServletReque
 
 @WebMvcTest(AttachmentController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class AttachmentControllerTest {
 
@@ -76,6 +76,7 @@ class AttachmentControllerTest {
                 .displayName("Alice")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);

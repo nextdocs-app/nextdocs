@@ -5,13 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.PostgresTestSupport;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
 import com.nextdocs.api.realtime.client.YhubClient;
 import com.nextdocs.api.search.config.SearchProperties;
 import com.nextdocs.api.search.repository.DocumentSearchRepository;
 import com.nextdocs.api.search.schedule.DocumentSearchReconcileJob;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;

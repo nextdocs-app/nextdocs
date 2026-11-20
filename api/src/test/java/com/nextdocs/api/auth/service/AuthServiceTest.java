@@ -10,13 +10,12 @@ import static org.mockito.Mockito.*;
 import com.nextdocs.api.auth.dto.request.LoginRequest;
 import com.nextdocs.api.auth.dto.request.RegisterRequest;
 import com.nextdocs.api.auth.dto.response.AuthResponse;
-import com.nextdocs.api.auth.dto.response.UserResponse;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.user.dto.response.UserResponse;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceInvite;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -120,11 +119,10 @@ class AuthServiceTest {
         assertThat(authResponse.accessToken()).isEqualTo("access.token.jwt");
         assertThat(authResponse.tokenType()).isEqualTo("Bearer");
         assertThat(authResponse.expiresIn()).isEqualTo(900L);
-        // Ownership is unproven: the first account may administer the instance, but
-        // email_verified stays false until some flow actually verifies the mailbox.
+        // Ownership is unproven: the first account may administer the instance, but it
+        // holds no invitation, so nothing has proven the mailbox.
         verify(userRepository, never()).save(any());
-        verify(workspaceService)
-                .bootstrapFirstUser(argThat(u -> u.getEmail().equals("alice@example.com") && !u.isEmailVerified()));
+        verify(workspaceService).bootstrapFirstUser(argThat(u -> u.getEmail().equals("alice@example.com")));
         verifyNoInteractions(inviteService);
     }
 
@@ -200,9 +198,9 @@ class AuthServiceTest {
         AuthResponse authResponse = authService.register(req, request, response);
 
         assertThat(authResponse.accessToken()).isEqualTo("access.token.jwt");
-        // Accepting the invitation link proves the mailbox and the claim happens before
-        // the membership is granted.
-        verify(userRepository).save(argThat(User::isEmailVerified));
+        // The claim happens before the membership is granted, so a lost race for a
+        // single-use invitation cannot leave a member behind.
+        verify(userRepository).save(any(User.class));
         verify(inviteService)
                 .consume(eq(invite), argThat(u -> u.getEmail().equals("alice@example.com")), eq("raw-token"));
         verify(workspaceService).addMember(eq(invite.getWorkspace()), any(User.class), eq(WorkspaceRole.ADMIN));
@@ -266,7 +264,6 @@ class AuthServiceTest {
         assertThat(persistedUser.isActive()).isTrue();
         assertThat(persistedUser.getDisplayName()).isEqualTo("Alice Again");
         assertThat(persistedUser.getPasswordHash()).isEqualTo("$2a$12$new");
-        assertThat(persistedUser.isEmailVerified()).isTrue();
         verify(inviteService).consume(invite, persistedUser, "raw-token");
         verify(workspaceService).addMember(invite.getWorkspace(), persistedUser, WorkspaceRole.MEMBER);
         verify(workspaceService, never()).bootstrapFirstUser(any());
@@ -370,38 +367,12 @@ class AuthServiceTest {
     }
 
     @Test
-    void getMe_returnsUserResponse_forExistingPrincipal() {
-        UserPrincipal principal = UserPrincipal.from(persistedUser);
-        when(userRepository.findById(persistedUser.getId())).thenReturn(Optional.of(persistedUser));
-
-        UserResponse userResponse = authService.getMe(principal);
-
-        assertThat(userResponse.id()).isEqualTo(persistedUser.getId());
-        assertThat(userResponse.email()).isEqualTo(persistedUser.getEmail());
-        assertThat(userResponse.displayName()).isEqualTo(persistedUser.getDisplayName());
-    }
-
-    @Test
-    void getMe_throwsNotFound_whenUserDoesNotExist() {
-        UserPrincipal principal = UserPrincipal.from(persistedUser);
-        when(userRepository.findById(persistedUser.getId())).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> authService.getMe(principal))
-                .isInstanceOf(ApiException.class)
-                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
-    }
-
-    @Test
     void toUserResponse_mapsAllFields() {
-        persistedUser.setAvatarUrl("https://example.com/avatar.png");
-        persistedUser.setEmailVerified(true);
-
-        UserResponse resp = AuthService.toUserResponse(persistedUser);
+        UserResponse resp = UserResponse.from(persistedUser);
 
         assertThat(resp.id()).isEqualTo(persistedUser.getId());
         assertThat(resp.email()).isEqualTo("alice@example.com");
         assertThat(resp.displayName()).isEqualTo("Alice");
-        assertThat(resp.avatarUrl()).isEqualTo("https://example.com/avatar.png");
-        assertThat(resp.emailVerified()).isTrue();
+        assertThat(resp.avatarUrl()).isNull();
     }
 }

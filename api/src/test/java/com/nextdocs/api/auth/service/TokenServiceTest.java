@@ -7,11 +7,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 import com.nextdocs.api.auth.entity.RefreshToken;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.security.ClientIpResolver;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.ClientIpResolver;
+import com.nextdocs.api.user.entity.User;
 import jakarta.servlet.http.Cookie;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -68,6 +68,7 @@ class TokenServiceTest {
                 .displayName("Alice")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         testUser.setId(UUID.randomUUID());
     }
 

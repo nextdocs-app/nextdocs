@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
 import com.nextdocs.api.common.response.ApiResponse;
 import jakarta.servlet.http.HttpServletResponse;
@@ -79,6 +79,14 @@ public class SecurityConfig {
     private static final String[] PUBLIC_ATTACHMENT_PATHS = {"/api/v1/attachments/*/url", "/api/v1/attachments/*/file"};
 
     /**
+     * Profile photos are identity images, not private data: a share-link visitor renders
+     * comment authors, and an {@code <img>} tag cannot send a bearer token. Method-scoped
+     * GET/HEAD for the same reason as the sets above — the profile writes on the same path
+     * prefix must stay authenticated.
+     */
+    private static final String[] PUBLIC_AVATAR_PATHS = {"/api/v1/users/*/avatar"};
+
+    /**
      * Builtin page-icon catalog and glyphs (static vendor set). Read-only on
      * purpose: a method-agnostic permitAll would silently make the next write
      * endpoint added under {@code /icons/*} public.
@@ -111,6 +119,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, PUBLIC_ONBOARDING_PATHS)
                         .permitAll()
                         .requestMatchers(HttpMethod.HEAD, PUBLIC_ONBOARDING_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_AVATAR_PATHS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.HEAD, PUBLIC_AVATAR_PATHS)
                         .permitAll()
                         .requestMatchers(PUBLIC_PATHS)
                         .permitAll()

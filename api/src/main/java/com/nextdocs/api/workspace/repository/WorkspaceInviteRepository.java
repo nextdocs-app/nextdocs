@@ -1,6 +1,6 @@
 package com.nextdocs.api.workspace.repository;
 
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.WorkspaceInvite;
 import jakarta.persistence.LockModeType;
 import java.time.OffsetDateTime;

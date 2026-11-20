@@ -1,7 +1,5 @@
 package com.nextdocs.api.comment.service;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.dto.request.CommentBodyRequest;
 import com.nextdocs.api.comment.dto.response.CommentAbilitiesResponse;
 import com.nextdocs.api.comment.dto.response.CommentAuthorResponse;
@@ -20,6 +18,8 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;

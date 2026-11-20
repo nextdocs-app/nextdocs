@@ -10,6 +10,8 @@ public record CollaboratorResponse(
         @Schema(description = "User ID") UUID userId,
         @Schema(description = "User email") String email,
         @Schema(description = "Display name") String displayName,
+
+        @Schema(description = "Avatar URL, when set") String avatarUrl,
         @Schema(description = "Access level") DocumentAccessLevel accessLevel,
 
         @Schema(description = "Collaborator grant timestamp")
@@ -39,16 +41,18 @@ public record CollaboratorResponse(
             UUID userId,
             String email,
             String displayName,
+            String avatarUrl,
             DocumentAccessLevel accessLevel,
             OffsetDateTime addedAt,
             boolean owner) {
-        this(userId, email, displayName, accessLevel, addedAt, owner, false, null, null, null, accessLevel);
+        this(userId, email, displayName, avatarUrl, accessLevel, addedAt, owner, false, null, null, null, accessLevel);
     }
 
     public CollaboratorResponse(
             UUID userId,
             String email,
             String displayName,
+            String avatarUrl,
             DocumentAccessLevel accessLevel,
             OffsetDateTime addedAt,
             boolean owner,
@@ -60,6 +64,7 @@ public record CollaboratorResponse(
                 userId,
                 email,
                 displayName,
+                avatarUrl,
                 accessLevel,
                 addedAt,
                 owner,

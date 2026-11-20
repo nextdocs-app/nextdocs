@@ -1,8 +1,7 @@
 package com.nextdocs.api.document.controller;
 
-import static com.nextdocs.api.auth.security.BearerTokens.rejectInvalidBearer;
+import static com.nextdocs.api.security.BearerTokens.rejectInvalidBearer;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
@@ -14,6 +13,7 @@ import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.document.service.DocumentSharingSettingsService;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;

@@ -11,8 +11,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.service.AttachmentService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
@@ -31,6 +29,8 @@ import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -126,7 +126,13 @@ class DocumentSpaceServiceTest {
                 .thenReturn(true);
 
         userId = UUID.randomUUID();
-        user = User.builder().email("alice@example.com").displayName("Alice").build();
+
+        user = User.builder()
+                .email("alice@example.com")
+                .displayName("Alice")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         user.setId(userId);
         space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
     }

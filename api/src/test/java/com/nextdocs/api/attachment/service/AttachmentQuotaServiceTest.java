@@ -13,10 +13,10 @@ import com.nextdocs.api.attachment.config.AttachmentProperties;
 import com.nextdocs.api.attachment.entity.AttachmentUsage;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.repository.AttachmentUsageRepository;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -53,7 +53,8 @@ class AttachmentQuotaServiceTest {
         properties = new AttachmentProperties();
         properties.setMaxStoragePerUser("1GB");
         quotaService = new AttachmentQuotaService(userRepository, usageRepository, attachmentRepository, properties);
-        user = User.builder().id(userId).build();
+
+        user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
     }
 
     @Test

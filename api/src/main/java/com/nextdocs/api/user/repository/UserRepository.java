@@ -1,6 +1,6 @@
-package com.nextdocs.api.auth.repository;
+package com.nextdocs.api.user.repository;
 
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
 import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import java.util.UUID;

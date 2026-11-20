@@ -1,4 +1,4 @@
-package com.nextdocs.api.auth.security.ratelimit;
+package com.nextdocs.api.security.ratelimit;
 
 import com.nextdocs.api.common.cache.CacheStore;
 import io.github.bucket4j.Bucket;

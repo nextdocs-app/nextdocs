@@ -1,6 +1,6 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import io.jsonwebtoken.JwtException;

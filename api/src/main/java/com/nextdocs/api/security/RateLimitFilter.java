@@ -1,8 +1,8 @@
-package com.nextdocs.api.auth.security;
+package com.nextdocs.api.security;
 
-import com.nextdocs.api.auth.security.ratelimit.RateLimiter;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
+import com.nextdocs.api.security.ratelimit.RateLimiter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -77,6 +77,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String PUBLIC_DOCUMENT_PATH_PREFIX = "/api/v1/documents/";
     private static final String ATTACHMENT_PATH_PREFIX = "/api/v1/attachments/";
     private static final String WORKSPACE_PATH_PREFIX = "/api/v1/workspaces/";
+    private static final String USERS_PATH_PREFIX = "/api/v1/users/";
     private static final String WORKSPACE_ATTACHMENTS_REMAINDER = "current/attachments";
     private static final String SPACES_PATH_PREFIX = "/api/v1/spaces/";
     private static final String SPACE_ATTACHMENTS_REMAINDER = "attachments";
@@ -86,6 +87,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String OVER_LIMIT_BODY_MSG = "Request payload is too large.";
     private static final String MISSING_UPLOAD_LENGTH_MSG = "Uploads must declare a Content-Length.";
     private static final String UNSUPPORTED_MEDIA_TYPE_MSG = "Unsupported Media Type.";
+    // Permit normal multipart headers and boundaries without reverting to the 30 MB ceiling.
+    private static final long AVATAR_MULTIPART_OVERHEAD_BYTES = 64 * 1024;
 
     private final RateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
@@ -101,6 +104,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final int uploadMaxRequests;
     private final Duration uploadWindow;
     private final long uploadMaxDeclaredBytes;
+    private final long avatarMaxDeclaredBytes;
     private final int downloadMaxRequests;
     private final Duration downloadWindow;
     private final int iconMaxRequests;
@@ -128,7 +132,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             @Value("${app.rate-limit.icon-window-seconds:60}") long iconWindowSeconds,
             @Value("${app.rate-limit.auth-max-requests:20}") int authMaxRequests,
             @Value("${app.rate-limit.auth-window-seconds:60}") long authWindowSeconds,
-            @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize) {
+            @Value("${spring.servlet.multipart.max-request-size:30MB}") String maxRequestSize,
+            @Value("${app.profile.max-avatar-size:2MB}") DataSize maxAvatarSize) {
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
         this.clientIpResolver = clientIpResolver;
@@ -152,6 +157,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // self-hoster who raises ATTACHMENT_MAX_REQUEST_SIZE must not silently hit a second,
         // stale limit in the filter.
         this.uploadMaxDeclaredBytes = DataSize.parse(maxRequestSize).toBytes();
+        long avatarBytes = maxAvatarSize.toBytes();
+        this.avatarMaxDeclaredBytes = Math.min(
+                uploadMaxDeclaredBytes,
+                avatarBytes > Long.MAX_VALUE - AVATAR_MULTIPART_OVERHEAD_BYTES
+                        ? Long.MAX_VALUE
+                        : avatarBytes + AVATAR_MULTIPART_OVERHEAD_BYTES);
     }
 
     @Override
@@ -389,6 +400,20 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return Verdict.customBudget("auth:", authMaxRequests, authWindow);
         }
 
+        // Profile routes: the name change is a cheap authenticated write, but the photo
+        // upload can consume disk and the photo read is anonymous, so neither may fall
+        // through to the unlimited branch below.
+        if (uri.startsWith(USERS_PATH_PREFIX)) {
+            String remainder = stripTrailingSlashes(uri.substring(USERS_PATH_PREFIX.length()));
+            if ("PUT".equalsIgnoreCase(request.getMethod()) && remainder.equals("me/avatar")) {
+                return Verdict.uploadBudget(uploadMaxRequests, uploadWindow, avatarMaxDeclaredBytes);
+            }
+            if (isAvatarRead(request, remainder)) {
+                return Verdict.customBudget("public-read:", publicReadMaxRequests, publicReadWindow);
+            }
+            return Verdict.unlimited();
+        }
+
         // Workspace routes are membership administration behind a JWT: unlimited,
         // except the icon upload, the one write that can consume unbounded disk.
         if (uri.startsWith(WORKSPACE_PATH_PREFIX)) {
@@ -564,6 +589,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return false;
         }
         return stripTrailingSlashes(decodedPath).equals(INSTANCE_STATUS_PATH);
+    }
+
+    /**
+     * Exactly {@code GET|HEAD /api/v1/users/{id}/avatar}, no nested or trailing segments.
+     * The anonymous route must not inherit the unlimited branch, and the remainder is
+     * already trailing-slash-stripped.
+     */
+    private static boolean isAvatarRead(HttpServletRequest request, String remainder) {
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
+            return false;
+        }
+        return remainder.endsWith("/avatar") && remainder.indexOf('/') == remainder.length() - 7;
     }
 
     /** Exactly {@code GET|HEAD /api/v1/attachments/{id}/file}, no nested or trailing segments. */

@@ -33,13 +33,12 @@ VALUES (${sqlString(plan.workspace.id)}, ${sqlString(plan.workspace.name)},
       sqlString(user.name),
       sqlString(scenario.PASSWORD_HASH),
       'TRUE',
-      'TRUE',
       sqlDate(joined),
       sqlDate(joined),
     ].join(', ')})`;
   });
   statements.push(`
-INSERT INTO users (id, email, display_name, password_hash, email_verified, is_active, created_at, updated_at)
+INSERT INTO users (id, email, display_name, password_hash, is_active, created_at, updated_at)
 VALUES
   ${userValues.join(',\n  ')};`);
 
