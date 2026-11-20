@@ -213,11 +213,28 @@ describe('DocumentPageHeader', () => {
     );
   });
 
-  it('hides both actions for a read-only reader', () => {
+  it('hides both actions for a read-only reader but keeps their row', () => {
     renderHeader({ isReadOnly: true, canEdit: false });
 
     expect(screen.queryByRole('button', { name: 'Add icon' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add cover' })).not.toBeInTheDocument();
+
+    // The empty row stays so the title keeps the same offset as an editable
+    // page of the same document, whether or not the reader can add icon/cover.
+    const titleTextarea = screen.getByPlaceholderText('Untitled');
+    expect(titleTextarea.previousElementSibling?.className).toMatch(/min-h-\[28px\]/);
+  });
+
+  it('keeps the read-only spacer as slim as an editable one once icon and cover are set', () => {
+    renderHeader({
+      isReadOnly: true,
+      canEdit: false,
+      icon: { type: 'emoji', value: '🚀' },
+      cover: { type: 'link', value: 'https://cdn.example/cover.jpg', position: 0.5 },
+    });
+
+    const titleTextarea = screen.getByPlaceholderText('Untitled');
+    expect(titleTextarea.previousElementSibling?.className).toMatch(/min-h-\[12px\]/);
   });
 
   it('picks an emoji from the picker and closes it', async () => {

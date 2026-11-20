@@ -56,6 +56,26 @@ html:has(.nd-app-scroll) {
     width: var(--nd-comments-rail-width) !important;
     max-width: var(--nd-comments-rail-width) !important;
   }
+
+  /* ── Remembered collapse, before React hydrates ──
+     The rail is unmounted once the store knows it is collapsed, but React has
+     not run at first paint. `data-nd-sidebar` is resolved by the head script
+     (lib/sidebar-preferences.util.ts), so the first frame already matches the
+     stored preference and the store's effect changes nothing visible.
+
+     Both selectors must beat the component's inline `left`: the toolbar tracks
+     the rail edge from JS, and without `!important` the inline value would win
+     until React catches up, sliding the breadcrumbs across the page. */
+  html[data-nd-sidebar='collapsed'] .nd-left-sidebar {
+    display: none;
+  }
+
+  html[data-nd-sidebar='collapsed']
+    body:not([data-version-history-open='true'])
+    .nd-doc-toolbar-left {
+    left: var(--nd-doc-toolbar-collapsed-left) !important;
+    max-width: var(--nd-doc-toolbar-collapsed-max-width) !important;
+  }
 }
 
 /* The comments rail and the document share the viewport here, so a 22rem rail

@@ -35,7 +35,10 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   --nd-comments-rail-width: 22rem;
-  --nd-sidebar-width: 256px;
+  --nd-sidebar-width: 320px;
+  /* Shared by DocToolbar and the pre-hydration collapse rules in layout-responsive.css. */
+  --nd-doc-toolbar-collapsed-left: calc(0.5rem + 1.875rem);
+  --nd-doc-toolbar-collapsed-max-width: calc(100vw - 17rem);
 
   /* NextDocs Brand Accent (matching NextDocs logo icon) */
   --nd-brand: #e78f80;

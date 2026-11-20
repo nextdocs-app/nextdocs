@@ -5,6 +5,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { SpacesSection } from '@/components/sidebar/SpacesSection';
 import authReducer from '@/stores/auth/auth.slice';
 import spaceTreeReducer from '@/stores/spaceTree/spaceTree.slice';
+import sidebarReducer from '@/stores/sidebar/sidebar.slice';
 import toastsReducer from '@/stores/toasts/toasts.slice';
 import { documentService } from '@/services/document.service';
 import { spaceApiService } from '@/services/space.service';
@@ -22,8 +23,23 @@ jest.mock('../../../../hooks/useMediaQuery.hook', () => ({
 }));
 
 jest.mock('../../../../components/settings/workspace/SpaceSettingsModal', () => ({
-  SpaceSettingsModal: ({ initialTab }: { initialTab?: 'general' | 'members' }) => (
-    <div data-testid="space-settings-modal" data-tab={initialTab ?? 'general'} />
+  SpaceSettingsModal: ({
+    initialTab,
+    space,
+    onSpaceChange,
+    onSpaceRemoved,
+  }: {
+    initialTab?: 'general' | 'members';
+    space: Space;
+    onSpaceChange?: (next: Space) => void;
+    onSpaceRemoved?: (spaceId: string) => void;
+  }) => (
+    <div data-testid="space-settings-modal" data-tab={initialTab ?? 'general'}>
+      <button onClick={() => onSpaceChange?.({ ...space, archivedAt: '2026-01-02T00:00:00Z' })}>
+        Archive
+      </button>
+      <button onClick={() => onSpaceRemoved?.(space.id)}>Delete</button>
+    </div>
   ),
 }));
 
@@ -126,6 +142,7 @@ function renderSection(spaceOrSpaces: Space | Space[] = makeSpace()) {
     reducer: {
       auth: authReducer,
       spaceTree: spaceTreeReducer,
+      sidebar: sidebarReducer,
       toasts: toastsReducer,
     },
     preloadedState: { auth: authState },
@@ -348,6 +365,36 @@ describe('SpacesSection', () => {
 
     expect(screen.queryByLabelText('Spaces')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Confidential Finance space' })).toBeNull();
+  });
+
+  it('forgets an archived space instead of keeping it unfolded', async () => {
+    const user = userEvent.setup();
+    const { store } = renderSection([makeSpace({ id: 'space-1', name: 'Team' })]);
+
+    await user.click(await screen.findByRole('button', { name: 'Team space' }));
+    expect(store.getState().sidebar.expandedSpaceIds).toEqual(['space-1']);
+
+    act(() => {
+      dispatchOpenSpaceSettings({ spaceId: 'space-1', tab: 'general' });
+    });
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+
+    expect(store.getState().sidebar.expandedSpaceIds).toEqual([]);
+  });
+
+  it('forgets a removed space instead of keeping it unfolded', async () => {
+    const user = userEvent.setup();
+    const { store } = renderSection([makeSpace({ id: 'space-1', name: 'Team' })]);
+
+    await user.click(await screen.findByRole('button', { name: 'Team space' }));
+    expect(store.getState().sidebar.expandedSpaceIds).toEqual(['space-1']);
+
+    act(() => {
+      dispatchOpenSpaceSettings({ spaceId: 'space-1', tab: 'general' });
+    });
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(store.getState().sidebar.expandedSpaceIds).toEqual([]);
   });
 
   it('opens the requested space settings tab from the share panel event', async () => {

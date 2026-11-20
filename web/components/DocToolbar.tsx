@@ -213,7 +213,7 @@ export function DocToolbar({
       ? 'calc(0.5rem + env(safe-area-inset-left, 0px) + 2.375rem)'
       : showsExpandedLeftRail
         ? 'calc(var(--nd-sidebar-width, 256px) + 12px)'
-        : 'calc(0.5rem + 1.875rem)',
+        : 'var(--nd-doc-toolbar-collapsed-left)',
   };
 
   return (
@@ -225,9 +225,9 @@ export function DocToolbar({
           flex items-center gap-0.5 min-w-0
           max-w-[calc(100vw-6.5rem)]
           ${
-            isSidebarCollapsed && !isVersionHistoryOpen
-              ? 'md:max-w-[calc(100vw-17rem)]'
-              : 'md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]'
+            showsExpandedLeftRail
+              ? 'md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]'
+              : 'md:max-w-[var(--nd-doc-toolbar-collapsed-max-width)]'
           }
           h-9 md:h-7 select-none pointer-events-auto
           transition-[left] duration-300

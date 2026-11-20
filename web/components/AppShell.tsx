@@ -14,6 +14,8 @@ import { toggleSearchDialog } from '@/stores/ui/ui.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
+import { useSidebarPreferences } from '@/hooks/useSidebarPreferences.hook';
+import { useRestoredSidebarExpansion } from '@/hooks/useRestoredSidebarExpansion.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '@/lib/pending-cloud-create.util';
 import { isEditorLinkShortcutTarget, recordRecentDocumentVisit } from '@/lib/search-helpers.util';
 import { addToast } from '@/stores/toasts/toasts.slice';
@@ -61,6 +63,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { user, isTokenExpiringSoon, accessToken, isInitializing, isAuthenticated } = useAuth();
   usePendingCloudDocumentCreates(user?.id ?? null, accessToken);
+  // Rail layout is remembered per device, expansion per account; both are
+  // adopted after hydration so the server HTML and the store cannot disagree.
+  useSidebarPreferences(user?.id ?? null);
+  useRestoredSidebarExpansion(user?.id ?? null);
 
   // Lock the page behind the drawer so the document cannot scroll under it.
   useEffect(() => {

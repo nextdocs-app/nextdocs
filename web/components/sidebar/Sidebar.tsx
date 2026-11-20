@@ -17,6 +17,7 @@ import {
   toggleSharedOpen,
   toggleSpacesOpen,
   setDocActionsAnchor,
+  clearExpandedSpaces,
 } from '@/stores/sidebar/sidebar.slice';
 import {
   closeSettingsDialog,
@@ -90,6 +91,7 @@ import { ProfileMenuPopup } from './ProfileMenuPopup';
 import { DocumentActionsMenu } from './DocumentActionsMenu';
 import { DocumentsPanel } from './DocumentsPanel';
 import { useSidebarResize } from './useSidebarResize';
+import { useStickyRowMetrics } from './useStickyRowMetrics';
 import { useDismissableMenu } from './useDismissableMenu';
 import { resolvePopupPosition } from './popup-position.util';
 import { canManageMembers } from '@/components/settings/workspace/workspace-role.util';
@@ -171,7 +173,7 @@ function Sidebar() {
   const sharedTreeRootIds = useAppSelector((state) => state.sharedTree?.rootIds ?? []);
   const sharedWithMeDocumentIds = useAppSelector(selectSharedWithMeDocumentIds);
 
-  const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
+  const { isResizing, startResizing } = useSidebarResize();
 
   // Mobile renders the same rail as an off-canvas drawer, which has no collapsed
   // state: it is either covering the page or hidden off-screen.
@@ -202,6 +204,8 @@ function Sidebar() {
   const workspaceMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const workspaceMenuPopupRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
+  /** Sticky rows stack on the rendered row pitch; see useStickyRowMetrics. */
+  const sidebarScrollRef = useStickyRowMetrics<HTMLDivElement>();
 
   const isDocumentsPanelOpen = documentsPanelMode !== null;
   const isTrashPanel = documentsPanelMode === 'trash';
@@ -951,7 +955,7 @@ function Sidebar() {
                 width: rect.width,
                 height: rect.height,
               },
-              // Measured instead of derived from `sidebarWidth` so the straddle
+              // Measured instead of derived from the rail width so the straddle
               // line also matches the documents panel, which is wider than the rail.
               panelEdgeX: sidebarRef.current?.getBoundingClientRect().right ?? null,
             };
@@ -1115,7 +1119,10 @@ function Sidebar() {
 
   if (!isClient) {
     return (
-      <aside className="nd-left-sidebar w-64 border-r border-sidebar-border flex-shrink-0 bg-sidebar" />
+      <aside
+        className="nd-left-sidebar border-r border-sidebar-border flex-shrink-0 bg-sidebar"
+        style={{ width: 'var(--nd-sidebar-width)' }}
+      />
     );
   }
 
@@ -1134,7 +1141,7 @@ function Sidebar() {
       inert={isMobileLayout && !isMobileNavOpen ? true : undefined}
       className={`nd-left-sidebar border-r border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: `var(--nd-sidebar-width, ${sidebarWidth}px)`,
+        width: 'var(--nd-sidebar-width)',
       }}
     >
       {/* Header — one toolbar row: workspace identity, then the rail control. */}
@@ -1228,9 +1235,9 @@ function Sidebar() {
         </button>
       </div>
 
-      {/* Document sections and account menu */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
-        <div className="ml-1">
+      {/* Document sections */}
+      <div ref={sidebarScrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className="ml-1 pb-10">
           {/* Spaces sit above the documents: their documents are no longer part of
               the Private tree, so this is where a filed document is reachable. */}
           {isAuthenticated && accessToken && (
@@ -1322,45 +1329,45 @@ function Sidebar() {
             )}
           </SidebarTreeDndContext>
         </div>
+      </div>
 
-        <div className="relative mt-auto sticky bottom-0 flex items-center justify-between gap-2 border-t border-border bg-sidebar px-1.5 py-2">
-          <button
-            ref={accountMenuTriggerRef}
-            onClick={toggleAccountMenu}
-            aria-haspopup="menu"
-            aria-expanded={isAccountMenuOpen}
-            className="group/account flex min-w-0 flex-1 items-center overflow-hidden rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-sidebar-accent cursor-pointer"
-          >
-            {isAuthenticated && user ? (
-              <UserAvatar
-                seed={user.id}
-                name={user.displayName || user.email}
-                src={user.avatarUrl}
-                size="xs"
-              />
-            ) : (
-              <span
-                aria-hidden="true"
-                className="inline-flex h-[25px] w-[25px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
-              >
-                <UserCircle className="h-[16px] w-[16px]" />
-              </span>
-            )}
-            <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-3">
-              <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
-              <ChevronDown
-                className={`flex-shrink-0 transition-all duration-150 ${
-                  isAccountMenuOpen
-                    ? 'opacity-70 -rotate-180 w-3.5'
-                    : 'w-0 opacity-0 group-hover/account:w-3.5 group-hover/account:opacity-70 group-focus-visible/account:w-3.5 group-focus-visible/account:opacity-70 overflow-hidden'
-                }`}
-                size={14}
-              />
+      <div className="relative flex-shrink-0 flex items-center justify-between gap-2 border-t border-border bg-sidebar px-1.5 py-2">
+        <button
+          ref={accountMenuTriggerRef}
+          onClick={toggleAccountMenu}
+          aria-haspopup="menu"
+          aria-expanded={isAccountMenuOpen}
+          className="group/account flex min-w-0 flex-1 items-center overflow-hidden rounded-sm px-1.5 py-1 text-left transition-colors hover:bg-sidebar-accent cursor-pointer"
+        >
+          {isAuthenticated && user ? (
+            <UserAvatar
+              seed={user.id}
+              name={user.displayName || user.email}
+              src={user.avatarUrl}
+              size="xs"
+            />
+          ) : (
+            <span
+              aria-hidden="true"
+              className="inline-flex h-[25px] w-[25px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--nd-placeholder-bg)] text-[var(--nd-placeholder-fg)]"
+            >
+              <UserCircle className="h-[16px] w-[16px]" />
             </span>
-          </button>
-          {/* Balances the header's rail control so both rows share an edge. */}
-          <div className={SIDEBAR_RAIL_CONTROL_CLASS} aria-hidden="true" />
-        </div>
+          )}
+          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-3">
+            <span className="truncate text-[15px] whitespace-nowrap flex-1">{accountLabel}</span>
+            <ChevronDown
+              className={`flex-shrink-0 transition-all duration-150 ${
+                isAccountMenuOpen
+                  ? 'opacity-70 -rotate-180 w-3.5'
+                  : 'w-0 opacity-0 group-hover/account:w-3.5 group-hover/account:opacity-70 group-focus-visible/account:w-3.5 group-focus-visible/account:opacity-70 overflow-hidden'
+              }`}
+              size={14}
+            />
+          </span>
+        </button>
+        {/* Balances the header's rail control so both rows share an edge. */}
+        <div className={SIDEBAR_RAIL_CONTROL_CLASS} aria-hidden="true" />
       </div>
 
       {isAuthenticated && isWorkspaceMenuOpen && workspaceMenuPosition && (
@@ -1406,6 +1413,9 @@ function Sidebar() {
             dispatch(resetSharedTree());
             dispatch(resetSpaceTrees());
             await logout();
+            // The account's space listing stays active until logout resolves,
+            // so clearing earlier only lets it repopulate the next key.
+            dispatch(clearExpandedSpaces());
             await navigateToResolvedRootDocument({
               isAuthenticated: false,
               accessToken: null,

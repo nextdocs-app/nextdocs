@@ -1,44 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAppDispatch } from '@/stores/hooks';
-import { setSidebarWidth as setSidebarWidthAction } from '@/stores/sidebar/sidebar.slice';
+import {
+  SIDEBAR_WIDTH_STORAGE_KEY,
+  SIDEBAR_DEFAULT_WIDTH,
+  applySidebarWidth,
+  clampSidebarWidth,
+  readAppliedSidebarWidth,
+} from '@/lib/sidebar-width.util';
 
-export function useSidebarResize(initialWidth = 256, minWidth = 256, maxWidth = 480) {
-  const dispatch = useAppDispatch();
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('nextdocs-sidebar-width');
-        if (saved) {
-          const parsed = parseInt(saved, 10);
-          if (!isNaN(parsed) && parsed >= minWidth && parsed <= maxWidth) {
-            return parsed;
-          }
-        }
-      } catch {
-        // Storage access might be restricted (e.g. private browsing or sandbox)
-      }
-    }
-    return initialWidth;
-  });
+/**
+ * Drag-to-resize for the navigation rail.
+ *
+ * The width itself is not React state: it is the `--nd-sidebar-width` custom
+ * property, resolved before the first paint by the head script in the root
+ * layout. A drag writes that property straight to the DOM (rAF-coalesced) and
+ * the drag end persists it, so there is nothing here for React to render and no
+ * source of truth that can disagree with the painted rail.
+ */
+export function useSidebarResize() {
   const [isResizing, setIsResizing] = useState(false);
-  const widthRef = useRef(sidebarWidth);
+  // Seeded on every drag start from what is painted; nothing reads it before then.
+  const widthRef = useRef<number>(SIDEBAR_DEFAULT_WIDTH);
   const rafRef = useRef<number | null>(null);
-
-  // Keep ref in sync when not resizing
-  useEffect(() => {
-    if (!isResizing) {
-      widthRef.current = sidebarWidth;
-    }
-  }, [sidebarWidth, isResizing]);
-
-  // Sync to DOM + Redux only when not dragging (or on mount)
-  useEffect(() => {
-    if (isResizing) return;
-    dispatch(setSidebarWidthAction(sidebarWidth));
-    if (typeof document !== 'undefined') {
-      document.documentElement.style.setProperty('--nd-sidebar-width', `${sidebarWidth}px`);
-    }
-  }, [sidebarWidth, dispatch, isResizing]);
 
   // Lock body styles & classes during resizing; clean up on finish or unmount
   useEffect(() => {
@@ -63,40 +45,39 @@ export function useSidebarResize(initialWidth = 256, minWidth = 256, maxWidth = 
 
   const startResizing = useCallback((e?: { preventDefault?: () => void }) => {
     e?.preventDefault?.();
+    // The rail may have been moved since mount (another tab, a previous drag),
+    // so start from what is actually painted.
+    widthRef.current = readAppliedSidebarWidth();
     setIsResizing(true);
   }, []);
 
   const stopResizing = useCallback(() => {
     const finalWidth = widthRef.current;
     if (typeof document !== 'undefined') {
-      document.documentElement.style.setProperty('--nd-sidebar-width', `${finalWidth}px`);
+      applySidebarWidth(finalWidth);
     }
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    setSidebarWidth(finalWidth);
     setIsResizing(false);
     try {
-      localStorage.setItem('nextdocs-sidebar-width', String(finalWidth));
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(finalWidth));
     } catch {
       // Storage access might be restricted.
     }
   }, []);
 
-  const resize = useCallback(
-    (e: MouseEvent | PointerEvent) => {
-      const newWidth = Math.max(minWidth, Math.min(maxWidth, e.clientX));
-      widthRef.current = newWidth;
-      if (rafRef.current) return;
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        // Update CSS var — sidebar and breadcrumbs both follow instantly (transition disabled via body class)
-        document.documentElement.style.setProperty('--nd-sidebar-width', `${widthRef.current}px`);
-      });
-    },
-    [minWidth, maxWidth]
-  );
+  const resize = useCallback((e: MouseEvent | PointerEvent) => {
+    widthRef.current = clampSidebarWidth(e.clientX);
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      // Sidebar and breadcrumbs both follow instantly; the 200ms width
+      // transition is disabled while resizing.
+      applySidebarWidth(widthRef.current);
+    });
+  }, []);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -128,7 +109,6 @@ export function useSidebarResize(initialWidth = 256, minWidth = 256, maxWidth = 
   }, [isResizing, resize, stopResizing]);
 
   return {
-    sidebarWidth,
     isResizing,
     startResizing,
   };

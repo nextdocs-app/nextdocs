@@ -141,7 +141,7 @@ export function SidebarTree({
   );
 
   const treeContent = (
-    <ul className="flex flex-col gap-px">
+    <ul className="flex flex-col gap-px relative z-0">
       {renderedRootIds.map((rootId) => (
         <SidebarTreeItem
           key={rootId}
