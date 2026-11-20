@@ -172,7 +172,7 @@ function Sidebar() {
   const sharedTreeRootIds = useAppSelector((state) => state.sharedTree?.rootIds ?? []);
   const sharedWithMeDocumentIds = useAppSelector(selectSharedWithMeDocumentIds);
 
-  const { sidebarWidth, isResizing, startResizing } = useSidebarResize();
+  const { isResizing, startResizing } = useSidebarResize();
 
   // Mobile renders the same rail as an off-canvas drawer, which has no collapsed
   // state: it is either covering the page or hidden off-screen.
@@ -952,7 +952,7 @@ function Sidebar() {
                 width: rect.width,
                 height: rect.height,
               },
-              // Measured instead of derived from `sidebarWidth` so the straddle
+              // Measured instead of derived from the rail width so the straddle
               // line also matches the documents panel, which is wider than the rail.
               panelEdgeX: sidebarRef.current?.getBoundingClientRect().right ?? null,
             };
@@ -1116,7 +1116,10 @@ function Sidebar() {
 
   if (!isClient) {
     return (
-      <aside className="nd-left-sidebar w-64 border-r border-sidebar-border flex-shrink-0 bg-sidebar" />
+      <aside
+        className="nd-left-sidebar border-r border-sidebar-border flex-shrink-0 bg-sidebar"
+        style={{ width: 'var(--nd-sidebar-width)' }}
+      />
     );
   }
 
@@ -1135,7 +1138,7 @@ function Sidebar() {
       inert={isMobileLayout && !isMobileNavOpen ? true : undefined}
       className={`nd-left-sidebar border-r border-sidebar-border flex-shrink-0 flex flex-col ${isDocumentsPanelOpen ? '' : 'overflow-hidden'} bg-sidebar text-sidebar-foreground select-none ${isResizing ? 'transition-none' : 'transition-[width] duration-200 ease-out'} relative`}
       style={{
-        width: `var(--nd-sidebar-width, ${sidebarWidth}px)`,
+        width: 'var(--nd-sidebar-width)',
       }}
     >
       {/* Header — one toolbar row: workspace identity, then the rail control. */}

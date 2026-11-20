@@ -10,6 +10,7 @@ import {
   applySidebarCollapsedAttribute,
   sidebarUiPreference,
 } from '../../../lib/sidebar-preferences.util';
+import { SIDEBAR_DEFAULT_WIDTH, readAppliedSidebarWidth } from '../../../lib/sidebar-width.util';
 
 describe('sidebar preferences without a browser', () => {
   it('reads the defaults when there is no storage to read', () => {
@@ -68,5 +69,10 @@ describe('sidebar preferences without a browser', () => {
     } finally {
       Reflect.deleteProperty(globalThis, 'window');
     }
+  });
+
+  it('leaves the width and the collapse signal alone', () => {
+    expect(readAppliedSidebarWidth()).toBe(SIDEBAR_DEFAULT_WIDTH);
+    expect(() => applySidebarCollapsedAttribute(true)).not.toThrow();
   });
 });

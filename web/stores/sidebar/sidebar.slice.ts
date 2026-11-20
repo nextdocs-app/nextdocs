@@ -5,7 +5,6 @@ import type { SidebarUiPreferences } from '@/lib/sidebar-preferences.util';
 export interface SidebarState {
   /** Desktop only: the rail is fully closed and the shell shows its opener. */
   isCollapsed: boolean;
-  sidebarWidth: number;
   panelMode: DocumentsPanelMode;
   searchQuery: string;
   isPrivateOpen: boolean;
@@ -27,7 +26,6 @@ export interface SidebarState {
 
 const initialState: SidebarState = {
   isCollapsed: false,
-  sidebarWidth: 256,
   panelMode: null,
   searchQuery: '',
   isPrivateOpen: true,
@@ -44,9 +42,6 @@ const sidebarSlice = createSlice({
   reducers: {
     setCollapsed(state, action: PayloadAction<boolean>) {
       state.isCollapsed = action.payload;
-    },
-    setSidebarWidth(state, action: PayloadAction<number>) {
-      state.sidebarWidth = action.payload;
     },
     /**
      * Adopts the stored rail state in one dispatch. The store itself is never
@@ -120,7 +115,6 @@ export const {
   setCollapsed,
   setMobileNavOpen,
   toggleMobileNav,
-  setSidebarWidth,
   setPanelMode,
   setSearchQuery,
   togglePrivateOpen,

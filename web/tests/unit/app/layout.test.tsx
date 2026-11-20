@@ -1,6 +1,7 @@
 import { isValidElement, type ReactNode } from 'react';
 import RootLayout from '@/app/layout';
 import { SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT } from '@/lib/sidebar-preferences.util';
+import { SIDEBAR_WIDTH_BOOTSTRAP_SCRIPT } from '@/lib/sidebar-width.util';
 
 jest.mock('next/font/google', () => ({
   Inter: () => ({ variable: '--font-inter' }),
@@ -26,9 +27,10 @@ function headScripts(): string[] {
 }
 
 describe('RootLayout', () => {
-  it('resolves the stored rail collapse before the first paint', () => {
+  it('resolves the stored rail width and collapse before the first paint', () => {
     const scripts = headScripts();
 
+    expect(scripts).toContain(SIDEBAR_WIDTH_BOOTSTRAP_SCRIPT);
     expect(scripts).toContain(SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT);
   });
 });

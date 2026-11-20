@@ -680,7 +680,6 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     const store = createTestStore({
       sidebar: {
         isCollapsed: true,
-        sidebarWidth: 256,
         panelMode: null,
         searchQuery: '',
         isPrivateOpen: true,
@@ -736,7 +735,6 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
 describe('DocToolbar sidebar toggle', () => {
   const closedSidebarState = {
     isCollapsed: true,
-    sidebarWidth: 256,
     panelMode: null,
     searchQuery: '',
     isPrivateOpen: true,

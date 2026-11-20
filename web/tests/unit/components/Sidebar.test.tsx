@@ -300,7 +300,6 @@ it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
       auth: signedInAuthState,
       sidebar: {
         isCollapsed: true,
-        sidebarWidth: 256,
         panelMode: null,
         searchQuery: '',
         isPrivateOpen: true,
@@ -1638,7 +1637,6 @@ it('moves a child document to trash in shared tree when user has edit access', a
     preloadedState: {
       sidebar: {
         isCollapsed: false,
-        sidebarWidth: 256,
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
