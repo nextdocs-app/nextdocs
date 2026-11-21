@@ -5,9 +5,11 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.mention.service.MentionService;
 import com.nextdocs.api.realtime.dto.request.ContentUpdatedRequest;
 import com.nextdocs.api.realtime.dto.response.InternalAccessResponse;
 import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
+import com.nextdocs.api.realtime.service.ProducedAtVersions;
 import com.nextdocs.api.search.config.SearchProperties;
 import com.nextdocs.api.search.service.SearchIndexService;
 import com.nextdocs.api.security.JwtTokenProvider;
@@ -55,6 +57,8 @@ public class InternalRealtimeController {
     private final ContentUpdatedThrottle contentUpdatedThrottle;
     private final SearchIndexService searchIndexService;
     private final SearchProperties searchProperties;
+    private final MentionService mentionService;
+    private final ProducedAtVersions producedAtVersions;
 
     public InternalRealtimeController(
             @Value("${app.yhub.service-token}") String serviceToken,
@@ -63,7 +67,9 @@ public class InternalRealtimeController {
             WorkspaceAccessService workspaceAccessService,
             ContentUpdatedThrottle contentUpdatedThrottle,
             SearchIndexService searchIndexService,
-            SearchProperties searchProperties) {
+            SearchProperties searchProperties,
+            MentionService mentionService,
+            ProducedAtVersions producedAtVersions) {
         // Trim like the realtime service reads its copy: an env var or mounted secret
         // often carries a trailing newline, and an untrimmed value would never match.
         String normalizedToken = serviceToken == null ? null : serviceToken.trim();
@@ -81,6 +87,8 @@ public class InternalRealtimeController {
         this.contentUpdatedThrottle = contentUpdatedThrottle;
         this.searchIndexService = searchIndexService;
         this.searchProperties = searchProperties;
+        this.mentionService = mentionService;
+        this.producedAtVersions = producedAtVersions;
     }
 
     @Operation(summary = "Resolve effective document access for Yhub auth plugin")
@@ -178,7 +186,15 @@ public class InternalRealtimeController {
 
         // Index before touching the timestamp: a skipped throttle window must not skip
         // content. A missing or hard-deleted document is a no-op upsert, not an error.
+        boolean contentAccepted = true;
+        // One ordering value for both projections of this read: the mention index takes the
+        // same instant as the search upsert, capped the way that upsert caps it, so a sender
+        // whose clock runs ahead cannot freeze either index against later payloads. A retry
+        // of the same body keeps the instant the first attempt was given, so it cannot
+        // outrank a newer read that landed in between.
+        Instant version = now;
         if (body != null && body.text() != null) {
+            version = producedAtVersions.assign(documentId, parseProducedAt(body.producedAt()), now);
             String text = body.text();
             boolean truncated = Boolean.TRUE.equals(body.truncated());
             int maxBytes = Math.max(0, searchProperties.getMaxContentBytes());
@@ -195,12 +211,23 @@ public class InternalRealtimeController {
                 text = new String(bytes, 0, end, StandardCharsets.UTF_8);
                 truncated = true;
             }
-            searchIndexService.indexContent(documentId, text, truncated, parseProducedAt(body.producedAt()), now);
+            contentAccepted = searchIndexService.indexContent(documentId, text, truncated, version, now);
         } else {
             // Content moved without carrying text: extraction failed, or an older realtime
             // build sent only the timestamp. Advancing the known content version makes the
             // crawl re-read this document immediately, without waiting for the age sweep.
             searchIndexService.recordContentVersion(documentId, now);
+        }
+
+        // Mentions are derived from the same Y.Doc read as the text. A null list means
+        // extraction failed (or an older sender): leave the index alone rather than
+        // clearing it. A reindex repairs the set but must not re-notify existing mentions.
+        // Skip a payload whose text was rejected as stale: its mention set belongs to the
+        // same older read, and the mention index orders by the same value. Mentions
+        // without text cannot be ordered, so they are ignored.
+        if (body != null && body.text() != null && contentAccepted && body.mentions() != null) {
+            mentionService.reconcileDocumentMentions(
+                    documentId, body.mentions(), Boolean.TRUE.equals(body.reindex()), version);
         }
 
         // A reindex reads existing content; it is not an edit. Recording it would move the

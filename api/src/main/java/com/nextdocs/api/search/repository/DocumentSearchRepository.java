@@ -289,9 +289,13 @@ public class DocumentSearchRepository {
                         .addValue("language", properties.getLanguage()));
     }
 
-    public void upsertContent(
+    /**
+     * @return the number of rows written. Zero means the ordering guard rejected an older
+     *     retry, so callers that derive more state from the same payload must skip it too.
+     */
+    public int upsertContent(
             UUID documentId, String content, boolean truncated, OffsetDateTime producedAt, OffsetDateTime indexedAt) {
-        jdbc.update(
+        return jdbc.update(
                 CONTENT_UPSERT_SQL,
                 new MapSqlParameterSource()
                         .addValue("documentId", documentId)
