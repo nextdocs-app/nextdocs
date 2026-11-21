@@ -41,7 +41,7 @@ import {
   UnnestBlockButton,
   useCreateBlockNote,
 } from '@blocknote/react';
-import { BlockNoteView, ShadCNDefaultComponents, type ShadCNComponents } from '@blocknote/shadcn';
+import { ShadCNDefaultComponents, type ShadCNComponents } from '@blocknote/shadcn';
 import { VersioningSidebar } from '@blocknote/react/versioning';
 import '@blocknote/shadcn/style.css';
 import {
@@ -103,6 +103,12 @@ import { useAttachmentHandlers } from './useAttachmentHandlers';
 import { DocumentPageHeader } from '@/components/page/DocumentPageHeader';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus.hook';
 import type { DocumentCover, DocumentIcon } from '@/types/document.types';
+import { BlockNoteViewWithMentions } from './mentions/BlockNoteViewWithMentions';
+import type { MentionConfig } from './mentions/MentionConfigContext';
+import { UserMention } from './mentions/UserMention';
+import { commentEditorSchema } from './mentions/comment-schema';
+import { MentionSuggestionMenu } from './mentions/MentionSuggestionMenu';
+import { createMentionMenuItems } from './mentions/mention-menu';
 
 type CodeLanguageInfo = {
   name: string;
@@ -195,6 +201,7 @@ const editorSchema = withMultiColumn(
     },
     inlineContentSpecs: {
       math: createReactInlineMathSpec(),
+      mention: UserMention,
     },
   })
 );
@@ -469,6 +476,19 @@ export function EditorContent({
   const canCommentRef = useRef(canComment);
   canCommentRef.current = canComment;
 
+  // Mention candidates are only offered to signed-in users: a share-link guest has no
+  // stable identity to notify, and the candidate endpoint is authenticated. COMMENT
+  // is enough, because the comment composer is the other place a mention can be added.
+  const getMentionAccessToken = useCallback(() => accessTokenRef.current, []);
+  const mentionConfig = useMemo<MentionConfig>(
+    () => ({
+      documentId,
+      getAccessToken: getMentionAccessToken,
+      enabled: isAuthenticated && canComment,
+    }),
+    [documentId, getMentionAccessToken, isAuthenticated, canComment]
+  );
+
   // File-block uploads and signed-URL resolution live in a dedicated hook so this
   // component stays out of the auth-retry and toast-throttling details.
   const { uploadFile, resolveFileUrl } = useAttachmentHandlers({
@@ -695,7 +715,11 @@ export function EditorContent({
     // codeBlockHighlighter.ts) alongside the comments extension, mobile
     // draggable blocks, and Yhub's activity-backed version history.
     return [
-      CommentsExtension({ threadStore, resolveUsers }),
+      CommentsExtension({
+        threadStore,
+        resolveUsers,
+        schema: commentEditorSchema,
+      }),
       syntaxHighlighter,
       MobileDraggableBlocksExtension({
         isTouchInput: () => isTouchInputRef.current,
@@ -779,6 +803,13 @@ export function EditorContent({
     // uploadFile/resolveFileUrl are effect events with stable identity, so listing them
     // keeps exhaustive-deps honest without ever rebuilding the editor.
     [documentId, ydoc, uploadFile, resolveFileUrl]
+  );
+
+  // A fresh factory per editor/config keeps its abort controller scoped to this
+  // document; `mentionConfig` is memoized so a token refresh does not rebuild it.
+  const getMentionMenuItems = useMemo(
+    () => createMentionMenuItems(editor, mentionConfig),
+    [editor, mentionConfig]
   );
 
   const getSlashMenuItems = useCallback(
@@ -1075,8 +1106,8 @@ export function EditorContent({
         onCoverPositionChange={handleCoverPositionChange}
       />
       {/* Portal target for the history rail. It lives outside BlockNoteView so
-          the panel can fixed-position itself, while RenderInPortalElement keeps
-          the editor context (extension store, theme, user store). */}
+        the panel can fixed-position itself, while RenderInPortalElement keeps
+        the editor context (extension store, theme, user store). */}
       {isVersionHistoryOpen && (
         <div
           ref={setVersionPanel}
@@ -1085,8 +1116,8 @@ export function EditorContent({
         />
       )}
       {/* Version history needs BlockNoteView's context (extension store, theme,
-          user store) for its portals, so an empty document still mounts it while
-          the rail is open — hidden, because the body has nothing to show. */}
+        user store) for its portals, so an empty document still mounts it while
+        the rail is open — hidden, because the body has nothing to show. */}
       {(isEditorVisible || isVersionHistoryOpen) && (
         <div
           className={
@@ -1095,7 +1126,8 @@ export function EditorContent({
               : 'hidden'
           }
         >
-          <BlockNoteView
+          <BlockNoteViewWithMentions
+            mentionConfig={mentionConfig}
             editor={editor}
             theme={resolvedTheme}
             editable={initialEditableRef.current}
@@ -1123,11 +1155,11 @@ export function EditorContent({
             comments={false}
           >
             {/*
-              Touch devices get a bar docked to the bottom of the viewport
-              instead of the floating toolbar, which is routinely buried under
-              the on-screen keyboard. Both take the same `formattingToolbar`, so
-              the button set is identical on either layout.
-            */}
+            Touch devices get a bar docked to the bottom of the viewport
+            instead of the floating toolbar, which is routinely buried under
+            the on-screen keyboard. Both take the same `formattingToolbar`, so
+            the button set is identical on either layout.
+          */}
             {!isViewer &&
               (isTouchInput ? (
                 <MobileFormattingToolbarController
@@ -1141,12 +1173,19 @@ export function EditorContent({
             {!isViewer && (
               <SuggestionMenuController triggerCharacter={'/'} getItems={getSlashMenuItems} />
             )}
+            {!isViewer && !isReadOnly && mentionConfig.enabled && (
+              <SuggestionMenuController
+                triggerCharacter={'@'}
+                getItems={getMentionMenuItems}
+                suggestionMenuComponent={MentionSuggestionMenu}
+              />
+            )}
             {/*
-              The block side menu is a mouse affordance: hover-driven handles
-              smaller than a fingertip. Touch devices get no handles at all, and
-              the gutter they would have reserved goes back to the text (see
-              the `(pointer: coarse)` rules in `styles/layout-responsive.css`).
-            */}
+            The block side menu is a mouse affordance: hover-driven handles
+            smaller than a fingertip. Touch devices get no handles at all, and
+            the gutter they would have reserved goes back to the text (see
+            the `(pointer: coarse)` rules in `styles/layout-responsive.css`).
+          */}
             {!isViewer && !isTouchInput && (
               <SideMenuController
                 floatingUIOptions={SIDE_MENU_FLOATING_OPTIONS}
@@ -1155,11 +1194,11 @@ export function EditorContent({
             )}
             {!isViewer && <CustomTableHandlesController />}
             {/*
-              The thread card is the one piece of floating comments UI that
-              needs placement rules of its own: it is the tallest thing anchored
-              inside the document, so it has to stay clear of the document
-              toolbar above the editor and of the bottom of the screen.
-            */}
+            The thread card is the one piece of floating comments UI that
+            needs placement rules of its own: it is the tallest thing anchored
+            inside the document, so it has to stay clear of the document
+            toolbar above the editor and of the bottom of the screen.
+          */}
             {commentsUiEnabled && !commentsSidebarOpen && (
               <>
                 <FloatingComposerController />
@@ -1196,7 +1235,7 @@ export function EditorContent({
                 <VersionHistoryToolbarActions onClose={onVersionHistoryClose} />
               </RenderInPortalElement>
             )}
-          </BlockNoteView>
+          </BlockNoteViewWithMentions>
         </div>
       )}
     </div>
