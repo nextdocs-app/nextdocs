@@ -12,7 +12,9 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
 import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -729,6 +731,194 @@ class PermissionServiceTest {
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireCommentAccess(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_ownerOfStandalonePage_passes() {
+        UUID ownerId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
+                .build();
+
+        permissionService.requireIdentityGrantForRoster(ownerId, doc);
+
+        verifyNoInteractions(accessGrantRepository, spaceAccessService);
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_identityGrantedReader_passes() {
+        UUID memberId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(true);
+
+        permissionService.requireIdentityGrantForRoster(memberId, doc);
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_linkOnlyReader_throwsNotFound() {
+        UUID linkOnlyId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(linkOnlyId, doc.getId()))
+                .thenReturn(false);
+
+        ApiException exception = assertThrows(
+                ApiException.class, () -> permissionService.requireIdentityGrantForRoster(linkOnlyId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_spaceMemberWithoutPageGrant_passes() {
+        UUID memberId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(false);
+        when(spaceAccessService.load(memberId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+
+        permissionService.requireIdentityGrantForRoster(memberId, doc);
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_spaceAdminWithoutContentAccess_passes() {
+        UUID adminId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(adminId, doc.getId()))
+                .thenReturn(false);
+        // Sharing is an administrator's call, so an admin with no content level still
+        // sees the roster.
+        when(spaceAccessService.load(adminId, spaceId)).thenReturn(new SpaceContext(space, WorkspaceRole.ADMIN, null));
+
+        permissionService.requireIdentityGrantForRoster(adminId, doc);
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_inaccessibleSpace_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        // No membership and no content level: the space grants nothing.
+        when(spaceAccessService.load(outsiderId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, null));
+
+        ApiException exception = assertThrows(
+                ApiException.class, () -> permissionService.requireIdentityGrantForRoster(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_missingSpaceMembership_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        // A vanished space membership is "no grant", not a server fault.
+        when(spaceAccessService.load(outsiderId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        ApiException exception = assertThrows(
+                ApiException.class, () -> permissionService.requireIdentityGrantForRoster(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_unresolvableSpace_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        when(spaceAccessService.load(outsiderId, spaceId)).thenReturn(null);
+
+        ApiException exception = assertThrows(
+                ApiException.class, () -> permissionService.requireIdentityGrantForRoster(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireIdentityGrantForRoster_spaceLookupFailureOtherThanNotFound_propagates() {
+        UUID memberId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(false);
+        // Only NOT_FOUND means "no space grant"; other failures are real faults and must
+        // not be masked as a hidden roster.
+        when(spaceAccessService.load(memberId, spaceId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireIdentityGrantForRoster(memberId, doc));
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
     }
 
     @Test

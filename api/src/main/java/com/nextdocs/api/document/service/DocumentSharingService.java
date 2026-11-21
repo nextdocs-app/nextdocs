@@ -67,7 +67,7 @@ public class DocumentSharingService {
     @Transactional(readOnly = true)
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
-        requireIdentityGrantForRoster(requesterId, doc);
+        permissionService.requireIdentityGrantForRoster(requesterId, doc);
 
         Set<UUID> directUserIds = new HashSet<>();
         List<CollaboratorResponse> result = new ArrayList<>();
@@ -731,50 +731,6 @@ public class DocumentSharingService {
                     .add(row);
         }
         return new AncestorContext(ancestors, rowsByDocument);
-    }
-
-    /**
-     * Roster visibility requires an identity grant (owner, user/group grant,
-     * space baseline, or workspace audience). Link-only readers can open the document but must
-     * not enumerate member emails and names. Masked as not found so link
-     * holders cannot distinguish a private document from a hidden roster.
-     */
-    private void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
-        Space space = permissionService.resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(requesterId)) {
-            return;
-        }
-        if (accessGrantRepository.hasPositiveIdentityGrant(requesterId, doc.getId())) {
-            return;
-        }
-        if (hasSpaceGrant(requesterId, doc)) {
-            return;
-        }
-        throw new ApiException(ErrorCode.NOT_FOUND);
-    }
-
-    /**
-     * A space grant is an identity grant: a space member already sees the space roster, so
-     * hiding this page's roster from them would be theatre. Space administrators count too,
-     * even without a content level, because sharing is their call. In a public space, workspace
-     * members pass here to inspect direct document collaborators (space rows are still filtered
-     * by {@code canViewSpaceRoster}). Anonymous or external link-only readers outside the workspace
-     * have no workspace identity and are masked as not found.
-     */
-    private boolean hasSpaceGrant(UUID userId, Document doc) {
-        Space space = permissionService.resolveSpace(doc);
-        if (space == null) {
-            return false;
-        }
-        try {
-            SpaceContext context = spaceAccessService.load(userId, space.getId());
-            return context != null && (context.accessLevel() != null || context.canAdminister());
-        } catch (ApiException ex) {
-            if (ex.getErrorCode() == ErrorCode.NOT_FOUND) {
-                return false;
-            }
-            throw ex;
-        }
     }
 
     private boolean canViewSpaceRoster(UUID requesterId, Space space) {
