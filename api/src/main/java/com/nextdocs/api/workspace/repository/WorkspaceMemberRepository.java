@@ -1,11 +1,13 @@
 package com.nextdocs.api.workspace.repository;
 
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +43,18 @@ public interface WorkspaceMemberRepository extends JpaRepository<WorkspaceMember
             + "WHERE wm.workspace.id = :workspaceId AND wm.user.id IN :userIds")
     List<UUID> findUserIdsByWorkspaceIdAndUserIdIn(
             @Param("workspaceId") UUID workspaceId, @Param("userIds") Collection<UUID> userIds);
+
+    /**
+     * Candidate search for the mention picker. The caller filters by document access
+     * afterwards, so this only narrows the roster by a name/email substring and stays
+     * bounded by the page request.
+     */
+    @Query("SELECT wm.user FROM WorkspaceMember wm "
+            + "WHERE wm.workspace.id = :workspaceId AND wm.user.active = true "
+            + "AND (:query = '' "
+            + "OR LOWER(wm.user.displayName) LIKE LOWER(CONCAT('%', :query, '%')) "
+            + "OR LOWER(wm.user.email) LIKE LOWER(CONCAT('%', :query, '%'))) "
+            + "ORDER BY LOWER(wm.user.displayName), wm.user.id")
+    List<User> searchMentionableUsers(
+            @Param("workspaceId") UUID workspaceId, @Param("query") String query, Pageable pageable);
 }
