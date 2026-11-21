@@ -25,6 +25,7 @@ export type {
   InlineContent,
   StyledText,
   Link,
+  Mention,
   Styles,
   DefaultBlockProps,
   HeadingLevel,
