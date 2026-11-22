@@ -21,7 +21,7 @@
     font-size: 2.4em;
     font-weight: 650;
     line-height: 1.2;
-    color: #121212;
+    color: var(--nd-editor-text);
     background: transparent;
     border: none;
     outline: none;
@@ -58,24 +58,24 @@
 
   @media (prefers-color-scheme: dark) {
     html:not([data-theme='light']):not([data-theme='dark']) .document-title-input {
-      color: #f2f2f2;
+      color: var(--nd-editor-text);
     }
     html:not([data-theme='light']):not([data-theme='dark']) .document-title-input::placeholder {
-      color: rgba(242, 242, 242, 0.3);
+      color: color-mix(in srgb, var(--nd-editor-text) 30%, transparent);
     }
   }
 
   /* Support explicit .dark class and data-theme="dark" */
   .dark .document-title-input {
-    color: #f2f2f2;
+    color: var(--nd-editor-text);
   }
   .dark .document-title-input::placeholder {
-    color: rgba(242, 242, 242, 0.3);
+    color: color-mix(in srgb, var(--nd-editor-text) 30%, transparent);
   }
 
   /* Explicit light override — beats any stale dark rules */
   html[data-theme='light'] .document-title-input {
-    color: #121212;
+    color: var(--nd-editor-text);
   }
   html[data-theme='light'] .document-title-input::placeholder {
     color: rgba(63, 63, 63, 0.3);
@@ -538,7 +538,7 @@
     --nd-hl-pink-text: var(--nd-hl-light-pink-text);
     --nd-hl-pink-bg: var(--nd-hl-light-pink-bg);
 
-    --bn-colors-editor-text: #121212 !important;
+    --bn-colors-editor-text: var(--nd-editor-text) !important;
     --bn-colors-editor-background: var(--background) !important;
     --bn-colors-highlights-gray-text: var(--nd-hl-gray-text) !important;
     --bn-colors-highlights-gray-background: var(--nd-hl-gray-bg) !important;
@@ -637,7 +637,7 @@
   .dark .bn-container,
   .bn-root[data-color-scheme='dark'],
   .bn-container[data-color-scheme='dark'] {
-    --bn-colors-editor-text: #f2f2f2 !important;
+    --bn-colors-editor-text: var(--nd-editor-text) !important;
     --bn-colors-editor-background: var(--background) !important;
     --nd-hl-gray-text: var(--nd-hl-dark-gray-text);
     --nd-hl-gray-bg: var(--nd-hl-dark-gray-bg);
@@ -680,7 +680,7 @@
   @media (prefers-color-scheme: dark) {
     html:not([data-theme='light']):not([data-theme='dark']) .bn-root,
     html:not([data-theme='light']):not([data-theme='dark']) .bn-container {
-      --bn-colors-editor-text: #f2f2f2 !important;
+      --bn-colors-editor-text: var(--nd-editor-text) !important;
       --bn-colors-editor-background: var(--background) !important;
       --nd-hl-gray-text: var(--nd-hl-dark-gray-text);
       --nd-hl-gray-bg: var(--nd-hl-dark-gray-bg);
@@ -724,7 +724,7 @@
   /* Explicit light override — beats stale data-color-scheme="dark" */
   html[data-theme='light'] .bn-root,
   html[data-theme='light'] .bn-container {
-    --bn-colors-editor-text: #121212 !important;
+    --bn-colors-editor-text: var(--nd-editor-text) !important;
     --bn-colors-editor-background: var(--background) !important;
     --nd-hl-gray-text: var(--nd-hl-light-gray-text);
     --nd-hl-gray-bg: var(--nd-hl-light-gray-bg);
