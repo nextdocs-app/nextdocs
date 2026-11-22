@@ -1,9 +1,12 @@
 package com.nextdocs.api.realtime.controller;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -21,14 +24,17 @@ import com.nextdocs.api.document.dto.response.DocumentAccessResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.service.DocumentSharingService;
+import com.nextdocs.api.mention.service.MentionService;
 import com.nextdocs.api.realtime.dto.request.ContentUpdatedRequest;
 import com.nextdocs.api.realtime.service.ContentUpdatedThrottle;
+import com.nextdocs.api.realtime.service.ProducedAtVersions;
 import com.nextdocs.api.search.config.SearchProperties;
 import com.nextdocs.api.search.service.SearchIndexService;
 import com.nextdocs.api.security.JwtTokenProvider;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,7 +51,8 @@ import org.springframework.test.web.servlet.MockMvc;
     com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
     com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class,
-    ContentUpdatedThrottle.class
+    ContentUpdatedThrottle.class,
+    ProducedAtVersions.class
 })
 class InternalRealtimeControllerTest {
 
@@ -59,6 +66,9 @@ class InternalRealtimeControllerTest {
 
     @Autowired
     private ContentUpdatedThrottle contentUpdatedThrottle;
+
+    @Autowired
+    private ProducedAtVersions producedAtVersions;
 
     @MockitoBean
     private DocumentSharingService sharingService;
@@ -79,6 +89,9 @@ class InternalRealtimeControllerTest {
     private SearchProperties searchProperties;
 
     @MockitoBean
+    private MentionService mentionService;
+
+    @MockitoBean
     private com.nextdocs.api.workspace.repository.WorkspaceMemberRepository workspaceMemberRepository;
 
     @Test
@@ -92,7 +105,9 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService,
+                        producedAtVersions));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
@@ -102,7 +117,9 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService,
+                        producedAtVersions));
         assertThrows(
                 IllegalStateException.class,
                 () -> new InternalRealtimeController(
@@ -112,7 +129,9 @@ class InternalRealtimeControllerTest {
                         workspaceAccessService,
                         contentUpdatedThrottle,
                         searchIndexService,
-                        searchProperties));
+                        searchProperties,
+                        mentionService,
+                        producedAtVersions));
     }
 
     @Test
@@ -124,7 +143,9 @@ class InternalRealtimeControllerTest {
                 workspaceAccessService,
                 contentUpdatedThrottle,
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService,
+                producedAtVersions);
         UUID docId = UUID.randomUUID();
 
         assertEquals(
@@ -288,6 +309,23 @@ class InternalRealtimeControllerTest {
     }
 
     @Test
+    void contentUpdatedBodyWithoutTextSkipsMentionsAndAdvancesTheContentVersion() throws Exception {
+        UUID docId = UUID.randomUUID();
+
+        // Same case as above, but a body without a text field: the mention guard must not
+        // treat a missing extraction as an empty mention set.
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\"}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(searchIndexService).recordContentVersion(eq(docId), any());
+        verify(searchIndexService, never()).indexContent(any(), any(), anyBoolean(), any(), any());
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean(), any());
+    }
+
+    @Test
     void contentUpdatedClipsAnOversizedProjectionAndFlagsIt() throws Exception {
         UUID docId = UUID.randomUUID();
         when(searchProperties.getMaxContentBytes()).thenReturn(4);
@@ -332,9 +370,11 @@ class InternalRealtimeControllerTest {
                 workspaceAccessService,
                 new ContentUpdatedThrottle(documentRepository),
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService,
+                producedAtVersions);
 
-        fresh.contentUpdated(null, new ContentUpdatedRequest(docId, "hello", false, null, false), SERVICE_TOKEN);
+        fresh.contentUpdated(null, new ContentUpdatedRequest(docId, "hello", false, null, false, null), SERVICE_TOKEN);
 
         ArgumentCaptor<OffsetDateTime> sortKey = ArgumentCaptor.forClass(OffsetDateTime.class);
         ArgumentCaptor<Instant> projection = ArgumentCaptor.forClass(Instant.class);
@@ -342,6 +382,185 @@ class InternalRealtimeControllerTest {
         verify(searchIndexService).indexContent(eq(docId), eq("hello"), eq(false), any(), projection.capture());
         // The crawl compares the two; a later sort key would make every edit look stale.
         assertEquals(sortKey.getValue().toInstant(), projection.getValue());
+    }
+
+    @Test
+    void contentUpdatedOrdersMentionsByTheSameInstantAsTheProjection() {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+        // A fresh throttle: the shared one may still hold this id inside its window.
+        InternalRealtimeController fresh = new InternalRealtimeController(
+                SERVICE_TOKEN,
+                sharingService,
+                jwtTokenProvider,
+                workspaceAccessService,
+                new ContentUpdatedThrottle(documentRepository),
+                searchIndexService,
+                searchProperties,
+                mentionService,
+                producedAtVersions);
+
+        fresh.contentUpdated(
+                null,
+                new ContentUpdatedRequest(
+                        docId,
+                        "hello",
+                        false,
+                        "2026-01-01T00:00:00Z",
+                        false,
+                        List.of(new ContentUpdatedRequest.MentionRef(UUID.randomUUID()))),
+                SERVICE_TOKEN);
+
+        ArgumentCaptor<Instant> projection = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> mentionVersion = ArgumentCaptor.forClass(Instant.class);
+        verify(searchIndexService).indexContent(eq(docId), eq("hello"), eq(false), projection.capture(), any());
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(false), mentionVersion.capture());
+        // One read, one ordering value: the mention set belongs to the text it was
+        // extracted with, so both guards must compare against the same instant.
+        assertEquals(projection.getValue(), mentionVersion.getValue());
+    }
+
+    @Test
+    void contentUpdatedClampsAFutureProducedAtForMentionsToo() {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+        InternalRealtimeController fresh = new InternalRealtimeController(
+                SERVICE_TOKEN,
+                sharingService,
+                jwtTokenProvider,
+                workspaceAccessService,
+                new ContentUpdatedThrottle(documentRepository),
+                searchIndexService,
+                searchProperties,
+                mentionService,
+                producedAtVersions);
+
+        fresh.contentUpdated(
+                null,
+                new ContentUpdatedRequest(
+                        docId,
+                        "hello",
+                        false,
+                        "2100-01-01T00:00:00Z",
+                        false,
+                        List.of(new ContentUpdatedRequest.MentionRef(UUID.randomUUID()))),
+                SERVICE_TOKEN);
+
+        ArgumentCaptor<Instant> mentionVersion = ArgumentCaptor.forClass(Instant.class);
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(false), mentionVersion.capture());
+        // A clock ahead of ours must not freeze the mention index against every later
+        // payload, exactly as the search upsert clamps it.
+        assertTrue(mentionVersion.getValue().isBefore(Instant.parse("2100-01-01T00:00:00Z")));
+        assertFalse(mentionVersion.getValue().isAfter(Instant.now()));
+    }
+
+    @Test
+    void contentUpdatedCapsAFutureProducedAtOncePerRead() {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        // Realtime retries the same body after a failed call. Capping each attempt at its
+        // own arrival would hand the retry a later instant than a newer read that landed
+        // in between, so the retry could restore a mention that read had removed.
+        controller.contentUpdated(null, futureRead(docId, "2100-01-01T00:00:00Z"), SERVICE_TOKEN);
+        controller.contentUpdated(null, futureRead(docId, "2100-01-01T00:00:00Z"), SERVICE_TOKEN);
+        controller.contentUpdated(null, futureRead(docId, "2100-06-01T00:00:00Z"), SERVICE_TOKEN);
+
+        ArgumentCaptor<Instant> mentionVersion = ArgumentCaptor.forClass(Instant.class);
+        verify(mentionService, times(3))
+                .reconcileDocumentMentions(eq(docId), anyList(), eq(false), mentionVersion.capture());
+        List<Instant> versions = mentionVersion.getAllValues();
+        assertFalse(versions.get(0).isAfter(Instant.now()));
+        assertEquals(versions.get(0), versions.get(1));
+        // A different read is not the retried one, so the cap did not pin the document.
+        assertFalse(versions.get(2).isBefore(versions.get(1)));
+    }
+
+    private static ContentUpdatedRequest futureRead(UUID docId, String producedAt) {
+        return new ContentUpdatedRequest(
+                docId,
+                "hello",
+                false,
+                producedAt,
+                false,
+                List.of(new ContentUpdatedRequest.MentionRef(UUID.randomUUID())));
+    }
+
+    @Test
+    void contentUpdatedReconcilesDocumentMentions() throws Exception {
+        UUID docId = UUID.randomUUID();
+        UUID mentionedId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"mentions\":[{\"userId\":\"" + mentionedId + "\"}]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(false), any());
+    }
+
+    @Test
+    void contentUpdatedReindexRepairsMentionsWithoutNotifying() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"reindex\":true,\"mentions\":[]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService).reconcileDocumentMentions(eq(docId), anyList(), eq(true), any());
+    }
+
+    @Test
+    void contentUpdatedSkipsMentionsWhenTheTextWasStale() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        // The ordering guard rejected this payload as older than the stored projection.
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(false);
+
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\","
+                                + "\"mentions\":[{\"userId\":\"" + UUID.randomUUID() + "\"}]}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean(), any());
+    }
+
+    @Test
+    void contentUpdatedWithoutMentionsLeavesTheMentionIndexAlone() throws Exception {
+        UUID docId = UUID.randomUUID();
+        when(searchProperties.getMaxContentBytes()).thenReturn(262144);
+        when(searchIndexService.indexContent(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(true);
+
+        // A payload accepted by the ordering guard but carrying no mention list is not a
+        // clear: an older sender could not extract them, so the index must stay put.
+        mockMvc.perform(post("/api/v1/internal/realtime/content-updated")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"documentId\":\"" + docId + "\",\"text\":\"hello\"}")
+                        .header("X-Yhub-Service", SERVICE_TOKEN))
+                .andExpect(status().isOk());
+
+        verify(mentionService, never()).reconcileDocumentMentions(any(), anyList(), anyBoolean(), any());
     }
 
     @Test
@@ -390,7 +609,9 @@ class InternalRealtimeControllerTest {
                 // A fresh throttle: this test needs an empty window for the failing write.
                 new ContentUpdatedThrottle(documentRepository),
                 searchIndexService,
-                searchProperties);
+                searchProperties,
+                mentionService,
+                producedAtVersions);
 
         when(documentRepository.markContentUpdated(eq(docId), any()))
                 .thenThrow(new IllegalStateException("database unavailable"))

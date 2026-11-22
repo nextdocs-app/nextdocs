@@ -1,5 +1,5 @@
 import { API_BASE_URL, ORG, UUID_REGEX, YHUB_SERVICE_TOKEN } from './config.js';
-import { extractDocumentText } from './search-text.js';
+import { extractDocument, type MentionRef } from './search-text.js';
 import { describeError } from './health.js';
 import { log } from './logger.js';
 
@@ -22,6 +22,12 @@ export type ContentUpdatedPayload = {
   text?: string;
   truncated?: boolean;
   producedAt?: string;
+  /**
+   * The document's current user mentions. Omitted when extraction failed, exactly like
+   * `text`: the API must not read that as "the document has no mentions" and clear the
+   * index. An empty array is a legitimate clear.
+   */
+  mentions?: MentionRef[];
   /** True for a crawl-driven re-read, which must not move the sidebar sort key. */
   reindex?: boolean;
 };
@@ -61,15 +67,16 @@ export async function notifyContentUpdated(
 
   if (update) {
     try {
-      const extracted = extractDocumentText(update);
+      const extracted = extractDocument(update);
       payload.text = extracted.text;
       payload.truncated = extracted.truncated;
+      payload.mentions = extracted.mentions;
       payload.producedAt = producedAt ?? new Date().toISOString();
     } catch (err) {
-      log.warn(`Realtime text extraction failed for ${docid} (${describeError(err)})`);
+      log.warn(`Realtime content extraction failed for ${docid} (${describeError(err)})`);
       // A reindex exists to repair the projection; without text there is nothing to write.
       if (reindex) {
-        throw new Error(`Realtime text extraction failed for ${docid}`, { cause: err });
+        throw new Error(`Realtime content extraction failed for ${docid}`, { cause: err });
       }
     }
   }

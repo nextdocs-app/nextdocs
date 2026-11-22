@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import * as Y from '@y/y';
 import { MAX_RECHECK_DOCS } from '../../src/config.js';
 import { notifyContentUpdated, shouldNotifyContentUpdated } from '../../src/content-updated.js';
 import { handleRecheck } from '../../src/server.js';
@@ -132,6 +133,37 @@ describe('notifyContentUpdated', () => {
   function reply(status: number): Response {
     return { ok: status >= 200 && status < 300, status } as Response;
   }
+
+  it('carries the extracted text and mentions of the compacted document', async () => {
+    let body: string | undefined;
+    global.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+      body = init?.body as string;
+      return reply(200);
+    }) as unknown as typeof fetch;
+
+    const doc = new Y.Doc();
+    const root = doc.get('blocknote');
+    const paragraph = new Y.Node('paragraph');
+    paragraph.insert(0, 'ping ');
+    const mention = new Y.Node('mention');
+    mention.setAttr('userId', userId);
+    mention.setAttr('label', 'Alice');
+    paragraph.insert(5, [mention]);
+    root.insert(root.length, [paragraph]);
+    const update = Y.encodeStateAsUpdate(doc);
+    doc.destroy();
+
+    await notifyContentUpdated(documentId, update, false, '2026-01-02T03:04:05.000Z');
+
+    // Text and mentions come from the same walk, so one payload keeps them in step.
+    expect(JSON.parse(body as string)).toEqual({
+      documentId,
+      text: 'ping Alice',
+      truncated: false,
+      mentions: [{ userId }],
+      producedAt: '2026-01-02T03:04:05.000Z',
+    });
+  });
 
   it('retries a 5xx and stops once an attempt succeeds', async () => {
     const statuses = [503, 200];

@@ -94,6 +94,10 @@ jest.mock('@blocknote/react', () => {
       restoring: false,
       history: { status: 'success', data: [] },
     })),
+    createReactInlineContentSpec: jest.fn((config, implementation) => ({
+      ...config,
+      implementation,
+    })),
     createReactBlockSpec: jest.fn((config, implementation) => () => ({
       type: config?.type || 'alert',
       config,
@@ -125,9 +129,6 @@ jest.mock('@blocknote/diagram-block', () => ({
 }));
 
 jest.mock('@blocknote/shadcn', () => ({
-  BlockNoteView: jest.fn(({ children }: { children?: ReactNode }) => (
-    <div data-testid="blocknote-view">{children}</div>
-  )),
   ShadCNDefaultComponents: {
     DropdownMenu: {
       DropdownMenuTrigger: ({
@@ -206,6 +207,12 @@ jest.mock('@blocknote/shadcn', () => ({
   },
 }));
 
+jest.mock('../../../components/editor/mentions/BlockNoteViewWithMentions', () => ({
+  BlockNoteViewWithMentions: jest.fn(({ children }: { children?: ReactNode }) => (
+    <div data-testid="blocknote-view">{children}</div>
+  )),
+}));
+
 jest.mock('@blocknote/core', () => {
   const fallback = {
     BlockNoteSchema: {
@@ -214,6 +221,9 @@ jest.mock('@blocknote/core', () => {
       })),
     },
     createCodeBlockSpec: jest.fn((options) => ({ type: 'codeBlock', options })),
+    createParagraphBlockSpec: jest.fn(() => ({ type: 'paragraph' })),
+    defaultInlineContentSpecs: {},
+    defaultStyleSpecs: {},
     combineByGroup: jest.fn((base = [], ...others) => [...base, ...others.flat()]),
     defaultProps: {
       textAlignment: { default: 'left', values: ['left', 'center', 'right', 'justify'] },
@@ -347,7 +357,7 @@ import { useYjsPersistence } from '../../../hooks/useYjsPersistence.hook';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCreateBlockNote, useStore } from '@blocknote/react';
 import { createYHubVersionStorage, YVersioningExtension } from '@blocknote/core/y';
-import { BlockNoteView } from '@blocknote/shadcn';
+import { BlockNoteViewWithMentions as BlockNoteView } from '../../../components/editor/mentions/BlockNoteViewWithMentions';
 import { createCodeBlockSpec } from '@blocknote/core';
 import { syntaxHighlighter } from '../../../components/editor/codeBlockHighlighter';
 import { MobileFormattingToolbarController } from '../../../components/editor/MobileFormattingToolbar';
