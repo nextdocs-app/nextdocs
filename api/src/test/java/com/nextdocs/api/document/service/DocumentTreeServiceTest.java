@@ -36,6 +36,7 @@ import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -82,6 +83,9 @@ class DocumentTreeServiceTest {
     @Mock
     private SpaceAccessService spaceAccessService;
 
+    @Mock
+    private WorkspaceRepository workspaceRepository;
+
     private DocumentTreeService documentTreeService;
 
     private UUID userId;
@@ -112,6 +116,7 @@ class DocumentTreeServiceTest {
                 permissionService,
                 accessGrantSyncService,
                 spaceAccessService,
+                workspaceRepository,
                 publishedEvents::add);
     }
 
@@ -1992,5 +1997,41 @@ class DocumentTreeServiceTest {
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
         assertTrue(ex.getMessage().contains("another document"));
         verifyNoInteractions(spaceAccessService);
+    }
+
+    @Test
+    void move_detachToRoot_locksWorkspaceThenDocumentBeforeAccessCheck() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID workspaceId = UUID.randomUUID();
+        Workspace workspace = Workspace.builder().id(workspaceId).name("Team").build();
+        Document parent =
+                Document.builder().id(parentId).creator(user).title("Parent").build();
+        Document doc = Document.builder()
+                .id(docId)
+                .creator(user)
+                .parent(parent)
+                .workspace(workspace)
+                .title("Child")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+        when(documentRepository.findWorkspaceIdById(docId)).thenReturn(Optional.of(workspaceId));
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(documentRepository.findByIdForOwnershipUpdate(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any(UserDocumentOrder.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null));
+
+        InOrder order = inOrder(workspaceRepository, documentRepository, permissionService, accessGrantSyncService);
+        order.verify(workspaceRepository).findByIdForUpdate(workspaceId);
+        order.verify(documentRepository).findByIdForOwnershipUpdate(docId);
+        order.verify(permissionService).requireEditAccess(userId, docId);
+        order.verify(accessGrantSyncService).upsertUserGrant(doc, user, DocumentAccessLevel.OWNER, user);
     }
 }

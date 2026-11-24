@@ -28,6 +28,7 @@ import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +61,7 @@ public class DocumentTreeService {
     private final PermissionService permissionService;
     private final AccessGrantSyncService accessGrantSyncService;
     private final SpaceAccessService spaceAccessService;
+    private final WorkspaceRepository workspaceRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
@@ -301,6 +303,13 @@ public class DocumentTreeService {
             // cannot confirm a stranger's document exists.
             permissionService.requireReadAccess(userId, documentId);
             throw new ApiException(ErrorCode.VALIDATION_FAILED, "This document is not part of the Private section.");
+        }
+        if (targetDoc.getParent() != null) {
+            // Detaching a nested page turns it into a standalone root; serialize with
+            // WorkspaceService.removeMember in Workspace -> Document order before checking
+            // post-lock permissions and writing the root's OWNER grant.
+            documentRepository.findWorkspaceIdById(documentId).ifPresent(workspaceRepository::findByIdForUpdate);
+            documentRepository.findByIdForOwnershipUpdate(documentId);
         }
         permissionService.requireEditAccess(userId, documentId);
         Document doc = targetDoc;

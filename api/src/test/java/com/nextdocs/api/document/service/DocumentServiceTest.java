@@ -3176,6 +3176,34 @@ class DocumentServiceTest {
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
+    @Test
+    void create_standaloneRoot_locksWorkspaceMembership() {
+        UUID userId = UUID.randomUUID();
+        User owner = User.builder()
+                .id(userId)
+                .email("owner@example.com")
+                .displayName("Owner")
+                .passwordHash("$2a$12$hash")
+                .build();
+        com.nextdocs.api.workspace.entity.Workspace workspace = com.nextdocs.api.workspace.entity.Workspace.builder()
+                .id(UUID.randomUUID())
+                .name("Team")
+                .build();
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(owner));
+        when(workspaceService.requireWorkspaceForStandaloneCreate(userId)).thenReturn(workspace);
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        documentService.create(
+                userId,
+                new com.nextdocs.api.document.dto.request.DocumentCreateRequest(
+                        null, "Standalone", null, null, null, null, null, null, null));
+
+        verify(workspaceService).requireWorkspaceForStandaloneCreate(userId);
+        verify(workspaceService, never()).requireWorkspace(any());
+    }
+
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {
         User owner = User.builder()
                 .id(UUID.randomUUID())

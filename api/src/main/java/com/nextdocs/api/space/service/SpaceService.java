@@ -653,6 +653,9 @@ public class SpaceService {
      */
     @Transactional
     public void detachPage(UUID userId, UUID spaceId, UUID documentId) {
+        // Detaching a space page turns it into a standalone root; lock Workspace -> Space
+        // (matching deleteSpace) so member removal cannot drop a sole owner's grant mid-detach.
+        spaceRepository.findWorkspaceIdById(spaceId).ifPresent(this::lockWorkspace);
         Space space = lockSpace(spaceId);
         documentService.clearSpace(userId, documentId, spaceId);
         auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);

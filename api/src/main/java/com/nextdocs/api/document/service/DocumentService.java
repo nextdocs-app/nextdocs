@@ -240,7 +240,7 @@ public class DocumentService {
                 ? targetSpace.getWorkspace()
                 : (parent != null && parent.getWorkspace() != null
                         ? parent.getWorkspace()
-                        : workspaceService.requireWorkspace(userId));
+                        : workspaceService.requireWorkspaceForStandaloneCreate(userId));
 
         Document document = Document.builder()
                 .id(documentId)
