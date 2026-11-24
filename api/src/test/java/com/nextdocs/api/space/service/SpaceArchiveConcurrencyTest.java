@@ -104,7 +104,7 @@ class SpaceArchiveConcurrencyTest {
                 .build());
         page = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(actor)
+                .creator(actor)
                 .title("Page")
                 .build());
     }

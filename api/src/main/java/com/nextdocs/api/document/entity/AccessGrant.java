@@ -12,9 +12,10 @@ import org.hibernate.annotations.UpdateTimestamp;
 /**
  * One page-level grant or No access barrier.
  *
- * <p>The schema keeps users, groups, and audiences in one table because they are
- * different principals of the same permission decision. Membership and public-link
- * settings stay in their own stores; they are baselines/channels, not page grants.
+ * <p>A row names a person or a workspace group. A workspace audience is not a page
+ * grant: it lives on the document ({@code workspace_access_mode}) or on a space
+ * ({@code access_mode}), and public links live on the document, so those settings
+ * stay in one place instead of being copied onto every page they reach.
  *
  * <p>Every persisted grant belongs to a workspace, matching the V31 database constraint.
  */
@@ -50,9 +51,6 @@ public class AccessGrant {
 
     @Column(name = "group_id")
     private UUID groupId;
-
-    @Column(length = 32)
-    private String audience;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 8)

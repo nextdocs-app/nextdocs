@@ -77,6 +77,9 @@ class DocumentTreeServiceTest {
     private PermissionService permissionService;
 
     @Mock
+    private AccessGrantSyncService accessGrantSyncService;
+
+    @Mock
     private SpaceAccessService spaceAccessService;
 
     private DocumentTreeService documentTreeService;
@@ -90,6 +93,9 @@ class DocumentTreeServiceTest {
     void setUp() {
         publishedEvents.clear();
         userId = UUID.randomUUID();
+        org.mockito.Mockito.lenient()
+                .when(permissionService.resolveAccess(eq(userId), any(UUID.class)))
+                .thenReturn(DocumentAccessLevel.OWNER);
         user = User.builder()
                 .id(userId)
                 .email("alice@example.com")
@@ -104,8 +110,88 @@ class DocumentTreeServiceTest {
                 sharedSectionService,
                 userRepository,
                 permissionService,
+                accessGrantSyncService,
                 spaceAccessService,
                 publishedEvents::add);
+    }
+
+    @Test
+    void move_reparent_clearsBreakpointsForNewAncestorOwnersOnly() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID editorId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(docId)
+                .creator(user)
+                .title("Doc")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        Document parent =
+                Document.builder().id(parentId).creator(user).title("Parent").build();
+        AccessGrant ownerGrant = AccessGrant.builder()
+                .document(parent)
+                .user(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build();
+        AccessGrant editorGrant = AccessGrant.builder()
+                .document(parent)
+                .user(User.builder().id(editorId).passwordHash("$2a$12$hash").build())
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.EDIT)
+                .build();
+        AccessGrant denyGrant = AccessGrant.builder()
+                .document(parent)
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .effect(AccessGrantEffect.DENY)
+                .accessLevel(DocumentAccessLevel.NO_ACCESS)
+                .build();
+
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
+        when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
+        when(permissionService.resolveSpace(parent)).thenReturn(null);
+        when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
+        when(documentRepository.findAncestorChainIds(parentId)).thenReturn(List.of());
+        when(accessGrantRepository.findUserGrantsByDocumentIdIn(List.of(parentId)))
+                .thenReturn(List.of(ownerGrant, editorGrant, denyGrant));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
+
+        documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
+
+        // Only an ancestor OWNER keeps a subtree grant; an editor there does not.
+        verify(accessGrantRepository).deleteDenyInSubtreeForUser(docId, ownerId);
+        verify(accessGrantRepository, never()).deleteDenyInSubtreeForUser(docId, editorId);
+        verify(accessGrantRepository).pruneOrphanedBreakpoints(docId);
+    }
+
+    @Test
+    void move_privateRootThatBecameShared_rejectsThePrivateNamespace() {
+        UUID docId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(docId)
+                .creator(user)
+                .title("Moved by another tab")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false, true);
+        when(permissionService.resolveSpace(doc)).thenReturn(null);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        verify(permissionService).requireReadAccess(userId, docId);
     }
 
     private SharedEntry sharedEntry(UUID id, UUID parentId, UUID spaceId, String title, String orderKey) {
@@ -144,7 +230,7 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Doc")
                 .space(Space.builder().id(UUID.randomUUID()).name("Engineering").build())
                 .createdAt(OffsetDateTime.now())
@@ -152,7 +238,7 @@ class DocumentTreeServiceTest {
                 .build();
 
         Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
+                Document.builder().id(parentId).creator(user).title("Parent").build();
 
         DocumentMoveRequest request = new DocumentMoveRequest(parentId, prevSiblingId, nextSiblingId);
 
@@ -186,8 +272,7 @@ class DocumentTreeServiceTest {
         verify(documentRepository).saveAndFlush(any(Document.class));
 
         // Verify ONLY owner root order was deleted, preserving collaborator Shared orders
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(user.getId(), docId);
-        verify(userDocumentOrderRepository, never()).deleteByDocument_Id(docId);
+        verify(userDocumentOrderRepository).deleteByDocument_Id(docId);
         // A space anchors at a root page, so reparenting leaves it behind.
         assertNull(doc.getSpace());
     }
@@ -203,7 +288,7 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared To Me Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -256,10 +341,10 @@ class DocumentTreeServiceTest {
         User owner =
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document parent =
-                Document.builder().id(parentId).user(owner).title("Parent").build();
+                Document.builder().id(parentId).creator(owner).title("Parent").build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Nested Shared Doc")
                 .parent(parent)
                 .siblingOrderKey("a1")
@@ -306,12 +391,12 @@ class DocumentTreeServiceTest {
         // drop as SHARED. Its reorder is a real sibling reorder inside that parent.
         Document parent = Document.builder()
                 .id(parentId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared parent")
                 .build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Fetched child")
                 .parent(parent)
                 .siblingOrderKey("a1")
@@ -364,7 +449,7 @@ class DocumentTreeServiceTest {
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -406,7 +491,7 @@ class DocumentTreeServiceTest {
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -450,20 +535,20 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Moving subtree")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
         Document child = Document.builder()
                 .id(childDocId)
-                .user(user)
+                .creator(user)
                 .parent(doc)
                 .title("Child")
                 .build();
         Document hostParent = Document.builder()
                 .id(hostParentId)
-                .user(host)
+                .creator(host)
                 .title("Host parent")
                 .build();
 
@@ -471,21 +556,17 @@ class DocumentTreeServiceTest {
         when(permissionService.requireEditAccess(userId, hostParentId)).thenReturn(hostParent);
         when(documentRepository.findByIdAndDeletedAtIsNull(hostParentId)).thenReturn(Optional.of(hostParent));
         when(documentRepository.findMaxSiblingOrderKey(hostParentId, docId)).thenReturn(Optional.empty());
-        when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of(child));
-        when(documentRepository.findAllByParent_IdIn(List.of(childDocId))).thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
 
         documentTreeService.move(userId, docId, new DocumentMoveRequest(hostParentId, null, null));
 
-        // Location authority: moved doc and its descendants now belong to the host tree owner.
-        assertEquals(host.getId(), doc.getUser().getId());
-        assertEquals(host.getId(), child.getUser().getId());
-        verify(documentRepository).saveAll(anyList());
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(host.getId(), docId);
-        verify(userDocumentOrderRepository).deleteByUser_IdAndDocument_Id(user.getId(), docId);
-        verify(userDocumentOrderRepository, never()).deleteByDocument_Id(docId);
+        // Attribution stays the real author; access flows through the host parent chain.
+        assertEquals(userId, doc.getCreator().getId());
+        assertEquals(userId, child.getCreator().getId());
+        verify(documentRepository, never()).saveAll(anyList());
+        verify(userDocumentOrderRepository).deleteByDocument_Id(docId);
     }
 
     @Test
@@ -495,13 +576,13 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
         Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
+                Document.builder().id(parentId).creator(user).title("Parent").build();
 
         when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
@@ -514,7 +595,7 @@ class DocumentTreeServiceTest {
         documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
 
         // Intra-tree reparenting never touches ownership; no cascade walk happens.
-        assertEquals(user.getId(), doc.getUser().getId());
+        assertEquals(user.getId(), doc.getCreator().getId());
         verify(documentRepository, never()).saveAll(anyList());
         // A move changes inherited access even when ownership stays put.
         assertEquals(List.of(new DocumentAccessChangedEvent(docId)), publishedEvents);
@@ -533,7 +614,7 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .workspace(workspaceA)
                 .title("Doc")
                 .createdAt(OffsetDateTime.now())
@@ -541,14 +622,14 @@ class DocumentTreeServiceTest {
                 .build();
         Document child = Document.builder()
                 .id(childId)
-                .user(user)
+                .creator(user)
                 .parent(doc)
                 .workspace(workspaceA)
                 .title("Child")
                 .build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(user)
+                .creator(user)
                 .workspace(workspaceB)
                 .title("Parent in B")
                 .build();
@@ -575,11 +656,11 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID childId = UUID.randomUUID();
 
-        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Doc").build();
 
         Document child = Document.builder()
                 .id(childId)
-                .user(user)
+                .creator(user)
                 .title("Child")
                 .parent(doc)
                 .siblingOrderKey("a1")
@@ -598,7 +679,7 @@ class DocumentTreeServiceTest {
     void move_selfAsSibling_throwsValidationFailed() {
         UUID docId = UUID.randomUUID();
 
-        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Doc").build();
 
         DocumentMoveRequest request = new DocumentMoveRequest(null, docId, null);
 
@@ -614,14 +695,14 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID targetParentId = UUID.randomUUID();
 
-        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Doc").build();
 
         UUID currentId = targetParentId;
         for (int i = 0; i < 100; i++) {
             UUID nextParentId = UUID.randomUUID();
             Document parentDoc = Document.builder()
                     .id(currentId)
-                    .user(user)
+                    .creator(user)
                     .parent(Document.builder().id(nextParentId).build())
                     .build();
             when(documentRepository.findByIdAndDeletedAtIsNull(currentId)).thenReturn(Optional.of(parentDoc));
@@ -640,7 +721,7 @@ class DocumentTreeServiceTest {
     @Test
     void move_newParentAtDepthLimit_throwsValidationFailed() {
         UUID docId = UUID.randomUUID();
-        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Doc").build();
 
         // A closed 100-node chain: the moved leaf would land on a 101-node chain.
         Map<UUID, Document> chain = closedAncestorChain(100);
@@ -663,7 +744,7 @@ class DocumentTreeServiceTest {
         UUID docId = UUID.randomUUID();
         UUID childId = UUID.randomUUID();
         UUID grandchildId = UUID.randomUUID();
-        Document doc = Document.builder().id(docId).user(user).title("Doc").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Doc").build();
 
         // New parent 98 nodes deep leaves room for one level; the moved document's
         // grandchild would land on a 101-node chain.
@@ -697,7 +778,7 @@ class DocumentTreeServiceTest {
         for (int i = 0; i < length; i++) {
             Document ancestor = Document.builder()
                     .id(ids.get(i))
-                    .user(user)
+                    .creator(user)
                     .title("Ancestor " + i)
                     .parent(
                             i + 1 < length
@@ -716,14 +797,14 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
+                Document.builder().id(parentId).creator(user).title("Parent").build();
 
         DocumentMoveRequest request = new DocumentMoveRequest(parentId, null, null);
 
@@ -753,7 +834,7 @@ class DocumentTreeServiceTest {
         Space space = Space.builder().id(UUID.randomUUID()).name("Design").build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared space page")
                 .space(space)
                 .siblingOrderKey("space-key")
@@ -798,48 +879,16 @@ class DocumentTreeServiceTest {
     }
 
     @Test
-    void move_nestedCollaboratorPageToRoot_rejectsInsteadOfWritingAPrivateRow() {
-        UUID docId = UUID.randomUUID();
-        UUID parentId = UUID.randomUUID();
-
-        User owner =
-                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
-        Document parent =
-                Document.builder().id(parentId).user(owner).title("Owner root").build();
-        Document doc = Document.builder()
-                .id(docId)
-                .user(owner)
-                .title("Nested collaborator page")
-                .parent(parent)
-                .siblingOrderKey("a1")
-                .build();
-
-        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.resolveSpace(doc)).thenReturn(null);
-        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
-
-        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
-        // The Private table holds the caller's own pages only; a collaborator's position
-        // belongs to the Shared namespace, which the section listing owns.
-        verifyNoInteractions(userDocumentOrderRepository);
-        verifyNoInteractions(userSharedOrderRepository);
-    }
-
-    @Test
     void move_nestedToRoot_recreatesOrderForCollaborators() {
         UUID docId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
         UUID collaboratorId = UUID.randomUUID();
 
         Document parent =
-                Document.builder().id(parentId).user(user).title("Parent").build();
+                Document.builder().id(parentId).creator(user).title("Parent").build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Doc")
                 .parent(parent)
                 .siblingOrderKey("a1")
@@ -884,6 +933,41 @@ class DocumentTreeServiceTest {
 
         // Un-parenting removes the ancestor chain that justified any NO_ACCESS breakpoints.
         verify(accessGrantRepository).pruneOrphanedBreakpoints(docId);
+        // The page becomes a standalone root, so the owner's access has to be a real row;
+        // without it the page resolves to nobody once the parent chain is gone.
+        verify(accessGrantSyncService).upsertUserGrant(doc, user, DocumentAccessLevel.OWNER, user);
+    }
+
+    @Test
+    void move_editorUnparentsAnotherOwnersPrivateNestedPage_throwsForbidden() {
+        UUID docId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+
+        Document parent =
+                Document.builder().id(parentId).creator(user).title("Parent").build();
+        Document doc = Document.builder()
+                .id(docId)
+                .creator(user)
+                .title("Doc")
+                .parent(parent)
+                .siblingOrderKey("a1")
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        // The page is inherited from the owner's tree: edit access is not ownership.
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.EDIT);
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null)));
+
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        assertNotNull(doc.getParent());
+        verify(accessGrantSyncService, never()).upsertUserGrant(any(), any(), any(), any());
+        verify(documentRepository, never()).saveAndFlush(any(Document.class));
+        verifyNoInteractions(userDocumentOrderRepository);
     }
 
     @Test
@@ -895,7 +979,7 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -904,7 +988,7 @@ class DocumentTreeServiceTest {
         DocumentMoveRequest request = new DocumentMoveRequest(null, null, null);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
-        when(permissionService.requireReadAccess(userId, docId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+        when(sharedSectionService.isInSection(userId, docId)).thenReturn(true);
 
         ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
@@ -919,14 +1003,14 @@ class DocumentTreeServiceTest {
         // lives in the Shared namespace, which the section tests cover.
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
+                Document.builder().id(prevSiblingId).creator(user).title("Prev").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
@@ -963,16 +1047,16 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
+                Document.builder().id(prevSiblingId).creator(user).title("Prev").build();
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(user).title("Next").build();
+                Document.builder().id(nextSiblingId).creator(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
@@ -1011,16 +1095,16 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document prevSibling =
-                Document.builder().id(prevSiblingId).user(user).title("Prev").build();
+                Document.builder().id(prevSiblingId).creator(user).title("Prev").build();
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(user).title("Next").build();
+                Document.builder().id(nextSiblingId).creator(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
@@ -1057,14 +1141,14 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document nextSibling =
-                Document.builder().id(nextSiblingId).user(user).title("Next").build();
+                Document.builder().id(nextSiblingId).creator(user).title("Next").build();
         DocumentMoveRequest request = new DocumentMoveRequest(null, null, nextSiblingId);
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
@@ -1100,14 +1184,14 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .title("Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         Document siblingDoc =
-                Document.builder().id(siblingId).user(user).title("Sibling").build();
+                Document.builder().id(siblingId).creator(user).title("Sibling").build();
 
         UserDocumentOrder siblingOrder = UserDocumentOrder.builder()
                 .user(user)
@@ -1176,10 +1260,11 @@ class DocumentTreeServiceTest {
         User otherOwner =
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
-        Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
+        Document doc =
+                Document.builder().id(docId).creator(user).title("My Doc").build();
         Document secretSibling = Document.builder()
                 .id(prevSiblingId)
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Secret")
                 .build();
 
@@ -1198,12 +1283,13 @@ class DocumentTreeServiceTest {
     void move_nestedSiblingReferenceForRootMove_throwsValidationFailed() {
         UUID docId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
-        Document parent = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document parent = Document.builder().id(UUID.randomUUID()).creator(user).build();
 
-        Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
+        Document doc =
+                Document.builder().id(docId).creator(user).title("My Doc").build();
         Document nestedSibling = Document.builder()
                 .id(prevSiblingId)
-                .user(user)
+                .creator(user)
                 .parent(parent)
                 .title("Nested Sibling")
                 .build();
@@ -1213,10 +1299,40 @@ class DocumentTreeServiceTest {
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
         when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(nestedSibling));
+        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(DocumentAccessLevel.OWNER);
 
         ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertEquals("sibling does not belong to root navigation", ex.getMessage());
+    }
+
+    @Test
+    void move_unauthorizedNestedSiblingReference_throwsNotFound() {
+        UUID docId = UUID.randomUUID();
+        UUID prevSiblingId = UUID.randomUUID();
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
+        Document parent =
+                Document.builder().id(UUID.randomUUID()).creator(otherOwner).build();
+
+        Document doc =
+                Document.builder().id(docId).creator(user).title("My Doc").build();
+        Document secretNestedSibling = Document.builder()
+                .id(prevSiblingId)
+                .creator(otherOwner)
+                .parent(parent)
+                .title("Secret")
+                .build();
+
+        DocumentMoveRequest request = new DocumentMoveRequest(null, prevSiblingId, null);
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
+        when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
+        when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId)).thenReturn(Optional.of(secretNestedSibling));
+        when(permissionService.resolveAccess(userId, prevSiblingId)).thenReturn(null);
+
+        ApiException ex = assertThrows(ApiException.class, () -> documentTreeService.move(userId, docId, request));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
     // --- space-root pages ---
@@ -1224,7 +1340,7 @@ class DocumentTreeServiceTest {
     private Document spacePage(UUID id, Space space, String siblingOrderKey) {
         return Document.builder()
                 .id(id)
-                .user(user)
+                .creator(user)
                 .title("Space Page")
                 .space(space)
                 .siblingOrderKey(siblingOrderKey)
@@ -1379,7 +1495,7 @@ class DocumentTreeServiceTest {
         Document parentDoc = spacePage(parentId, space, "a0");
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .parent(parentDoc)
                 .siblingOrderKey("a1")
                 .build();
@@ -1405,7 +1521,7 @@ class DocumentTreeServiceTest {
         Document parentDoc = spacePage(parentId, space, "a0");
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .parent(parentDoc)
                 .siblingOrderKey("a1")
                 .build();
@@ -1435,16 +1551,17 @@ class DocumentTreeServiceTest {
 
         User otherOwner =
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
-        Document doc = Document.builder().id(docId).user(user).title("Mine").build();
+        Document doc = Document.builder().id(docId).creator(user).title("Mine").build();
         Document sibling = Document.builder()
                 .id(siblingId)
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Theirs")
                 .build();
 
         when(documentRepository.findByIdAndDeletedAtIsNull(docId)).thenReturn(Optional.of(doc));
         when(documentRepository.findByIdAndDeletedAtIsNull(siblingId)).thenReturn(Optional.of(sibling));
         when(sharedSectionService.isInSection(userId, docId)).thenReturn(false);
+        when(sharedSectionService.isInSection(userId, siblingId)).thenReturn(true);
         when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(permissionService.resolveAccess(userId, siblingId)).thenReturn(DocumentAccessLevel.VIEW);
 
@@ -1472,19 +1589,19 @@ class DocumentTreeServiceTest {
         Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
         Document parentDoc = Document.builder()
                 .id(parentId)
-                .user(author)
+                .creator(author)
                 .space(space)
                 .siblingOrderKey("a0")
                 .build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(author)
+                .creator(author)
                 .parent(parentDoc)
                 .siblingOrderKey("a1")
                 .build();
         Document child = Document.builder()
                 .id(childId)
-                .user(childAuthor)
+                .creator(childAuthor)
                 .parent(doc)
                 .siblingOrderKey("a0")
                 .build();
@@ -1493,8 +1610,6 @@ class DocumentTreeServiceTest {
         when(permissionService.resolveSpace(doc)).thenReturn(space, (Space) null);
         when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of(child));
-        when(documentRepository.findAllByParent_IdIn(List.of(childId))).thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(userId, docId))
                 .thenReturn(Optional.empty());
@@ -1504,16 +1619,17 @@ class DocumentTreeServiceTest {
         when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(true);
         when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
+        // Detaching from the space leaves a standalone page whose creator is the caller.
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
 
         DocumentResponse response =
                 documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null, true));
 
         assertNull(response.parentId());
         assertEquals(DocumentAccessLevel.OWNER, response.accessLevel());
-        assertEquals(userId, doc.getUser().getId());
-        assertEquals(userId, child.getUser().getId());
+        assertEquals(author.getId(), doc.getCreator().getId());
         assertNull(doc.getParent());
-        verify(documentRepository).saveAll(List.of(child));
+        verify(accessGrantSyncService).upsertUserGrant(eq(doc), eq(user), eq(DocumentAccessLevel.OWNER), eq(user));
         verify(spaceAccessService).requireActiveAdministration(userId, space.getId());
     }
 
@@ -1525,7 +1641,7 @@ class DocumentTreeServiceTest {
         Document parentDoc = spacePage(parentId, space, "a0");
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .parent(parentDoc)
                 .siblingOrderKey("a1")
                 .build();
@@ -1543,6 +1659,7 @@ class DocumentTreeServiceTest {
         when(accessGrantRepository.findPositiveUserGrantsByDocumentId(docId)).thenReturn(List.of());
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
+        when(permissionService.resolveAccess(userId, docId)).thenReturn(DocumentAccessLevel.OWNER);
 
         DocumentResponse response =
                 documentTreeService.move(userId, docId, new DocumentMoveRequest(null, null, null, true));
@@ -1564,10 +1681,10 @@ class DocumentTreeServiceTest {
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
-                Document.builder().id(docId).user(owner).title("Shared Doc").build();
+                Document.builder().id(docId).creator(owner).title("Shared Doc").build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(owner)
+                .creator(owner)
                 .title("Target Parent")
                 .build();
 
@@ -1593,10 +1710,10 @@ class DocumentTreeServiceTest {
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
-                Document.builder().id(docId).user(owner).title("Shared Doc").build();
+                Document.builder().id(docId).creator(owner).title("Shared Doc").build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(owner)
+                .creator(owner)
                 .title("Public Parent")
                 .build();
 
@@ -1625,9 +1742,12 @@ class DocumentTreeServiceTest {
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
         Document doc =
-                Document.builder().id(docId).user(owner1).title("Shared Doc").build();
-        Document parent =
-                Document.builder().id(parentId).user(owner2).title("Other Tree").build();
+                Document.builder().id(docId).creator(owner1).title("Shared Doc").build();
+        Document parent = Document.builder()
+                .id(parentId)
+                .creator(owner2)
+                .title("Other Tree")
+                .build();
 
         when(permissionService.requireEditAccess(userId, docId)).thenReturn(doc);
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
@@ -1650,10 +1770,11 @@ class DocumentTreeServiceTest {
         User otherOwner =
                 User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
 
-        Document doc = Document.builder().id(docId).user(user).title("My Doc").build();
+        Document doc =
+                Document.builder().id(docId).creator(user).title("My Doc").build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Collaborator Parent")
                 .build();
 
@@ -1661,7 +1782,6 @@ class DocumentTreeServiceTest {
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
         when(documentRepository.findByIdAndDeletedAtIsNull(parentId)).thenReturn(Optional.of(parent));
         when(documentRepository.findMaxSiblingOrderKey(parentId, docId)).thenReturn(Optional.empty());
-        when(documentRepository.findAllByParent_IdIn(List.of(docId))).thenReturn(List.of());
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(documentRepository.existsNonTrashedChildrenByParentId(docId)).thenReturn(false);
         when(accessGrantRepository.existsPositiveGrantByDocumentId(docId)).thenReturn(false);
@@ -1671,7 +1791,7 @@ class DocumentTreeServiceTest {
                 documentTreeService.move(userId, docId, new DocumentMoveRequest(parentId, null, null));
 
         assertEquals(parentId, response.parentId());
-        assertEquals(otherOwner.getId(), doc.getUser().getId());
+        assertEquals(userId, doc.getCreator().getId());
     }
 
     @Test
@@ -1683,13 +1803,13 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .space(space)
                 .title("Page A")
                 .build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(user)
+                .creator(user)
                 .space(space)
                 .title("Page B")
                 .build();
@@ -1722,13 +1842,13 @@ class DocumentTreeServiceTest {
 
         Document parent = Document.builder()
                 .id(parentId)
-                .user(parentAuthor)
+                .creator(parentAuthor)
                 .space(space)
                 .title("Page B")
                 .build();
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .parent(parent)
                 .title("Page A")
                 .build();
@@ -1747,10 +1867,10 @@ class DocumentTreeServiceTest {
 
         assertEquals(parentId, response.parentId());
         // Reordering must not graft the page into the parent author's tree.
-        assertEquals(userId, doc.getUser().getId());
+        assertEquals(userId, doc.getCreator().getId());
         verify(spaceAccessService, never()).load(any(), any());
         verify(accessGrantRepository, never()).pruneOrphanedBreakpoints(docId);
-        verify(userDocumentOrderRepository, never()).deleteByUser_IdAndDocument_Id(any(), eq(docId));
+        verify(userDocumentOrderRepository, never()).deleteByDocument_Id(docId);
     }
 
     @Test
@@ -1768,13 +1888,13 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(author)
+                .creator(author)
                 .space(space)
                 .title("Page A")
                 .build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(parentAuthor)
+                .creator(parentAuthor)
                 .space(space)
                 .title("Page B")
                 .build();
@@ -1794,13 +1914,13 @@ class DocumentTreeServiceTest {
 
         assertEquals(parentId, response.parentId());
         // In a space user_id is author attribution, not an ownership grant to transfer.
-        assertEquals(author.getId(), doc.getUser().getId());
+        assertEquals(author.getId(), doc.getCreator().getId());
         assertNull(doc.getSpace());
         verify(documentRepository, never()).findAllByParent_IdIn(any());
         verify(documentRepository, never()).findAncestorChainIds(any());
         verify(accessGrantRepository, never()).deleteDenyInSubtreeForUser(any(), any());
         verify(accessGrantRepository, never()).pruneOrphanedBreakpoints(any());
-        verify(userDocumentOrderRepository, never()).deleteByUser_IdAndDocument_Id(any(), any());
+        verify(userDocumentOrderRepository, never()).deleteByDocument_Id(any());
         verifyNoInteractions(spaceAccessService);
     }
 
@@ -1813,13 +1933,13 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .space(space)
                 .title("Page A")
                 .build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(user)
+                .creator(user)
                 .space(space)
                 .title("Page B")
                 .build();
@@ -1849,13 +1969,13 @@ class DocumentTreeServiceTest {
 
         Document doc = Document.builder()
                 .id(docId)
-                .user(user)
+                .creator(user)
                 .space(space1)
                 .title("Page 1")
                 .build();
         Document parent = Document.builder()
                 .id(parentId)
-                .user(user)
+                .creator(user)
                 .space(space2)
                 .title("Page 2")
                 .build();

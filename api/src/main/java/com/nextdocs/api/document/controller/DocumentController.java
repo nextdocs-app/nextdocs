@@ -66,12 +66,10 @@ public class DocumentController {
             summary = "List documents",
             description = "Returns a paged list of documents filtered by parentId, scope, and trashed. "
                     + "Use parentId=root for root-level documents, or parentId=<UUID> for direct children. "
-                    + "Use scope=private for unshared owned documents, scope=shared for shared documents, "
+                    + "Use scope=private (with parentId=root) for unshared owned roots, "
+                    + "scope=shared (with parentId=root) for the caller's Shared section in personal drag order, "
                     + "scope=space together with spaceId for the root pages of one space, "
-                    + "or scope=all for all owned documents. With parentId=root, scope=shared "
-                    + "returns the caller's Shared section in their own drag order, so sort is "
-                    + "ignored; without parentId it is the flat shared view (nested pages "
-                    + "included) and sort applies. Use trashed=true for trash.",
+                    + "or scope=all for every page the caller can reach. Use trashed=true for trash.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

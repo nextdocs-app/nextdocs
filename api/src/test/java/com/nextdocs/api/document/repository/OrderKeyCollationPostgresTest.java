@@ -154,7 +154,7 @@ class OrderKeyCollationPostgresTest {
 
     private void insertDoc(UUID ownerId, String siblingOrderKey) throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, "
+                "INSERT INTO documents (id, created_by, workspace_id, title, general_access_mode, "
                         + "link_access_level, workspace_access_mode, workspace_access_level, sibling_order_key, "
                         + "created_at, updated_at) "
                         + "VALUES (?, ?, (SELECT workspace_id FROM workspace_members WHERE user_id = ?), ?, "

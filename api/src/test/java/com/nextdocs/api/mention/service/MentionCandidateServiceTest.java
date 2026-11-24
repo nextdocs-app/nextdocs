@@ -102,9 +102,7 @@ class MentionCandidateServiceTest {
         // A signed-in member may reach a standalone private page only through a COMMENT
         // link: that is enough to comment, but not to enumerate member names and emails.
         when(permissionService.requireCommentAccess(callerId, documentId)).thenReturn(commentAccess());
-        doThrow(new ApiException(ErrorCode.NOT_FOUND))
-                .when(permissionService)
-                .requireIdentityGrantForRoster(callerId, document);
+        doThrow(new ApiException(ErrorCode.NOT_FOUND)).when(permissionService).requireRosterAccess(callerId, document);
 
         ApiException error =
                 assertThrows(ApiException.class, () -> candidateService.search(callerId, documentId, "", 20));

@@ -10,13 +10,10 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.SharedDocumentCandidate;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
-import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -24,7 +21,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -41,13 +37,18 @@ public class DocumentListQueryHelper {
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
-    private final UserSharedOrderRepository userSharedOrderRepository;
     private final SharedSectionService sharedSectionService;
     private final DocumentProperties documentProperties;
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
 
     private static final Set<String> KNOWN_SCOPES = Set.of("all", "private", "shared", "space");
+    private static final Map<String, String> NATIVE_SORT_COLUMNS = Map.of(
+            "updatedAt", "updated_at",
+            "createdAt", "created_at",
+            "title", "title",
+            "siblingOrderKey", "sibling_order_key",
+            "id", "id");
 
     @Transactional(readOnly = true)
     public Page<DocumentResponse> list(
@@ -155,6 +156,7 @@ public class DocumentListQueryHelper {
             Map<UUID, Long> childCounts = fetchChildCounts(docIds);
             Set<UUID> collaboratorDocIds =
                     new HashSet<>(accessGrantRepository.findDocumentIdsWithPositiveGrants(docIds));
+            Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
 
             List<DocumentResponse> responses = rows.getContent().stream()
                     .map(r -> {
@@ -169,7 +171,7 @@ public class DocumentListQueryHelper {
                                 orderKey,
                                 hasChildren,
                                 hasCollaborators,
-                                DocumentAccessLevel.OWNER,
+                                accessLevels.get(doc.getId()),
                                 null,
                                 null);
                     })
@@ -221,12 +223,7 @@ public class DocumentListQueryHelper {
         }
 
         int total = entries.size();
-        // Spring always supplies a pageable; an explicitly unpaged request is the only
-        // case without a window to slice, and then the whole section is the page.
-        int start = pageable.isUnpaged() ? 0 : (int) Math.min(pageable.getOffset(), total);
-        int size = pageable.isUnpaged() ? total : pageable.getPageSize();
-        int end = Math.min(start + size, total);
-        List<SharedEntry> pageEntries = entries.subList(start, end);
+        List<SharedEntry> pageEntries = pageSlice(entries, pageable);
         if (pageEntries.isEmpty()) {
             return new PageImpl<>(List.of(), pageable, total);
         }
@@ -372,93 +369,80 @@ public class DocumentListQueryHelper {
         String normalizedScope =
                 scope != null && !scope.isBlank() ? scope.trim().toLowerCase() : "all";
 
-        if ("private".equals(normalizedScope)) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "scope=private is only supported for root documents.");
+        if ("private".equals(normalizedScope) || "shared".equals(normalizedScope)) {
+            throw new ApiException(
+                    ErrorCode.VALIDATION_FAILED, "scope=" + normalizedScope + " is only supported for root documents.");
         }
 
-        if ("shared".equals(normalizedScope)) {
-            // Same two-phase shape as the shared roots: every candidate's effective access
-            // is resolved before pagination, so the scan fetches metadata only and the
-            // requested page's entities are loaded after the page is chosen.
-            List<SharedDocumentCandidate> candidates = documentRepository.findSharedWithUserId(userId);
-            if (candidates.isEmpty()) {
-                return new PageImpl<>(List.of(), effectivePageable, 0);
-            }
+        // The native query takes SQL column names, and the client controls the sort, so
+        // map to a fixed allowlist instead of splicing its property name into the SQL.
+        Sort sqlSort = Sort.by(effectivePageable.getSort().stream()
+                .filter(order -> NATIVE_SORT_COLUMNS.containsKey(order.getProperty()))
+                .map(order -> order.withProperty(NATIVE_SORT_COLUMNS.get(order.getProperty())))
+                .toList());
+        Pageable sqlPageable = PageRequest.of(
+                effectivePageable.getPageNumber(),
+                effectivePageable.getPageSize(),
+                sqlSort.isSorted()
+                        ? sqlSort
+                        : Sort.by(Sort.Order.desc("updated_at"), Sort.Order.desc("created_at"), Sort.Order.asc("id")));
+        Page<Object[]> page = documentRepository.findReachableDocuments(userId, sqlPageable);
+        Map<UUID, DocumentAccessLevel> accessLevels = new HashMap<>();
+        List<UUID> pageIds = page.getContent().stream()
+                .map(row -> {
+                    UUID id = (UUID) row[0];
+                    accessLevels.put(id, DocumentAccessLevel.valueOf(row[1].toString()));
+                    return id;
+                })
+                .toList();
 
-            List<UUID> candidateIds =
-                    candidates.stream().map(SharedDocumentCandidate::id).toList();
-            Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, candidateIds);
-            List<SharedDocumentCandidate> docs = candidates.stream()
-                    .filter(candidate -> accessLevels.containsKey(candidate.id()))
-                    .toList();
-            if (docs.isEmpty()) {
-                return new PageImpl<>(List.of(), effectivePageable, 0);
-            }
-
-            Set<UUID> parentIds = docs.stream()
-                    .map(SharedDocumentCandidate::parentId)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toSet());
-            Map<UUID, DocumentAccessLevel> parentAccess = fetchAccessLevels(userId, parentIds);
-
-            List<UUID> rootAndFloatedDocIds = docs.stream()
-                    .filter(candidate -> candidate.parentId() == null || parentAccess.get(candidate.parentId()) == null)
-                    .map(SharedDocumentCandidate::id)
-                    .toList();
-            Map<UUID, String> userOrderKeys = fetchSharedOrderKeys(userId, rootAndFloatedDocIds);
-
-            List<SharedListingRow> rows = docs.stream()
-                    .map(candidate -> {
-                        boolean isRootForUser =
-                                candidate.parentId() == null || parentAccess.get(candidate.parentId()) == null;
-                        String orderKey =
-                                isRootForUser ? userOrderKeys.get(candidate.id()) : candidate.siblingOrderKey();
-                        return new SharedListingRow(
-                                candidate.id(),
-                                candidate.title(),
-                                candidate.createdAt(),
-                                candidate.updatedAt(),
-                                orderKey);
-                    })
-                    .toList();
-
-            return toSharedPage(paginateRows(rows, effectivePageable), accessLevels);
+        Map<UUID, Document> documentsById = new HashMap<>();
+        for (Document document : documentRepository.findAllById(pageIds)) {
+            documentsById.put(document.getId(), document);
         }
+        List<Document> readableDocs = pageIds.stream()
+                .map(documentsById::get)
+                .filter(Objects::nonNull)
+                .toList();
 
-        Page<Document> page = documentRepository.findAllByUser_IdAndDeletedAtIsNull(userId, effectivePageable);
-        List<Document> docs = page.getContent();
-        if (docs.isEmpty()) {
-            return new PageImpl<>(List.of(), effectivePageable, page.getTotalElements());
+        List<UUID> pageDocumentIds = readableDocs.stream().map(Document::getId).toList();
+        Map<UUID, Long> childCounts = fetchChildCounts(pageDocumentIds);
+        Set<UUID> collaboratorDocIds = fetchCollaboratorDocIds(pageDocumentIds);
+        Map<UUID, String> rootOrderKeys = fetchRootOrderKeys(userId, readableDocs);
+
+        List<DocumentResponse> responses = readableDocs.stream()
+                .map(doc -> {
+                    boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
+                    boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
+                    // A root page inside a space uses the space's shared key; a Private/Shared
+                    // root uses the caller's personal navigation key.
+                    String orderKey = doc.getParent() != null
+                            ? doc.getSiblingOrderKey()
+                            : doc.getSpace() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
+                    UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
+
+                    return DocumentResponses.of(
+                            doc,
+                            parentDocId,
+                            orderKey,
+                            hasChildren,
+                            hasCollaborators,
+                            accessLevels.get(doc.getId()),
+                            null,
+                            null);
+                })
+                .toList();
+        return new PageImpl<>(responses, effectivePageable, page.getTotalElements());
+    }
+
+    /** The requested window of an already ordered, fully resolved list. */
+    private static <T> List<T> pageSlice(List<T> items, Pageable pageable) {
+        if (pageable.isUnpaged()) {
+            return items;
         }
-
-        List<UUID> docIds = docs.stream().map(Document::getId).toList();
-        Map<UUID, Long> childCounts = fetchChildCounts(docIds);
-        Set<UUID> collaboratorDocIds = new HashSet<>(accessGrantRepository.findDocumentIdsWithPositiveGrants(docIds));
-        Map<UUID, String> rootOrderKeys = fetchRootOrderKeys(userId, docs);
-        // The "mine" scope is every page the caller owns, space pages included; an
-        // archived space caps those at VIEW like every other projection.
-        Map<UUID, DocumentAccessLevel> accessLevels = fetchAccessLevels(userId, docIds);
-
-        return page.map(doc -> {
-            boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
-            boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
-            // A root page inside a space uses the space's shared key; a Private/Shared
-            // root uses the caller's personal navigation key.
-            String orderKey = doc.getParent() != null
-                    ? doc.getSiblingOrderKey()
-                    : doc.getSpace() != null ? doc.getSiblingOrderKey() : rootOrderKeys.get(doc.getId());
-            UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
-
-            return DocumentResponses.of(
-                    doc,
-                    parentDocId,
-                    orderKey,
-                    hasChildren,
-                    hasCollaborators,
-                    accessLevels.getOrDefault(doc.getId(), null),
-                    null,
-                    null);
-        });
+        int start = (int) Math.min(pageable.getOffset(), items.size());
+        int end = Math.min(start + pageable.getPageSize(), items.size());
+        return items.subList(start, end);
     }
 
     private Map<UUID, Long> fetchChildCounts(Collection<UUID> docIds) {
@@ -503,141 +487,11 @@ public class DocumentListQueryHelper {
         return orderKeys;
     }
 
-    /** The flat Shared listing is the search/cache view, but its order is still personal. */
-    private Map<UUID, String> fetchSharedOrderKeys(UUID userId, Collection<UUID> docIds) {
-        if (docIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, String> orderKeys = new HashMap<>();
-        for (Object[] row : userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, docIds)) {
-            orderKeys.put((UUID) row[0], (String) row[1]);
-        }
-        return orderKeys;
-    }
-
     private Map<UUID, String> fetchRootOrderKeys(UUID userId, List<Document> docs) {
         List<UUID> rootIds = docs.stream()
                 .filter(document -> document.getParent() == null && document.getSpace() == null)
                 .map(Document::getId)
                 .toList();
         return fetchUserOrderKeys(userId, rootIds);
-    }
-
-    /** Fields a shared listing can filter, sort and paginate on before its page rows load. */
-    private record SharedListingRow(
-            UUID id, String title, OffsetDateTime createdAt, OffsetDateTime updatedAt, String orderKey) {}
-
-    private Map<UUID, Document> loadDocuments(Collection<SharedListingRow> rows) {
-        List<UUID> docIds = rows.stream().map(SharedListingRow::id).toList();
-        if (docIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<UUID, Document> documents = new HashMap<>();
-        for (Document document : documentRepository.findAllById(docIds)) {
-            documents.put(document.getId(), document);
-        }
-        return documents;
-    }
-
-    /** Loads the requested page's full rows and builds their list projections. */
-    private Page<DocumentResponse> toSharedPage(
-            Page<SharedListingRow> candidatePage, Map<UUID, DocumentAccessLevel> accessLevels) {
-        Map<UUID, Document> documents = loadDocuments(candidatePage.getContent());
-        List<UUID> docIds =
-                candidatePage.getContent().stream().map(SharedListingRow::id).toList();
-        Map<UUID, Long> childCounts = fetchChildCounts(docIds);
-        Set<UUID> collaboratorDocIds = fetchCollaboratorDocIds(docIds);
-
-        List<DocumentResponse> responses = candidatePage.getContent().stream()
-                .map(row -> {
-                    Document doc = documents.get(row.id());
-                    if (doc == null) {
-                        return null;
-                    }
-                    boolean hasChildren = childCounts.getOrDefault(doc.getId(), 0L) > 0;
-                    boolean hasCollaborators = collaboratorDocIds.contains(doc.getId());
-                    UUID parentDocId = doc.getParent() != null ? doc.getParent().getId() : null;
-
-                    return DocumentResponses.of(
-                            doc,
-                            parentDocId,
-                            row.orderKey(),
-                            hasChildren,
-                            hasCollaborators,
-                            accessLevels.getOrDefault(row.id(), null),
-                            null,
-                            null);
-                })
-                .filter(Objects::nonNull)
-                .toList();
-        return new PageImpl<>(responses, candidatePage.getPageable(), candidatePage.getTotalElements());
-    }
-
-    private static Page<SharedListingRow> paginateRows(List<SharedListingRow> items, Pageable pageable) {
-        if (pageable == null || pageable.isUnpaged()) {
-            return new PageImpl<>(items, Pageable.unpaged(), items.size());
-        }
-        List<SharedListingRow> sorted = items;
-        if (pageable.getSort().isSorted()) {
-            Comparator<SharedListingRow> comparator = comparatorFor(pageable.getSort());
-            if (comparator != null) {
-                sorted = items.stream().sorted(comparator).toList();
-            }
-        }
-        int total = sorted.size();
-        int start = (int) Math.min(pageable.getOffset(), total);
-        int end = Math.min(start + pageable.getPageSize(), total);
-        List<SharedListingRow> pageContent = sorted.subList(start, end);
-        return new PageImpl<>(pageContent, pageable, total);
-    }
-
-    private static Comparator<SharedListingRow> comparatorFor(Sort sort) {
-        if (sort == null || sort.isUnsorted()) {
-            return null;
-        }
-        Comparator<SharedListingRow> comparator = null;
-        for (Sort.Order order : sort) {
-            Comparator<SharedListingRow> step = comparatorForProperty(order);
-            if (step != null) {
-                comparator = comparator == null ? step : comparator.thenComparing(step);
-            }
-        }
-        return comparator;
-    }
-
-    private static Comparator<SharedListingRow> comparatorForProperty(Sort.Order order) {
-        String property = order.getProperty();
-        if (property == null) {
-            return null;
-        }
-        return switch (property) {
-            case "title" -> Comparator.comparing(SharedListingRow::title, stringComparator(order));
-            case "updatedAt" -> Comparator.comparing(SharedListingRow::updatedAt, valueComparator(order));
-            case "createdAt" -> Comparator.comparing(SharedListingRow::createdAt, valueComparator(order));
-            // Shared listings are active-only, so every row has a null deletedAt.
-            case "deletedAt" -> (left, right) -> 0;
-            case "id" -> Comparator.comparing(SharedListingRow::id, valueComparator(order));
-            case "orderKey", "siblingOrderKey" ->
-                Comparator.comparing(SharedListingRow::orderKey, stringComparator(order));
-            default -> null;
-        };
-    }
-
-    private static <T extends Comparable<T>> Comparator<T> valueComparator(Sort.Order order) {
-        Comparator<T> natural = Comparator.naturalOrder();
-        Comparator<T> base = order.isDescending() ? natural.reversed() : natural;
-        return order.getNullHandling() == Sort.NullHandling.NULLS_FIRST
-                ? Comparator.nullsFirst(base)
-                : Comparator.nullsLast(base);
-    }
-
-    private static Comparator<String> stringComparator(Sort.Order order) {
-        Comparator<String> natural = order.isIgnoreCase() || "title".equals(order.getProperty())
-                ? String.CASE_INSENSITIVE_ORDER
-                : Comparator.naturalOrder();
-        Comparator<String> base = order.isDescending() ? natural.reversed() : natural;
-        return order.getNullHandling() == Sort.NullHandling.NULLS_FIRST
-                ? Comparator.nullsFirst(base)
-                : Comparator.nullsLast(base);
     }
 }

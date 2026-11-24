@@ -103,6 +103,9 @@ class DocumentServiceIconCoverTest {
     private DocumentService documentService;
 
     @Mock
+    private AccessGrantSyncService accessGrantSyncService;
+
+    @Mock
     private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
 
     @Mock
@@ -124,6 +127,7 @@ class DocumentServiceIconCoverTest {
                 accessGrantRepository,
                 userDocumentOrderRepository,
                 userSharedOrderRepository,
+                accessGrantSyncService,
                 sharedSectionService,
                 userRepository,
                 documentProperties,
@@ -150,7 +154,6 @@ class DocumentServiceIconCoverTest {
                 null,
                 "Doc",
                 "AQID",
-                "Alice",
                 null,
                 null,
                 null,
@@ -185,7 +188,7 @@ class DocumentServiceIconCoverTest {
         when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         DocumentService.CreateDocumentResult result = documentService.create(
-                userId, new DocumentCreateRequest(null, "Doc", "AQID", "Alice", null, null, null, null, null, null));
+                userId, new DocumentCreateRequest(null, "Doc", "AQID", null, null, null, null, null, null));
 
         ArgumentCaptor<byte[]> state = ArgumentCaptor.forClass(byte[].class);
         verify(yhubClient)
@@ -201,7 +204,7 @@ class DocumentServiceIconCoverTest {
         when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         documentService.create(
-                userId, new DocumentCreateRequest(null, "Doc", "AAA=", "Alice", null, null, null, null, null, null));
+                userId, new DocumentCreateRequest(null, "Doc", "AAA=", null, null, null, null, null, null));
 
         // A Yjs v1 update for an empty document is two bytes; the first socket
         // connection creates that room, so creation does not depend on Yhub.
@@ -219,8 +222,7 @@ class DocumentServiceIconCoverTest {
         ApiException error = assertThrows(
                 ApiException.class,
                 () -> documentService.create(
-                        userId,
-                        new DocumentCreateRequest(null, "Doc", "AQID", "Alice", null, null, null, null, null, null)));
+                        userId, new DocumentCreateRequest(null, "Doc", "AQID", null, null, null, null, null, null)));
 
         assertEquals(ErrorCode.SERVICE_UNAVAILABLE, error.getErrorCode());
     }
@@ -230,16 +232,7 @@ class DocumentServiceIconCoverTest {
         UUID userId = UUID.randomUUID();
         when(userRepository.findById(userId)).thenReturn(Optional.of(owner(userId)));
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null,
-                "Doc",
-                "AQID",
-                null,
-                null,
-                null,
-                null,
-                null,
-                new PageIconRequest("builtin", "no-such-icon"),
-                null);
+                null, "Doc", "AQID", null, null, null, null, new PageIconRequest("builtin", "no-such-icon"), null);
 
         ApiException ex = assertThrows(ApiException.class, () -> documentService.create(userId, request));
 
@@ -265,7 +258,6 @@ class DocumentServiceIconCoverTest {
                 documentId,
                 new DocumentUpdateRequest(
                         null,
-                        null,
                         new PageIconRequest("BUILTIN", "add-circle-bold"),
                         new DocumentCoverRequest(null, null, null)));
 
@@ -288,7 +280,7 @@ class DocumentServiceIconCoverTest {
                         userId,
                         documentId,
                         new DocumentUpdateRequest(
-                                null, null, null, new DocumentCoverRequest("LINK", "http://example.com/c.png", null))));
+                                null, null, new DocumentCoverRequest("LINK", "http://example.com/c.png", null))));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -307,7 +299,7 @@ class DocumentServiceIconCoverTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         DocumentResponse response =
-                documentService.update(userId, documentId, new DocumentUpdateRequest("Renamed", null, null, null));
+                documentService.update(userId, documentId, new DocumentUpdateRequest("Renamed", null, null));
 
         assertEquals("Renamed", response.title());
         assertEquals(new DocumentIconResponse("emoji", "📝"), response.icon());
@@ -325,7 +317,6 @@ class DocumentServiceIconCoverTest {
         DocumentResponse response = documentService.updatePublic(
                 documentId,
                 new DocumentUpdateRequest(
-                        null,
                         null,
                         new PageIconRequest("EMOJI", "🚀"),
                         new DocumentCoverRequest("LINK", "https://example.com/c.gif", null)));
@@ -346,7 +337,7 @@ class DocumentServiceIconCoverTest {
     private static Document activeDoc(UUID ownerId, UUID documentId) {
         return Document.builder()
                 .id(documentId)
-                .user(owner(ownerId))
+                .creator(owner(ownerId))
                 .title("Doc")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))

@@ -58,6 +58,7 @@ public class DocumentTreeService {
     private final SharedSectionService sharedSectionService;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final AccessGrantSyncService accessGrantSyncService;
     private final SpaceAccessService spaceAccessService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -222,47 +223,24 @@ public class DocumentTreeService {
             doc.setSiblingOrderKey(newSiblingOrderKey);
             saved = documentRepository.saveAndFlush(doc);
         } else {
-            // A destination inside a space keeps user_id as author attribution: the space
-            // root is the permission anchor, so the move must not rewrite the author or
-            // prune page-level NO_ACCESS breakpoints against it.
+            // A destination inside a space keeps the creator attribution: the space is
+            // the permission anchor, so the move must not rewrite the author or prune
+            // page-level NO_ACCESS breakpoints against it.
             boolean joinsSpace = permissionService.resolveSpace(newParent) != null;
-            User previousOwner = doc.getUser();
-            if (!joinsSpace && !newParent.getUser().getId().equals(doc.getUser().getId())) {
-                // Location authority: a subtree grafted into another user's standalone
-                // tree joins that tree - the host becomes the owner of the moved document
-                // and everything beneath it, so access keeps flowing from the new parent
-                // chain.
-                adoptHostTreeOwnership(doc, newParent.getUser());
-            }
 
-            // A page that leaves its space must not carry page audience rules into a
-            // different container: those rules replaced this space's baseline.
-            Space previousSpace = permissionService.resolveSpace(doc);
-            Space destinationSpace = permissionService.resolveSpace(newParent);
-            if (previousSpace != null
-                    && (destinationSpace == null || !previousSpace.getId().equals(destinationSpace.getId()))) {
-                permissionService.removeSpaceAudienceRules(documentId);
-            }
-
-            doc.setParent(newParent);
-            doc.setSiblingOrderKey(newSiblingOrderKey);
             // A space anchors at a root page only (V24's chk_documents_space_root), so a
             // page moved under another page drops its own anchor. If the destination is in
             // the same space, that space still anchors the page through the new ancestor.
+            doc.setParent(newParent);
+            doc.setSiblingOrderKey(newSiblingOrderKey);
             doc.setSpace(null);
             adoptHostTreeWorkspace(doc, newParent.getWorkspace());
             saved = documentRepository.saveAndFlush(doc);
 
             if (!joinsSpace) {
-                // Reparenting to a new parent: delete the Private root order rows of the
-                // previous and the new host. A collaborator's position lives in
-                // user_shared_document_orders (V44) and is never touched here: direct
-                // collaborators still see this document floated in their Shared section.
-                userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(
-                        newParent.getUser().getId(), documentId);
-                if (!previousOwner.getId().equals(newParent.getUser().getId())) {
-                    userDocumentOrderRepository.deleteByUser_IdAndDocument_Id(previousOwner.getId(), documentId);
-                }
+                // A nested page has no Private root order for any user. Shared orders
+                // live in their own table and remain intact.
+                userDocumentOrderRepository.deleteByDocument_Id(documentId);
 
                 // Collect new-ancestor owners in fixed queries instead of one lazy
                 // parent load plus one delete CTE per level.
@@ -270,10 +248,10 @@ public class DocumentTreeService {
                 ancestorIds.add(newParent.getId());
                 ancestorIds.addAll(documentRepository.findAncestorChainIds(newParent.getId()));
                 Set<UUID> ownerIds = new HashSet<>();
-                ownerIds.add(newParent.getUser().getId());
-                for (Document ancestor : documentRepository.findAllWithUserByIdIn(ancestorIds)) {
-                    if (ancestor.getUser() != null) {
-                        ownerIds.add(ancestor.getUser().getId());
+                for (AccessGrant ancestorGrant : accessGrantRepository.findUserGrantsByDocumentIdIn(ancestorIds)) {
+                    if (ancestorGrant.getEffect() == AccessGrantEffect.ALLOW
+                            && ancestorGrant.getAccessLevel() == DocumentAccessLevel.OWNER) {
+                        ownerIds.add(ancestorGrant.getUser().getId());
                     }
                 }
                 for (UUID ownerId : ownerIds) {
@@ -295,6 +273,11 @@ public class DocumentTreeService {
      * space page. The key is the caller's own navigation, so only a page the caller owns
      * enters this namespace: a collaborator's position lives in the Shared table, and a
      * private row for them would reopen the invariant V44's migration establishes.
+     *
+     * <p>A Private page dragged to the root is detached from its tree and becomes the
+     * caller's own standalone root, so only an OWNER may do it and the page gets the
+     * explicit OWNER grant every root needs (V50). A Shared-section page never reaches
+     * that write: the section check below answers it first.
      */
     private DocumentResponse reorderPrivateRoots(
             UUID userId, UUID documentId, Document targetDoc, DocumentMoveRequest request, boolean rebuildFirst) {
@@ -313,7 +296,7 @@ public class DocumentTreeService {
             // only active space administrators may move content out of the space.
             spaceAccessService.requireActiveAdministration(userId, targetSpace.getId());
         }
-        if (targetSpace == null && !targetDoc.getUser().getId().equals(userId)) {
+        if (targetSpace == null && sharedSectionService.isInSection(userId, documentId)) {
             // Answer an unreadable page as missing before naming the namespace, so this
             // cannot confirm a stranger's document exists.
             permissionService.requireReadAccess(userId, documentId);
@@ -321,6 +304,16 @@ public class DocumentTreeService {
         }
         permissionService.requireEditAccess(userId, documentId);
         Document doc = targetDoc;
+
+        // Detaching a Private page to the root changes who owns it, so it needs the same
+        // authority as grafting it under another document. An editor dropping it here
+        // would pull the page out of the owner's tree and into their own; a Shared-section
+        // page is rejected above instead of reaching this gate.
+        if (doc.getParent() != null
+                && targetSpace == null
+                && permissionService.resolveAccess(userId, documentId) != DocumentAccessLevel.OWNER) {
+            throw new ApiException(ErrorCode.FORBIDDEN, "Only document owners may detach a page to the root.");
+        }
 
         if (rebuildFirst) {
             reindexUserOrders(userId);
@@ -377,14 +370,13 @@ public class DocumentTreeService {
         User user = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
 
         if (doc.getParent() != null) {
-            if (targetSpace != null) {
-                // Space content belongs to the container, not to the author row. Once the
-                // page becomes standalone the administrator performing the detach owns
-                // it, and descendants follow so access keeps flowing from the new root
-                // instead of reverting to authors.
-                adoptHostTreeOwnership(doc, user);
-                permissionService.removeSpaceAudienceRules(documentId);
-            }
+            // Either a space detach or a Private unparent ends the ancestor chain, so the
+            // page becomes a standalone root and needs its own OWNER row: resolution is
+            // grants-only (V50), and without it the page would resolve to nobody and
+            // vanish from every listing. Space content belongs to the container, so the
+            // administrator performing the detach owns it; in Private it is the owner who
+            // pulled the page out of their own tree. Descendants inherit from this root.
+            accessGrantSyncService.upsertUserGrant(doc, user, DocumentAccessLevel.OWNER, user);
             doc.setParent(null);
             doc.setSiblingOrderKey(null);
             documentRepository.saveAndFlush(doc);
@@ -406,11 +398,9 @@ public class DocumentTreeService {
 
         boolean hasChildren = documentRepository.existsNonTrashedChildrenByParentId(documentId);
         boolean hasCollaborators = accessGrantRepository.existsPositiveGrantByDocumentId(documentId);
-        Space spaceAfter = permissionService.resolveSpace(doc);
-        DocumentAccessLevel access =
-                (spaceAfter == null && doc.getUser().getId().equals(userId))
-                        ? DocumentAccessLevel.OWNER
-                        : permissionService.resolveAccess(userId, documentId);
+        // Ownership is a level here, not a property of the creator row: a creator who
+        // stepped down must get their stored level back, not OWNER.
+        DocumentAccessLevel access = permissionService.resolveAccess(userId, documentId);
 
         UUID resultParentId = doc.getParent() != null ? doc.getParent().getId() : null;
 
@@ -434,32 +424,9 @@ public class DocumentTreeService {
     }
 
     /**
-     * Transfers ownership of a moved document and all of its descendants to the owner of
-     * the destination tree, keeping the invariant child.user_id == parent.user_id so
-     * ancestor-based access resolution stays authoritative.
+     * Moves a document and all of its descendants into the destination workspace. Page
+     * access stays with the page chain, so only the tenant changes here.
      */
-    private void adoptHostTreeOwnership(Document doc, User hostOwner) {
-        doc.setUser(hostOwner);
-        List<UUID> frontier = List.of(doc.getId());
-        int depth = 0;
-        while (!frontier.isEmpty()) {
-            if (depth >= MAX_TREE_DEPTH) {
-                // Mirrors the depth cap used elsewhere; cycles are prevented by move validation.
-                throw new ApiException(ErrorCode.VALIDATION_FAILED, "Document tree is too deep or contains a cycle.");
-            }
-            List<Document> children = documentRepository.findAllByParent_IdIn(frontier);
-            if (children.isEmpty()) {
-                break;
-            }
-            for (Document child : children) {
-                child.setUser(hostOwner);
-            }
-            documentRepository.saveAll(children);
-            frontier = children.stream().map(Document::getId).toList();
-            depth++;
-        }
-    }
-
     private void adoptHostTreeWorkspace(Document doc, Workspace targetWorkspace) {
         if (targetWorkspace == null
                 || (doc.getWorkspace() != null
@@ -719,17 +686,18 @@ public class DocumentTreeService {
         Document sibling = documentRepository
                 .findByIdAndDeletedAtIsNull(siblingId)
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "Sibling document not found: " + siblingId));
-        if (sibling.getUser().getId().equals(userId)) {
-            if (sibling.getParent() != null) {
-                throw new ApiException(ErrorCode.VALIDATION_FAILED, "sibling does not belong to root navigation");
-            }
-        } else {
-            // Private holds only the caller's own roots: a readable page someone else owns
-            // is a Shared entry, so a Private row for it would reopen the invariant V44's
-            // migration establishes and put a page the caller cannot move in this namespace.
-            if (permissionService.resolveAccess(userId, siblingId) == null) {
-                throw new ApiException(ErrorCode.NOT_FOUND, "Sibling document not found: " + siblingId);
-            }
+        // Private holds only the caller's own roots: a readable page someone else can see
+        // is a Shared entry, so a Private row for it would reopen the invariant V44's
+        // migration establishes. Answer a page the caller cannot read as missing before
+        // naming the namespace, so a stranger's nested page is not confirmed either.
+        if (permissionService.resolveAccess(userId, siblingId) == null) {
+            throw new ApiException(ErrorCode.NOT_FOUND, "Sibling document not found: " + siblingId);
+        }
+        // A nested page is never a root-navigation neighbour.
+        if (sibling.getParent() != null) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "sibling does not belong to root navigation");
+        }
+        if (sharedSectionService.isInSection(userId, siblingId)) {
             throw new ApiException(
                     ErrorCode.VALIDATION_FAILED, "Sibling document is not part of the Private section: " + siblingId);
         }

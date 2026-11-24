@@ -9,7 +9,6 @@ import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.SharedDocumentCandidate;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
@@ -17,8 +16,6 @@ import com.nextdocs.api.space.entity.UserSpaceOrder;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
-import com.nextdocs.api.workspace.entity.WorkspaceMember;
-import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.time.OffsetDateTime;
@@ -33,9 +30,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Guards the crux of the spaces design against the real JPQL: a page filed into a space
- * must disappear from the Private, Shared, and "all roots" listings while every page
- * without a space keeps its place there. Mocked query-helper tests cannot see this,
- * because the predicate lives in the repository query itself.
+ * must disappear from the Private listing while every page without a space keeps its
+ * place there. The "all roots" query resolves effective access in SQL, so it is pinned on
+ * PostgreSQL in RosterVisibilityE2ETest instead. Mocked query-helper tests cannot see
+ * this, because the predicate lives in the repository query itself.
  */
 @SpringBootTest
 class SpaceRootListingPersistenceTest {
@@ -67,7 +65,7 @@ class SpaceRootListingPersistenceTest {
     private Document page(User owner, Space space, String title) {
         return documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .space(space)
                 .workspace(space == null ? null : space.getWorkspace())
                 .title(title)
@@ -77,14 +75,14 @@ class SpaceRootListingPersistenceTest {
     private Document workspacePage(User owner, Workspace workspace, String title) {
         return documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .title(title)
                 .build());
     }
 
     @Test
-    void rootListings_keepSpacePagesOutOfPrivateAndAll() {
+    void privateRootListing_keepsSpacePagesOut() {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("space-listing-" + UUID.randomUUID() + "@example.com")
                 .displayName("Owner")
@@ -100,6 +98,13 @@ class SpaceRootListingPersistenceTest {
 
         Document privatePage = page(owner, null, "Private Page");
         Document spacePage = page(owner, space, "Space Page");
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(privatePage)
+                .user(owner)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build());
 
         List<UUID> privateIds =
                 documentRepository.findPrivateRootDocuments(owner.getId(), PageRequest.of(0, 50)).getContent().stream()
@@ -107,15 +112,9 @@ class SpaceRootListingPersistenceTest {
                         .toList();
         assertThat(privateIds).containsExactly(privatePage.getId());
 
-        List<UUID> allRootIds =
-                documentRepository.findAllRootDocuments(owner.getId(), PageRequest.of(0, 50)).getContent().stream()
-                        .map(row -> ((Document) row[0]).getId())
-                        .toList();
-        assertThat(allRootIds).containsExactly(privatePage.getId());
-
-        // The Shared-section candidate query is pinned against PostgreSQL in
-        // SharedSectionCandidatePostgresTest: it runs resolve_effective_access, which H2
-        // cannot execute. The space's own listing is pinned there for the same reason;
+        // The all-roots and Shared-section candidate queries both resolve access in SQL
+        // with resolve_effective_access, which H2 cannot execute. They are pinned on
+        // PostgreSQL in RosterVisibilityE2ETest and SharedSectionCandidatePostgresTest;
         // the count below is plain SQL.
         assertThat(documentRepository.countBySpace_Id(space.getId())).isEqualTo(1);
     }
@@ -134,20 +133,35 @@ class SpaceRootListingPersistenceTest {
         // listing while the server listed it in Shared: two homes, one document.
         Document workspaceShared = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .workspaceAccessMode(DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS)
                 .title("Handbook")
                 .build());
         Document privateRoot = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .title("Notes")
                 .build());
 
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(workspaceShared)
+                .user(owner)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build());
+        accessGrantRepository.saveAndFlush(AccessGrant.builder()
+                .workspace(workspace)
+                .document(privateRoot)
+                .user(owner)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build());
+
         assertThat(accessGrantRepository.findDocumentIdsWithPositiveGrants(List.of(workspaceShared.getId())))
-                .isEmpty();
+                .containsExactly(workspaceShared.getId());
 
         List<UUID> privateIds =
                 documentRepository.findPrivateRootDocuments(owner.getId(), PageRequest.of(0, 50)).getContent().stream()
@@ -157,64 +171,6 @@ class SpaceRootListingPersistenceTest {
 
         // The Shared-section candidate query needs the PostgreSQL resolver, so
         // SharedSectionCandidatePostgresTest pins that this root is listed once.
-    }
-
-    @Test
-    void sharedListings_keepSpacePagesAndChildrenOutButReturnDirectShares() {
-        User owner = userRepository.saveAndFlush(User.builder()
-                .email("space-shared-owner-" + UUID.randomUUID() + "@example.com")
-                .displayName("Owner")
-                .passwordHash("$2a$12$hash")
-                .build());
-        User viewer = userRepository.saveAndFlush(User.builder()
-                .email("space-shared-viewer-" + UUID.randomUUID() + "@example.com")
-                .displayName("Viewer")
-                .passwordHash("$2a$12$hash")
-                .build());
-        Workspace workspace = workspaceRepository.saveAndFlush(
-                Workspace.builder().name("NextDocs").build());
-        workspaceMemberRepository.saveAndFlush(WorkspaceMember.builder()
-                .workspace(workspace)
-                .user(viewer)
-                .role(WorkspaceRole.MEMBER)
-                .build());
-        Space space = spaceRepository.saveAndFlush(Space.builder()
-                .workspace(workspace)
-                .name("Engineering")
-                .accessMode(SpaceAccessMode.PUBLIC)
-                .everyoneAccessLevel(DocumentAccessLevel.VIEW)
-                .build());
-        spaceMemberRepository.saveAndFlush(SpaceMember.builder()
-                .space(space)
-                .user(viewer)
-                .accessLevel(DocumentAccessLevel.VIEW)
-                .build());
-
-        Document spaceRoot = page(owner, space, "Space Root");
-        Document spaceChild = documentRepository.saveAndFlush(Document.builder()
-                .id(UUID.randomUUID())
-                .user(owner)
-                .workspace(workspace)
-                .parent(spaceRoot)
-                .title("Space Child")
-                .build());
-        Document directShare = page(owner, null, "Direct Share");
-        directShare.setWorkspace(workspace);
-        directShare = documentRepository.saveAndFlush(directShare);
-        accessGrantRepository.saveAndFlush(AccessGrant.builder()
-                .workspace(workspace)
-                .document(directShare)
-                .user(viewer)
-                .effect(AccessGrantEffect.ALLOW)
-                .accessLevel(DocumentAccessLevel.VIEW)
-                .build());
-
-        List<UUID> flatSharedIds = documentRepository.findSharedWithUserId(viewer.getId()).stream()
-                .map(SharedDocumentCandidate::id)
-                .toList();
-
-        assertThat(flatSharedIds).containsExactly(directShare.getId());
-        assertThat(flatSharedIds).doesNotContain(spaceRoot.getId(), spaceChild.getId());
     }
 
     @Test
@@ -270,45 +226,32 @@ class SpaceRootListingPersistenceTest {
     }
 
     @Test
-    void flatSharedCandidates_exposeTheNestedParentId() {
-        User owner = userRepository.saveAndFlush(User.builder()
-                .email("shared-parent-owner-" + UUID.randomUUID() + "@example.com")
-                .displayName("Owner")
-                .passwordHash("$2a$12$hash")
-                .build());
-        User viewer = userRepository.saveAndFlush(User.builder()
-                .email("shared-parent-viewer-" + UUID.randomUUID() + "@example.com")
-                .displayName("Viewer")
+    @Transactional
+    void countSolelyOwnedStandaloneRoots_includesTrashedStandaloneRoots() {
+        User soleOwner = userRepository.saveAndFlush(User.builder()
+                .email("sole-trashed-owner-" + UUID.randomUUID() + "@example.com")
+                .displayName("Sole Owner")
                 .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());
-        workspaceMemberRepository.saveAndFlush(WorkspaceMember.builder()
-                .workspace(workspace)
-                .user(viewer)
-                .role(WorkspaceRole.MEMBER)
-                .build());
-
-        Document parent = workspacePage(owner, workspace, "Parent");
-        Document child = documentRepository.saveAndFlush(Document.builder()
+        Document trashedRoot = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
                 .workspace(workspace)
-                .parent(parent)
-                .title("Child")
+                .creator(soleOwner)
+                .title("Trashed Root")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build());
         accessGrantRepository.saveAndFlush(AccessGrant.builder()
                 .workspace(workspace)
-                .document(child)
-                .user(viewer)
+                .document(trashedRoot)
+                .user(soleOwner)
                 .effect(AccessGrantEffect.ALLOW)
-                .accessLevel(DocumentAccessLevel.VIEW)
+                .accessLevel(DocumentAccessLevel.OWNER)
                 .build());
 
-        List<SharedDocumentCandidate> candidates = documentRepository.findSharedWithUserId(viewer.getId());
-
-        assertThat(candidates).extracting(SharedDocumentCandidate::id).containsExactly(child.getId());
-        assertThat(candidates).extracting(SharedDocumentCandidate::parentId).containsExactly(parent.getId());
+        assertThat(accessGrantRepository.countSolelyOwnedStandaloneRoots(workspace.getId(), soleOwner.getId()))
+                .isEqualTo(1L);
     }
 
     @Test

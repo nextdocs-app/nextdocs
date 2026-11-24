@@ -63,7 +63,7 @@ class AttachmentQuotaPersistenceTest {
                 .build());
         document = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Quota doc")
                 .build());
     }
