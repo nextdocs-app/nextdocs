@@ -106,8 +106,7 @@ async function migrateLocalDocumentToCloud(
     accessToken,
     localDoc.id,
     normalizedTitle,
-    localDoc.result.ydoc,
-    localDoc.result.meta.createdBy ?? null
+    localDoc.result.ydoc
   );
 
   try {
@@ -169,8 +168,7 @@ export async function resolveRootDocumentId(
       accessToken,
       localSnapshot.id,
       normalizedTitle,
-      localSnapshot.ydoc,
-      localSnapshot.meta.createdBy ?? null
+      localSnapshot.ydoc
     );
 
     try {
