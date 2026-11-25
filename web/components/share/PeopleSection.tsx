@@ -27,7 +27,6 @@ interface PeopleSectionProps {
   documentSpace?: DocumentSpaceSummary | null;
   breadcrumbs?: DocumentBreadcrumbItem[];
   accessToken?: string | null;
-  resolveIcon?: (sourceId: string | null, kind: PeopleGroupKind) => DocumentIcon | null | undefined;
   hasEffectivePublicLink: boolean;
   effectiveLinkAction: string;
   recentlyAddedUserIds: ReadonlySet<string>;
@@ -127,14 +126,12 @@ function PeopleGroupBlock({
   accessToken,
   documentSpace,
   breadcrumbs,
-  resolveIcon,
   children,
 }: {
   group: PeopleGroup;
   accessToken?: string | null;
   documentSpace?: DocumentSpaceSummary | null;
   breadcrumbs?: DocumentBreadcrumbItem[];
-  resolveIcon?: (sourceId: string | null, kind: PeopleGroupKind) => DocumentIcon | null | undefined;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -147,11 +144,6 @@ function PeopleGroupBlock({
   const storeIcon = useStoreIcon(group.sourceId, group.kind);
 
   const resolvedIcon = (() => {
-    if (group.icon !== undefined) return group.icon;
-    if (resolveIcon) {
-      const custom = resolveIcon(group.sourceId, group.kind);
-      if (custom !== undefined) return custom;
-    }
     if (breadcrumbs && group.sourceId) {
       if (group.kind === 'document') {
         const crumb = breadcrumbs.find((b) => b.id === group.sourceId);
@@ -221,7 +213,6 @@ export function PeopleSection({
   documentSpace,
   breadcrumbs,
   accessToken,
-  resolveIcon,
   hasEffectivePublicLink,
   effectiveLinkAction,
   recentlyAddedUserIds,
@@ -230,10 +221,6 @@ export function PeopleSection({
 }: PeopleSectionProps) {
   const renderRow = (collab: Collaborator, showSource = collab.userId === currentUserId) => {
     const isSelf = collab.userId === currentUserId;
-    const isDirectOwner = Boolean(collab.owner);
-    // Any inherited grant is overridable here, including an ancestor
-    // full-access grant; only the document's own owner stays locked.
-    const canEditRow = canManageSharing && !isSelf && !isDirectOwner;
     const sourceId = collab.inheritedFromId || (collab.inherited && spaceId ? spaceId : null);
 
     return (
@@ -241,7 +228,8 @@ export function PeopleSection({
         key={collab.userId}
         collab={collab}
         isSelf={isSelf}
-        canEditRow={canEditRow}
+        canManageSharing={canManageSharing}
+        spaceArchived={Boolean(documentSpace?.archived)}
         detail={getPersonDetail(collab, {
           recentlyAddedUserIds,
           showSource,
@@ -271,7 +259,6 @@ export function PeopleSection({
           accessToken={accessToken}
           documentSpace={documentSpace}
           breadcrumbs={breadcrumbs}
-          resolveIcon={resolveIcon}
         >
           {group.people.map((collab) => renderRow(collab, false))}
         </PeopleGroupBlock>

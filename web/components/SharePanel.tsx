@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   documentService,
@@ -14,7 +14,8 @@ import {
   type SharingSettings,
 } from '@/services/document.service';
 import { useAuth } from '@/hooks/useAuth.hook';
-import { ChainLink, Close, Globe, Lock } from '@/icons';
+import { dispatchDocumentAccessChanged } from '@/lib/document-access-event.util';
+import { ChainLink, Close, Globe, Lock, Users } from '@/icons';
 import { dispatchOpenSpaceSettings } from '@/lib/space-settings-event.util';
 import { Badge } from '@/components/Badge';
 import { AccessDropdown } from './share/AccessDropdown';
@@ -22,12 +23,13 @@ import { PeopleSection } from './share/PeopleSection';
 import { getPeopleGroups } from './share/peopleGroups';
 import {
   ACCESS_ACTION_LABELS,
+  GENERAL_ACCESS_LEVEL_OPTIONS,
+  getGeneralAccessModeOptions,
   getGeneralAccessViewModel,
-  getGeneralModeOptions,
+  getWorkspaceAccessViewModel,
   INVITE_ACCESS_OPTIONS,
-  LINK_ACCESS_OPTIONS,
   type CollaboratorDropdownValue,
-  type GeneralModeDropdownValue,
+  type GeneralAccessModeDropdownValue,
 } from './share/shareOptions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -40,6 +42,52 @@ interface SharePanelProps {
   canManageSharing?: boolean;
   documentSpace?: DocumentSpaceSummary | null;
   onNavigate?: (documentId: string) => void;
+}
+
+// ─── Shared row shell ─────────────────────────────────────────────────────────
+
+/**
+ * One General Access row: an icon tile, the audience mode control, an optional level
+ * control, and a provenance line. Both audiences render through it so their layout
+ * cannot drift apart.
+ */
+function GeneralAccessRow({
+  active,
+  icon,
+  modeControl,
+  levelControl,
+  footer,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  modeControl: ReactNode;
+  levelControl?: ReactNode;
+  footer: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 py-2 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors">
+      <span
+        className={`
+          inline-flex h-8 w-8 rounded-lg flex-shrink-0 items-center justify-center select-none transition-colors
+          ${
+            active
+              ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400'
+              : 'bg-sidebar-accent text-muted-foreground'
+          }
+        `}
+      >
+        {icon}
+      </span>
+
+      <div className="flex-1 min-w-0 flex flex-col justify-center">
+        <div className="flex items-center justify-between gap-1 min-w-0">
+          <div className="-ml-1">{modeControl}</div>
+          {levelControl && <div className="flex-shrink-0">{levelControl}</div>}
+        </div>
+        {footer}
+      </div>
+    </div>
+  );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -60,6 +108,9 @@ export function SharePanel({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const collaboratorsRef = useRef<Collaborator[]>([]);
+  collaboratorsRef.current = collaborators;
+  const [hiddenSharingSources, setHiddenSharingSources] = useState(false);
   const [settings, setSettings] = useState<SharingSettings | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteAccess, setInviteAccess] = useState<DocumentAccessLevel>('EDIT');
@@ -69,6 +120,25 @@ export function SharePanel({
   const [recentlyAddedUserIds, setRecentlyAddedUserIds] = useState<Set<string>>(new Set());
   const [breadcrumbs, setBreadcrumbs] = useState<DocumentBreadcrumbItem[]>([]);
   const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const collaboratorWrites = useRef<Promise<void>>(Promise.resolve());
+  const settingsWrites = useRef<Promise<void>>(Promise.resolve());
+  // Shared between the load effect and collaborator write handlers so an in-flight
+  // load cannot overwrite a roster installed by a newer write.
+  const rosterGenerationRef = useRef(0);
+  // Shared between the load effect and settings writes so an in-flight load cannot
+  // overwrite settings installed by a newer save.
+  const settingsGenerationRef = useRef(0);
+  const inFlightSettingsCountRef = useRef(0);
+  // Identifies the open panel session (document + visibility). A response from a
+  // save or roster write sent for an older session is discarded instead of being
+  // painted onto the document the panel shows now.
+  const panelSessionRef = useRef(0);
+  const panelSessionKeyRef = useRef('');
+  const panelSessionKey = `${documentId}:${isOpen}`;
+  if (panelSessionKeyRef.current !== panelSessionKey) {
+    panelSessionKeyRef.current = panelSessionKey;
+    panelSessionRef.current += 1;
+  }
 
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
 
@@ -119,14 +189,20 @@ export function SharePanel({
   useEffect(() => {
     if (!isOpen || !isAuthenticated || !accessToken) return;
     let cancelled = false;
+    const generation = ++rosterGenerationRef.current;
+    const settingsGeneration = ++settingsGenerationRef.current;
 
     // Reset stale roster state up front: DocToolbar keeps isShareOpen across
     // documentId changes (no key remount), so without this the previous
     // document's collaborators briefly render under the new document.
     setCollaborators([]);
+    setHiddenSharingSources(false);
     setSettings(null);
     setBreadcrumbs([]);
     setError(null);
+    setIsSavingInvite(false);
+    inFlightSettingsCountRef.current = 0;
+    setIsSavingSettings(false);
     // "New" is a session marker, not a property of the grant. A reopen or a
     // document switch starts a new session.
     setRecentlyAddedUserIds(new Set());
@@ -151,38 +227,42 @@ export function SharePanel({
             });
         }
 
-        if (!canManageSharing) {
-          try {
-            const cols = await documentService.listCollaborators(documentId, accessToken);
-            if (!cancelled) {
-              setCollaborators(cols);
-              setSettings(null);
-            }
-          } catch (e) {
-            // Readers without an identity grant cannot enumerate the roster:
-            // hide the section instead of surfacing an error.
-            if (e instanceof DocumentServiceApiError && (e.status === 403 || e.status === 404)) {
-              if (!cancelled) {
-                setCollaborators([]);
-                setSettings(null);
-              }
-            } else {
-              throw e;
-            }
-          }
-        } else {
-          const [cols, sett] = await Promise.all([
-            documentService.listCollaborators(documentId, accessToken),
-            documentService.getSharingSettings(documentId, accessToken),
-          ]);
-          if (!cancelled) {
+        if (typeof documentService.hasHiddenSharingSources === 'function') {
+          void documentService
+            .hasHiddenSharingSources(documentId, accessToken)
+            .then((hidden) => {
+              if (!cancelled) setHiddenSharingSources(hidden);
+            })
+            .catch(() => {});
+        }
+
+        const [cols, sett] = await Promise.all([
+          documentService.listCollaborators(documentId, accessToken),
+          documentService.getSharingSettings(documentId, accessToken),
+        ]);
+        if (!cancelled) {
+          if (rosterGenerationRef.current === generation) {
             setCollaborators(cols);
+          }
+          if (settingsGenerationRef.current === settingsGeneration) {
             setSettings(sett);
           }
         }
       } catch (e) {
-        if (!cancelled)
+        // A link-only outsider has no workspace identity: the API withholds the roster
+        // and the settings together. Hide both instead of surfacing an error.
+        if (e instanceof DocumentServiceApiError && (e.status === 403 || e.status === 404)) {
+          if (!cancelled) {
+            if (rosterGenerationRef.current === generation) {
+              setCollaborators([]);
+            }
+            if (settingsGenerationRef.current === settingsGeneration) {
+              setSettings(null);
+            }
+          }
+        } else if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load sharing settings');
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -227,32 +307,49 @@ export function SharePanel({
 
   // ── Handlers ────────────────────────────────────────────────────────────
 
+  // Each response contains the whole roster, so concurrent writes can otherwise
+  // replace a newer roster with an older response. The session is captured when the
+  // write is queued: a write that only starts after the panel switched documents must
+  // not run against the document it was queued for.
+  const queueCollaboratorWrite = (write: () => Promise<void>) => {
+    const session = panelSessionRef.current;
+    const run = () => (panelSessionRef.current === session ? write() : Promise.resolve());
+    collaboratorWrites.current = collaboratorWrites.current.then(run, run);
+  };
+
   const handleInvite = async () => {
     if (!accessToken || !inviteEmail.trim()) return;
+    const session = panelSessionRef.current;
     try {
       setIsSavingInvite(true);
       setError(null);
-      const knownIds = new Set(collaborators.map((collab) => collab.userId));
+      const knownIds = new Set(collaboratorsRef.current.map((collab) => collab.userId));
       const next = await documentService.upsertCollaborator(
         documentId,
         { email: inviteEmail.trim(), accessLevel: inviteAccess },
         accessToken
       );
+      if (panelSessionRef.current !== session) return;
+      const generation = ++rosterGenerationRef.current;
       const added = next.find((collab) => !knownIds.has(collab.userId));
       if (added) {
         setRecentlyAddedUserIds((current) => new Set(current).add(added.userId));
       }
-      setCollaborators(next);
+      if (rosterGenerationRef.current === generation) {
+        setCollaborators(next);
+      }
       setInviteEmail('');
     } catch (e) {
+      if (panelSessionRef.current !== session) return;
       setError(e instanceof Error ? e.message : 'Failed to add collaborator');
     } finally {
-      setIsSavingInvite(false);
+      if (panelSessionRef.current === session) setIsSavingInvite(false);
     }
   };
 
   const handleAccessChange = async (userId: string, level: CollaboratorAccessLevel) => {
     if (!accessToken) return;
+    const session = panelSessionRef.current;
     try {
       setError(null);
       const next = await documentService.updateCollaboratorAccess(
@@ -261,20 +358,98 @@ export function SharePanel({
         level,
         accessToken
       );
-      setCollaborators(next);
+      // A self-change invalidates the access level this tab resolved at load: the
+      // editor, share button and trash affordances all follow it, even if the panel
+      // closed or switched documents while the write was in flight.
+      if (user?.id === userId) {
+        dispatchDocumentAccessChanged(documentId);
+      }
+      if (panelSessionRef.current !== session) return;
+      const generation = ++rosterGenerationRef.current;
+      if (rosterGenerationRef.current === generation) {
+        setCollaborators(next);
+      }
     } catch (e) {
+      if (panelSessionRef.current !== session) return;
       setError(e instanceof Error ? e.message : 'Failed to update access');
     }
   };
 
   const handleRemove = async (userId: string) => {
     if (!accessToken) return;
+    const session = panelSessionRef.current;
     try {
       setError(null);
       const next = await documentService.removeCollaborator(documentId, userId, accessToken);
-      setCollaborators(next);
+      if (panelSessionRef.current !== session) return;
+      const generation = ++rosterGenerationRef.current;
+      if (rosterGenerationRef.current === generation) {
+        setCollaborators(next);
+      }
     } catch (e) {
+      if (panelSessionRef.current !== session) return;
       setError(e instanceof Error ? e.message : 'Failed to remove collaborator');
+    }
+  };
+
+  /**
+   * Removing yourself goes through `DELETE /collaborators/me`: the API refuses a self
+   * No access row (only an admin could undo that breakpoint), and leaving a page you
+   * inherit from a space or an ancestor is not possible at all. When the grant you
+   * dropped was your only channel the roster is no longer readable, so the panel closes
+   * and the workspace root replaces the page that just became unreachable.
+   */
+  const handleLeave = async () => {
+    if (!accessToken) return;
+    const session = panelSessionRef.current;
+    try {
+      setError(null);
+      await documentService.leaveSharedDocument(documentId, accessToken);
+      dispatchDocumentAccessChanged(documentId);
+      if (panelSessionRef.current !== session) return;
+      const generation = ++rosterGenerationRef.current;
+
+      // Roster 403/404 can mean either no access at all or a link-only reader whose
+      // roster is withheld. Confirm document readability before redirecting home.
+      let lostAccess = false;
+      try {
+        const next = await documentService.listCollaborators(documentId, accessToken);
+        if (panelSessionRef.current !== session) return;
+        if (rosterGenerationRef.current === generation) {
+          setCollaborators(next);
+        }
+      } catch (e) {
+        if (panelSessionRef.current !== session) return;
+        const rosterDenied =
+          e instanceof DocumentServiceApiError && (e.status === 403 || e.status === 404);
+        if (!rosterDenied) {
+          setError('You left the page, but its people list could not be refreshed.');
+        } else {
+          if (rosterGenerationRef.current === generation) {
+            setCollaborators([]);
+          }
+          settingsGenerationRef.current += 1;
+          setSettings(null);
+          try {
+            const myAccess = await documentService.getMyAccess(documentId, accessToken);
+            if (panelSessionRef.current !== session) return;
+            lostAccess = !myAccess.allowed || !myAccess.accessLevel;
+          } catch (accessErr) {
+            if (panelSessionRef.current !== session) return;
+            lostAccess =
+              accessErr instanceof DocumentServiceApiError &&
+              (accessErr.status === 403 || accessErr.status === 404);
+          }
+        }
+      }
+
+      if (lostAccess) {
+        onClose();
+        router.replace('/');
+      }
+    } catch (e) {
+      if (panelSessionRef.current !== session) return;
+      setError(e instanceof Error ? e.message : 'Failed to leave page');
     }
   };
 
@@ -282,112 +457,159 @@ export function SharePanel({
     collab: Collaborator,
     nextValue: CollaboratorDropdownValue
   ) => {
-    if (nextValue === 'INHERIT' || nextValue === 'REMOVE') {
-      void handleRemove(collab.userId);
+    // A non-admin's own row is read-only; re-selecting its configured grant is not an edit.
+    if (!canManageSharing && collab.userId === user?.id && nextValue === collab.accessLevel) {
+      return;
+    }
+    if (nextValue === 'INHERIT') {
+      queueCollaboratorWrite(() => handleRemove(collab.userId));
+    } else if (nextValue === 'LEAVE') {
+      queueCollaboratorWrite(handleLeave);
     } else {
-      void handleAccessChange(collab.userId, nextValue);
+      queueCollaboratorWrite(() => handleAccessChange(collab.userId, nextValue));
     }
   };
 
-  // Mode selection mirrors a collaborator row's single dropdown: picking a
-  // state writes it (override), and the Inherit option deletes the override.
-  // Driven off the view-model state so dropdown, badges and payloads share
-  // one source of truth instead of re-deriving override/block branches.
-  const handleGeneralModeSelect = async (nextValue: GeneralModeDropdownValue) => {
+  // Every general-access write answers with the whole settings document, so
+  // serialize them per panel session and bump settingsGenerationRef on completion
+  // so neither an older save nor an in-flight load can overwrite newer settings.
+  const queueSettingsWrite = (write: () => Promise<void>) => {
+    const session = panelSessionRef.current;
+    const run = () => (panelSessionRef.current === session ? write() : Promise.resolve());
+    settingsWrites.current = settingsWrites.current.then(run, run);
+  };
+
+  const saveSettings = (
+    payload: Parameters<typeof documentService.updateSharingSettings>[1],
+    failureMessage: string
+  ) => {
+    if (!accessToken) return;
+    const session = panelSessionRef.current;
+    inFlightSettingsCountRef.current += 1;
+    setIsSavingSettings(true);
+    setError(null);
+    queueSettingsWrite(async () => {
+      try {
+        const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
+        if (panelSessionRef.current !== session) return;
+        const settingsGeneration = ++settingsGenerationRef.current;
+        if (settingsGenerationRef.current === settingsGeneration) {
+          setSettings(next);
+        }
+      } catch (e) {
+        if (panelSessionRef.current !== session) return;
+        setError(e instanceof Error ? e.message : failureMessage);
+      } finally {
+        if (panelSessionRef.current === session) {
+          inFlightSettingsCountRef.current = Math.max(0, inFlightSettingsCountRef.current - 1);
+          if (inFlightSettingsCountRef.current === 0) {
+            setIsSavingSettings(false);
+          }
+        }
+      }
+    });
+  };
+
+  // Both general-access rows use the same mode values: each row shows its
+  // own audience and also offers the other audience while it is inactive, so
+  // setting both creates two independent rows without a separate add flow.
+  const handleGeneralAccessModeSelect = (
+    row: 'workspace' | 'link',
+    nextValue: GeneralAccessModeDropdownValue
+  ) => {
     if (!accessToken || !settings) return;
+    const workspace = getWorkspaceAccessViewModel(settings);
+    const link = getGeneralAccessViewModel(settings);
+    const workspaceFailure = 'Failed to update workspace access';
+
     // Restore parent inheritance (mirrors deleting a collaborator override row
     // via its Inherit option).
     if (nextValue === 'INHERIT') {
-      try {
-        setIsSavingSettings(true);
-        setError(null);
-        const next = await documentService.updateSharingSettings(
-          documentId,
-          { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
-          accessToken
-        );
-        setSettings(next);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to restore link inheritance');
-      } finally {
-        setIsSavingSettings(false);
-      }
-      return;
+      return saveSettings(
+        row === 'workspace'
+          ? { workspaceAccessMode: 'RESTRICTED', workspaceInheritBlocked: false }
+          : { generalAccessMode: 'RESTRICTED', linkInheritBlocked: false },
+        `Failed to restore ${row === 'workspace' ? 'workspace' : 'link'} inheritance`
+      );
     }
-    const mode: DocumentGeneralAccessMode = nextValue;
-    const vm = getGeneralAccessViewModel(settings);
-    // Already in this explicit own mode: nothing to write (guards against no-op re-select).
-    // An inherited link CAN be re-selected as ANYONE_WITH_LINK to pin it as an own override.
-    if (mode === 'ANYONE_WITH_LINK' && vm.state === 'own') return;
-    if (mode === 'RESTRICTED' && (vm.state === 'private' || vm.state === 'blocked')) return;
-    try {
-      setIsSavingSettings(true);
-      setError(null);
-      let payload: {
-        generalAccessMode: DocumentGeneralAccessMode;
-        linkAccessLevel?: DocumentAccessLevel;
-        linkInheritBlocked?: boolean;
-      };
-      if (mode === 'ANYONE_WITH_LINK') {
-        payload = {
-          generalAccessMode: mode,
+
+    if (nextValue === 'WORKSPACE_MEMBERS') {
+      // Selecting the audience that already owns this row is a no-op. The
+      // link row can still use the same option to turn workspace access on.
+      if (row === 'workspace' && workspace.displayMode === 'WORKSPACE_MEMBERS') return;
+      return saveSettings(
+        {
+          workspaceAccessMode: 'WORKSPACE_MEMBERS',
+          workspaceAccessLevel: workspace.level,
+          ...(settings.workspaceInheritBlocked ? { workspaceInheritBlocked: false } : {}),
+        },
+        workspaceFailure
+      );
+    }
+
+    if (nextValue === 'ANYONE_WITH_LINK') {
+      // An own active link is already represented; an expired own link is not.
+      if (row === 'link' && link.state === 'own') return;
+      return saveSettings(
+        {
+          generalAccessMode: 'ANYONE_WITH_LINK',
           linkAccessLevel: settings.linkAccessLevel || 'VIEW',
-          ...(vm.state === 'expired' ? { clearLinkExpiresAt: true } : {}),
-        };
-      } else if (
-        vm.state === 'inherited' ||
-        vm.state === 'blocked' ||
-        (vm.state === 'own' && settings.inheritedFromId)
-      ) {
-        // Restricted means the document is private on the link channel. With
-        // an inherited or blocked link that requires blocking inheritance,
-        // or the ancestor grant would keep it public; dropping only the own
-        // link is the explicit Inherit option instead. Pure-own links with
-        // no ancestor send a bare RESTRICTED so no parentless Inherit
-        // option appears.
-        payload = { generalAccessMode: mode, linkInheritBlocked: true };
-      } else {
-        payload = { generalAccessMode: mode };
-      }
-      const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
-      setSettings(next);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update sharing settings');
-    } finally {
-      setIsSavingSettings(false);
+          ...(link.state === 'expired' ? { clearLinkExpiresAt: true } : {}),
+        },
+        'Failed to update sharing settings'
+      );
     }
+
+    // RESTRICTED turns the channel off. The block is what makes the page private when
+    // something still supplies the audience (an ancestor page or the space). Send it
+    // unconditionally: redaction can hide that source, and the server normalizes a block
+    // away when no reachable ancestor supplies one, so a hidden source is never mistaken
+    // for "nothing to shadow".
+    if (row === 'workspace') {
+      if (workspace.displayMode === 'RESTRICTED') return;
+      return saveSettings(
+        { workspaceAccessMode: 'RESTRICTED', workspaceInheritBlocked: true },
+        workspaceFailure
+      );
+    }
+
+    if (link.state === 'private' || link.state === 'blocked') return;
+    return saveSettings(
+      { generalAccessMode: 'RESTRICTED', linkInheritBlocked: true },
+      'Failed to update sharing settings'
+    );
   };
 
-  const handleLinkAccessChange = async (level: DocumentAccessLevel) => {
-    if (!accessToken || !settings) return;
-    try {
-      setIsSavingSettings(true);
-      // Changing the level on an inherited link creates an override on this
-      // document (same as changing an inherited collaborator row), so the
-      // mode must be ANYONE_WITH_LINK even though the stored own mode is RESTRICTED.
-      const modeToSend =
-        isInheritedPublicLink && !hasOwnPublicLink
-          ? 'ANYONE_WITH_LINK'
-          : settings.generalAccessMode;
-      const payload: {
-        generalAccessMode: DocumentGeneralAccessMode;
-        linkAccessLevel: DocumentAccessLevel;
-        clearLinkExpiresAt?: boolean;
-      } = {
+  const handleWorkspaceAccessChange = (level: DocumentAccessLevel) => {
+    if (!settings) return;
+    return saveSettings(
+      {
+        workspaceAccessMode: 'WORKSPACE_MEMBERS',
+        workspaceAccessLevel: level,
+        ...(settings.workspaceInheritBlocked ? { workspaceInheritBlocked: false } : {}),
+      },
+      'Failed to update workspace access'
+    );
+  };
+
+  const handleLinkAccessChange = (level: DocumentAccessLevel) => {
+    if (!settings) return;
+    // Changing the level on an inherited link creates an override on this
+    // document (same as changing an inherited collaborator row), so the
+    // mode must be ANYONE_WITH_LINK even though the stored own mode is RESTRICTED.
+    const modeToSend =
+      isInheritedPublicLink && !hasOwnPublicLink ? 'ANYONE_WITH_LINK' : settings.generalAccessMode;
+    return saveSettings(
+      {
         generalAccessMode: modeToSend,
         linkAccessLevel: level,
         ...(generalAccessState === 'expired' ||
         (generalAccessState === 'inherited' && Boolean(settings.linkExpiresAt))
           ? { clearLinkExpiresAt: true }
           : {}),
-      };
-      const next = await documentService.updateSharingSettings(documentId, payload, accessToken);
-      setSettings(next);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update link access');
-    } finally {
-      setIsSavingSettings(false);
-    }
+      },
+      'Failed to update link access'
+    );
   };
 
   const handleCopyLink = async () => {
@@ -401,6 +623,20 @@ export function SharePanel({
       setError('Failed to copy link. Please check clipboard permissions and try again.');
       console.error('Failed to copy share link to clipboard', e);
     }
+  };
+
+  /**
+   * The badge beside the workspace row names the page or space that supplies the setting.
+   * A page opens in the editor; a space opens the settings that own the audience.
+   */
+  const handleWorkspaceSourceClick = () => {
+    if (!workspaceVm.sourceId) return;
+    if (workspaceVm.sourceKind === 'SPACE') {
+      onClose();
+      dispatchOpenSpaceSettings({ spaceId: workspaceVm.sourceId, tab: 'general' });
+      return;
+    }
+    handleNavigate(workspaceVm.sourceId);
   };
 
   const handleNavigate = (targetDocId: string) => {
@@ -421,32 +657,47 @@ export function SharePanel({
     hasOwnPublicLink,
     isInheritedPublicLink,
     hasEffectivePublicLink,
-    showInheritOption,
+    showInheritOption: showLinkInheritOption,
     showProvenanceBadge,
     provenanceBadgePrefix,
     provenanceBadgeTooltip,
     inheritedFromTitle,
     displayMode: displayGeneralMode,
   } = getGeneralAccessViewModel(settings);
+  const workspaceVm = getWorkspaceAccessViewModel(settings);
   const effectiveLinkAction = ACCESS_ACTION_LABELS[settings?.linkAccessLevel ?? 'VIEW'] ?? 'view';
+  // An effective workspace audience already explains who else can open this page. The
+  // hidden sources warning exists for sources and rosters the viewer cannot see; repeating
+  // it under the workspace row would contradict that row.
+  const showHiddenSharingSources = hiddenSharingSources && !workspaceVm.hasEffectiveWorkspaceAccess;
+  const roster = collaborators;
   const {
     pinned: pinnedCollaborator,
     flat: flatCollaborators,
     groups: peopleGroups,
-  } = getPeopleGroups(collaborators, {
+  } = getPeopleGroups(roster, {
     spaceId: space?.id ?? null,
     pinnedUserId: user?.id ?? null,
   });
 
-  // A page-level FULL access grant is real inside a space too: it overrides a
-  // lower space grant, and the effective OWNER may administer the page.
-  const sharingRestrictionMessage = space
-    ? space.archived
-      ? `${space.name} is archived. Restore the space to manage who can access this page.`
-      : space.canAdminister
-        ? 'Sharing is unavailable right now.'
-        : `Only page owners or owners of ${space.name} can manage sharing for this page.`
-    : 'You need owner access to manage sharing.';
+  // Every reader who can see the roster sees the same General Access rows; the controls
+  // render as text when the caller is not an owner. The workspace row appears when it
+  // carries a setting, and the link row doubles as the empty state, exactly as it does
+  // for a manager.
+  const showsWorkspaceAccessRow = Boolean(settings) && workspaceVm.state !== 'private';
+  const showsLinkAccessRow =
+    Boolean(settings) && (generalAccessState !== 'private' || !showsWorkspaceAccessRow);
+  const showsGeneralAccessSection = showsWorkspaceAccessRow || showsLinkAccessRow;
+  const workspaceModeOptions = settings
+    ? getGeneralAccessModeOptions({
+        current: workspaceVm.displayMode,
+        canRestrict: canManageSharing,
+        canAddWorkspace: canManageSharing,
+        canAddLink: canManageSharing && !hasEffectivePublicLink,
+        showInheritOption: canManageSharing && workspaceVm.showInheritOption,
+        inheritFromTitle: workspaceVm.inheritFromTitle,
+      })
+    : [];
 
   const openSpaceSettings = (tab: 'general' | 'members' = 'members') => {
     if (!space) return;
@@ -498,13 +749,13 @@ export function SharePanel({
         </button>
       </div>
 
-      {/* ── Invite bar ────────────────────────────────────────── */}
+      {/* ── Invite bar / read-only notice ─────────────────────── */}
       <div className="px-4 pt-3.5 pb-2">
         {!isAuthenticated || !accessToken ? (
           <p className="py-2 text-[13.5px] text-muted-foreground">Sign in to manage sharing.</p>
         ) : !canManageSharing ? (
           <div className="py-1">
-            <p className="text-[13px] text-muted-foreground">{sharingRestrictionMessage}</p>
+            <p className="text-[13px] text-muted-foreground">Only owners can manage sharing.</p>
             {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
           </div>
         ) : (
@@ -515,7 +766,7 @@ export function SharePanel({
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleInvite();
+                  if (e.key === 'Enter') queueCollaboratorWrite(handleInvite);
                 }}
                 placeholder="Add people by email"
                 className="
@@ -537,19 +788,19 @@ export function SharePanel({
               )}
               <button
                 type="button"
-                onClick={() => void handleInvite()}
+                onClick={() => queueCollaboratorWrite(handleInvite)}
                 disabled={isSavingInvite || !inviteEmail.trim()}
                 aria-label="Add"
                 className="
-                  flex-shrink-0 rounded-lg
-                  bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
-                  text-neutral-950 font-medium
-                  px-3.5 py-1.5
-                  text-[13px] transition-all cursor-pointer shadow-xs
-                  outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  active:scale-95
-                "
+                    flex-shrink-0 rounded-lg
+                    bg-[var(--nd-brand)] hover:bg-[var(--nd-brand-hover)] active:bg-[#d57768]
+                    text-neutral-950 font-medium
+                    px-3.5 py-1.5
+                    text-[13px] transition-all cursor-pointer shadow-xs
+                    outline-none focus-visible:ring-2 focus-visible:ring-[var(--nd-brand)]/50
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    active:scale-95
+                  "
               >
                 {isSavingInvite ? '…' : 'Add'}
               </button>
@@ -578,7 +829,7 @@ export function SharePanel({
           ) : (
             <>
               {/* ── People ── */}
-              {collaborators.length > 0 && (
+              {(roster.length > 0 || showHiddenSharingSources) && (
                 <section className="pb-3">
                   <PeopleSection
                     pinned={pinnedCollaborator}
@@ -596,104 +847,161 @@ export function SharePanel({
                     onAccessSelect={handleCollaboratorAccessSelect}
                     onNavigate={handleNavigate}
                   />
+                  {showHiddenSharingSources && (
+                    <p className="px-1.5 py-2 text-xs text-muted-foreground">
+                      Others may have access through locations you can’t view.
+                    </p>
+                  )}
                 </section>
               )}
 
-              {/* ── Link access ── */}
-              {canManageSharing && settings && (
+              {/* ── General Access ── */}
+              {showsGeneralAccessSection && (
                 <section className="pt-3 border-t border-border/70 dark:border-white/10">
                   <p className="mb-0.5 text-[12px] font-medium text-muted-foreground/70 select-none">
-                    Link access
+                    General Access
                   </p>
 
-                  <div className="flex items-center gap-2.5 py-2 px-1.5 rounded-lg hover:bg-sidebar-accent/40 transition-colors">
-                    <span
-                      className={`
-                        inline-flex h-8 w-8 rounded-lg flex-shrink-0 items-center justify-center select-none transition-colors
-                        ${
-                          hasEffectivePublicLink
-                            ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400'
-                            : 'bg-sidebar-accent text-muted-foreground'
-                        }
-                      `}
-                    >
-                      {hasEffectivePublicLink ? (
-                        <Globe size={17} strokeWidth={1.75} />
-                      ) : (
-                        <Lock size={17} strokeWidth={1.75} />
-                      )}
-                    </span>
-
-                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                      {/* Row 1: state + level */}
-                      <div className="flex items-center justify-between gap-1 min-w-0">
-                        <div className="-ml-1">
+                  {showsWorkspaceAccessRow && (
+                    <GeneralAccessRow
+                      active={workspaceVm.hasEffectiveWorkspaceAccess}
+                      icon={
+                        workspaceVm.hasEffectiveWorkspaceAccess ? (
+                          <Users size={17} strokeWidth={1.75} />
+                        ) : (
+                          <Lock size={17} strokeWidth={1.75} />
+                        )
+                      }
+                      modeControl={
+                        <AccessDropdown
+                          value={workspaceVm.displayMode}
+                          options={workspaceModeOptions}
+                          onChange={(v) => void handleGeneralAccessModeSelect('workspace', v)}
+                          disabled={isSavingSettings}
+                          readOnly={!canManageSharing}
+                          align="left"
+                          ariaLabel="Workspace general access"
+                        />
+                      }
+                      levelControl={
+                        workspaceVm.hasEffectiveWorkspaceAccess && settings ? (
                           <AccessDropdown
-                            value={displayGeneralMode}
-                            options={getGeneralModeOptions({
-                              showInheritOption,
-                              inheritedFromTitle: settings?.inheritedFromTitle,
-                            })}
-                            onChange={(v) => void handleGeneralModeSelect(v)}
+                            value={workspaceVm.level}
+                            options={GENERAL_ACCESS_LEVEL_OPTIONS}
+                            onChange={(v) => void handleWorkspaceAccessChange(v)}
                             disabled={isSavingSettings}
-                            align="left"
+                            readOnly={!canManageSharing}
+                            align="right"
+                            ariaLabel="Workspace access level"
                           />
-                        </div>
-
-                        {(hasEffectivePublicLink || generalAccessState === 'expired') && (
-                          <div className="flex-shrink-0">
-                            <AccessDropdown
-                              value={settings?.linkAccessLevel ?? 'VIEW'}
-                              options={LINK_ACCESS_OPTIONS}
-                              onChange={(v) => void handleLinkAccessChange(v)}
-                              disabled={isSavingSettings}
-                              align="right"
-                            />
+                        ) : undefined
+                      }
+                      footer={
+                        workspaceVm.showSourceBadge ? (
+                          <div className="pl-1 pt-0.5 flex items-center gap-1.5 min-w-0">
+                            <Badge
+                              onClick={
+                                workspaceVm.sourceId ? handleWorkspaceSourceClick : undefined
+                              }
+                              title={workspaceVm.sourceBadgeTooltip}
+                              className="max-w-[140px] truncate flex-shrink-0"
+                            >
+                              {workspaceVm.sourceBadgePrefix} “{workspaceVm.sourceTitle}”
+                            </Badge>
                           </div>
-                        )}
-                      </div>
+                        ) : (
+                          <p className="pl-1 pt-0.5 text-[11.5px] text-muted-foreground/70 leading-snug">
+                            {workspaceVm.hasEffectiveWorkspaceAccess
+                              ? `Everyone in this workspace can ${
+                                  ACCESS_ACTION_LABELS[workspaceVm.level] ?? 'view'
+                                }`
+                              : 'Only people with access can open'}
+                          </p>
+                        )
+                      }
+                    />
+                  )}
 
-                      {/* Row 2: provenance (From / Overrides) replaces the description, mirroring People rows */}
-                      {isInheritedPublicLink || showProvenanceBadge ? (
-                        <div className="pl-1 pt-0.5 flex items-center gap-1.5">
-                          {isInheritedPublicLink && (
-                            <Badge
-                              onClick={
-                                settings?.inheritedFromId || space?.id
-                                  ? () => handleNavigate(settings?.inheritedFromId || space!.id)
-                                  : undefined
-                              }
-                              title={`From “${inheritedFromTitle}”`}
-                              className="max-w-[140px] truncate flex-shrink-0"
-                            >
-                              From “{inheritedFromTitle}”
-                            </Badge>
-                          )}
-                          {showProvenanceBadge && (
-                            <Badge
-                              onClick={
-                                settings?.inheritedFromId || space?.id
-                                  ? () => handleNavigate(settings?.inheritedFromId || space!.id)
-                                  : undefined
-                              }
-                              title={provenanceBadgeTooltip}
-                              className="max-w-[140px] truncate flex-shrink-0"
-                            >
-                              {provenanceBadgePrefix} {inheritedFromTitle}
-                            </Badge>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="pl-1 pt-0.5 text-[11.5px] text-muted-foreground/70 leading-snug">
-                          {hasEffectivePublicLink
-                            ? `Anyone on the internet with the link can ${effectiveLinkAction}`
-                            : generalAccessState === 'expired'
-                              ? 'Link expired — update link access or re-enable to revive'
-                              : 'Only people with access can open with the link'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                  {showsLinkAccessRow && settings && (
+                    <GeneralAccessRow
+                      active={hasEffectivePublicLink}
+                      icon={
+                        hasEffectivePublicLink ? (
+                          <Globe size={17} strokeWidth={1.75} />
+                        ) : (
+                          <Lock size={17} strokeWidth={1.75} />
+                        )
+                      }
+                      modeControl={
+                        <AccessDropdown
+                          value={displayGeneralMode}
+                          options={getGeneralAccessModeOptions({
+                            current: displayGeneralMode,
+                            canRestrict: canManageSharing,
+                            canAddWorkspace:
+                              canManageSharing && !workspaceVm.hasEffectiveWorkspaceAccess,
+                            canAddLink: canManageSharing,
+                            showInheritOption: canManageSharing && showLinkInheritOption,
+                            inheritFromTitle: settings.inheritedFromTitle,
+                          })}
+                          onChange={(v) => void handleGeneralAccessModeSelect('link', v)}
+                          disabled={isSavingSettings}
+                          readOnly={!canManageSharing}
+                          align="left"
+                        />
+                      }
+                      levelControl={
+                        hasEffectivePublicLink || generalAccessState === 'expired' ? (
+                          <AccessDropdown
+                            value={settings.linkAccessLevel ?? 'VIEW'}
+                            options={GENERAL_ACCESS_LEVEL_OPTIONS}
+                            onChange={(v) => void handleLinkAccessChange(v)}
+                            disabled={isSavingSettings}
+                            readOnly={!canManageSharing}
+                            align="right"
+                          />
+                        ) : undefined
+                      }
+                      footer={
+                        isInheritedPublicLink || showProvenanceBadge ? (
+                          <div className="pl-1 pt-0.5 flex items-center gap-1.5 min-w-0">
+                            {isInheritedPublicLink && (
+                              <Badge
+                                onClick={
+                                  settings.inheritedFromId || space?.id
+                                    ? () => handleNavigate(settings.inheritedFromId || space!.id)
+                                    : undefined
+                                }
+                                title={`From “${inheritedFromTitle}”`}
+                                className="max-w-[140px] truncate flex-shrink-0"
+                              >
+                                From “{inheritedFromTitle}”
+                              </Badge>
+                            )}
+                            {showProvenanceBadge && (
+                              <Badge
+                                onClick={() => handleNavigate(settings.inheritedFromId!)}
+                                title={provenanceBadgeTooltip}
+                                className="max-w-[140px] truncate flex-shrink-0"
+                              >
+                                {provenanceBadgePrefix} {inheritedFromTitle}
+                              </Badge>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="pl-1 pt-0.5 text-[11.5px] text-muted-foreground/70 leading-snug">
+                            {hasEffectivePublicLink
+                              ? `Anyone on the internet with the link can ${effectiveLinkAction}`
+                              : generalAccessState === 'expired'
+                                ? canManageSharing
+                                  ? 'Link expired — update link access or re-enable to revive'
+                                  : 'The share link has expired'
+                                : 'Only people with access can open with the link'}
+                          </p>
+                        )
+                      }
+                    />
+                  )}
                 </section>
               )}
             </>

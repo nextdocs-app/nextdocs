@@ -10,7 +10,6 @@ const baseCollab: Collaborator = {
   displayName: 'A',
   accessLevel: 'VIEW',
   addedAt: '2024-01-01T00:00:00.000Z',
-  owner: false,
   inherited: false,
   inheritedFromId: null,
   inheritedFromTitle: null,
@@ -124,22 +123,23 @@ describe('getCollaboratorRowOptions', () => {
     expect(normalizeTitle('  Parent   Wiki ')).toBe('Parent Wiki');
   });
 
-  it('offers Full access for a page-level grant', () => {
+  it('offers Owner for a page-level grant', () => {
     expect(getCollaboratorRowOptions(baseCollab).some((option) => option.value === 'OWNER')).toBe(
       true
     );
   });
 
-  it('offers Remove for direct collaborators without ancestor grant', () => {
+  it('offers a single revoke entry when nothing is inherited to shadow', () => {
     const options = getCollaboratorRowOptions(baseCollab);
-    const removeOption = options.find((o) => o.value === 'REMOVE');
-    expect(removeOption).toBeDefined();
-    expect(removeOption?.label).toBe('Remove');
-    expect(removeOption?.isDestructive).toBe(true);
-    expect(removeOption?.dividerBefore).toBe(false);
+    const revokeOptions = options.filter((o) => o.value === 'NO_ACCESS' || o.value === 'LEAVE');
+
+    // One entry, not a "No access" and a "Remove" that do the same delete.
+    expect(revokeOptions.map((o) => o.value)).toEqual(['NO_ACCESS']);
+    expect(revokeOptions[0].isDestructive).toBe(true);
+    expect(revokeOptions[0].dividerBefore).toBe(true);
   });
 
-  it('omits Remove when Inherit is available', () => {
+  it('keeps Inherit and No access apart on an override row', () => {
     const options = getCollaboratorRowOptions({
       ...baseCollab,
       inherited: false,
@@ -148,6 +148,6 @@ describe('getCollaboratorRowOptions', () => {
       inheritedAccessLevel: 'EDIT',
     });
     expect(options.some((o) => o.value === 'INHERIT')).toBe(true);
-    expect(options.some((o) => o.value === 'REMOVE')).toBe(false);
+    expect(options.some((o) => o.value === 'NO_ACCESS')).toBe(true);
   });
 });
