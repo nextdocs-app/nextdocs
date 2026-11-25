@@ -20,6 +20,7 @@ import {
 import { setYDoc } from '@/stores/document/ydoc-holder';
 import { readPreservedLocalCopy } from '@/lib/stale-local-copy.util';
 import { queuePendingCloudCreate, removePendingCloudCreate } from '@/lib/pending-cloud-create.util';
+import { dispatchDocumentAccessChanged } from '@/lib/document-access-event.util';
 import { WebsocketProvider } from '@y/websocket';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { useNetworkStatus } from '../../../hooks/useNetworkStatus.hook';
@@ -3068,6 +3069,1108 @@ describe('useDocument', () => {
     expect(store.getState().document.meta?.deletedAt).toBeUndefined();
   });
 
+  describe('in-tab access changes', () => {
+    let hiddenSpy: jest.SpyInstance | undefined;
+
+    afterEach(() => {
+      hiddenSpy?.mockRestore();
+      hiddenSpy = undefined;
+    });
+
+    it('re-reads the caller level and turns the editor read-only after a self-demotion', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Handing over',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      let level: 'OWNER' | 'VIEW' = 'OWNER';
+      getMyAccessSpy.mockImplementation(async (documentId: string) => ({
+        documentId,
+        allowed: true,
+        accessLevel: level,
+        owner: true,
+        canManageSharing: level === 'OWNER',
+      }));
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      expect(result.current.accessLevel).toBe('OWNER');
+      expect(result.current.isReadOnly).toBe(false);
+      expect(result.current.canManageSharing).toBe(true);
+
+      level = 'VIEW';
+      act(() => {
+        dispatchDocumentAccessChanged('access-change-id');
+      });
+
+      await waitFor(() => {
+        expect(result.current.accessLevel).toBe('VIEW');
+      });
+      expect(result.current.isReadOnly).toBe(true);
+      expect(result.current.canManageSharing).toBe(false);
+      expect(readCachedDocumentAccessLevel('access-change-id')).toBe('VIEW');
+    });
+
+    it.each([403, 404])('restricts the page when an access re-read returns %s', async (status) => {
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      });
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Denied', status));
+      act(() => dispatchDocumentAccessChanged('access-change-id'));
+      await waitFor(() => expect(result.current.errorState?.kind).toBe('restricted'));
+      expect(result.current.accessLevel).toBeNull();
+      expect(result.current.ydoc).toBeNull();
+    });
+
+    it('restricts the page when the access re-read reports no access', async () => {
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      });
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      getMyAccessSpy.mockResolvedValueOnce({
+        documentId: 'access-change-id',
+        allowed: false,
+        accessLevel: null,
+        owner: false,
+        canManageSharing: false,
+      });
+      act(() => dispatchDocumentAccessChanged('access-change-id'));
+
+      await waitFor(() => expect(result.current.errorState?.kind).toBe('restricted'));
+      expect(result.current.accessLevel).toBeNull();
+    });
+
+    it('refreshes the session instead of restricting on a stale token', async () => {
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      });
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      mockRefreshSession.mockClear();
+
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Stale token', 401));
+      act(() => dispatchDocumentAccessChanged('access-change-id'));
+
+      await waitFor(() => expect(mockRefreshSession).toHaveBeenCalled());
+      expect(result.current.errorState?.kind).not.toBe('restricted');
+    });
+
+    it('ignores a non-API error during the access re-read', async () => {
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      });
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      const callsAfterLoad = getMyAccessSpy.mock.calls.length;
+      getMyAccessSpy.mockRejectedValueOnce(new Error('Network down'));
+      await act(async () => {
+        dispatchDocumentAccessChanged('access-change-id');
+      });
+
+      // The initial load already called the spy; only a new request proves the
+      // listener re-read ran and settled.
+      await waitFor(() => expect(getMyAccessSpy.mock.calls.length).toBe(callsAfterLoad + 1));
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a fulfilled access re-read from an earlier visit to the same document', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc A',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      let resolveVisit1: (value: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveVisit1 = resolve;
+        })
+      );
+      act(() => dispatchDocumentAccessChanged('doc-a'));
+
+      // Reopen doc-a via doc-b before visit 1's re-read resolves
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(result.current.accessLevel).toBe('EDIT'));
+
+      await act(async () => {
+        resolveVisit1({
+          documentId: 'doc-a',
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a stale poll from an earlier opening of the same document', async () => {
+      const docMeta = {
+        title: 'Doc Poll Reopen',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(2));
+
+      let rejectPollVisit1: (err: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectPollVisit1 = reject;
+        })
+      );
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(3));
+
+      // Keep doc-b/doc-a reopen hidden so doc-a's new visit doesn't even bump accessEventSeqRef
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        rejectPollVisit1(new DocumentServiceApiError('Forbidden', 403));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('does not republish ydoc in loadDoc if enterRestrictedState ran while saveDocument was awaiting', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc Mid-Load Revoke',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      let resolveSave: () => void = () => {};
+      saveDocumentSpy.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        })
+      );
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          canManageSharing: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: false,
+          accessLevel: null,
+          owner: false,
+          canManageSharing: false,
+        });
+
+      const { result } = renderHook(() => useDocument('mid-load-doc'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(saveDocumentSpy).toHaveBeenCalled());
+
+      act(() => {
+        dispatchDocumentAccessChanged('mid-load-doc');
+      });
+      await waitFor(() => expect(result.current.errorState?.kind).toBe('restricted'));
+
+      await act(async () => {
+        resolveSave();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.ydoc).toBeNull();
+      expect(result.current.errorState?.kind).toBe('restricted');
+    });
+
+    it('ignores an access re-read failure that is neither stale nor a revocation', async () => {
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      });
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      const callsAfterLoad = getMyAccessSpy.mock.calls.length;
+      getMyAccessSpy.mockRejectedValueOnce(new DocumentServiceApiError('Server error', 500));
+      await act(async () => {
+        dispatchDocumentAccessChanged('access-change-id');
+      });
+
+      await waitFor(() => expect(getMyAccessSpy.mock.calls.length).toBe(callsAfterLoad + 1));
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a fulfilled access re-read from an earlier visit to the same document', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc A',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      let resolveVisit1: (value: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveVisit1 = resolve;
+        })
+      );
+      act(() => dispatchDocumentAccessChanged('doc-a'));
+
+      // Reopen doc-a via doc-b before visit 1's re-read resolves
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(result.current.accessLevel).toBe('EDIT'));
+
+      await act(async () => {
+        resolveVisit1({
+          documentId: 'doc-a',
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a stale poll from an earlier opening of the same document', async () => {
+      const docMeta = {
+        title: 'Doc Poll Reopen',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(2));
+
+      let rejectPollVisit1: (err: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectPollVisit1 = reject;
+        })
+      );
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(3));
+
+      // Keep doc-b/doc-a reopen hidden so doc-a's new visit doesn't even bump accessEventSeqRef
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        rejectPollVisit1(new DocumentServiceApiError('Forbidden', 403));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('does not republish ydoc in loadDoc if enterRestrictedState ran while saveDocument was awaiting', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc Mid-Load Revoke',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      let resolveSave: () => void = () => {};
+      saveDocumentSpy.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        })
+      );
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          canManageSharing: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: false,
+          accessLevel: null,
+          owner: false,
+          canManageSharing: false,
+        });
+
+      const { result } = renderHook(() => useDocument('mid-load-doc'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(saveDocumentSpy).toHaveBeenCalled());
+
+      act(() => {
+        dispatchDocumentAccessChanged('mid-load-doc');
+      });
+      await waitFor(() => expect(result.current.errorState?.kind).toBe('restricted'));
+
+      await act(async () => {
+        resolveSave();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.ydoc).toBeNull();
+      expect(result.current.errorState?.kind).toBe('restricted');
+    });
+
+    it('ignores an access change for another document', async () => {
+      const ydoc = new Y.Doc();
+      const meta = {
+        title: 'Other page',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+
+      const { result } = renderHook(() => useDocument('this-document-id'), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      getMyAccessSpy.mockClear();
+
+      act(() => {
+        dispatchDocumentAccessChanged('another-document-id');
+      });
+
+      expect(getMyAccessSpy).not.toHaveBeenCalled();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops an access re-read that resolves after the panel switched documents', async () => {
+      const metaA = {
+        title: 'Doc A',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const metaB = {
+        title: 'Doc B',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy
+        .mockResolvedValueOnce({ ydoc: new Y.Doc(), meta: metaA })
+        .mockResolvedValueOnce({ ydoc: new Y.Doc(), meta: metaB });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.accessLevel).toBe('EDIT');
+
+      let resolveA: (value: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveA = resolve;
+        })
+      );
+      act(() => dispatchDocumentAccessChanged('doc-a'));
+
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      const levelForB = result.current.accessLevel;
+
+      await act(async () => {
+        resolveA({
+          documentId: 'doc-a',
+          allowed: false,
+          accessLevel: null,
+          owner: false,
+          canManageSharing: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // A's denial belongs to a page that is no longer open.
+      expect(result.current.documentId).toBe('doc-b');
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe(levelForB);
+    });
+
+    it('keeps the newest access event when an older re-read resolves last', async () => {
+      // The 15s poll would re-read the default EDIT level after this event ordering
+      // settles; hide the tab so only the two in-tab re-reads are in play.
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      getCloudDocumentSpy.mockResolvedValue({
+        ydoc: new Y.Doc(),
+        meta: {
+          title: 'Page',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+        },
+      });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'access-change-id',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result } = renderHook(() => useDocument('access-change-id'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      let resolveOlder: ((value: unknown) => void) | undefined;
+      getMyAccessSpy
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            resolveOlder = resolve;
+          })
+        )
+        .mockResolvedValueOnce({
+          documentId: 'access-change-id',
+          allowed: true,
+          accessLevel: 'COMMENT',
+          owner: false,
+          canManageSharing: false,
+        });
+
+      await act(async () => {
+        dispatchDocumentAccessChanged('access-change-id');
+        dispatchDocumentAccessChanged('access-change-id');
+      });
+      await waitFor(() => expect(result.current.accessLevel).toBe('COMMENT'));
+
+      await act(async () => {
+        resolveOlder?.({
+          documentId: 'access-change-id',
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The first event's read resolved after the second; its older answer must not win.
+      expect(result.current.accessLevel).toBe('COMMENT');
+    });
+
+    it('drops an access re-read from an earlier visit to the same document on both resolve and reject', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc A',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      let rejectVisit1: (err: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectVisit1 = reject;
+        })
+      );
+      act(() => dispatchDocumentAccessChanged('doc-a'));
+
+      // Switch doc-a -> doc-b -> doc-a before visit 1's re-read settles
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        rejectVisit1(new DocumentServiceApiError('Forbidden', 403));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a fulfilled access re-read from an earlier visit to the same document', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc A',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      let resolveVisit1: (value: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveVisit1 = resolve;
+        })
+      );
+      act(() => dispatchDocumentAccessChanged('doc-a'));
+
+      // Reopen doc-a via doc-b before visit 1's re-read resolves
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(result.current.accessLevel).toBe('EDIT'));
+
+      await act(async () => {
+        resolveVisit1({
+          documentId: 'doc-a',
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('drops a stale poll from an earlier opening of the same document', async () => {
+      const docMeta = {
+        title: 'Doc Poll Reopen',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy.mockResolvedValue({
+        documentId: 'doc-a',
+        allowed: true,
+        accessLevel: 'EDIT',
+        owner: false,
+        canManageSharing: false,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ docId }: { docId: string }) => useDocument(docId),
+        { wrapper: createWrapper(), initialProps: { docId: 'doc-a' } }
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(2));
+
+      let rejectPollVisit1: (err: unknown) => void = () => {};
+      getMyAccessSpy.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectPollVisit1 = reject;
+        })
+      );
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(3));
+
+      // Keep doc-b/doc-a reopen hidden so doc-a's new visit doesn't even bump accessEventSeqRef
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      await act(async () => {
+        rerender({ docId: 'doc-b' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-b'));
+      await act(async () => {
+        rerender({ docId: 'doc-a' });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.documentId).toBe('doc-a'));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        rejectPollVisit1(new DocumentServiceApiError('Forbidden', 403));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('EDIT');
+    });
+
+    it('does not republish ydoc in loadDoc if enterRestrictedState ran while saveDocument was awaiting', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const docMeta = {
+        title: 'Doc Mid-Load Revoke',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      let resolveSave: () => void = () => {};
+      saveDocumentSpy.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        })
+      );
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          canManageSharing: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: 'mid-load-doc',
+          allowed: false,
+          accessLevel: null,
+          owner: false,
+          canManageSharing: false,
+        });
+
+      const { result } = renderHook(() => useDocument('mid-load-doc'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(saveDocumentSpy).toHaveBeenCalled());
+
+      act(() => {
+        dispatchDocumentAccessChanged('mid-load-doc');
+      });
+      await waitFor(() => expect(result.current.errorState?.kind).toBe('restricted'));
+
+      await act(async () => {
+        resolveSave();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.ydoc).toBeNull();
+      expect(result.current.errorState?.kind).toBe('restricted');
+    });
+
+    it('drops a stale poll rejection and stale trash-fetch result when a newer access event arrived', async () => {
+      const docMeta = {
+        title: 'Doc Poll',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      let mode: 'owner' | 'hang-poll' | 'view' = 'owner';
+      getMyAccessSpy.mockImplementation(async (documentId: string) => {
+        if (mode === 'hang-poll') {
+          mode = 'view';
+          return new Promise((_, reject) => {
+            rejectPoll = reject;
+          });
+        }
+        return {
+          documentId,
+          allowed: true,
+          accessLevel: mode === 'view' ? 'VIEW' : 'OWNER',
+          owner: mode !== 'view',
+          canManageSharing: mode !== 'view',
+        };
+      });
+
+      const { result } = renderHook(() => useDocument('poll-doc'), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(2));
+
+      let rejectPoll: (err: unknown) => void = () => {};
+      mode = 'hang-poll';
+
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => expect(mode).toBe('view'));
+
+      act(() => {
+        dispatchDocumentAccessChanged('poll-doc');
+      });
+      await waitFor(() => expect(result.current.accessLevel).toBe('VIEW'));
+
+      await act(async () => {
+        rejectPoll(new DocumentServiceApiError('Forbidden', 403));
+        await Promise.resolve();
+      });
+
+      expect(result.current.errorState).toBeNull();
+      expect(result.current.accessLevel).toBe('VIEW');
+    });
+
+    it('drops a stale trash-fetch result when a newer access event arrived before getCloudDocument resolved', async () => {
+      const docMeta = {
+        title: 'Doc Trash Race',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValueOnce({ ydoc: new Y.Doc(), meta: docMeta });
+      let pollState: 'edit' | 'trashed-owner' | 'view' = 'edit';
+      getMyAccessSpy.mockImplementation(async (documentId: string) => ({
+        documentId,
+        allowed: true,
+        trashed: pollState === 'trashed-owner',
+        accessLevel:
+          pollState === 'trashed-owner' ? 'OWNER' : pollState === 'edit' ? 'EDIT' : 'VIEW',
+        owner: pollState === 'trashed-owner',
+        canManageSharing: pollState === 'trashed-owner',
+      }));
+
+      const { result } = renderHook(() => useDocument('trash-race-doc'), {
+        wrapper: createWrapper(),
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(getMyAccessSpy).toHaveBeenCalledTimes(2));
+      expect(result.current.accessLevel).toBe('EDIT');
+
+      let resolveCloudCopy: (value: unknown) => void = () => {};
+      getCloudDocumentSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCloudCopy = resolve;
+        })
+      );
+      pollState = 'trashed-owner';
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await waitFor(() => expect(getCloudDocumentSpy).toHaveBeenCalledTimes(2));
+
+      // Newer access event arrives and resolves VIEW while getCloudDocument is in flight
+      pollState = 'view';
+      act(() => {
+        dispatchDocumentAccessChanged('trash-race-doc');
+      });
+      await waitFor(() => expect(result.current.accessLevel).toBe('VIEW'));
+
+      await act(async () => {
+        resolveCloudCopy({
+          ydoc: new Y.Doc(),
+          meta: { ...docMeta, deletedAt: '2024-01-02T00:00:00.000Z' },
+        });
+        await Promise.resolve();
+      });
+
+      expect(result.current.accessLevel).toBe('VIEW');
+      expect(result.current.meta?.deletedAt).toBeUndefined();
+    });
+
+    it('skips realtime session access overwrite when a newer access event arrived while keeping the socket', async () => {
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const validUuid = '12345678-1234-1234-1234-123456789012';
+      const docMeta = {
+        title: 'Realtime Seq',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          canManageSharing: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+
+      let resolveSession: (value: unknown) => void = () => {};
+      createRealtimeSessionSpy.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        })
+      );
+
+      const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await waitFor(() => expect(createRealtimeSessionSpy).toHaveBeenCalled());
+
+      act(() => {
+        dispatchDocumentAccessChanged(validUuid);
+      });
+      await waitFor(() => expect(result.current.accessLevel).toBe('VIEW'));
+
+      await act(async () => {
+        resolveSession({
+          wsUrl: 'ws://localhost:1234',
+          documentId: validUuid,
+          accessLevel: 'EDIT',
+        });
+        await Promise.resolve();
+      });
+
+      expect(result.current.accessLevel).toBe('VIEW');
+      expect(result.current.realtimeProvider).not.toBeNull();
+    });
+
+    it('retries realtime session instead of restricting when a 403/404 was superseded by a newer access event', async () => {
+      jest.useFakeTimers();
+      hiddenSpy = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      const validUuid = '12345678-1234-1234-1234-123456789012';
+      const docMeta = {
+        title: 'Realtime Superseded 403',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      getCloudDocumentSpy.mockResolvedValue({ ydoc: new Y.Doc(), meta: docMeta });
+      getMyAccessSpy
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'EDIT',
+          owner: false,
+          canManageSharing: false,
+        })
+        .mockResolvedValueOnce({
+          documentId: validUuid,
+          allowed: true,
+          accessLevel: 'VIEW',
+          owner: false,
+          canManageSharing: false,
+        });
+
+      let rejectSession: (err: unknown) => void = () => {};
+      createRealtimeSessionSpy
+        .mockReturnValueOnce(
+          new Promise((_, reject) => {
+            rejectSession = reject;
+          })
+        )
+        .mockResolvedValueOnce({
+          wsUrl: 'ws://localhost:1234',
+          documentId: validUuid,
+          accessLevel: 'VIEW',
+        });
+
+      try {
+        const { result } = renderHook(() => useDocument(validUuid), { wrapper: createWrapper() });
+        await act(async () => {
+          for (let i = 0; i < 6; i += 1) {
+            await Promise.resolve();
+          }
+        });
+        expect(result.current.isLoading).toBe(false);
+        expect(createRealtimeSessionSpy).toHaveBeenCalledTimes(1);
+
+        act(() => {
+          dispatchDocumentAccessChanged(validUuid);
+        });
+        await act(async () => {
+          for (let i = 0; i < 6; i += 1) {
+            await Promise.resolve();
+          }
+        });
+        expect(result.current.accessLevel).toBe('VIEW');
+
+        await act(async () => {
+          rejectSession(new DocumentServiceApiError('Forbidden', 403));
+          await Promise.resolve();
+        });
+
+        expect(result.current.errorState).toBeNull();
+        expect(result.current.accessLevel).toBe('VIEW');
+
+        await act(async () => {
+          jest.advanceTimersByTime(500);
+          for (let i = 0; i < 6; i += 1) {
+            await Promise.resolve();
+          }
+        });
+
+        expect(createRealtimeSessionSpy).toHaveBeenCalledTimes(2);
+        expect(result.current.realtimeProvider).not.toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('realtime access revalidation and close handling', () => {
     const validUuid = '12345678-1234-1234-1234-123456789012';
 
@@ -4061,5 +5164,162 @@ describe('useDocument', () => {
     await waitFor(() => {
       expect(readPendingMetaPatch('user-1', 'stale-title-id')).toBeNull();
     });
+  });
+
+  it('ignores a stale initial getMyAccess denial after switching documents', async () => {
+    const doc1 = new Y.Doc();
+    const doc2 = new Y.Doc();
+    const meta1 = {
+      title: 'Doc 1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    const meta2 = {
+      title: 'Doc 2',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    let resolveDoc1Access!: (value: {
+      documentId: string;
+      allowed: boolean;
+      accessLevel: 'OWNER' | 'EDIT' | 'COMMENT' | 'VIEW' | null;
+      owner: boolean;
+      trashed: boolean;
+      canManageSharing: boolean;
+      space: null;
+    }) => void;
+
+    getCloudDocumentSpy.mockImplementation(async (docId: string) =>
+      docId === 'doc-1' ? { ydoc: doc1, meta: meta1 } : { ydoc: doc2, meta: meta2 }
+    );
+    getMyAccessSpy.mockImplementation((docId: string) => {
+      if (docId === 'doc-1') {
+        return new Promise((resolve) => {
+          resolveDoc1Access = resolve;
+        });
+      }
+      return Promise.resolve({
+        documentId: 'doc-2',
+        allowed: true,
+        accessLevel: 'OWNER',
+        owner: true,
+        trashed: false,
+        canManageSharing: true,
+        space: null,
+      });
+    });
+
+    const { result, rerender } = renderHook(({ docId }: { docId: string }) => useDocument(docId), {
+      wrapper: createWrapper(),
+      initialProps: { docId: 'doc-1' },
+    });
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledWith('doc-1', 'token-1');
+    });
+
+    rerender({ docId: 'doc-2' });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.meta?.title).toBe('Doc 2');
+      expect(result.current.accessLevel).toBe('OWNER');
+    });
+
+    // Late denial from doc-1's initial load must not restrict doc-2.
+    await act(async () => {
+      resolveDoc1Access({
+        documentId: 'doc-1',
+        allowed: false,
+        accessLevel: null,
+        owner: false,
+        trashed: false,
+        canManageSharing: false,
+        space: null,
+      });
+    });
+
+    expect(result.current.errorState).toBeNull();
+    expect(result.current.meta?.title).toBe('Doc 2');
+    expect(result.current.accessLevel).toBe('OWNER');
+  });
+
+  it('keeps a newer access-change event level over a slower initial loadDoc getMyAccess', async () => {
+    const ydoc = new Y.Doc();
+    const meta = {
+      title: 'Race Doc',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    let resolveInitialAccess!: (value: {
+      documentId: string;
+      allowed: boolean;
+      accessLevel: 'OWNER' | 'EDIT' | 'COMMENT' | 'VIEW' | null;
+      owner: boolean;
+      trashed: boolean;
+      canManageSharing: boolean;
+      space: null;
+    }) => void;
+
+    getCloudDocumentSpy.mockResolvedValue({ ydoc, meta });
+    createRealtimeSessionSpy.mockResolvedValue({
+      wsUrl: 'ws://localhost:1234',
+      documentId: 'race-access-doc',
+      accessLevel: 'VIEW',
+    });
+    getMyAccessSpy
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitialAccess = resolve;
+          })
+      )
+      .mockResolvedValue({
+        documentId: 'race-access-doc',
+        allowed: true,
+        accessLevel: 'VIEW',
+        owner: false,
+        trashed: false,
+        canManageSharing: false,
+        space: null,
+      });
+
+    const { result } = renderHook(() => useDocument('race-access-doc'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(getMyAccessSpy).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      dispatchDocumentAccessChanged('race-access-doc');
+    });
+
+    await waitFor(() => {
+      expect(result.current.accessLevel).toBe('VIEW');
+    });
+
+    // Initial load's slower getMyAccess resolves afterwards with stale OWNER.
+    await act(async () => {
+      resolveInitialAccess({
+        documentId: 'race-access-doc',
+        allowed: true,
+        accessLevel: 'OWNER',
+        owner: true,
+        trashed: false,
+        canManageSharing: true,
+        space: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.accessLevel).toBe('VIEW');
+    expect(result.current.canManageSharing).toBe(false);
   });
 });
