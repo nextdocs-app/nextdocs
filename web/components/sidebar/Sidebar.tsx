@@ -103,6 +103,7 @@ import {
 
 import type { SharedDocumentEntry } from '@/stores/documentList/documentList.types';
 import type { DocActionType, SidebarSectionDocument } from './types';
+import type { SidebarTreeNode } from '@/types/tree.types';
 
 const emptySubscribe = () => () => {};
 
@@ -111,6 +112,77 @@ const emptySubscribe = () => () => {};
 const EMPTY_SHARED_DOCUMENTS: SharedDocumentEntry[] = [];
 const guestNoop = () => {};
 const guestResolveActionType = () => 'move-to-trash' as const;
+
+/**
+ * The action a Shared-section row can perform. An owner who can edit trashes; an owner
+ * below Can edit can neither trash nor administer the page, so their only route is to
+ * leave. The API still refuses to leave the page's last owner.
+ */
+export function resolveSharedRowAction(doc: SidebarSectionDocument): DocActionType {
+  if (!('relationship' in doc)) {
+    return 'move-to-trash';
+  }
+  if (doc.relationship === 'collaborator') {
+    return 'leave-shared';
+  }
+  return doc.accessLevel === 'EDIT' || doc.accessLevel === 'OWNER'
+    ? 'move-to-trash'
+    : 'leave-shared';
+}
+
+/** Ids visible in a search-filtered panel tree, including ancestors of matches. */
+export function collectMatchingTreeIds(
+  nodes: Record<string, SidebarTreeNode>,
+  rootIds: string[],
+  query: string
+): Set<string> {
+  const normalized = query.trim().toLowerCase();
+  const visible = new Set<string>();
+  const visit = (id: string): boolean => {
+    const node = nodes[id];
+    if (!node) {
+      return false;
+    }
+    const selfMatch = (node.title || 'Untitled').toLowerCase().includes(normalized);
+    // `.some(visit)` stops at the first visible child; every sibling still has to
+    // be visited so later matches join the visible set.
+    let hasVisibleChild = false;
+    for (const childId of node.children) {
+      if (visit(childId)) {
+        hasVisibleChild = true;
+      }
+    }
+    if (selfMatch || hasVisibleChild) {
+      visible.add(id);
+      return true;
+    }
+    return false;
+  };
+  rootIds.forEach(visit);
+  return visible;
+}
+
+/** Row action for a document inside the shared panel's tree. */
+export function resolveSharedPanelTreeAction(
+  isSharedPanel: boolean,
+  node: SidebarTreeNode | undefined
+): DocActionType {
+  if (!isSharedPanel) {
+    return 'move-to-trash';
+  }
+  if (node?.parentId != null) {
+    return 'move-to-trash';
+  }
+  return node?.effectiveAccessLevel === 'OWNER' ? 'move-to-trash' : 'leave-shared';
+}
+
+/** Row action for one flat entry of the shared panel. */
+export function resolveSharedPanelAction(
+  isSharedPanel: boolean,
+  doc: SidebarSectionDocument
+): DocActionType {
+  return isSharedPanel ? resolveSharedRowAction(doc) : 'move-to-trash';
+}
 
 // Shared geometry for the header's rail control and the footer spacer beside
 // the account row, so the two rows stay aligned.
@@ -489,21 +561,7 @@ function Sidebar() {
     }
 
     const { nodes, rootIds } = panelTreeApi;
-    const visible = new Set<string>();
-    const visit = (id: string): boolean => {
-      const node = nodes[id];
-      if (!node) {
-        return false;
-      }
-      const selfMatch = (node.title || 'Untitled').toLowerCase().includes(query);
-      const hasVisibleChild = node.children.some(visit);
-      if (selfMatch || hasVisibleChild) {
-        visible.add(id);
-        return true;
-      }
-      return false;
-    };
-    rootIds.forEach(visit);
+    const visible = collectMatchingTreeIds(nodes, rootIds, query);
 
     return {
       visibleRootIds: rootIds.filter(
@@ -514,16 +572,8 @@ function Sidebar() {
   }, [panelTreeApi, searchQuery, isPrivatePanel, excludedNodeIds]);
 
   const resolvePanelTreeActionType = useCallback(
-    (documentId: string): DocActionType => {
-      if (isSharedPanel) {
-        const node = sharedTreeNodes[documentId];
-        if (node?.parentId != null) {
-          return 'move-to-trash';
-        }
-        return node?.effectiveAccessLevel === 'OWNER' ? 'move-to-trash' : 'leave-shared';
-      }
-      return 'move-to-trash';
-    },
+    (documentId: string): DocActionType =>
+      resolveSharedPanelTreeAction(isSharedPanel, sharedTreeNodes[documentId]),
     [isSharedPanel, sharedTreeNodes]
   );
 
@@ -603,7 +653,6 @@ function Sidebar() {
                 newId,
                 created.meta.title || 'Untitled',
                 created.ydoc,
-                created.meta.createdBy ?? null,
                 parentId ?? null
               );
               void dispatch(fetchRootNodesThunk());
@@ -912,25 +961,12 @@ function Sidebar() {
     dispatch(setSearchQuery(''));
   }, [dispatch]);
 
-  const resolveSharedActionType = useCallback((doc: SidebarSectionDocument): DocActionType => {
-    if ('relationship' in doc && doc.relationship === 'collaborator') {
-      return 'leave-shared';
-    }
-    return 'move-to-trash';
-  }, []);
-
   const resolveSharedTreeActionType = useCallback(
     (documentId: string): DocActionType => {
       const doc = sharedDocuments.find((entry) => entry.id === documentId);
-      return doc ? resolveSharedActionType(doc) : 'move-to-trash';
+      return doc ? resolveSharedRowAction(doc) : 'move-to-trash';
     },
-    [sharedDocuments, resolveSharedActionType]
-  );
-
-  const resolvePanelActionType = useCallback(
-    (doc: SidebarSectionDocument): DocActionType =>
-      isSharedPanel ? resolveSharedActionType(doc) : 'move-to-trash',
-    [isSharedPanel, resolveSharedActionType]
+    [sharedDocuments]
   );
 
   const handleToggleDocumentActions = useCallback(
@@ -1485,7 +1521,6 @@ function Sidebar() {
           onRequestPermanentDelete={handleRequestPermanentDelete}
           docActionsAnchor={docActionsAnchor}
           onToggleDocumentActions={handleToggleDocumentActions}
-          resolvePanelActionType={resolvePanelActionType}
           resolvePanelTreeActionType={resolvePanelTreeActionType}
           setDocActionsAnchor={(anchor) => dispatch(setDocActionsAnchor(anchor))}
           hasMore={panelHasMore}
