@@ -6,10 +6,12 @@ import {
 } from '../../src/permissions.js';
 
 describe('Permissions', () => {
-  it('maps VIEW to read-only document, awareness and full history', () => {
+  it('maps VIEW to a read-only document but write awareness for presence', () => {
     const perms = documentPermissions('VIEW');
     expect(perms.ydoc).toBe('-r--');
-    expect(perms.awareness).toBe('-r--');
+    // Presence is ephemeral and never reaches the Y.Doc, so a reader broadcasts it or
+    // the toolbar could not show them as "here now".
+    expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-r--');
     expect(perms.endpoint.ydoc).toBe('-r--');
     // A viewer may inspect the timeline and named versions but cannot roll back:
