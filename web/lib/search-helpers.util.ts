@@ -1,4 +1,5 @@
 import { sanitizeDocumentIcon } from '@/lib/document-icon.util';
+import { formatRelativeTime } from '@/lib/relative-time.util';
 import { toSortableTimestamp } from '@/lib/timestamp.util';
 import type { LocalDocumentEntry } from '@/stores/documentList/documentList.types';
 import type { SpaceSummary, SpaceTree } from '@/stores/spaceTree/spaceTree.slice';
@@ -107,43 +108,8 @@ export function buildMatchSegments(text: string, query: string): SearchTextSegme
 
 /** Formats an ISO timestamp as a compact "Edited 2m ago" label for a result row. */
 export function formatRelativeSearchTime(value: string | null | undefined): string {
-  if (!value) {
-    return '';
-  }
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return '';
-  }
-
-  const now = Date.now();
-  const diffMs = Math.max(0, now - timestamp);
-  const diffMinutes = Math.floor(diffMs / 60_000);
-  if (diffMinutes < 1) {
-    return 'Edited just now';
-  }
-  if (diffMinutes < 60) {
-    return `Edited ${diffMinutes}m ago`;
-  }
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) {
-    return `Edited ${diffHours}h ago`;
-  }
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) {
-    return 'Edited yesterday';
-  }
-  if (diffDays < 7) {
-    return `Edited ${diffDays}d ago`;
-  }
-
-  const date = new Date(timestamp);
-  const currentYear = new Date(now).getFullYear();
-  const day = date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(date.getFullYear() !== currentYear ? { year: 'numeric' } : {}),
-  });
-  return `Edited ${day}`;
+  const relative = formatRelativeTime(value, { style: 'compact' });
+  return relative ? `Edited ${relative}` : '';
 }
 
 interface CandidateDocument {
