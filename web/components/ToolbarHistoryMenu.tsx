@@ -6,7 +6,6 @@ import { PopupMenuItem } from '@/components/PopupMenuItem';
 import { Portal } from '@/components/Portal';
 import { SidebarPopup } from '@/components/sidebar/SidebarPopup';
 import { useDismissableMenu } from '@/components/sidebar/useDismissableMenu';
-import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useTheme } from '@/hooks/useTheme.hook';
 import { computeMenuPosition, type MenuPosition } from '@/lib/menu-position.util';
 
@@ -23,16 +22,15 @@ type ToolbarHistoryMenuProps = {
 /**
  * The document toolbar's actions menu. It is placed with the sidebar's rules:
  * measured while hidden, then pinned below the trigger and clamped to the
- * viewport. On desktop the straddle clamp keeps it right-aligned with the
- * trigger; on the mobile layout the after-edge branch does the same without
- * crossing the screen edge.
+ * viewport. The menu is right-aligned with its trigger, so it opens leftwards
+ * over the page - the comments rail can dock on the right without the menu
+ * straddling into it.
  */
 export function ToolbarHistoryMenu({
   canViewVersionHistory,
   onVersionHistoryToggle,
 }: ToolbarHistoryMenuProps) {
   const { resolvedTheme } = useTheme();
-  const isMobileLayout = useIsMobileLayout();
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -65,7 +63,7 @@ export function ToolbarHistoryMenu({
           menu: { width, height },
           viewport: { width: window.innerWidth, height: window.innerHeight },
           anchorEdgeX: triggerRect.right,
-          alignment: isMobileLayout ? 'after-edge' : 'straddle',
+          alignment: 'before-edge',
         })
       );
     };
@@ -75,7 +73,7 @@ export function ToolbarHistoryMenu({
     return () => {
       window.removeEventListener('resize', updatePosition);
     };
-  }, [isOpen, isMobileLayout]);
+  }, [isOpen]);
 
   return (
     <div className="relative flex items-center">
@@ -90,14 +88,16 @@ export function ToolbarHistoryMenu({
         title="More document actions"
         className={[
           'inline-flex items-center justify-center rounded-sm transition-colors duration-150',
-          'h-9 w-9 md:h-[30px] md:w-[30px]',
+          'h-9 w-8 md:h-[30px] md:w-[30px]',
           isOpen
             ? 'text-primary bg-[var(--nd-toolbar-hover-bg)]'
             : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)]',
           'cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         ].join(' ')}
       >
-        <MoreHorizontal />
+        {/* Same icon size as the comments toggle, so the two glyphs are inked
+            to the same width inside identical 30px boxes. */}
+        <MoreHorizontal size={19} />
       </button>
 
       {isOpen && (

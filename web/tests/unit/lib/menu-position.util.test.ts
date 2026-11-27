@@ -43,6 +43,62 @@ describe('computeMenuPosition', () => {
     expect(position.left + MENU.width / 2).toBe(256);
   });
 
+  it('right-aligns the menu with a trigger at the viewport edge', () => {
+    const trigger = rect({ left: 1402, top: 8, width: 30, height: 30, right: 1432, bottom: 38 });
+    const position = computeMenuPosition({
+      trigger,
+      menu: MENU,
+      viewport: { width: 1440, height: 900 },
+      anchorEdgeX: trigger.right,
+      alignment: 'before-edge',
+    });
+
+    expect(position.left + MENU.width).toBe(trigger.right);
+    expect(position.left + MENU.width).toBe(1440 - MENU_VIEWPORT_MARGIN_PX);
+  });
+
+  it('stays left of a right-docked panel instead of straddling into it', () => {
+    // The comments rail pushes the toolbar trigger left of the panel's edge.
+    const trigger = rect({ left: 1042, top: 8, width: 30, height: 30, right: 1072, bottom: 38 });
+    const panelEdge = 1088;
+    const position = computeMenuPosition({
+      trigger,
+      menu: MENU,
+      viewport: { width: 1440, height: 900 },
+      anchorEdgeX: trigger.right,
+      alignment: 'before-edge',
+    });
+
+    expect(position.left + MENU.width).toBe(trigger.right);
+    expect(position.left + MENU.width).toBeLessThan(panelEdge);
+  });
+
+  it('clamps a right-aligned menu at the left margin', () => {
+    const trigger = rect({ left: 30, top: 8, width: 30, height: 30, right: 60, bottom: 38 });
+    const position = computeMenuPosition({
+      trigger,
+      menu: MENU,
+      viewport: { width: 1440, height: 900 },
+      anchorEdgeX: trigger.right,
+      alignment: 'before-edge',
+    });
+
+    expect(position.left).toBe(MENU_VIEWPORT_MARGIN_PX);
+  });
+
+  it('clamps a right-aligned menu when the trigger crosses the right margin', () => {
+    const trigger = rect({ left: 1408, top: 8, width: 30, height: 30, right: 1438, bottom: 38 });
+    const position = computeMenuPosition({
+      trigger,
+      menu: MENU,
+      viewport: { width: 1440, height: 900 },
+      anchorEdgeX: trigger.right,
+      alignment: 'before-edge',
+    });
+
+    expect(position.left + MENU.width).toBe(1440 - MENU_VIEWPORT_MARGIN_PX);
+  });
+
   it('opens below the trigger when the space below is large enough', () => {
     const position = computeMenuPosition({
       trigger: rect(),

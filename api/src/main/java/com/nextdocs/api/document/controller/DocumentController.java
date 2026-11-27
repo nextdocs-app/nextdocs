@@ -7,8 +7,10 @@ import com.nextdocs.api.document.dto.request.DocumentMoveRequest;
 import com.nextdocs.api.document.dto.request.DocumentUpdateRequest;
 import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.DocumentViewerResponse;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
+import com.nextdocs.api.document.service.DocumentViewService;
 import com.nextdocs.api.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -35,6 +37,7 @@ public class DocumentController {
 
     private final DocumentService documentService;
     private final DocumentTreeService documentTreeService;
+    private final DocumentViewService documentViewService;
 
     @Operation(
             summary = "Create a document",
@@ -116,7 +119,56 @@ public class DocumentController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID id,
             @RequestParam(required = false, defaultValue = "false") boolean includeTrashed) {
+        // A GET must not write: view history is recorded through POST /{id}/view.
         return ResponseEntity.ok(ApiResponse.ok(documentService.get(principal.getId(), id, includeTrashed)));
+    }
+
+    @Operation(
+            summary = "Record or touch document view history",
+            description = "Refreshes the last_viewed_at timestamp for the authenticated user on this document.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "204",
+                        description = "View recorded"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found")
+            })
+    @PostMapping("/{id}/view")
+    public ResponseEntity<Void> recordView(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        // The read check is the authorization: anyone who may open the document may record
+        // the visit. Its own write failures stay inside the service.
+        DocumentResponse document = documentService.get(principal.getId(), id, true);
+        if (document.deletedAt() == null) {
+            documentViewService.recordView(id, principal.getId());
+        }
+        return ResponseEntity.noContent().build();
+    }
+
+    @Operation(
+            summary = "List document viewers",
+            description = "Returns the people who have opened this document, most recent visit first. "
+                    + "View history is not sharing: the rows carry no access level and no email, and anyone "
+                    + "who may read the page — a link holder included — sees the same list. Live presence "
+                    + "travels over the realtime channel instead, so this is the durable half only.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Viewers returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found")
+            })
+    @GetMapping("/{id}/viewers")
+    public ResponseEntity<ApiResponse<List<DocumentViewerResponse>>> viewers(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(documentViewService.viewers(principal.getId(), id)));
     }
 
     @Operation(

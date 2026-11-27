@@ -19,9 +19,11 @@ import com.nextdocs.api.document.dto.response.DocumentBreadcrumbResponse;
 import com.nextdocs.api.document.dto.response.DocumentCoverResponse;
 import com.nextdocs.api.document.dto.response.DocumentIconResponse;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
+import com.nextdocs.api.document.dto.response.DocumentViewerResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.DocumentService;
 import com.nextdocs.api.document.service.DocumentTreeService;
+import com.nextdocs.api.document.service.DocumentViewService;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.security.JwtTokenProvider;
 import com.nextdocs.api.security.UserPrincipal;
@@ -60,6 +62,9 @@ class DocumentControllerTest {
 
     @MockitoBean
     private DocumentTreeService documentTreeService;
+
+    @MockitoBean
+    private DocumentViewService documentViewService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
@@ -308,6 +313,16 @@ class DocumentControllerTest {
     }
 
     @Test
+    void get_success_returns200() throws Exception {
+        when(documentService.get(eq(userId), eq(documentId), eq(false))).thenReturn(documentResponse(null));
+
+        mockMvc.perform(get("/api/v1/documents/{id}", documentId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(documentId.toString()));
+    }
+
+    @Test
     void get_notFound_returns404() throws Exception {
         when(documentService.get(eq(userId), eq(documentId), eq(false)))
                 .thenThrow(new ApiException(ErrorCode.NOT_FOUND));
@@ -315,6 +330,79 @@ class DocumentControllerTest {
         mockMvc.perform(get("/api/v1/documents/{id}", documentId).with(user(principal)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void recordView_activeDocument_recordsVisitAndReturns204() throws Exception {
+        when(documentService.get(eq(userId), eq(documentId), eq(true))).thenReturn(documentResponse(null));
+
+        mockMvc.perform(post("/api/v1/documents/{id}/view", documentId).with(user(principal)))
+                .andExpect(status().isNoContent());
+
+        verify(documentViewService).recordView(documentId, userId);
+    }
+
+    @Test
+    void recordView_trashedDocument_skipsWriteAndReturns204() throws Exception {
+        when(documentService.get(eq(userId), eq(documentId), eq(true)))
+                .thenReturn(documentResponse(OffsetDateTime.now()));
+
+        mockMvc.perform(post("/api/v1/documents/{id}/view", documentId).with(user(principal)))
+                .andExpect(status().isNoContent());
+
+        verify(documentViewService, never()).recordView(any(), any());
+    }
+
+    @Test
+    void recordView_unreadableDocument_returns404() throws Exception {
+        when(documentService.get(eq(userId), eq(documentId), eq(true)))
+                .thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        mockMvc.perform(post("/api/v1/documents/{id}/view", documentId).with(user(principal)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(documentViewService, never()).recordView(any(), any());
+    }
+
+    @Test
+    void viewers_returnsHistoryForAnyReader() throws Exception {
+        OffsetDateTime viewedAt = OffsetDateTime.now();
+        when(documentViewService.viewers(userId, documentId))
+                .thenReturn(List.of(new DocumentViewerResponse(userId, "Alice", null, viewedAt)));
+
+        mockMvc.perform(get("/api/v1/documents/{id}/viewers", documentId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].userId").value(userId.toString()))
+                .andExpect(jsonPath("$.data[0].displayName").value("Alice"))
+                // View history names people without exposing their contact details.
+                .andExpect(jsonPath("$.data[0].email").doesNotExist());
+    }
+
+    @Test
+    void viewers_unreadableDocument_returns404() throws Exception {
+        when(documentViewService.viewers(userId, documentId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        mockMvc.perform(get("/api/v1/documents/{id}/viewers", documentId).with(user(principal)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    private DocumentResponse documentResponse(OffsetDateTime deletedAt) {
+        return DocumentResponse.withoutBranding(
+                documentId,
+                "My Doc",
+                null,
+                null,
+                false,
+                false,
+                DocumentAccessLevel.OWNER,
+                OffsetDateTime.now(),
+                OffsetDateTime.now(),
+                deletedAt,
+                null,
+                null,
+                null);
     }
 
     @Test

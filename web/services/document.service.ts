@@ -218,6 +218,14 @@ interface ApiCollaborator {
   inheritedAccessLevel?: DocumentAccessLevel | null;
 }
 
+/** One person who opened the document, from the view-history endpoint. */
+interface ApiDocumentViewer {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  lastViewedAt?: string | null;
+}
+
 interface ApiBreadcrumbSpace {
   id: string;
   name: string;
@@ -309,6 +317,18 @@ export interface Collaborator {
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   inheritedAccessLevel?: DocumentAccessLevel | null;
+}
+
+/**
+ * View history for the toolbar's reader group: who opened this document, newest
+ * visit first. Not sharing — no access level and no email, because a visit is a
+ * fact about the past rather than a permission.
+ */
+export interface DocumentViewerRow {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  lastViewedAt: string | null;
 }
 
 export interface SharingSettings {
@@ -999,6 +1019,31 @@ class DocumentService {
       inheritedFromTitle: item.inheritedFromTitle ?? null,
       inheritedAccessLevel: sanitizeNullableAccessLevel(item.inheritedAccessLevel),
     };
+  }
+
+  public async recordView(documentId: string, accessToken: string): Promise<void> {
+    await this.fetchApi<void>(`/api/v1/documents/${encodeURIComponent(documentId)}/view`, {
+      method: 'POST',
+      accessToken,
+      allowEmptyData: true,
+    });
+  }
+
+  public async listViewers(documentId: string, accessToken: string): Promise<DocumentViewerRow[]> {
+    const body = await this.fetchApi<ApiDocumentViewer[]>(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/viewers`,
+      {
+        method: 'GET',
+        accessToken,
+      }
+    );
+
+    return body.map((item) => ({
+      userId: item.userId,
+      displayName: item.displayName,
+      avatarUrl: item.avatarUrl ?? null,
+      lastViewedAt: item.lastViewedAt ?? null,
+    }));
   }
 
   public async listCollaborators(documentId: string, accessToken: string): Promise<Collaborator[]> {

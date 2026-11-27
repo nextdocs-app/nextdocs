@@ -1251,6 +1251,74 @@ describe('document.service', () => {
     });
   });
 
+  describe('listViewers', () => {
+    it('lists viewers without asking for access levels', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: [
+            {
+              userId: 'u-1',
+              displayName: 'A',
+              avatarUrl: '/api/v1/users/u-1/avatar?v=abc',
+              lastViewedAt: '2024-02-01T00:00:00.000Z',
+            },
+            { userId: 'u-2', displayName: 'B' },
+          ],
+          error: null,
+        }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      const rows = await documentService.listViewers('doc-1', 'tok');
+
+      expect(fetchMock.mock.calls[0][0]).toContain('/api/v1/documents/doc-1/viewers');
+      expect(rows[0].avatarUrl).toBe('/api/v1/users/u-1/avatar?v=abc');
+      expect(rows[0].lastViewedAt).toBe('2024-02-01T00:00:00.000Z');
+      // An omitted timestamp reads as null, not undefined, so the group can render it.
+      expect(rows[1].lastViewedAt).toBeNull();
+      expect(rows[1].avatarUrl).toBeNull();
+    });
+  });
+
+  describe('recordView', () => {
+    it('posts the visit to the view endpoint and accepts an empty answer', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 204,
+        headers: { get: () => null },
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(documentService.recordView('doc 1', 'tok')).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc%201/view'),
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
+          body: undefined,
+        })
+      );
+    });
+
+    it('reports a refused view so the caller can ignore it', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        headers: { get: () => null },
+        json: async () => ({ success: false, message: 'Document not found', data: null }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(documentService.recordView('doc-1', 'tok')).rejects.toMatchObject({
+        status: 404,
+        message: 'Document not found',
+      });
+    });
+  });
+
   describe('getSharingSettings', () => {
     it.each(['PAGE', 'SPACE', 'INVALID', null])(
       'sanitizes source kind %s on reads and writes',

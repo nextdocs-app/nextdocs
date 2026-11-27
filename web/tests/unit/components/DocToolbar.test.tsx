@@ -35,8 +35,18 @@ jest.mock('../../../components/SharePanel', () => ({
 }));
 
 jest.mock('../../../services/document.service', () => ({
+  DocumentServiceApiError: class DocumentServiceApiError extends Error {
+    status: number;
+
+    constructor(message: string, status: number) {
+      super(message);
+      this.status = status;
+    }
+  },
   documentService: {
     getDocumentBreadcrumbs: jest.fn().mockResolvedValue([]),
+    listViewers: jest.fn().mockResolvedValue([]),
+    recordView: jest.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -871,5 +881,158 @@ describe('DocToolbar document actions menu', () => {
     await user.click(screen.getByRole('button', { name: 'More document actions' }));
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu', { name: 'Document actions' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DocToolbar reader stack', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('shows the viewer group beside Share when someone else has read it', async () => {
+    (documentService.listViewers as jest.Mock).mockResolvedValue([
+      {
+        userId: 'user-2',
+        displayName: 'Bob',
+        avatarUrl: null,
+        lastViewedAt: '2026-01-02T00:00:00Z',
+      },
+    ]);
+
+    renderWithStore(<DocToolbar documentId="doc-readers" isShareEnabled isOffline={false} />, {
+      auth: {
+        user: {
+          id: 'user-1',
+          email: 'ada@example.com',
+          displayName: 'Ada',
+          avatarUrl: null,
+        },
+        accessToken: 'access-token',
+        expiresAt: Date.now() + 60_000,
+        lastSilentRefreshAt: null,
+        sessionId: 0,
+        isInitializing: false,
+      },
+    });
+
+    expect(
+      await screen.findByRole('group', { name: 'People who accessed this document' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: "View Bob's profile" })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Document hierarchy' })).toHaveClass(
+      'max-w-[calc(100vw-17rem)]'
+    );
+  });
+});
+
+describe('DocToolbar last edited label', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('reads a recent edit relatively', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-edited"
+        isShareEnabled={false}
+        isOffline={false}
+        updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()}
+      />
+    );
+
+    expect(screen.getByText('Edited 5 mins ago')).toBeInTheDocument();
+  });
+
+  it('reads an older edit as a calendar date', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-15T12:00:00.000Z'));
+    try {
+      const updatedAt = '2026-01-05T00:00:00.000Z';
+      renderWithStore(
+        <DocToolbar
+          documentId="doc-edited"
+          isShareEnabled={false}
+          isOffline={false}
+          updatedAt={updatedAt}
+        />
+      );
+
+      const expected = new Date(updatedAt).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      });
+      expect(screen.getByText(`Edited ${expected}`)).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows no label without an edit timestamp', () => {
+    renderWithStore(
+      <DocToolbar documentId="doc-edited" isShareEnabled={false} isOffline={false} />
+    );
+
+    expect(screen.queryByText(/^Edited /)).not.toBeInTheDocument();
+  });
+});
+
+describe('DocToolbar comments toggle', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens the sidebar from the resting control', () => {
+    const onCommentsToggle = jest.fn();
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+        onCommentsToggle={onCommentsToggle}
+      />
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'Open comments sidebar. No open threads.',
+    });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(button);
+    expect(onCommentsToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes an open sidebar and counts its threads', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+        isCommentsSidebarOpen
+        openCommentsCount={1}
+        onCommentsToggle={jest.fn()}
+      />
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'Close comments sidebar. 1 open thread.',
+    });
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('disables the control when the page has no comment handler', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+      />
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Open comments sidebar. No open threads.' })
+    ).toBeDisabled();
   });
 });

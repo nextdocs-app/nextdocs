@@ -103,6 +103,38 @@ describe('write gate over a socket', () => {
     editor.destroy();
   });
 
+  it('lets a VIEW socket broadcast awareness without writing the document', async () => {
+    const docid = newDocId();
+    const viewerToken = mintToken();
+    const editorToken = mintToken();
+    api.setVerdict(viewerToken, { allowed: true, accessLevel: 'VIEW' });
+    api.setVerdict(editorToken, { allowed: true, accessLevel: 'EDIT' });
+
+    const viewer = connectClient(server.wsBase, docid, { token: viewerToken });
+    const editor = connectClient(server.wsBase, docid, { token: editorToken });
+    await Promise.all([waitForSynced(viewer.provider), waitForSynced(editor.provider)]);
+
+    // What the toolbar reads: a VIEW-level public reader has to be visible to peers.
+    viewer.provider.awareness.setLocalStateField('user', { id: 'viewer-user', name: 'viewer' });
+
+    await waitFor(
+      () =>
+        [...editor.provider.awareness.getStates().values()].some(
+          (state) => (state as { user?: { id?: string } }).user?.id === 'viewer-user'
+        ),
+      5000,
+      'VIEW awareness never reached the peer'
+    );
+
+    // The same socket still cannot write content.
+    viewer.doc.get('body').insert(0, 'viewer-write');
+    await sleep(500);
+    expect(await readTextAsService(server.wsBase, docid)).not.toContain('viewer-write');
+
+    viewer.destroy();
+    editor.destroy();
+  });
+
   it('denies a socket when the API reports a level outside the permission map', async () => {
     const docid = newDocId();
     const token = mintToken();
