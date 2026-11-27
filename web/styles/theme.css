@@ -57,6 +57,9 @@
   --nd-comments-surface: #ffffff;
   --nd-toolbar-hover-bg: oklch(0.93 0 0);
 
+  /* Editor body text (BlockNote editor + document title). */
+  --nd-editor-text: #121212;
+
   /* Document Comment Highlight Marks */
   --nd-comment-mark-bg: rgba(234, 179, 8, 0.2);
   --nd-comment-mark-bg-hover: rgba(234, 179, 8, 0.35);
@@ -163,6 +166,11 @@
   --nd-comments-panel-border: rgba(255, 255, 255, 0.08);
   --nd-comments-surface: #242422;
   --nd-toolbar-hover-bg: oklch(0.32 0 0);
+
+  /* Warm off-white, one step under pure white: L* 93 is brighter than the sidebar's #e2e2e2
+     (L* 90) and softer than #f2f2f2 (L* 95.5) against the warm near-black page.
+     Contrast on #171615 is 15.2:1 (WCAG AAA). */
+  --nd-editor-text: #edebe6;
 
   /* Document Comment Highlight Marks Dark Overrides */
   --nd-comment-mark-bg: rgba(234, 179, 8, 0.22);
