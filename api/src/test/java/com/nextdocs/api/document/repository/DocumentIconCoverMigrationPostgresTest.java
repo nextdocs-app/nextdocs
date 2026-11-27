@@ -177,7 +177,7 @@ class DocumentIconCoverMigrationPostgresTest {
     private UUID insertDocument() throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, "
+                "INSERT INTO documents (id, created_by, workspace_id, title, general_access_mode, "
                         + "link_access_level, link_inherit_blocked, created_at, updated_at) "
                         + "VALUES (?, ?, (SELECT id FROM workspaces ORDER BY created_at LIMIT 1), "
                         + "?, 'RESTRICTED', 'VIEW', false, now(), now())")) {

@@ -10,11 +10,16 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -27,9 +32,9 @@ import org.springframework.transaction.annotation.Transactional;
  * It replaces direct ownership/collaborator lookups with ancestor-walk resolution.
  *
  * <p>The SQL resolver is the identity contract: nearest-page overrides, page No access
- * barriers, page audience overrides, and identity-only trash
- * resolution. Public links are a separate positive channel. The golden matrix pins the SQL
- * contract.
+ * barriers, and identity-only trash resolution. Public links are a separate positive
+ * channel, and so is the workspace audience (a page's own setting, or a space's, which a
+ * page in it can override or block). The golden matrix pins the SQL contract.
  */
 @Service
 @RequiredArgsConstructor
@@ -55,6 +60,8 @@ public class PermissionService {
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final SpaceAccessService spaceAccessService;
+    private final WorkspaceAccessService workspaceAccessService;
+    private final WorkspaceMemberRepository workspaceMemberRepository;
 
     /**
      * Resolves the effective access level of a user for a document.
@@ -117,16 +124,7 @@ public class PermissionService {
     }
 
     private static int accessRank(String level) {
-        if (level == null) {
-            return 0;
-        }
-        return switch (level) {
-            case "OWNER" -> 4;
-            case "EDIT" -> 3;
-            case "COMMENT" -> 2;
-            case "VIEW" -> 1;
-            default -> 0;
-        };
+        return level == null ? 0 : DocumentAccessLevel.valueOf(level).rank();
     }
 
     /**
@@ -161,7 +159,7 @@ public class PermissionService {
      * Resolves one document's identity level for several users at once. The
      * collaborator roster needs this: each row reports what that person can
      * actually do via identity channels here, so a page owner demoted by their space membership no
-     * longer displays as full access. Keys are present even when the level is
+     * longer displays as an owner. Keys are present even when the level is
      * null, so a caller can tell "blocked" from "not queried".
      */
     @Transactional(readOnly = true)
@@ -326,24 +324,32 @@ public class PermissionService {
     }
 
     /**
-     * Roster visibility requires an identity grant (owner, user/group grant, space
-     * baseline, or workspace audience). Link-only readers can open the document but must
-     * not enumerate member names or emails. Masked as not found so link holders cannot
-     * distinguish a private document from a hidden roster.
+     * Roster visibility requires a workspace identity: an owner/user/group grant, a space
+     * baseline, a workspace audience, or membership in the document's workspace. A
+     * link-only outsider can open the document but must not enumerate member names or
+     * emails. Masked as not found so link holders cannot distinguish a private document
+     * from a hidden roster.
      *
      * <p>Shared by every surface that renders the member roster: the collaborator list
      * and the mention picker both disclose people, so both use this one rule.
      */
     @Transactional(readOnly = true)
-    public void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
-        Space space = resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(requesterId)) {
-            return;
-        }
+    public void requireRosterAccess(UUID requesterId, Document doc) {
+        // The grant store is the authority, not creator attribution: a direct OWNER row
+        // authorizes the creator, and a creator whose grant was revoked (or who is only
+        // admitted by a link) does not enumerate the roster.
         if (accessGrantRepository.hasPositiveIdentityGrant(requesterId, doc.getId())) {
             return;
         }
         if (hasSpaceGrant(requesterId, doc)) {
+            return;
+        }
+        // A workspace member keeps their workspace identity even when the only channel
+        // that opened this page is a public link. The roster is withheld only from a
+        // link-only reader outside the workspace, who has no identity here at all.
+        Workspace workspace = doc.getWorkspace();
+        if (workspace != null
+                && workspaceMemberRepository.existsByWorkspaceIdAndUserId(workspace.getId(), requesterId)) {
             return;
         }
         throw new ApiException(ErrorCode.NOT_FOUND);
@@ -373,27 +379,15 @@ public class PermissionService {
     }
 
     /**
-     * Enforces that the user is the direct owner of the document (no ancestor walk).
-     * Administrative settings (e.g. sharing settings, collaborator edits) must be restricted
-     * to the direct owner of the specific page.
-     *
-     * @return the Document if owned
-     */
-    @Transactional(readOnly = true)
-    public Document requireOwnerAccess(UUID userId, UUID documentId) {
-        return documentRepository
-                .findByIdAndUser_IdAndDeletedAtIsNull(documentId, userId)
-                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
-    }
-
-    /**
      * Enforces that the user may administer sharing for the document. A page inside
      * a space follows the same closest-ancestor rule as content: an effective page
      * OWNER (usually an explicit collaborator row) is the authority, and space
      * administration remains the fallback so a space OWNER or workspace admin can
-     * still manage every page. A standalone page keeps the effective-OWNER gate,
-     * including trashed-page breakpoints and the existence mask for callers with no
-     * access. An archived space is rejected with 409 before any mutation.
+     * still manage every page. A private page keeps the workspace id but lives in
+     * its creator's personal section, outside that hierarchy: only an effective page
+     * OWNER or an owner of one of its ancestors may administer sharing there. The
+     * existence mask for callers with no access and the archived-space 409 stay
+     * unchanged.
      *
      * @return the Document when the caller may administer sharing
      */
@@ -415,10 +409,16 @@ public class PermissionService {
             }
 
             // A page-level OWNER overrides a lower space grant, so it must also
-            // carry the sharing rights that make "Full access" truthful.
+            // carry the sharing rights that make OWNER truthful.
             DocumentAccessLevel pageAccess =
                     active != null ? resolveAccess(userId, documentId) : resolveTrashAccess(userId, documentId);
             if (pageAccess == DocumentAccessLevel.OWNER) {
+                return doc;
+            }
+
+            // Ownership of an ancestor page is a subtree grant, so it survives a
+            // child-level demotion on the way down.
+            if (ownsAncestor(userId, doc)) {
                 return doc;
             }
 
@@ -431,13 +431,61 @@ public class PermissionService {
 
         DocumentAccessLevel access =
                 active != null ? resolveAccess(userId, documentId) : resolveTrashAccess(userId, documentId);
-        if (access == null) {
+        // Ownership of an ancestor is a subtree grant, so it survives a child-level
+        // demotion on the way down. Evaluate it before rejecting missing page access: an
+        // ancestor owner blocked by a No access row below still administers that subtree.
+        boolean ancestorOwner = ownsAncestor(userId, doc);
+        if (access == null && !ancestorOwner) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
-        if (access != DocumentAccessLevel.OWNER) {
+        // A private page keeps the workspace id but lives in its creator's personal
+        // section, outside the workspace/space hierarchy. A workspace role is not a
+        // grant on it: only the page owner or an owner of one of its ancestors may
+        // administer sharing. Owning an ancestor is a subtree grant.
+        if (access != DocumentAccessLevel.OWNER && !ancestorOwner) {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
         return doc;
+    }
+
+    /**
+     * True only for the workspace OWNER role. Admins administer, but ownership of
+     * the workspace itself is what keeps a person unblockable below it.
+     */
+    @Transactional(readOnly = true)
+    public boolean isWorkspaceOwner(UUID userId, Document doc) {
+        return workspaceRole(userId, doc)
+                .map(role -> role == WorkspaceRole.OWNER)
+                .orElse(false);
+    }
+
+    /**
+     * True when the caller is an effective OWNER of a strict ancestor. Ownership is a
+     * subtree grant: a nearer page can lower what the caller sees, but it cannot take
+     * away their right to administer sharing (and restore their own level) anywhere
+     * below the level they own. Workspace and space ownership are separate gates.
+     */
+    @Transactional(readOnly = true)
+    public boolean ownsAncestor(UUID userId, Document doc) {
+        List<UUID> ancestorIds = documentRepository.findAncestorChainIds(doc.getId());
+        if (ancestorIds.isEmpty()) {
+            return false;
+        }
+        Map<UUID, DocumentAccessLevel> levels = doc.getDeletedAt() != null
+                ? resolveTrashAccessBatch(userId, ancestorIds)
+                : resolveAccessBatch(userId, ancestorIds);
+        return levels.containsValue(DocumentAccessLevel.OWNER);
+    }
+
+    private Optional<WorkspaceRole> workspaceRole(UUID userId, Document doc) {
+        if (doc.getWorkspace() == null) {
+            return Optional.empty();
+        }
+        return workspaceAccessService
+                .findMember(userId)
+                .filter(membership ->
+                        membership.workspace().getId().equals(doc.getWorkspace().getId()))
+                .map(membership -> membership.member().getRole());
     }
 
     /**
@@ -465,16 +513,6 @@ public class PermissionService {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }
         return trashed;
-    }
-
-    /**
-     * Drops page audience rules for a subtree that is leaving its space. This is a
-     * maintenance write, not an authorization gate: callers have already checked that
-     * the actor may move or detach the page. Identity, group, and user grants stay.
-     */
-    @Transactional
-    public void removeSpaceAudienceRules(UUID subtreeRootId) {
-        accessGrantRepository.deleteSpaceAudienceGrantsInSubtree(subtreeRootId);
     }
 
     /**

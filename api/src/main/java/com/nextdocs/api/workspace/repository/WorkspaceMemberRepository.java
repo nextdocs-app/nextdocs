@@ -3,6 +3,7 @@ package com.nextdocs.api.workspace.repository;
 import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -10,6 +11,7 @@ import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -32,6 +34,15 @@ public interface WorkspaceMemberRepository extends JpaRepository<WorkspaceMember
     List<WorkspaceMember> findAllByWorkspaceIdOrderByCreatedAtAsc(UUID workspaceId);
 
     Optional<WorkspaceMember> findByWorkspaceIdAndUserId(UUID workspaceId, UUID userId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT wm FROM WorkspaceMember wm WHERE wm.user.id = :userId")
+    Optional<WorkspaceMember> findByUserIdForUpdate(@Param("userId") UUID userId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT wm FROM WorkspaceMember wm WHERE wm.workspace.id = :workspaceId AND wm.user.id = :userId")
+    Optional<WorkspaceMember> findByWorkspaceIdAndUserIdForUpdate(
+            @Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
 
     long countByWorkspaceId(UUID workspaceId);
 

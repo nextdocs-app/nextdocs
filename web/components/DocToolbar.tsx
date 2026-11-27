@@ -76,7 +76,7 @@ interface DocToolbarProps {
   showTrashNotice?: boolean;
   /** Whether the viewer may restore/purge the trashed document (EDIT access or owner) */
   canManageTrash?: boolean;
-  /** Whether the viewer may manage sharing settings (OWNER access or full-access collaborator) */
+  /** Whether the viewer may manage sharing settings (OWNER access, directly or inherited) */
   canManageSharing?: boolean;
   /** Space context for the share panel when the page lives in a space */
   documentSpace?: DocumentSpaceSummary | null;

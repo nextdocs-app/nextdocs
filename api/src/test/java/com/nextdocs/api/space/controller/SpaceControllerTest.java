@@ -326,7 +326,6 @@ class SpaceControllerTest {
                 false,
                 false,
                 DocumentAccessLevel.OWNER,
-                "Owner",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,

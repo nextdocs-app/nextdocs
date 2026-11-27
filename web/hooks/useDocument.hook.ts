@@ -52,6 +52,7 @@ import { normalizeDocumentTitle } from '@/lib/document-content.util';
 import { hasRelatedYjsHistory, mergeYjsSnapshot } from '@/lib/yjs.util';
 import { preserveStaleLocalCopy } from '@/lib/stale-local-copy.util';
 import { dispatchDocumentMetaUpdated } from '@/lib/document-meta-event.util';
+import { subscribeDocumentAccessChanged } from '@/lib/document-access-event.util';
 import type { DocumentLoadResult, DocumentMeta } from '@/types/document.types';
 import type * as Y from '@y/y';
 import { WebsocketProvider } from '@y/websocket';
@@ -256,6 +257,12 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
   const accessTokenRef = useRef<string | null>(accessToken);
   const accessLevelRef = useRef<DocumentAccessLevel | null>(initialFallbackAccessLevel);
+  // Bumped by every access-change event and periodic poll. A read captures it
+  // before the request and discards its answer when a newer read started meanwhile.
+  const accessEventSeqRef = useRef(0);
+  // Bumped whenever a document-opening visit resets or begins loading, so a
+  // re-read from an earlier visit to the same document cannot land after reopen.
+  const openDocumentGenerationRef = useRef(0);
   const [resolvedDocumentId, setResolvedDocumentId] = useState(id);
   const [accessLevel, setAccessLevel] = useState<DocumentAccessLevel | null>(
     initialFallbackAccessLevel
@@ -373,6 +380,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   // either a status code (generic not-found) or the API error that triggered it.
   const enterRestrictedState = useCallback(
     (documentId: string, source: DocumentServiceApiError | number) => {
+      // Invalidate any in-flight opening or re-read for the visit being restricted
+      // so a slow cache write cannot republish the Y.Doc over the restricted panel.
+      openDocumentGenerationRef.current += 1;
       clearCachedDocumentAccessLevel(documentId);
       const restrictedError =
         typeof source === 'number'
@@ -410,6 +420,60 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
   useEffect(() => {
     resolvedDocumentIdRef.current = resolvedDocumentId;
   }, [resolvedDocumentId]);
+
+  // The share panel writes grants, including this caller's own level. Re-read the
+  // level it changed instead of keeping the one resolved at load: a self-demotion
+  // to VIEW/COMMENT must make the editor read-only now, not after a reload. A
+  // denial is a real verdict, so it lands in the restricted state; a transient
+  // failure keeps the last known level rather than escalating to a lockout.
+  useEffect(() => {
+    return subscribeDocumentAccessChanged((changedId) => {
+      const token = accessTokenRef.current;
+      if (changedId !== resolvedDocumentIdRef.current || !isAuthenticated || !token) {
+        return;
+      }
+      accessEventSeqRef.current += 1;
+      const eventSeq = accessEventSeqRef.current;
+      const openGeneration = openDocumentGenerationRef.current;
+
+      void (async () => {
+        try {
+          const myAccess = await documentService.getMyAccess(changedId, token);
+          // The panel may have switched documents (or revisited the same document)
+          // while this read was in flight, or a newer read may have superseded it.
+          if (
+            resolvedDocumentIdRef.current !== changedId ||
+            openDocumentGenerationRef.current !== openGeneration ||
+            accessEventSeqRef.current !== eventSeq
+          ) {
+            return;
+          }
+          if (!myAccess.allowed || !myAccess.accessLevel) {
+            enterRestrictedState(changedId, 404);
+            return;
+          }
+          writeCachedDocumentAccessLevel(changedId, myAccess.accessLevel);
+          setResolvedAccessLevel(myAccess.accessLevel, true);
+          setSharingContext(toSharingContext(myAccess));
+        } catch (err) {
+          if (
+            resolvedDocumentIdRef.current !== changedId ||
+            openDocumentGenerationRef.current !== openGeneration ||
+            accessEventSeqRef.current !== eventSeq
+          ) {
+            return;
+          }
+          if (err instanceof DocumentServiceApiError) {
+            if (err.status === 401) {
+              void refresh();
+            } else if (err.status === 403 || err.status === 404) {
+              enterRestrictedState(changedId, err.status);
+            }
+          }
+        }
+      })();
+    });
+  }, [isAuthenticated, enterRestrictedState, refresh, setResolvedAccessLevel]);
 
   useEffect(() => {
     const syncPendingCloudCreate = () => {
@@ -476,6 +540,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
   useEffect(() => {
     if (isInitializing) {
+      openDocumentGenerationRef.current += 1;
       dispatch(setLoading(true));
       dispatch(setError(null));
       setErrorState(null);
@@ -509,6 +574,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     }
 
     lastLoadContextKeyRef.current = loadContextKey;
+    const openGeneration = ++openDocumentGenerationRef.current;
     const initialLevel = readCachedDocumentAccessLevel(id) ?? (isSharedDocument ? 'VIEW' : null);
     setResolvedAccessLevel(initialLevel, false);
     setSharingContext(EMPTY_SHARING_CONTEXT);
@@ -517,6 +583,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
     setIsGuestShareLink(isSharedDocument);
 
     let cancelled = false;
+    const isCurrentLoad = () => !cancelled && openDocumentGenerationRef.current === openGeneration;
 
     async function loadDoc() {
       try {
@@ -568,6 +635,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 cloudErr instanceof DocumentServiceApiError &&
                 (cloudErr.status === 403 || cloudErr.status === 404)
               ) {
+                if (!isCurrentLoad()) return;
                 enterRestrictedState(id, cloudErr);
                 return;
               } else if (!isConnectivityError(cloudErr)) {
@@ -588,12 +656,14 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               result = await documentService.getPublicDocument(id);
               // An in-place sign-in cancels this guest load; it must not restore
               // public-link provenance on the account that just signed in.
-              if (cancelled) return;
+              if (!isCurrentLoad()) return;
               documentService.notePublicLinkDocument(id);
               guestAccessLevel = await resolveGuestAccessLevel(id, {
                 payloadLevel: result.accessLevel,
               });
+              if (!isCurrentLoad()) return;
             } catch (publicErr) {
+              if (!isCurrentLoad()) return;
               if (
                 publicErr instanceof DocumentServiceApiError &&
                 (publicErr.status === 403 || publicErr.status === 404)
@@ -606,15 +676,18 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               }
 
               const localResult = await documentService.loadDocument(id);
+              if (!isCurrentLoad()) return;
               if (!localResult) {
                 throw publicErr;
               }
 
               result = localResult;
               guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
+              if (!isCurrentLoad()) return;
             }
           } else {
             const localResult = await documentService.loadDocument(id);
+            if (!isCurrentLoad()) return;
 
             // Guests have no private workspace. A local record that is not a
             // share-link mirror is a leftover from the removed guest flow and
@@ -633,17 +706,20 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               result = await documentService.getPublicDocument(id);
               // Same guard for the unauthenticated private-route fallback: a load
               // that sign-in already superseded must not tag the session.
-              if (cancelled) return;
+              if (!isCurrentLoad()) return;
               documentService.notePublicLinkDocument(id);
               loadedFromShareLink = true;
               guestAccessLevel = await resolveGuestAccessLevel(id, {
                 payloadLevel: result.accessLevel,
               });
+              if (!isCurrentLoad()) return;
             } catch (publicErr) {
+              if (!isCurrentLoad()) return;
               if (isConnectivityError(publicErr)) {
                 if (localResult) {
                   result = localResult;
                   guestAccessLevel = await resolveGuestAccessLevel(id, { fallback: 'VIEW' });
+                  if (!isCurrentLoad()) return;
                 } else {
                   // No local mirror: recreating a blank EDIT copy offline would
                   // let a guest fabricate writes that later hit the public
@@ -667,6 +743,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           }
         }
 
+        if (!isCurrentLoad()) {
+          return;
+        }
+
         const isTrashedDoc = !!result.meta.deletedAt;
 
         if (isTrashedDoc && !isAuthenticated) {
@@ -674,7 +754,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           return;
         }
 
-        if (!cancelled) {
+        if (isCurrentLoad()) {
           setIsGuestShareLink(loadedFromShareLink);
           if (
             isAuthenticated &&
@@ -683,36 +763,44 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             !hasPendingSyncForRequestedDoc &&
             !hasPendingCloudCreateForRequestedDoc
           ) {
+            accessEventSeqRef.current += 1;
+            const accessSeq = accessEventSeqRef.current;
             try {
               const myAccess = await documentService.getMyAccess(effectiveId, token);
-              if (!myAccess.allowed || !myAccess.accessLevel) {
-                enterRestrictedState(effectiveId, 404);
-                return;
+              if (!isCurrentLoad()) return;
+              if (accessEventSeqRef.current === accessSeq) {
+                if (!myAccess.allowed || !myAccess.accessLevel) {
+                  enterRestrictedState(effectiveId, 404);
+                  return;
+                }
+                // Cache the level even for trashed docs so refresh does not
+                // flicker to read-only before getMyAccess resolves. The doc
+                // stays read-only via meta.deletedAt regardless of cached level.
+                writeCachedDocumentAccessLevel(effectiveId, myAccess.accessLevel);
+                setResolvedAccessLevel(myAccess.accessLevel, true);
+                setSharingContext(toSharingContext(myAccess));
               }
-              // Cache the level even for trashed docs so refresh does not
-              // flicker to read-only before getMyAccess resolves. The doc
-              // stays read-only via meta.deletedAt regardless of cached level.
-              writeCachedDocumentAccessLevel(effectiveId, myAccess.accessLevel);
-              setResolvedAccessLevel(myAccess.accessLevel, true);
-              setSharingContext(toSharingContext(myAccess));
             } catch (accessErr) {
-              if (
-                accessErr instanceof DocumentServiceApiError &&
-                (accessErr.status === 403 || accessErr.status === 404)
-              ) {
-                enterRestrictedState(effectiveId, accessErr);
-                return;
-              }
+              if (!isCurrentLoad()) return;
+              if (accessEventSeqRef.current === accessSeq) {
+                if (
+                  accessErr instanceof DocumentServiceApiError &&
+                  (accessErr.status === 403 || accessErr.status === 404)
+                ) {
+                  enterRestrictedState(effectiveId, accessErr);
+                  return;
+                }
 
-              // Access lookup is advisory for UI state; keep the most recently known access level
-              // when the network drops so cached shared docs do not become editable offline.
-              const fallbackLevel = isTrashedDoc
-                ? (readCachedDocumentAccessLevel(effectiveId) ?? accessLevelRef.current ?? 'VIEW')
-                : resolveAuthenticatedFallbackAccessLevel(effectiveId, {
-                    currentAccessLevel: accessLevelRef.current,
-                    isSharedDocument,
-                  });
-              setResolvedAccessLevel(fallbackLevel, true);
+                // Access lookup is advisory for UI state; keep the most recently known access level
+                // when the network drops so cached shared docs do not become editable offline.
+                const fallbackLevel = isTrashedDoc
+                  ? (readCachedDocumentAccessLevel(effectiveId) ?? accessLevelRef.current ?? 'VIEW')
+                  : resolveAuthenticatedFallbackAccessLevel(effectiveId, {
+                      currentAccessLevel: accessLevelRef.current,
+                      isSharedDocument,
+                    });
+                setResolvedAccessLevel(fallbackLevel, true);
+              }
             }
           } else {
             const fallbackLevel = isTrashedDoc
@@ -759,6 +847,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             }
           }
 
+          if (cancelled || openDocumentGenerationRef.current !== openGeneration) {
+            return;
+          }
+
           ydocRef.current = result.ydoc;
           setResolvedDocumentId(effectiveId);
           setYDoc(result.ydoc);
@@ -778,7 +870,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       } catch (err) {
         console.error('Failed to load document:', err);
 
-        if (!cancelled) {
+        if (!cancelled && openDocumentGenerationRef.current === openGeneration) {
           const nextError = buildDocumentErrorState(err);
           setErrorState(nextError);
           ydocRef.current = null;
@@ -925,9 +1017,11 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         return;
       }
 
+      accessEventSeqRef.current += 1;
+      const accessSeq = accessEventSeqRef.current;
       try {
         const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
-        if (closeHandlerCancelled) return;
+        if (closeHandlerCancelled || accessEventSeqRef.current !== accessSeq) return;
         if (!myAccess.allowed || !myAccess.accessLevel) {
           enterRestrictedState(resolvedDocumentId, 404);
           return;
@@ -937,7 +1031,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           const cloudCopy = await documentService.getCloudDocument(resolvedDocumentId, token, {
             includeTrashed: true,
           });
-          if (closeHandlerCancelled) return;
+          if (closeHandlerCancelled || accessEventSeqRef.current !== accessSeq) return;
           if (cloudCopy.meta.deletedAt) {
             applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
             return;
@@ -948,7 +1042,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         // then restricting is honest instead of showing a silently blank document.
         enterRestrictedState(resolvedDocumentId, 404);
       } catch (err) {
-        if (closeHandlerCancelled) return;
+        if (closeHandlerCancelled || accessEventSeqRef.current !== accessSeq) return;
         if (err instanceof DocumentServiceApiError && err.status === 401) {
           // A stale token is not an access verdict: refresh and let the provider
           // effect reconnect with the new token instead of restricting the page.
@@ -1018,11 +1112,17 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       }
 
       const verifyAccessAndHandleClose = async () => {
+        accessEventSeqRef.current += 1;
+        const accessSeq = accessEventSeqRef.current;
         try {
           const token = accessTokenRef.current;
           if (token) {
             const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
             if (closeHandlerCancelled) return;
+            if (accessEventSeqRef.current !== accessSeq) {
+              scheduleCloseReconnect();
+              return;
+            }
             if (myAccess.allowed) {
               setSharingContext(toSharingContext(myAccess));
             }
@@ -1038,6 +1138,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                   { includeTrashed: true }
                 );
                 if (closeHandlerCancelled) return;
+                if (accessEventSeqRef.current !== accessSeq) {
+                  scheduleCloseReconnect();
+                  return;
+                }
                 if (cloudCopy.meta.deletedAt) {
                   applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
                   if (provider) {
@@ -1055,6 +1159,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
                 return;
               } catch (cloudErr) {
                 if (closeHandlerCancelled) return;
+                if (accessEventSeqRef.current !== accessSeq) {
+                  scheduleCloseReconnect();
+                  return;
+                }
                 if (
                   cloudErr instanceof DocumentServiceApiError &&
                   (cloudErr.status === 403 || cloudErr.status === 404)
@@ -1087,6 +1195,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             try {
               const publicAccess = await documentService.checkAccess(resolvedDocumentId);
               if (closeHandlerCancelled) return;
+              if (accessEventSeqRef.current !== accessSeq) {
+                scheduleCloseReconnect();
+                return;
+              }
               if (!publicAccess.allowed || !publicAccess.accessLevel) {
                 handleAccessRevoked(404);
                 return;
@@ -1097,6 +1209,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
               return;
             } catch (publicErr) {
               if (closeHandlerCancelled) return;
+              if (accessEventSeqRef.current !== accessSeq) {
+                scheduleCloseReconnect();
+                return;
+              }
               if (
                 publicErr instanceof DocumentServiceApiError &&
                 (publicErr.status === 403 || publicErr.status === 404)
@@ -1125,6 +1241,10 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             (err.status === 403 || err.status === 404)
           ) {
             if (closeHandlerCancelled) return;
+            if (accessEventSeqRef.current !== accessSeq) {
+              scheduleCloseReconnect();
+              return;
+            }
             // Access has been officially revoked/restricted.
             handleAccessRevoked(err.status);
             return;
@@ -1166,6 +1286,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
 
     const initRealtimeSession = async () => {
       sessionRetryTimer = undefined;
+      const accessSeq = accessEventSeqRef.current;
       try {
         const session = await documentService.createRealtimeSession(
           resolvedDocumentId,
@@ -1173,7 +1294,7 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
         );
         if (cancelled) return;
 
-        if (session.accessLevel) {
+        if (session.accessLevel && accessEventSeqRef.current === accessSeq) {
           writeCachedDocumentAccessLevel(resolvedDocumentId, session.accessLevel);
           setResolvedAccessLevel(session.accessLevel, true);
         }
@@ -1209,6 +1330,13 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof DocumentServiceApiError && (err.status === 403 || err.status === 404)) {
+          if (accessEventSeqRef.current !== accessSeq) {
+            // A newer access read superseded this denial; retry session setup if the page is still active.
+            if (ydocRef.current !== null && accessLevelRef.current !== null) {
+              scheduleSessionRetry();
+            }
+            return;
+          }
           enterRestrictedState(resolvedDocumentId, err.status);
           return;
         }
@@ -1316,9 +1444,21 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       if (isCloudReadInBackoff()) {
         return;
       }
+      const openGeneration = openDocumentGenerationRef.current;
+      const isCurrentPoll = (seq: number) =>
+        openDocumentGenerationRef.current === openGeneration &&
+        accessEventSeqRef.current === seq &&
+        resolvedDocumentIdRef.current === resolvedDocumentId;
       if (!isAuthenticated) {
+        accessEventSeqRef.current += 1;
+        const accessSeq = accessEventSeqRef.current;
         try {
           const publicAccess = await documentService.checkAccess(resolvedDocumentId);
+          // The interval was cleared when the page switched, but this request may still
+          // resolve afterwards; its answer belongs to an earlier opening, document, or read.
+          if (!isCurrentPoll(accessSeq)) {
+            return;
+          }
           if (!publicAccess.allowed || !publicAccess.accessLevel) {
             enterRestrictedState(resolvedDocumentId, 404);
             return;
@@ -1328,6 +1468,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             setResolvedAccessLevel(publicAccess.accessLevel, true);
           }
         } catch (err) {
+          if (!isCurrentPoll(accessSeq)) {
+            return;
+          }
           if (
             err instanceof DocumentServiceApiError &&
             (err.status === 403 || err.status === 404)
@@ -1345,8 +1488,15 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
       if (!token) {
         return;
       }
+      accessEventSeqRef.current += 1;
+      const accessSeq = accessEventSeqRef.current;
       try {
         const myAccess = await documentService.getMyAccess(resolvedDocumentId, token);
+        // A newer access-change event or poll has its own read in flight, and a switched
+        // or reopened document has a new opening; this older answer must not overwrite either.
+        if (!isCurrentPoll(accessSeq)) {
+          return;
+        }
         if (myAccess.allowed) {
           setSharingContext(toSharingContext(myAccess));
         }
@@ -1357,6 +1507,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             const cloudCopy = await documentService.getCloudDocument(resolvedDocumentId, token, {
               includeTrashed: true,
             });
+            if (!isCurrentPoll(accessSeq)) {
+              return;
+            }
             if (cloudCopy.meta.deletedAt) {
               applyTrashedDocumentView(resolvedDocumentId, cloudCopy, myAccess.accessLevel);
               return;
@@ -1366,6 +1519,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
             setResolvedAccessLevel(myAccess.accessLevel, true);
             return;
           } catch (cloudErr) {
+            if (!isCurrentPoll(accessSeq)) {
+              return;
+            }
             if (
               cloudErr instanceof DocumentServiceApiError &&
               (cloudErr.status === 403 || cloudErr.status === 404)
@@ -1386,6 +1542,9 @@ export function useDocument(documentId: string, options?: UseDocumentOptions) {
           setResolvedAccessLevel(myAccess.accessLevel, true);
         }
       } catch (err) {
+        if (!isCurrentPoll(accessSeq)) {
+          return;
+        }
         if (err instanceof DocumentServiceApiError && err.status === 401) {
           // Stale token: silently attempt re-auth. When refreshSessionThunk resolves
           // with a new accessToken, the dep change tears down and recreates this

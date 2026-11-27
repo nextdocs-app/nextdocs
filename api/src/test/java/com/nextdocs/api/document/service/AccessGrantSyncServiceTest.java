@@ -42,7 +42,7 @@ class AccessGrantSyncServiceTest {
         document = Document.builder()
                 .id(UUID.randomUUID())
                 .workspace(workspace)
-                .user(User.builder()
+                .creator(User.builder()
                         .id(UUID.randomUUID())
                         .passwordHash("$2a$12$hash")
                         .build())
@@ -64,7 +64,7 @@ class AccessGrantSyncServiceTest {
     void upsertUserGrant_rejectsDocumentsWithoutWorkspace() {
         Document noWorkspaceDoc = Document.builder()
                 .id(UUID.randomUUID())
-                .user(User.builder()
+                .creator(User.builder()
                         .id(UUID.randomUUID())
                         .passwordHash("$2a$12$hash")
                         .build())

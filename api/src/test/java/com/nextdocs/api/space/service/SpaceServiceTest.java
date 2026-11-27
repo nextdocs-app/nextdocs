@@ -692,14 +692,18 @@ class SpaceServiceTest {
     }
 
     @Test
-    void detachPage_locksTheSpaceAndLeavesTheGateToDocumentService() {
+    void detachPage_locksWorkspaceThenSpaceAndLeavesTheGateToDocumentService() {
         UUID documentId = UUID.randomUUID();
+        when(spaceRepository.findWorkspaceIdById(space.getId())).thenReturn(Optional.of(workspace.getId()));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
 
         spaceService.detachPage(actorId, space.getId(), documentId);
 
-        verify(spaceRepository).findByIdForUpdate(space.getId());
-        verify(documentService).clearSpace(actorId, documentId, space.getId());
+        var inOrder = org.mockito.Mockito.inOrder(workspaceRepository, spaceRepository, documentService);
+        inOrder.verify(workspaceRepository).findByIdForUpdate(workspace.getId());
+        inOrder.verify(spaceRepository).findByIdForUpdate(space.getId());
+        inOrder.verify(documentService).clearSpace(actorId, documentId, space.getId());
         verify(auditService)
                 .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());

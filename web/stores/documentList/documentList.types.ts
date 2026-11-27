@@ -18,9 +18,8 @@ export interface LocalDocumentEntry {
 
 export interface SharedDocumentEntry extends LocalDocumentEntry {
   /**
-   * Whether the entry is the current user's own page, derived from the server's
-   * ownership flag and never from `accessLevel`: a collaborator can hold an
-   * OWNER-level grant, and treating that as ownership hides their shared page.
+   * The server's ownership flag, which is the OWNER access level: ownership is a grant
+   * row now, so a collaborator promoted to OWNER is an owner too.
    */
   relationship: 'owner' | 'collaborator';
   /** Real parent in the owning user's tree (null for root-level documents). */

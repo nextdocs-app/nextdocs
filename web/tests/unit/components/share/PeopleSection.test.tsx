@@ -11,7 +11,6 @@ function person(overrides: Partial<Collaborator> & Pick<Collaborator, 'userId'>)
     displayName: overrides.userId,
     accessLevel: 'VIEW',
     addedAt: '2026-01-01T00:00:00Z',
-    owner: false,
     ...overrides,
   };
 }
@@ -27,7 +26,6 @@ describe('PeopleSection', () => {
         title: 'From “Product roadmap”',
         sourceId: 'doc-1',
         sourceTitle: 'Product roadmap',
-        icon: { type: 'emoji', value: '🗺️' },
         people: [
           person({ userId: 'alice', inherited: true, inheritedFromId: 'doc-1' }),
           person({ userId: 'bob', inherited: true, inheritedFromId: 'doc-1' }),
@@ -40,6 +38,9 @@ describe('PeopleSection', () => {
         pinned={null}
         flat={[]}
         groups={groups}
+        breadcrumbs={[
+          { id: 'doc-1', title: 'Product roadmap', icon: { type: 'emoji', value: '🗺️' } },
+        ]}
         canManageSharing={true}
         hasEffectivePublicLink={false}
         effectiveLinkAction="view"
@@ -61,7 +62,6 @@ describe('PeopleSection', () => {
         title: 'From “Design docs”',
         sourceId: 'doc-2',
         sourceTitle: 'Design docs',
-        icon: null,
         people: [
           person({ userId: 'alice', inherited: true, inheritedFromId: 'doc-2' }),
           person({ userId: 'bob', inherited: true, inheritedFromId: 'doc-2' }),
@@ -97,7 +97,6 @@ describe('PeopleSection', () => {
         title: 'From “Engineering”',
         sourceId: 'space-1',
         sourceTitle: 'Engineering',
-        icon: { type: 'emoji', value: '⚙️' },
         people: [
           person({ userId: 'alice', inherited: true, inheritedFromId: 'space-1' }),
           person({ userId: 'bob', inherited: true, inheritedFromId: 'space-1' }),
@@ -110,6 +109,13 @@ describe('PeopleSection', () => {
         pinned={null}
         flat={[]}
         groups={groups}
+        breadcrumbs={[
+          {
+            id: 'doc',
+            title: 'Doc',
+            space: { id: 'space-1', name: 'Engineering', icon: { type: 'emoji', value: '⚙️' } },
+          },
+        ]}
         canManageSharing={true}
         hasEffectivePublicLink={false}
         effectiveLinkAction="view"
@@ -131,7 +137,6 @@ describe('PeopleSection', () => {
         title: 'From “General”',
         sourceId: 'space-2',
         sourceTitle: 'General',
-        icon: null,
         people: [
           person({ userId: 'alice', inherited: true, inheritedFromId: 'space-2' }),
           person({ userId: 'bob', inherited: true, inheritedFromId: 'space-2' }),
@@ -165,7 +170,6 @@ describe('PeopleSection', () => {
         title: 'Blocked',
         sourceId: null,
         sourceTitle: null,
-        icon: null,
         people: [person({ userId: 'malicious', accessLevel: 'NO_ACCESS' })],
       },
     ];
@@ -229,5 +233,86 @@ describe('PeopleSection', () => {
     await user.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
+  });
+
+  describe('the viewer’s own row', () => {
+    function renderSelfRow(overrides: Partial<Collaborator>, canManageSharing = true): void {
+      render(
+        <PeopleSection
+          pinned={person({ userId: 'me', ...overrides })}
+          flat={[]}
+          groups={[]}
+          canManageSharing={canManageSharing}
+          currentUserId="me"
+          hasEffectivePublicLink={false}
+          effectiveLinkAction="view"
+          recentlyAddedUserIds={new Set()}
+          onAccessSelect={noop}
+          onNavigate={noop}
+        />
+      );
+    }
+
+    it('is editable when the viewer holds OWNER', () => {
+      renderSelfRow({ accessLevel: 'OWNER' });
+
+      expect(screen.getByRole('button', { name: /Owner/i })).toBeInTheDocument();
+    });
+
+    it('is editable when the viewer holds a lower level but can manage sharing', () => {
+      // A hierarchy owner who demoted themselves on this child can still
+      // administer sharing, so their own row must stay editable.
+      renderSelfRow({ accessLevel: 'EDIT' });
+
+      expect(screen.getByRole('button', { name: /Can edit/i })).toBeInTheDocument();
+    });
+
+    it('offers Leave to a lower-level viewer who cannot manage sharing', () => {
+      // Removing yourself is not a sharing write: the API keeps it on the leave
+      // endpoint, so an invited EDIT collaborator can still take themselves off.
+      renderSelfRow({ accessLevel: 'EDIT' }, false);
+
+      expect(screen.getByRole('button', { name: /Can edit/i })).toBeInTheDocument();
+    });
+
+    it('offers Leave to a viewer who cannot manage sharing', () => {
+      renderSelfRow({ accessLevel: 'OWNER' }, false);
+
+      expect(screen.getByRole('button', { name: /Owner/i })).toBeInTheDocument();
+    });
+
+    it('is read-only when the membership is inherited', () => {
+      // Inherited access cannot be left; the API answers 404, so no menu is offered.
+      renderSelfRow({ accessLevel: 'EDIT', inherited: true, inheritedFromId: 'space-1' }, false);
+
+      expect(screen.queryByRole('button', { name: /Can edit/i })).not.toBeInTheDocument();
+      expect(screen.getByText('Can edit')).toBeInTheDocument();
+    });
+
+    it('is read-only when the viewer has no leave and cannot manage sharing', () => {
+      renderSelfRow({ accessLevel: 'NO_ACCESS' }, false);
+
+      expect(screen.queryByRole('button', { name: /No access/i })).not.toBeInTheDocument();
+      expect(screen.getByText('No access')).toBeInTheDocument();
+    });
+
+    it('is editable for an owner row', () => {
+      render(
+        <PeopleSection
+          pinned={person({ userId: 'me', accessLevel: 'OWNER' })}
+          flat={[]}
+          groups={[]}
+          canManageSharing={true}
+          currentUserId="me"
+          hasEffectivePublicLink={false}
+          effectiveLinkAction="view"
+          recentlyAddedUserIds={new Set()}
+          onAccessSelect={noop}
+          onNavigate={noop}
+        />
+      );
+
+      expect(screen.getByRole('button', { name: /Owner/i })).toBeInTheDocument();
+    });
   });
 });

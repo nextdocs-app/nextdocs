@@ -388,7 +388,8 @@ class AttachmentMigrationPostgresTest {
     private UUID insertDocument(boolean legacyContentColumn) throws SQLException {
         UUID id = UUID.randomUUID();
         boolean hasWorkspace = hasWorkspaceColumn();
-        String sql = "INSERT INTO documents (id, user_id"
+        String creatorColumn = hasColumn("documents", "user_id") ? "user_id" : "created_by";
+        String sql = "INSERT INTO documents (id, " + creatorColumn
                 + (hasWorkspace ? ", workspace_id" : "")
                 + ", title"
                 + (legacyContentColumn ? ", yjs_state" : "")
@@ -408,6 +409,18 @@ class AttachmentMigrationPostgresTest {
             stmt.executeUpdate();
         }
         return id;
+    }
+
+    private boolean hasColumn(String table, String column) throws SQLException {
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                        + "AND table_name = ? AND column_name = ?")) {
+            stmt.setString(1, table);
+            stmt.setString(2, column);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     private boolean hasWorkspaceColumn() throws SQLException {

@@ -196,7 +196,6 @@ describe('usePendingCloudDocumentCreates', () => {
       'doc-1',
       'Offline draft',
       localDocument.ydoc,
-      null,
       null
     );
     expect(getPendingCloudCreate('doc-2')).toBeNull();

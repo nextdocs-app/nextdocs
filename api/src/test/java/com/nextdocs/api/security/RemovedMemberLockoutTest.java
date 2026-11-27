@@ -75,14 +75,15 @@ class RemovedMemberLockoutTest {
         String memberRefresh =
                 tokenService.issueRefreshToken(member, new MockHttpServletRequest(), new MockHttpServletResponse());
 
-        // The member token is live before the removal…
-        mockMvc.perform(get("/api/v1/documents").header("Authorization", "Bearer " + memberToken))
+        // The member token is live before the removal. The document listing is avoided
+        // here: it resolves access through resolve_effective_access, which H2 lacks.
+        mockMvc.perform(get("/api/v1/workspaces/current").header("Authorization", "Bearer " + memberToken))
                 .andExpect(status().isOk());
 
         workspaceService.removeMember(owner.getId(), member.getId());
 
         // …and dead on the very next request, without waiting out the token's expiry.
-        mockMvc.perform(get("/api/v1/documents").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/v1/workspaces/current").header("Authorization", "Bearer " + memberToken))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/workspaces/current").header("Authorization", "Bearer " + memberToken))
                 .andExpect(status().isUnauthorized());
@@ -90,14 +91,14 @@ class RemovedMemberLockoutTest {
         mockMvc.perform(post("/api/v1/auth/refresh").cookie(new Cookie("rt", memberRefresh)))
                 .andExpect(status().isUnauthorized());
         // Other members are unaffected.
-        mockMvc.perform(get("/api/v1/documents").header("Authorization", "Bearer " + ownerToken))
+        mockMvc.perform(get("/api/v1/workspaces/current").header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isOk());
 
         // Even if the account were flipped active again without a membership, the old
         // token stays refused: the gate is the live membership, not the account flag.
         member.setActive(true);
         userRepository.saveAndFlush(member);
-        mockMvc.perform(get("/api/v1/documents").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/v1/workspaces/current").header("Authorization", "Bearer " + memberToken))
                 .andExpect(status().isUnauthorized());
 
         assertThat(memberRepository.findByUserId(member.getId())).isEmpty();

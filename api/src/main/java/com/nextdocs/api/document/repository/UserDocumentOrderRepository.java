@@ -21,10 +21,6 @@ public interface UserDocumentOrderRepository extends JpaRepository<UserDocumentO
     boolean existsByUser_IdAndOrderKey(UUID userId, String orderKey);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("DELETE FROM UserDocumentOrder udo WHERE udo.user.id = :userId AND udo.document.id = :documentId")
-    void deleteByUser_IdAndDocument_Id(@Param("userId") UUID userId, @Param("documentId") UUID documentId);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("DELETE FROM UserDocumentOrder udo WHERE udo.document.id = :documentId")
     void deleteByDocument_Id(@Param("documentId") UUID documentId);
 

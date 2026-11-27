@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef } from 'react';
 import { ChevronRight, Search, Restore, Trash } from '@/icons';
 import { DocRowIcon } from './DocRowIcon';
 import { DocumentsPanelSkeleton } from './DocumentsPanelSkeleton';
-import { DocumentActionsButton } from './DocumentActionsButton';
 import { SidebarTreeItem } from './SidebarTreeItem';
 import { SidebarTreeDndContext } from './SidebarTreeDndContext';
 import { useStickyRowMetrics } from './useStickyRowMetrics';
@@ -50,7 +49,6 @@ export type DocumentsPanelProps = {
     documentId: string,
     actionType: DocActionType
   ) => void;
-  resolvePanelActionType: (doc: SidebarSectionDocument) => DocActionType;
   resolvePanelTreeActionType: (documentId: string) => DocActionType;
   setDocActionsAnchor: (anchor: DocActionsAnchor | null) => void;
   hasMore: boolean;
@@ -85,7 +83,6 @@ export function DocumentsPanel({
   onRequestPermanentDelete,
   docActionsAnchor,
   onToggleDocumentActions,
-  resolvePanelActionType,
   resolvePanelTreeActionType,
   setDocActionsAnchor,
   hasMore,
@@ -388,7 +385,7 @@ export function DocumentsPanel({
                 isTrashPanel && doc.parentId != null && trashedDocIds.has(doc.parentId);
               return (
                 <li key={`all-doc-${doc.id}`} className="relative group/doc">
-                  {isTrashPanel ? (
+                  {
                     <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
                       <button
                         onClick={() => {
@@ -444,34 +441,7 @@ export function DocumentsPanel({
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => {
-                          setDocActionsAnchor(null);
-                          onSelectDocument(doc.id);
-                        }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-9 pointer-coarse:pr-12 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
-                          isActive
-                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
-                            : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
-                        }`}
-                      >
-                        <DocRowIcon icon={doc.meta.icon} />
-                        <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
-                      </button>
-
-                      {isAuthenticated && accessToken && (
-                        <DocumentActionsButton
-                          documentId={doc.id}
-                          documentTitle={doc.meta.title || 'Untitled'}
-                          actionType={resolvePanelActionType(doc as SidebarSectionDocument)}
-                          isOpen={docActionsAnchor?.documentId === doc.id}
-                          onToggle={onToggleDocumentActions}
-                        />
-                      )}
-                    </>
-                  )}
+                  }
                 </li>
               );
             })}

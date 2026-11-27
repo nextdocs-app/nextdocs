@@ -1199,7 +1199,7 @@ describe('document.service', () => {
       expect(rows[1].avatarUrl).toBeNull();
     });
 
-    it('should map effective levels and treat malformed ones as blocked', async () => {
+    it('should ignore the removed per-collaborator effective level', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -1211,6 +1211,7 @@ describe('document.service', () => {
               displayName: 'A',
               accessLevel: 'OWNER',
               addedAt: '2024-01-01T00:00:00.000Z',
+              // An older/foreign payload field must not resurface in the roster model.
               effectiveAccessLevel: 'VIEW',
             },
             {
@@ -1219,7 +1220,6 @@ describe('document.service', () => {
               displayName: 'B',
               accessLevel: 'EDIT',
               addedAt: '2024-01-01T00:00:00.000Z',
-              effectiveAccessLevel: 'SUPERADMIN',
             },
           ],
           error: null,
@@ -1229,13 +1229,47 @@ describe('document.service', () => {
 
       const rows = await documentService.listCollaborators('doc-1', 'tok');
 
-      expect(rows[0].effectiveAccessLevel).toBe('VIEW');
-      // An unknown effective level must never become edit capability.
-      expect(rows[1].effectiveAccessLevel).toBe('NO_ACCESS');
+      expect(rows[0]).not.toHaveProperty('effectiveAccessLevel');
+      expect(rows[0].accessLevel).toBe('OWNER');
+      expect(rows[1].accessLevel).toBe('EDIT');
+    });
+  });
+
+  describe('hasHiddenSharingSources', () => {
+    it('should read the hidden-sources flag for a document', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: true, error: null }),
+      } as unknown as Response);
+      (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as typeof fetch;
+
+      await expect(documentService.hasHiddenSharingSources('doc-1', 'tok')).resolves.toBe(true);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/documents/doc-1/collaborators/hidden-sources'),
+        expect.objectContaining({ method: 'GET' })
+      );
     });
   });
 
   describe('getSharingSettings', () => {
+    it.each(['PAGE', 'SPACE', 'INVALID', null])(
+      'sanitizes source kind %s on reads and writes',
+      async (kind) => {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ success: true, data: { workspaceInheritedFromKind: kind } }),
+        });
+        const expected = kind === 'PAGE' || kind === 'SPACE' ? kind : null;
+        expect(
+          (await documentService.getSharingSettings('doc-1', 'tok')).workspaceInheritedFromKind
+        ).toBe(expected);
+        expect(
+          (await documentService.updateSharingSettings('doc-1', {}, 'tok'))
+            .workspaceInheritedFromKind
+        ).toBe(expected);
+      }
+    );
+
     it('should fall back malformed sharing mode and level', async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,

@@ -45,10 +45,11 @@ public class MentionCandidateService {
         // COMMENT is enough: an editor can mention in the body, a commenter in a reply.
         // VIEW-only readers never see the picker.
         PermissionService.DocumentCommentAccess access = permissionService.requireCommentAccess(callerId, documentId);
-        // COMMENT can also be granted by a share link. A link-only reader may discuss the
-        // page but must not enumerate the workspace roster, so the picker uses the same
-        // identity rule as the collaborator list.
-        permissionService.requireIdentityGrantForRoster(callerId, access.document());
+        // COMMENT can also be granted by a share link. A workspace member may mention even
+        // when the link is the only channel that opened the page; a link-only outsider
+        // must not enumerate the workspace roster, so the picker uses the same rule as the
+        // collaborator list.
+        permissionService.requireRosterAccess(callerId, access.document());
         WorkspaceAccessService.Membership membership = workspaceAccessService.requireMember(callerId);
 
         int cappedLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);

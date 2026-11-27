@@ -572,7 +572,7 @@ class DocumentSearchPostgresTest {
     private UUID insertDocument(UUID creatorId, String title) throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, link_access_level, "
+                "INSERT INTO documents (id, created_by, workspace_id, title, general_access_mode, link_access_level, "
                         + "link_inherit_blocked, deleted_at, created_at, updated_at) "
                         + "VALUES (?, ?, ?, ?, 'RESTRICTED', 'VIEW', FALSE, NULL, now(), now())")) {
             stmt.setObject(1, id);
@@ -581,6 +581,11 @@ class DocumentSearchPostgresTest {
             stmt.setString(4, title);
             stmt.executeUpdate();
         }
+        // The creator owns a standalone root through a grant row, not the old column.
+        jdbc.update(
+                "INSERT INTO access_grants (workspace_id, document_id, user_id, effect, access_level) "
+                        + "VALUES (:workspaceId, :documentId, :userId, 'ALLOW', 'OWNER')",
+                new MapSqlParameterSource(Map.of("workspaceId", workspaceId, "documentId", id, "userId", creatorId)));
         return id;
     }
 

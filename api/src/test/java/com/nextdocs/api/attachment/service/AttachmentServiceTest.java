@@ -138,7 +138,7 @@ class AttachmentServiceTest {
                 .displayName("Alice")
                 .passwordHash("$2a$12$hash")
                 .build();
-        document = Document.builder().id(documentId).user(user).title("Doc").build();
+        document = Document.builder().id(documentId).creator(user).title("Doc").build();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
     }
 

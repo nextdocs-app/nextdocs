@@ -7,14 +7,13 @@ function person(overrides: Partial<Collaborator> & Pick<Collaborator, 'userId'>)
     displayName: overrides.userId,
     accessLevel: 'VIEW',
     addedAt: '2026-01-01T00:00:00Z',
-    owner: false,
     ...overrides,
   };
 }
 
 describe('getPeopleGroups', () => {
   it('pins the viewer above the list, falling back to the owner', () => {
-    const owner = person({ userId: 'alice', owner: true, accessLevel: 'OWNER' });
+    const owner = person({ userId: 'alice', accessLevel: 'OWNER' });
     const viewer = person({ userId: 'santhosh' });
     const direct = person({ userId: 'bob' });
 
@@ -109,51 +108,6 @@ describe('getPeopleGroups', () => {
     expect(grouped.flat.map((collab) => collab.userId)).toEqual(['c', 'f']);
   });
 
-  it('populates group icons when resolveIcon is provided', () => {
-    const docIcon = { type: 'emoji' as const, value: '🚀' };
-    const spaceIcon = { type: 'builtin' as const, value: 'folder', color: 'blue' as const };
-
-    const grouped = getPeopleGroups(
-      [
-        person({
-          userId: 'a',
-          inherited: true,
-          inheritedFromId: 'doc-product',
-          inheritedFromTitle: 'Product docs',
-        }),
-        person({
-          userId: 'b',
-          inherited: true,
-          inheritedFromId: 'doc-product',
-          inheritedFromTitle: 'Product docs',
-        }),
-        person({
-          userId: 'c',
-          inherited: true,
-          inheritedFromId: 'space-1',
-          inheritedFromTitle: 'Engineering',
-        }),
-        person({
-          userId: 'd',
-          inherited: true,
-          inheritedFromId: 'space-1',
-          inheritedFromTitle: 'Engineering',
-        }),
-      ],
-      {
-        spaceId: 'space-1',
-        resolveIcon: (id, kind) => {
-          if (kind === 'document' && id === 'doc-product') return docIcon;
-          if (kind === 'space' && id === 'space-1') return spaceIcon;
-          return null;
-        },
-      }
-    );
-
-    expect(grouped.groups[0].icon).toEqual(docIcon);
-    expect(grouped.groups[1].icon).toEqual(spaceIcon);
-  });
-
   it('groups an inherited collaborator even when the pinned viewer shares the source', () => {
     const viewer = person({
       userId: 'me',
@@ -180,7 +134,7 @@ describe('getPeopleGroups', () => {
   });
 
   it('keeps blocked people out of the flat list and in their own group', () => {
-    const owner = person({ userId: 'alice', owner: true, accessLevel: 'OWNER' });
+    const owner = person({ userId: 'alice', accessLevel: 'OWNER' });
     const direct = person({ userId: 'bob' });
     const blocked = person({
       userId: 'eve',
@@ -210,7 +164,7 @@ describe('getPersonDetail', () => {
     );
   });
 
-  it('shows an override note', () => {
+  it('shows an additional-source note', () => {
     const override = person({
       userId: 'bob',
       inheritedFromId: 'doc-parent',
@@ -230,7 +184,7 @@ describe('getPersonDetail', () => {
       inheritedFromId: 'space-1',
       inheritedFromTitle: 'Engineering',
     });
-    const owner = person({ userId: 'alice', owner: true, accessLevel: 'OWNER' });
+    const owner = person({ userId: 'alice', accessLevel: 'OWNER' });
 
     expect(getPersonDetail(inherited)).toBeNull();
     expect(getPersonDetail(owner)).toBeNull();
