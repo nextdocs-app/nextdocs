@@ -264,8 +264,8 @@ importers:
         specifier: ^6.0.2
         version: 6.0.2
       '@y/websocket':
-        specifier: 4.0.0-rc.5
-        version: 4.0.0-rc.5(@y/y@14.0.0-rc.30)
+        specifier: 4.0.0-rc.6
+        version: 4.0.0-rc.6(@y/y@14.0.0-rc.30)
       eslint:
         specifier: 10.15.0
         version: 10.15.0(jiti@2.7.0)(supports-color@8.1.1)
@@ -357,8 +357,8 @@ importers:
         specifier: 1.0.6-rc.1
         version: 1.0.6-rc.1(@y/y@14.0.0-rc.30)
       '@y/websocket':
-        specifier: 4.0.0-rc.5
-        version: 4.0.0-rc.5(@y/y@14.0.0-rc.30)
+        specifier: 4.0.0-rc.6
+        version: 4.0.0-rc.6(@y/y@14.0.0-rc.30)
       '@y/y':
         specifier: 14.0.0-rc.30
         version: 14.0.0-rc.30
@@ -2476,8 +2476,8 @@ packages:
     peerDependencies:
       '@y/y': '*'
 
-  '@y/websocket@4.0.0-rc.5':
-    resolution: {integrity: sha512-qQ9CU8Vqe3r6glBcuNJni4hAzd6QjuuvK3mQwgJKDe6Jg/+CtkEgKDlGeo0Qact9Bq6Thxx6Sx86ILRG2e69Ng==}
+  '@y/websocket@4.0.0-rc.6':
+    resolution: {integrity: sha512-MrIRE5ny4SmVDJcY7FAmZoSl/3T/w6dplN5j7+LH7tyrOALnW9Gv/USsDKX9I+kVd1iiBUJb+/OSHeYCMksKVg==}
     engines: {node: '>=16.0.0', npm: '>=8.0.0'}
     peerDependencies:
       '@y/y': '*'
@@ -7377,7 +7377,7 @@ snapshots:
       '@y/y': 14.0.0-rc.30
       lib0: 1.0.0-rc.37
 
-  '@y/websocket@4.0.0-rc.5(@y/y@14.0.0-rc.30)':
+  '@y/websocket@4.0.0-rc.6(@y/y@14.0.0-rc.30)':
     dependencies:
       '@y/protocols': 1.0.6-rc.1(@y/y@14.0.0-rc.30)
       '@y/y': 14.0.0-rc.30
