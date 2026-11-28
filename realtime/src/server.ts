@@ -1,4 +1,4 @@
-import { createYHub, createAuthPlugin, createAuthorize, createApiEndpoint, apiError } from '@y/hub';
+import { createYHub, createAuthPlugin, createApiEndpoint, apiError } from '@y/hub';
 import {
   ORG,
   PORT,
@@ -19,7 +19,7 @@ import {
   checkApiAccess,
   type UserAuthInfo,
 } from './auth.js';
-import { buildAuthCallbacks } from './authorize.js';
+import { buildAuthCallbacks, toAuthPluginDef } from './authorize.js';
 import { handleAnchorCreate, handleAnchorDelete } from './anchor.js';
 import { ActiveRoomTracker, RecheckGate, startRoomSweep } from './sweep.js';
 import { checkStore, describeError, jsonResponse } from './health.js';
@@ -67,10 +67,12 @@ const authCallbacks = buildAuthCallbacks({
   onAuthorized: (docid) => activeRooms.touch(docid),
 });
 
-const authPlugin = createAuthPlugin<UserAuthInfo>({
-  authenticate: authCallbacks.authenticate,
-  authorize: createAuthorize<UserAuthInfo>(authCallbacks.authorize),
-});
+/**
+ * Yhub 0.11 instantiates this class with itself at startup and asks it for the
+ * permissions of a whole list of resources; the callbacks already hold everything
+ * the decisions need, so they ignore the instance.
+ */
+const AuthPlugin = createAuthPlugin<UserAuthInfo>(toAuthPluginDef(authCallbacks));
 
 const customEndpoints = [
   /**
@@ -225,6 +227,7 @@ export interface RunningServer {
 
 export async function createServer(): Promise<RunningServer> {
   const yhub = await createYHub({
+    auth: AuthPlugin,
     redis: {
       url: REDIS_URL,
       prefix: REDIS_PREFIX,
@@ -235,7 +238,6 @@ export async function createServer(): Promise<RunningServer> {
     server: {
       port: PORT,
       apiPrefix: 'api',
-      auth: authPlugin,
       api: customEndpoints,
       cors: { origin: CORS_ORIGINS },
       maxDocSize: MAX_DOC_SIZE_BYTES,

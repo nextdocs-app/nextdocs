@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { buildAuthCallbacks, type AuthDeps } from '../../src/authorize.js';
+import { buildAuthCallbacks, toAuthPluginDef, type AuthDeps } from '../../src/authorize.js';
 import {
   adminDocumentPermissions,
   documentPermissions,
@@ -88,12 +88,12 @@ describe('authenticate', () => {
   });
 });
 
-describe('authorize.document', () => {
+describe('document', () => {
   it('grants the service admin permissions without asking the API', async () => {
     const { callbacks, calls } = build();
 
     await expect(
-      callbacks.authorize.document(docRef, { userid: 'service', isService: true })
+      callbacks.document(docRef, { userid: 'service', isService: true })
     ).resolves.toEqual(adminDocumentPermissions);
     expect(calls.checked).toEqual([]);
   });
@@ -105,7 +105,7 @@ describe('authorize.document', () => {
   ])('denies %s without asking the API', async (_label, ref) => {
     const { callbacks, calls } = build();
 
-    await expect(callbacks.authorize.document(ref, { userid: 'user-1' })).resolves.toBeNull();
+    await expect(callbacks.document(ref, { userid: 'user-1' })).resolves.toBeNull();
     expect(calls.checked).toEqual([]);
   });
 
@@ -116,22 +116,22 @@ describe('authorize.document', () => {
   ])('denies %s', async (_label, verdict) => {
     const { callbacks, calls } = build({ checkAccess: async () => verdict });
 
-    await expect(callbacks.authorize.document(docRef, { userid: 'user-1' })).resolves.toBeNull();
+    await expect(callbacks.document(docRef, { userid: 'user-1' })).resolves.toBeNull();
     expect(calls.authorized).toEqual([]);
   });
 
   it('denies when the API cannot answer', async () => {
     const { callbacks } = build({ checkAccess: async () => null });
 
-    await expect(callbacks.authorize.document(docRef, { userid: 'user-1' })).resolves.toBeNull();
+    await expect(callbacks.document(docRef, { userid: 'user-1' })).resolves.toBeNull();
   });
 
   it('maps an EDIT verdict to write permissions and marks the room active', async () => {
     const { callbacks, calls } = build();
 
-    await expect(
-      callbacks.authorize.document(docRef, { userid: 'user-1', token: 'jwt' })
-    ).resolves.toEqual(documentPermissions('EDIT'));
+    await expect(callbacks.document(docRef, { userid: 'user-1', token: 'jwt' })).resolves.toEqual(
+      documentPermissions('EDIT')
+    );
     expect(calls.checked).toEqual([documentId]);
     expect(calls.authorized).toEqual([documentId]);
   });
@@ -145,31 +145,79 @@ describe('authorize.document', () => {
       },
     });
 
-    await callbacks.authorize.document(docRef, { userid: 'user-1', token: 'jwt' });
+    await callbacks.document(docRef, { userid: 'user-1', token: 'jwt' });
     expect(seen).toEqual(['jwt']);
   });
 });
 
-describe('authorize.org and global', () => {
+describe('org and global', () => {
   it('grants the organization only to the service identity in this organization', async () => {
     const { callbacks } = build();
     const serviceUser = { userid: 'service', isService: true };
 
-    await expect(callbacks.authorize.org({ org: 'nextdocs' }, serviceUser)).resolves.toEqual(
+    await expect(callbacks.org({ org: 'nextdocs' }, serviceUser)).resolves.toEqual(
       serviceOrgPermissions
     );
-    await expect(callbacks.authorize.org({ org: 'other' }, serviceUser)).resolves.toBeNull();
-    await expect(
-      callbacks.authorize.org({ org: 'nextdocs' }, { userid: 'user-1' })
-    ).resolves.toBeNull();
+    await expect(callbacks.org({ org: 'other' }, serviceUser)).resolves.toBeNull();
+    await expect(callbacks.org({ org: 'nextdocs' }, { userid: 'user-1' })).resolves.toBeNull();
   });
 
   it('exposes read-only health and ping endpoints', async () => {
     const { callbacks } = build();
 
-    await expect(callbacks.authorize.global()).resolves.toEqual({
+    await expect(callbacks.global()).resolves.toEqual({
       type: 'permissions:global:v1',
       endpoint: { health: '-r--', ping: '-r--' },
     });
+  });
+});
+
+// Yhub 0.11 asks one getter per scope with a whole list of resources and demands
+// every entry back with the resource it was given, so the mapping is the seam that
+// replaced `createAuthorize`.
+describe('toAuthPluginDef', () => {
+  const otherDocument = '22222222-2222-4222-8222-222222222222';
+  const foreignRef = { ...docRef, org: 'other' };
+  const secondRef = { ...docRef, docid: otherDocument };
+
+  it('answers a document batch in order and hands back the same resources', async () => {
+    const { callbacks } = build();
+
+    const answers = await toAuthPluginDef(callbacks).getDocumentPermissions?.(
+      {} as never,
+      [docRef, foreignRef, secondRef],
+      { userid: 'user-1' }
+    );
+
+    expect(answers?.map((answer) => answer.resource)).toEqual([docRef, foreignRef, secondRef]);
+    expect(answers?.map((answer) => answer.permissions)).toEqual([
+      documentPermissions('EDIT'),
+      // One denial must not drop the entries beside it.
+      null,
+      documentPermissions('EDIT'),
+    ]);
+  });
+
+  it('denies an organization batch to a browser caller', async () => {
+    const { callbacks } = build();
+
+    const answers = await toAuthPluginDef(callbacks).getOrgPermissions?.(
+      {} as never,
+      [{ org: 'nextdocs' }],
+      { userid: 'user-1' }
+    );
+
+    expect(answers).toEqual([{ resource: { org: 'nextdocs' }, permissions: null }]);
+  });
+
+  it('authenticates from the request Yhub passes in second', async () => {
+    const { callbacks } = build();
+
+    await expect(
+      toAuthPluginDef(callbacks).authenticate?.(
+        {} as never,
+        request({ authorization: 'Bearer access-token' }) as never
+      )
+    ).resolves.toEqual({ userid: 'user-1', token: 'access-token' });
   });
 });
