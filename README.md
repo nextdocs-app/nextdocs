@@ -30,7 +30,7 @@
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) 26.13.1 (LTS)
-- [Java](https://openjdk.org/) 21
+- [Java](https://openjdk.org/) 25
 - [Docker](https://www.docker.com/) (for PostgreSQL)
 - [pnpm](https://pnpm.io/) 12.21.0 (pinned in `package.json`; run `corepack enable` once, or install it with `npm install -g pnpm@12.21.0`)
 
