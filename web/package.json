@@ -33,7 +33,7 @@
     "@shikijs/themes": "^4.6.0",
     "@y/prosemirror": "2.0.0-15",
     "@y/protocols": "1.0.6-rc.1",
-    "@y/websocket": "4.0.0-0",
+    "@y/websocket": "4.0.0-rc.6",
     "@y/y": "14.0.0-rc.30",
     "frimousse": "^0.4.0",
     "idb": "^8.0.4",
