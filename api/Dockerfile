@@ -1,12 +1,12 @@
 # Keep the Java line in sync with .java-version; `pnpm run check:runtime-versions` fails otherwise.
-FROM maven:3-eclipse-temurin-27-alpine AS build
+FROM maven:3.10-eclipse-temurin-25-alpine AS build
 WORKDIR /app
 COPY pom.xml .
 RUN mvn -B dependency:go-offline --no-transfer-progress
 COPY src ./src
 RUN mvn -B clean package -DskipTests --no-transfer-progress
 
-FROM maven:3-eclipse-temurin-27-alpine AS dev
+FROM maven:3.10-eclipse-temurin-25-alpine AS dev
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
