@@ -3,8 +3,6 @@ package com.nextdocs.api.document.service;
 import static com.nextdocs.api.document.config.DocumentProperties.MAX_TREE_DEPTH;
 
 import com.nextdocs.api.attachment.service.AttachmentService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
@@ -37,6 +35,8 @@ import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.search.event.DocumentSearchTitleChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.service.WorkspaceService;
@@ -101,6 +101,7 @@ public class DocumentService {
     private final AccessGrantRepository accessGrantRepository;
     private final UserDocumentOrderRepository userDocumentOrderRepository;
     private final UserSharedOrderRepository userSharedOrderRepository;
+    private final AccessGrantSyncService accessGrantSyncService;
     private final SharedSectionService sharedSectionService;
     private final UserRepository userRepository;
     private final DocumentProperties documentProperties;
@@ -154,9 +155,8 @@ public class DocumentService {
     }
 
     /**
-     * Idempotent handling when a client-provided ID already exists. Nested documents belong
-     * to their host tree's owner, so the original creator may no longer match user_id;
-     * anyone who still holds access gets the existing document back, strangers get a conflict.
+     * Idempotent handling when a client-provided ID already exists. Anyone who still
+     * holds access gets the existing document back; strangers get a conflict.
      */
     private CreateDocumentResult existingDocumentForCreate(Document existing, UUID userId) {
         if (existing.getDeletedAt() != null) {
@@ -164,8 +164,7 @@ public class DocumentService {
                     ErrorCode.CONFLICT,
                     "A trashed document already exists with this ID. Restore or permanently delete it first.");
         }
-        boolean isOwner = existing.getUser().getId().equals(userId) && permissionService.resolveSpace(existing) == null;
-        if (!isOwner && permissionService.resolveAccess(userId, existing.getId()) == null) {
+        if (permissionService.resolveAccess(userId, existing.getId()) == null) {
             throw new ApiException(ErrorCode.CONFLICT, "A document already exists with this ID.");
         }
         return new CreateDocumentResult(toResponse(existing, userId), false);
@@ -241,15 +240,14 @@ public class DocumentService {
                 ? targetSpace.getWorkspace()
                 : (parent != null && parent.getWorkspace() != null
                         ? parent.getWorkspace()
-                        : workspaceService.requireWorkspace(userId));
+                        : workspaceService.requireWorkspaceForStandaloneCreate(userId));
 
         Document document = Document.builder()
                 .id(documentId)
-                // In a space, content belongs to the space; the author is recorded in user.
-                // In a standalone tree, nested documents inherit the tree's owner.
-                .user(targetSpace != null ? user : (parent != null ? parent.getUser() : user))
+                // Creator attribution is the real caller; access comes from the grant
+                // written below, never from this column.
+                .creator(user)
                 .title(normalizeTitle(request.title()))
-                .createdBy(request.createdBy())
                 .parent(parent)
                 .space(space)
                 .workspace(workspace)
@@ -260,6 +258,12 @@ public class DocumentService {
         iconCoverApplier.applyCoverForCreate(document, request.cover());
 
         Document saved = documentRepository.saveAndFlush(document);
+
+        // A standalone root's creator owns it through a real grant row; space content
+        // takes its access from the space and nested pages from their ancestors.
+        if (space == null && parent == null) {
+            accessGrantSyncService.upsertUserGrant(saved, user, DocumentAccessLevel.OWNER, user);
+        }
 
         // After commit, not here: search is derived, so an index failure must never roll
         // back a create. The listener also gives a brand-new page a searchable title
@@ -670,16 +674,12 @@ public class DocumentService {
             document.setTitle(title);
         }
 
-        if (request.createdBy() != null) {
-            document.setCreatedBy(request.createdBy());
-        }
-
         iconCoverApplier.applyIcon(document, request.icon());
         iconCoverApplier.applyCover(document, request.cover());
 
         Document saved = documentRepository.save(document);
-        // Only a real rename needs the title vector rebuilt; icon, cover and createdBy
-        // saves must not re-index the body.
+        // Only a real rename needs the title vector rebuilt; icon and cover saves must
+        // not re-index the body.
         if (titleChanged) {
             eventPublisher.publishEvent(new DocumentSearchTitleChangedEvent(saved.getId()));
         }
@@ -764,9 +764,6 @@ public class DocumentService {
                 .findMaxSpaceSiblingOrderKey(spaceId, documentId)
                 .filter(FractionalIndex::isValidOrderKey)
                 .orElse(null);
-        // A standalone page may still carry rules from a space it was detached from;
-        // clear them before the new space can make them meaningful again.
-        permissionService.removeSpaceAudienceRules(documentId);
         // Workspaces are single-tenant per instance (V19), so the document and space
         // share the same workspace; subtree workspace IDs are already consistent.
         document.setSpace(space);
@@ -789,16 +786,35 @@ public class DocumentService {
         if (document.getSpace() == null || !document.getSpace().getId().equals(spaceId)) {
             throw new ApiException(ErrorCode.NOT_FOUND, "The page is not in this space.");
         }
-        // Audience rules replace a space baseline, so they cannot outlive the space.
-        permissionService.removeSpaceAudienceRules(documentId);
         document.setSpace(null);
         // Root-page ordering outside a space is the caller's personal navigation row,
         // so the shared key has no meaning once the page is detached.
         document.setSiblingOrderKey(null);
         documentRepository.save(document);
-        // The page lands in the owner's Private section, where its position is personal:
-        // without a row it has none, so give it a fresh slot at the top.
-        ensurePersonalOrderRow(document.getUser(), document);
+        // Leaving a space turns space content into a standalone root, so the page needs an
+        // OWNER row; the space grant no longer applies. Preserve the owner the page already
+        // has: creator attribution is not authority, and re-granting the creator would
+        // undo a demotion or a No access row. Only a page with no OWNER left gets one, and
+        // then the administrator performing the detach holds it, matching the anonymous
+        // create fallback that kept the page from landing ownerless.
+        User owner = accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId).stream()
+                .filter(grant -> grant.getAccessLevel() == DocumentAccessLevel.OWNER)
+                .map(AccessGrant::getUser)
+                .findFirst()
+                .orElse(null);
+        if (owner == null) {
+            // The creator object is attribution, not a restored grant: use it only when
+            // the detaching administrator is that same account, never to resurrect a
+            // demoted or removed creator.
+            owner = document.getCreator();
+            if (owner == null || !owner.getId().equals(userId)) {
+                owner = userRepository.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
+            }
+            accessGrantSyncService.upsertUserGrant(document, owner, DocumentAccessLevel.OWNER, owner);
+        }
+        // The page lands in the owner's Private section (or Shared while other holders
+        // remain), where its position is personal: give it a fresh slot.
+        ensurePersonalOrderRow(owner, document);
     }
 
     public DocumentResponse restore(UUID userId, UUID documentId) {
@@ -866,25 +882,37 @@ public class DocumentService {
                     document.setSiblingOrderKey(FractionalIndex.keyBetween(maxKey, null));
                 }
             } else {
-                UUID ownerId = document.getUser().getId();
-                java.util.Optional<UserDocumentOrder> existingOpt =
-                        userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId);
-                String existingKey =
-                        existingOpt.map(UserDocumentOrder::getOrderKey).orElse(null);
-                boolean needsRegenerate =
-                        forceRegenerate || existingOpt.isEmpty() || !FractionalIndex.isValidOrderKey(existingKey);
-                if (needsRegenerate) {
-                    String maxKey = userDocumentOrderRepository
-                            .findMaxOrderKeyByUserId(ownerId, documentId)
-                            .filter(FractionalIndex::isValidOrderKey)
-                            .orElse(null);
-                    String newKey = FractionalIndex.keyBetween(maxKey, null);
-                    UserDocumentOrder udo = existingOpt.orElseGet(() -> UserDocumentOrder.builder()
-                            .user(document.getUser())
-                            .document(document)
-                            .build());
-                    udo.setOrderKey(newKey);
-                    userDocumentOrderRepository.saveAndFlush(udo);
+                // A root restored from trash goes back to Private for its owner, so the
+                // personal position belongs to the first OWNER row. A page with another
+                // holder restores into Shared, but it still needs its position when the
+                // grant list is empty (attribution fallback) or when the owner is the
+                // creator.
+                User privateOwner = accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId).stream()
+                        .filter(grant -> grant.getAccessLevel() == DocumentAccessLevel.OWNER)
+                        .map(AccessGrant::getUser)
+                        .findFirst()
+                        .orElse(document.getCreator());
+                if (privateOwner != null) {
+                    UUID ownerId = privateOwner.getId();
+                    java.util.Optional<UserDocumentOrder> existingOpt =
+                            userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId);
+                    String existingKey =
+                            existingOpt.map(UserDocumentOrder::getOrderKey).orElse(null);
+                    boolean needsRegenerate =
+                            forceRegenerate || existingOpt.isEmpty() || !FractionalIndex.isValidOrderKey(existingKey);
+                    if (needsRegenerate) {
+                        String maxKey = userDocumentOrderRepository
+                                .findMaxOrderKeyByUserId(ownerId, documentId)
+                                .filter(FractionalIndex::isValidOrderKey)
+                                .orElse(null);
+                        String newKey = FractionalIndex.keyBetween(maxKey, null);
+                        UserDocumentOrder udo = existingOpt.orElseGet(() -> UserDocumentOrder.builder()
+                                .user(privateOwner)
+                                .document(document)
+                                .build());
+                        udo.setOrderKey(newKey);
+                        userDocumentOrderRepository.saveAndFlush(udo);
+                    }
                 }
             }
 
@@ -1196,29 +1224,6 @@ public class DocumentService {
             // Space pages are shared content: the space's key wins for every caller,
             // including the owner and collaborators who also carry a personal row.
             orderKey = document.getSiblingOrderKey();
-        } else if (callerUserId != null && !document.getUser().getId().equals(callerUserId)) {
-            boolean isFloatedOrRoot;
-            if (document.getParent() == null) {
-                isFloatedOrRoot = true;
-            } else {
-                DocumentAccessLevel parentAccess =
-                        (document.getParent().getDeletedAt() != null || document.getDeletedAt() != null)
-                                ? permissionService.resolveTrashAccess(
-                                        callerUserId, document.getParent().getId())
-                                : permissionService.resolveAccess(
-                                        callerUserId, document.getParent().getId());
-                isFloatedOrRoot = (parentAccess == null);
-            }
-            if (isFloatedOrRoot) {
-                // A collaborator's entry lives in their Shared section, so its personal
-                // position comes from the Shared table, never the Private one.
-                orderKey = userSharedOrderRepository
-                        .findOrderKeyByUserIdAndDocumentId(callerUserId, document.getId())
-                        .orElse(null);
-                section = DocumentOrderSection.SHARED;
-            } else {
-                orderKey = document.getSiblingOrderKey();
-            }
         } else if (document.getParent() != null) {
             orderKey = document.getSiblingOrderKey();
         } else if (callerUserId != null) {
@@ -1270,7 +1275,6 @@ public class DocumentService {
                 // Ownership is classified on the Shared listing, which is the only response
                 // that has to tell the caller's own page from a shared one.
                 null,
-                document.getCreatedBy(),
                 document.getCreatedAt(),
                 document.getUpdatedAt(),
                 deletedAt,

@@ -11,8 +11,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.service.AttachmentService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
@@ -31,6 +29,8 @@ import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -98,6 +98,9 @@ class DocumentSpaceServiceTest {
     private YhubClient yhubClient;
 
     @Mock
+    private AccessGrantSyncService accessGrantSyncService;
+
+    @Mock
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @BeforeEach
@@ -108,6 +111,7 @@ class DocumentSpaceServiceTest {
                 accessGrantRepository,
                 userDocumentOrderRepository,
                 userSharedOrderRepository,
+                accessGrantSyncService,
                 sharedSectionService,
                 userRepository,
                 properties,
@@ -126,7 +130,13 @@ class DocumentSpaceServiceTest {
                 .thenReturn(true);
 
         userId = UUID.randomUUID();
-        user = User.builder().email("alice@example.com").displayName("Alice").build();
+
+        user = User.builder()
+                .email("alice@example.com")
+                .displayName("Alice")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         user.setId(userId);
         space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
     }
@@ -138,7 +148,7 @@ class DocumentSpaceServiceTest {
     private Document rootPage() {
         return Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Page")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -157,8 +167,7 @@ class DocumentSpaceServiceTest {
                 .thenReturn(Optional.empty());
 
         DocumentService.CreateDocumentResult result = documentService.create(
-                userId,
-                new DocumentCreateRequest(null, "Page", "AQID", "Alice", null, space.getId(), null, null, null, null));
+                userId, new DocumentCreateRequest(null, "Page", "AQID", null, space.getId(), null, null, null, null));
 
         ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
         verify(documentRepository).saveAndFlush(captor.capture());
@@ -177,7 +186,7 @@ class DocumentSpaceServiceTest {
         UUID prevSiblingId = UUID.randomUUID();
         Document prevSibling = Document.builder()
                 .id(prevSiblingId)
-                .user(user)
+                .creator(user)
                 .space(space)
                 .siblingOrderKey("a5")
                 .build();
@@ -193,8 +202,7 @@ class DocumentSpaceServiceTest {
 
         DocumentService.CreateDocumentResult result = documentService.create(
                 userId,
-                new DocumentCreateRequest(
-                        null, "Page", "AQID", "Alice", null, space.getId(), prevSiblingId, null, null, null));
+                new DocumentCreateRequest(null, "Page", "AQID", null, space.getId(), prevSiblingId, null, null, null));
 
         // The space sibling positions the page in the shared order...
         assertThat(result.document().orderKey()).isNotNull().isGreaterThan("a5");
@@ -209,16 +217,7 @@ class DocumentSpaceServiceTest {
         assertThatThrownBy(() -> documentService.create(
                         userId,
                         new DocumentCreateRequest(
-                                null,
-                                "Page",
-                                "AQID",
-                                "Alice",
-                                UUID.randomUUID(),
-                                space.getId(),
-                                null,
-                                null,
-                                null,
-                                null)))
+                                null, "Page", "AQID", UUID.randomUUID(), space.getId(), null, null, null, null)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
         verify(spaceAccessService, never()).requireEdit(any(), any());
@@ -232,8 +231,7 @@ class DocumentSpaceServiceTest {
 
         assertThatThrownBy(() -> documentService.create(
                         userId,
-                        new DocumentCreateRequest(
-                                null, "Page", "AQID", "Alice", null, space.getId(), null, null, null, null)))
+                        new DocumentCreateRequest(null, "Page", "AQID", null, space.getId(), null, null, null, null)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
     }
@@ -256,8 +254,6 @@ class DocumentSpaceServiceTest {
         assertThat(response.orderKey()).isEqualTo(page.getSiblingOrderKey());
         assertThat(response.spaceId()).isEqualTo(space.getId());
         verify(documentRepository).save(page);
-        // Audience rules from the previous container must not survive the move.
-        verify(permissionService).removeSpaceAudienceRules(page.getId());
     }
 
     @Test
@@ -335,7 +331,6 @@ class DocumentSpaceServiceTest {
         // Root-page order outside a space is personal, so the shared key is meaningless.
         assertThat(page.getSiblingOrderKey()).isNull();
         verify(documentRepository).save(page);
-        verify(permissionService).removeSpaceAudienceRules(page.getId());
 
         // The page returns to the owner's Private section, which needs a personal row;
         // detaching puts it before every existing root page.
@@ -365,6 +360,27 @@ class DocumentSpaceServiceTest {
         // A personal row already gives the page a position; detaching must not reset it.
         verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
         verify(userDocumentOrderRepository, never()).findMinOrderKeyByUserId(any(), any());
+    }
+
+    @Test
+    void clearSpace_withoutARecordedCreator_fallsBackToTheAdministrator() {
+        Document page = Document.builder()
+                .id(UUID.randomUUID())
+                .title("Anonymous page")
+                .space(space)
+                .siblingOrderKey("a1")
+                .build();
+        when(permissionService.requireEditAccess(userId, page.getId())).thenReturn(page);
+        when(spaceAccessService.requireActiveAdministration(userId, space.getId()))
+                .thenReturn(spaceContext(DocumentAccessLevel.OWNER));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userDocumentOrderRepository.existsByUser_IdAndDocument_Id(userId, page.getId()))
+                .thenReturn(true);
+
+        documentService.clearSpace(userId, page.getId(), space.getId());
+
+        // An anonymous create must not land ownerless once the space grant stops applying.
+        verify(accessGrantSyncService).upsertUserGrant(page, user, DocumentAccessLevel.OWNER, user);
     }
 
     @Test

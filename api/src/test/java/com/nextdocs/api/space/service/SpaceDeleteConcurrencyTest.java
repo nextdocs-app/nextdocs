@@ -5,8 +5,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.GlobalExceptionHandler;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -17,6 +15,8 @@ import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -100,6 +100,7 @@ class SpaceDeleteConcurrencyTest {
         actor = userRepository.saveAndFlush(User.builder()
                 .email("space-delete-race-actor@example.com")
                 .displayName("Actor")
+                .passwordHash("$2a$12$hash")
                 .build());
         workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("Race").build());
@@ -115,7 +116,7 @@ class SpaceDeleteConcurrencyTest {
                 .build());
         page = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(actor)
+                .creator(actor)
                 .title("Page")
                 .build());
         mockMvc = MockMvcBuilders.standaloneSetup(new AttachProbe(documentService))

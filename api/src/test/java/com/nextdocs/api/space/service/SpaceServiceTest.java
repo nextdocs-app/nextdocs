@@ -21,8 +21,6 @@ import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -50,6 +48,8 @@ import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
 import com.nextdocs.api.space.repository.UserSpaceOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -147,7 +147,13 @@ class SpaceServiceTest {
                 publishedEvents::add);
 
         workspace = Workspace.builder().id(UUID.randomUUID()).name("NextDocs").build();
-        actor = User.builder().email("owner@example.com").displayName("Owner").build();
+
+        actor = User.builder()
+                .email("owner@example.com")
+                .displayName("Owner")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         actorId = UUID.randomUUID();
         actor.setId(actorId);
         space = Space.builder()
@@ -465,7 +471,13 @@ class SpaceServiceTest {
     @Test
     void addMember_resolvesAnExistingWorkspaceMemberByEmail() {
         callerAdministers(DocumentAccessLevel.OWNER);
-        User bob = User.builder().email("bob@example.com").displayName("Bob").build();
+
+        User bob = User.builder()
+                .email("bob@example.com")
+                .displayName("Bob")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         bob.setId(UUID.randomUUID());
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
@@ -500,6 +512,7 @@ class SpaceServiceTest {
         User stranger = User.builder()
                 .email("stranger@example.com")
                 .displayName("Stranger")
+                .passwordHash("$2a$12$hash")
                 .build();
         stranger.setId(UUID.randomUUID());
         when(userRepository.findByEmail("stranger@example.com")).thenReturn(Optional.of(stranger));
@@ -517,7 +530,13 @@ class SpaceServiceTest {
     @Test
     void addMember_rejectsAnExistingMemberInsteadOfSilentlyChangingTheirLevel() {
         callerAdministers(DocumentAccessLevel.OWNER);
-        User bob = User.builder().email("bob@example.com").displayName("Bob").build();
+
+        User bob = User.builder()
+                .email("bob@example.com")
+                .displayName("Bob")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         bob.setId(UUID.randomUUID());
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
         when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
@@ -544,7 +563,13 @@ class SpaceServiceTest {
                 .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.OWNER))
                 .thenThrow(new ApiException(ErrorCode.CONFLICT));
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
-        User bob = User.builder().email("bob@example.com").displayName("Bob").build();
+
+        User bob = User.builder()
+                .email("bob@example.com")
+                .displayName("Bob")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         bob.setId(UUID.randomUUID());
         when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bob));
         when(workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), bob.getId()))
@@ -594,7 +619,13 @@ class SpaceServiceTest {
     @Test
     void updateMemberAccess_promotesAnotherMemberToOwner() {
         callerAdministers(DocumentAccessLevel.OWNER);
-        User bob = User.builder().email("bob@example.com").displayName("Bob").build();
+
+        User bob = User.builder()
+                .email("bob@example.com")
+                .displayName("Bob")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         bob.setId(UUID.randomUUID());
         SpaceMember bobRow = member(bob, DocumentAccessLevel.EDIT);
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
@@ -661,14 +692,18 @@ class SpaceServiceTest {
     }
 
     @Test
-    void detachPage_locksTheSpaceAndLeavesTheGateToDocumentService() {
+    void detachPage_locksWorkspaceThenSpaceAndLeavesTheGateToDocumentService() {
         UUID documentId = UUID.randomUUID();
+        when(spaceRepository.findWorkspaceIdById(space.getId())).thenReturn(Optional.of(workspace.getId()));
+        when(workspaceRepository.findByIdForUpdate(workspace.getId())).thenReturn(Optional.of(workspace));
         when(spaceRepository.findByIdForUpdate(space.getId())).thenReturn(Optional.of(space));
 
         spaceService.detachPage(actorId, space.getId(), documentId);
 
-        verify(spaceRepository).findByIdForUpdate(space.getId());
-        verify(documentService).clearSpace(actorId, documentId, space.getId());
+        var inOrder = org.mockito.Mockito.inOrder(workspaceRepository, spaceRepository, documentService);
+        inOrder.verify(workspaceRepository).findByIdForUpdate(workspace.getId());
+        inOrder.verify(spaceRepository).findByIdForUpdate(space.getId());
+        inOrder.verify(documentService).clearSpace(actorId, documentId, space.getId());
         verify(auditService)
                 .recordSpace(space, actorId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);
         verify(spaceAccessService, never()).requireActiveAdministration(any(), any());

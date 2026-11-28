@@ -3,14 +3,14 @@ package com.nextdocs.api.comment.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.entity.Comment;
 import com.nextdocs.api.comment.entity.CommentReaction;
 import com.nextdocs.api.comment.entity.CommentThread;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.repository.DocumentRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -59,11 +59,15 @@ class CommentPersistenceTest {
 
     @BeforeEach
     void setUp() {
-        user = userRepository.saveAndFlush(
-                User.builder().email("alice@example.com").displayName("Alice").build());
+        user = userRepository.saveAndFlush(User.builder()
+                .email("alice@example.com")
+                .displayName("Alice")
+                .passwordHash("$2a$12$hash")
+                .build());
+
         document = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Document")
                 .build());
     }

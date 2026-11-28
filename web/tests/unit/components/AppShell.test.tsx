@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { AppShell } from '../../../components/AppShell';
 import { useAuth } from '../../../hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '../../../hooks/usePendingCloudDocumentCreates.hook';
+import { useSidebarPreferences } from '../../../hooks/useSidebarPreferences.hook';
+import { useRestoredSidebarExpansion } from '../../../hooks/useRestoredSidebarExpansion.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '../../../lib/pending-cloud-create.util';
 import { setCollapsed, toggleMobileNav } from '../../../stores/sidebar/sidebar.slice';
 import { toggleSearchDialog } from '../../../stores/ui/ui.slice';
@@ -28,6 +30,14 @@ jest.mock('../../../hooks/useMediaQuery.hook', () => ({
 jest.mock('../../../hooks/useAuth.hook', () => ({ useAuth: jest.fn() }));
 jest.mock('../../../hooks/usePendingCloudDocumentCreates.hook', () => ({
   usePendingCloudDocumentCreates: jest.fn(),
+}));
+// Both are store-level side effects: AppShell only has to mount them with the
+// right identity, and their own suites cover what they do.
+jest.mock('../../../hooks/useSidebarPreferences.hook', () => ({
+  useSidebarPreferences: jest.fn(),
+}));
+jest.mock('../../../hooks/useRestoredSidebarExpansion.hook', () => ({
+  useRestoredSidebarExpansion: jest.fn(),
 }));
 const mockDispatch = jest.fn();
 jest.mock('../../../stores/hooks', () => ({
@@ -75,6 +85,23 @@ describe('AppShell', () => {
     );
 
     expect(usePendingCloudDocumentCreates).toHaveBeenCalledWith('user-1', 'token-1');
+  });
+
+  it('remembers the rail for the signed-in account', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 'user-1' },
+      accessToken: 'token-1',
+      isTokenExpiringSoon: false,
+    });
+
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>
+    );
+
+    expect(useSidebarPreferences).toHaveBeenCalledWith('user-1');
+    expect(useRestoredSidebarExpansion).toHaveBeenCalledWith('user-1');
   });
 
   it('says why a page the user wrote disappeared', () => {

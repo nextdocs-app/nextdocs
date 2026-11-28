@@ -7,8 +7,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteEmailResult;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteStatus;
@@ -77,6 +77,7 @@ class WorkspaceInviteNotificationIntegrationTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("notify-owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("NextDocs").build());

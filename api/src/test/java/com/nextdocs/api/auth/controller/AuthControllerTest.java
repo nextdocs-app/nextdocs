@@ -7,13 +7,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.nextdocs.api.auth.dto.response.AuthResponse;
-import com.nextdocs.api.auth.dto.response.UserResponse;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.auth.service.AuthService;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.dto.response.UserResponse;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInvitePreviewResponse;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
@@ -31,9 +31,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(AuthController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class AuthControllerTest {
 
@@ -66,10 +66,11 @@ class AuthControllerTest {
                 .displayName("Alice")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         testUser.setId(UUID.randomUUID());
         testPrincipal = UserPrincipal.from(testUser);
 
-        stubUserResponse = new UserResponse(testUser.getId(), "alice@example.com", "Alice", null, false);
+        stubUserResponse = new UserResponse(testUser.getId(), "alice@example.com", "Alice", null);
         stubAuthResponse = AuthResponse.of("access.token.jwt", 900L, stubUserResponse);
     }
 
@@ -271,21 +272,5 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/logout").with(user(testPrincipal))).andExpect(status().isNoContent());
 
         verify(authService).logout(any(), any());
-    }
-
-    @Test
-    void me_withAuthentication_returns200WithUserProfile() throws Exception {
-        when(authService.getMe(any(UserPrincipal.class))).thenReturn(stubUserResponse);
-
-        mockMvc.perform(get("/api/v1/auth/me").with(user(testPrincipal)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.email").value("alice@example.com"))
-                .andExpect(jsonPath("$.data.displayName").value("Alice"));
-    }
-
-    @Test
-    void me_withoutAuthentication_returns401() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized());
     }
 }

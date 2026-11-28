@@ -14,6 +14,8 @@ import { toggleSearchDialog } from '@/stores/ui/ui.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
 import { useAuth } from '@/hooks/useAuth.hook';
 import { usePendingCloudDocumentCreates } from '@/hooks/usePendingCloudDocumentCreates.hook';
+import { useSidebarPreferences } from '@/hooks/useSidebarPreferences.hook';
+import { useRestoredSidebarExpansion } from '@/hooks/useRestoredSidebarExpansion.hook';
 import { PENDING_DOCUMENT_DISCARDED_EVENT } from '@/lib/pending-cloud-create.util';
 import { isEditorLinkShortcutTarget, recordRecentDocumentVisit } from '@/lib/search-helpers.util';
 import { addToast } from '@/stores/toasts/toasts.slice';
@@ -61,6 +63,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const { user, isTokenExpiringSoon, accessToken, isInitializing, isAuthenticated } = useAuth();
   usePendingCloudDocumentCreates(user?.id ?? null, accessToken);
+  // Rail layout is remembered per device, expansion per account; both are
+  // adopted after hydration so the server HTML and the store cannot disagree.
+  useSidebarPreferences(user?.id ?? null);
+  useRestoredSidebarExpansion(user?.id ?? null);
 
   // Lock the page behind the drawer so the document cannot scroll under it.
   useEffect(() => {
@@ -223,6 +229,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             aria-expanded={isMobileLayout ? isMobileNavOpen : false}
             title={isMobileLayout ? 'Open navigation' : 'Open sidebar'}
             className="
+              nd-shell-nav-toggle
               fixed top-2 z-40 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-sm
               md:h-7 md:w-7
               text-muted-foreground hover:text-foreground hover:bg-[var(--nd-toolbar-hover-bg)]
@@ -234,12 +241,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Hamburger size={19} />
           </button>
         )}
-        {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling
-        the browser that the scrollable region starts below the toolbar's height.*/}
-        <div className="h-12 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />
+        {/* The toolbar floats over the document instead of sitting above it:
+            the scrollport reaches the top of the viewport and pads its content
+            down by the toolbar's height, so scrolled content passes underneath
+            the breadcrumbs and the controls. */}
         <div
           ref={setScroller}
-          className="nd-app-scroll flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full"
+          className="nd-app-scroll flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full pt-12 scroll-pt-12"
         >
           {/*
             No global max-w here: each route centers its own column

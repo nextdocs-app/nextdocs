@@ -79,17 +79,33 @@ by the next sweep here. A transient outage never freezes a room: only a 401/403 
 
 Yhub is deny-by-default. `src/permissions.ts` lists the endpoints each role may use:
 
-- `VIEW` reads the Y.Doc and awareness. It cannot touch comment anchors.
+- `VIEW` reads the Y.Doc and awareness. It cannot touch comment anchors. It may
+  read the version timeline (activity, changesets, named versions) but not restore.
 - `COMMENT` reads the Y.Doc, writes awareness (presence and the comment-refresh ping),
   and may call the `anchor` endpoint. That endpoint is the only Y.Doc mutation a
   commenter can request: the service inserts a mark for a thread the API confirms,
   never a client-supplied update. The endpoint's `d` bit removes a mark only after
-  the API reports the thread gone (orphan cleanup).
+  the API reports the thread gone (orphan cleanup). Commenters can read history but
+  cannot name or restore versions.
 - `EDIT` / `OWNER` read and write both, and use the same anchor endpoint when the
-  editor creates a thread.
+  editor creates a thread. They may also create, rename, and delete named versions
+  and roll the document back to an earlier activity window.
 - The service identity gets explicit document read/write plus `delete: ['soft','hard']`
   and the org-scoped `recheck` endpoint. There is no wildcard grant: a future Yhub
   endpoint stays closed until it is added deliberately.
+
+## Version history
+
+History is Yhub's activity log, not a Postgres projection. The editor's version
+rail replaces the navigation sidebar while it is open and reads the same
+`activity`, `changeset`, and `version` endpoints Yhub owns; the permissions above
+are the only gate. A preview forks the Y.Doc at the
+selected window without writing the live room. Restoring calls `rollback`, which
+rewrites the live Y.Doc (comment anchors included) and names the previous state
+`Before restore`, so the writer can undo the restore. Threads and replies remain
+owned by the API: a restored anchor points at the thread id that is still in
+Postgres, and a thread whose mark was never versioned simply stays available in
+the comments sidebar.
 
 ## Comment anchors
 
@@ -143,6 +159,13 @@ content is deleted.
 | `POST`   | `/api/recheck/v1/nextdocs`                   | org      | Batched re-authorization (service only)             |
 | `POST`   | `/api/anchor/v1/nextdocs/{docid}`            | document | Insert a comment mark (COMMENT+)                    |
 | `DELETE` | `/api/anchor/v1/nextdocs/{docid}?threadId=…` | document | Remove an orphaned comment mark (after deletion)    |
+| `GET`    | `/api/activity/v1/nextdocs/{docid}`          | document | Version timeline (VIEW+)                            |
+| `GET`    | `/api/changeset/v1/nextdocs/{docid}`         | document | Historical Y.Doc or attribution diff (VIEW+)        |
+| `GET`    | `/api/version/v1/nextdocs/{docid}`           | document | Named versions (VIEW+)                              |
+| `POST`   | `/api/version/v1/nextdocs/{docid}`           | document | Name a version (EDIT+)                              |
+| `PATCH`  | `/api/version/v1/nextdocs/{docid}`           | document | Rename a version (EDIT+)                            |
+| `DELETE` | `/api/version/v1/nextdocs/{docid}`           | document | Delete a named version (EDIT+)                      |
+| `POST`   | `/api/rollback/v1/nextdocs/{docid}`          | document | Restore an earlier state (EDIT+)                    |
 | `PATCH`  | `/api/ydoc/v1/nextdocs/{docid}`              | document | Seed a new document                                 |
 | `GET`    | `/api/ydoc/v1/nextdocs/{docid}`              | document | Read the persisted update                           |
 | `DELETE` | `/api/ydoc/v1/nextdocs/{docid}?hard=true`    | document | Purge content                                       |

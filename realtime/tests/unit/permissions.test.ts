@@ -6,12 +6,17 @@ import {
 } from '../../src/permissions.js';
 
 describe('Permissions', () => {
-  it('maps VIEW to read-only document and read-only awareness', () => {
+  it('maps VIEW to a read-only document but write awareness for presence', () => {
     const perms = documentPermissions('VIEW');
     expect(perms.ydoc).toBe('-r--');
-    expect(perms.awareness).toBe('-r--');
+    // Presence is ephemeral and never reaches the Y.Doc, so a reader broadcasts it or
+    // the toolbar could not show them as "here now".
+    expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-r--');
     expect(perms.endpoint.ydoc).toBe('-r--');
+    // A viewer may inspect the timeline and named versions but cannot roll back:
+    // restore writes the document, so no rollback bit and no version mutations.
+    expect(perms.history).toEqual({ from: 0, version: '-r--' });
     // A viewer must never be able to create or remove a comment anchor.
     expect(perms.endpoint.anchor).toBeUndefined();
   });
@@ -22,27 +27,39 @@ describe('Permissions', () => {
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-r--');
     expect(perms.endpoint.ydoc).toBe('-r--');
+    // Commenters read history; restoring or naming versions mutates the Y.Doc.
+    expect(perms.history).toEqual({ from: 0, version: '-r--' });
     // The only Y.Doc mutation COMMENT may request: the server inserts the mark.
     // `d` exists for orphan cleanup after the API reports the thread gone.
     expect(perms.endpoint.anchor).toBe('c--d');
   });
 
-  it('maps EDIT to write document and write awareness', () => {
+  it('maps EDIT to write document, write awareness and restorable history', () => {
     const perms = documentPermissions('EDIT');
     expect(perms.ydoc).toBe('-ru-');
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-ru-');
     expect(perms.endpoint.ydoc).toBe('-ru-');
+    expect(perms.endpoint.activity).toBe('-r--');
+    expect(perms.endpoint.changeset).toBe('-r--');
+    expect(perms.endpoint.version).toBe('crud');
+    expect(perms.endpoint.rollback).toBe('c---');
     expect(perms.endpoint.anchor).toBe('c--d');
+    expect(perms.history).toEqual({ from: 0, rollback: true, version: 'crud' });
   });
 
-  it('maps OWNER to write document and write awareness', () => {
+  it('maps OWNER to write document, write awareness and restorable history', () => {
     const perms = documentPermissions('OWNER');
     expect(perms.ydoc).toBe('-ru-');
     expect(perms.awareness).toBe('-ru-');
     expect(perms.endpoint.ws).toBe('-ru-');
     expect(perms.endpoint.ydoc).toBe('-ru-');
+    expect(perms.endpoint.activity).toBe('-r--');
+    expect(perms.endpoint.changeset).toBe('-r--');
+    expect(perms.endpoint.version).toBe('crud');
+    expect(perms.endpoint.rollback).toBe('c---');
     expect(perms.endpoint.anchor).toBe('c--d');
+    expect(perms.history).toEqual({ from: 0, rollback: true, version: 'crud' });
   });
 
   it('denies an unknown access level instead of falling through to write', () => {

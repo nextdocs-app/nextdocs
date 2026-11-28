@@ -268,7 +268,6 @@ export async function flushPendingCloudCreate(
       entry.id,
       local.meta.title || 'Untitled',
       local.ydoc,
-      local.meta.createdBy ?? null,
       entry.parentId
     );
 

@@ -42,7 +42,6 @@ const localDocument = {
   ydoc: {} as never,
   meta: {
     title: 'Offline draft',
-    createdBy: 'user-1',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -197,7 +196,6 @@ describe('pending cloud creates', () => {
       'doc-1',
       'Offline draft',
       localDocument.ydoc,
-      'user-1',
       'parent-1'
     );
     expect(getPendingCloudCreate('doc-1')).toBeNull();
@@ -363,7 +361,7 @@ describe('pending cloud creates', () => {
     // the user wrote, and it can live at the root.
     await expect(flushPendingCloudCreate('token', child)).resolves.toBe('created');
 
-    expect(createCloudDocument.mock.calls.map(([, id, , , , parentId]) => [id, parentId])).toEqual([
+    expect(createCloudDocument.mock.calls.map(([, id, , , parentId]) => [id, parentId])).toEqual([
       ['parent', null],
       ['child', null],
     ]);
@@ -446,7 +444,7 @@ describe('pending cloud creates', () => {
 
       await expect(flushPendingCloudCreate('token', entry)).resolves.toBe('created');
 
-      expect(createCloudDocument.mock.calls.map(([, , , , , parentId]) => parentId)).toEqual([
+      expect(createCloudDocument.mock.calls.map(([, , , , parentId]) => parentId)).toEqual([
         'parent-1',
         null,
       ]);

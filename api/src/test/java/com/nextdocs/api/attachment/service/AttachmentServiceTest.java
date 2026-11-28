@@ -27,14 +27,14 @@ import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.repository.AttachmentRepository;
 import com.nextdocs.api.attachment.storage.AttachmentStorage;
 import com.nextdocs.api.attachment.storage.StoredAttachment;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -136,8 +136,9 @@ class AttachmentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
-        document = Document.builder().id(documentId).user(user).title("Doc").build();
+        document = Document.builder().id(documentId).creator(user).title("Doc").build();
         workspace = Workspace.builder().id(workspaceId).name("NextDocs").build();
     }
 

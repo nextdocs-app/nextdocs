@@ -10,7 +10,12 @@ import authReducer from '../../../stores/auth/auth.slice';
 import documentListReducer from '../../../stores/documentList/documentList.slice';
 import uiReducer from '../../../stores/ui/ui.slice';
 import userEvent from '@testing-library/user-event';
-import Sidebar from '../../../components/sidebar';
+import Sidebar, {
+  collectMatchingTreeIds,
+  resolveSharedPanelAction,
+  resolveSharedPanelTreeAction,
+  resolveSharedRowAction,
+} from '../../../components/sidebar/Sidebar';
 import { useDocumentList } from '../../../hooks/useDocumentList.hook';
 import { DocumentServiceApiError, documentService } from '../../../services/document.service';
 import { useRouter, useParams } from 'next/navigation';
@@ -61,7 +66,6 @@ const signedInAuthState = {
     id: '1',
     email: 'a@b.com',
     avatarUrl: null,
-    emailVerified: false,
   },
   accessToken: 'token-1',
   isInitializing: false,
@@ -206,7 +210,6 @@ function setupDefault() {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -302,12 +305,12 @@ it('keeps the mobile drawer mounted when the desktop rail is collapsed', () => {
       auth: signedInAuthState,
       sidebar: {
         isCollapsed: true,
-        sidebarWidth: 256,
         panelMode: null,
         searchQuery: '',
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -661,17 +664,42 @@ it('calls logout when "Log out" is selected from the account menu', async () => 
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
     logout: mockLogout,
   });
   const user = userEvent.setup();
-  render(<Sidebar />);
+  const store = configureStore({
+    reducer: {
+      sidebar: sidebarReducer,
+      sidebarTree: sidebarTreeReducer,
+      sharedTree: sharedTreeReducer,
+      spaceTree: spaceTreeReducer,
+      auth: authReducer,
+      ui: uiReducer,
+      documentList: documentListReducer,
+    },
+    preloadedState: {
+      auth: signedInAuthState,
+      sidebar: {
+        ...sidebarReducer(undefined, { type: '@@init' }),
+        expandedSpaceIds: ['space-1'],
+      },
+      sidebarTree: {
+        nodes: mockTreeNodes,
+        rootIds: ['id-1', 'id-2'],
+        isRootLoading: false,
+        rootHasMore: false,
+        rootPage: 0,
+      },
+    },
+  });
+  render(<Sidebar />, store);
   await user.click(screen.getByRole('button', { name: /Alice/i }));
   await user.click(screen.getByRole('menuitem', { name: /Log out/i }));
   expect(mockLogout).toHaveBeenCalledTimes(1);
+  expect(store.getState().sidebar.expandedSpaceIds).toEqual([]);
   // Signed out there is no private root to resolve; the home route prompts
   // for sign-in instead of creating a guest document.
   expect(resolveRootDocumentId).not.toHaveBeenCalled();
@@ -1075,7 +1103,6 @@ it('opens shared documents panel from shared section show all', async () => {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1132,7 +1159,6 @@ it('lets collaborator leave shared document from shared panel row actions menu',
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1202,6 +1228,90 @@ it('lets collaborator leave shared document from shared panel row actions menu',
   expect(mockRefresh).toHaveBeenCalled();
 });
 
+it('offers Leave page to a shared-panel creator below Can edit', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-owner-view',
+        relationship: 'owner',
+        accessLevel: 'VIEW',
+        meta: {
+          title: 'Demoted Creator Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+      ...Array.from({ length: 7 }, (_, i) => ({
+        id: `shared-filler-${i + 1}`,
+        relationship: 'collaborator' as const,
+        meta: {
+          title: `Shared Filler Doc ${i + 1}`,
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      })),
+    ],
+    isLoading: false,
+    isSharedLoading: false,
+    isSharedLoadingMore: false,
+    sharedHasMore: false,
+    isShowingAllShared: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    trashedDocuments: [],
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showAllSharedDocuments: mockShowAllSharedDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreSharedDocuments: mockLoadMoreSharedDocuments,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(screen.getByRole('button', { name: /show all/i }));
+
+  const dialog = screen.getByRole('dialog', { name: /Shared documents/i });
+  expect(within(dialog).getByText('Demoted Creator Doc')).toBeInTheDocument();
+  await user.click(
+    within(dialog).getByRole('button', {
+      name: /Document actions for Demoted Creator Doc/i,
+    })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Leave shared document/i }));
+  await waitFor(() => {
+    expect(documentService.leaveSharedDocument).toHaveBeenCalledWith(
+      'shared-owner-view',
+      'token-1'
+    );
+  });
+  // The other rows still offer their menu.
+  expect(
+    within(dialog).getByRole('button', { name: /Document actions for Shared Filler Doc 1/i })
+  ).toBeInTheDocument();
+});
+
 it('shows trash option for authenticated user and opens trash panel', async () => {
   (useAuth as jest.Mock).mockReturnValue({
     user: {
@@ -1209,7 +1319,6 @@ it('shows trash option for authenticated user and opens trash panel', async () =
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1253,7 +1362,6 @@ it('moves a document to trash from row actions menu', async () => {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1288,7 +1396,6 @@ it('anchors the row actions menu on the sidebar edge, below the (...)', async ()
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1346,7 +1453,6 @@ it('moves a document to trash from show all documents panel row actions menu', a
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1477,7 +1583,6 @@ it('renders private panel with hasMore true when there are fewer than 7 private 
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1565,7 +1670,6 @@ it('moves a child document to trash in shared tree when user has edit access', a
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1622,12 +1726,12 @@ it('moves a child document to trash in shared tree when user has edit access', a
     preloadedState: {
       sidebar: {
         isCollapsed: false,
-        sidebarWidth: 256,
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: true,
         panelMode: null,
         searchQuery: '',
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -1687,7 +1791,6 @@ it('restores a document from trash panel row actions', async () => {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1736,7 +1839,6 @@ it('permanently deletes a document from trash panel after confirmation', async (
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1809,7 +1911,6 @@ it('shows restore button for child document in trash when trashHasMore is true a
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1862,7 +1963,6 @@ it('moves an owner-shared document to trash from shared section row actions menu
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1874,6 +1974,7 @@ it('moves an owner-shared document to trash from shared section row actions menu
       {
         id: 'shared-owner-1',
         relationship: 'owner',
+        accessLevel: 'OWNER',
         meta: {
           title: 'Owner Shared Doc',
           updatedAt: '2024-01-01T11:00:00Z',
@@ -1916,6 +2017,130 @@ it('moves an owner-shared document to trash from shared section row actions menu
   expect(mockRefreshTrash).toHaveBeenCalled();
 });
 
+it('offers Leave page to a page creator who stepped below Can edit', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-owner-view',
+        relationship: 'owner',
+        accessLevel: 'VIEW',
+        meta: {
+          title: 'Demoted Creator Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+
+  (documentService.leaveSharedDocument as jest.Mock).mockResolvedValue(undefined);
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  // A creator below Can edit cannot trash the page, but they still hold a normal
+  // grant row and can leave it.
+  expect(screen.getByText('Demoted Creator Doc')).toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: /Document actions for Demoted Creator Doc/i })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Leave shared document/i }));
+  await waitFor(() => {
+    expect(documentService.leaveSharedDocument).toHaveBeenCalledWith(
+      'shared-owner-view',
+      'token-1'
+    );
+  });
+});
+
+it('keeps Move to Trash for a page creator who still has edit access', async () => {
+  (useAuth as jest.Mock).mockReturnValue({
+    user: {
+      displayName: 'Alice',
+      id: '1',
+      email: 'a@b.com',
+      avatarUrl: null,
+    },
+    isAuthenticated: true,
+    accessToken: 'token-1',
+    logout: mockLogout,
+  });
+  (useDocumentList as jest.Mock).mockReturnValue({
+    documents: mockDocs,
+    sharedDocuments: [
+      {
+        id: 'shared-owner-edit',
+        relationship: 'owner',
+        accessLevel: 'EDIT',
+        meta: {
+          title: 'Editor Creator Doc',
+          updatedAt: '2024-01-01T11:00:00Z',
+          createdAt: '2024-01-01T10:00:00Z',
+        },
+      },
+    ],
+    trashedDocuments: [],
+    isLoading: false,
+    isSharedLoading: false,
+    isLoadingMore: false,
+    hasMore: false,
+    isShowingAll: false,
+    isTrashLoading: false,
+    isTrashLoadingMore: false,
+    trashHasMore: false,
+    canShowAll: false,
+    refresh: mockRefresh,
+    refreshTrash: mockRefreshTrash,
+    showAllDocuments: mockShowAllDocuments,
+    showTrashDocuments: mockShowTrashDocuments,
+    loadMore: mockLoadMore,
+    loadMoreTrashDocuments: mockLoadMoreTrashDocuments,
+  });
+  (documentService.moveCloudDocumentToTrash as jest.Mock).mockResolvedValue(undefined);
+
+  const user = userEvent.setup();
+  render(<Sidebar />);
+
+  await user.click(
+    screen.getByRole('button', { name: /Document actions for Editor Creator Doc/i })
+  );
+  await user.click(screen.getByRole('menuitem', { name: /Move to Trash/i }));
+
+  await waitFor(() => {
+    expect(documentService.moveCloudDocumentToTrash).toHaveBeenCalledWith(
+      'shared-owner-edit',
+      'token-1'
+    );
+  });
+});
+
 it('lets collaborator leave shared document from shared section row actions menu', async () => {
   (useAuth as jest.Mock).mockReturnValue({
     user: {
@@ -1923,7 +2148,6 @@ it('lets collaborator leave shared document from shared section row actions menu
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -1983,7 +2207,6 @@ it('resolves a replacement document when leaving the active shared document', as
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2049,7 +2272,6 @@ it('excludes shared documents from the private section', async () => {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2124,7 +2346,6 @@ it('excludes shared documents from the private documents panel', async () => {
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2197,14 +2418,13 @@ it('excludes shared documents from the private documents panel', async () => {
   expect(within(dialog).getByRole('button', { name: 'Untitled' })).toBeInTheDocument();
 });
 
-it('keeps nested owner-shared documents in the private section under their parent', async () => {
+it('floats a nested owner-shared document whose parent is not shared', async () => {
   (useAuth as jest.Mock).mockReturnValue({
     user: {
       displayName: 'Alice',
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2253,17 +2473,8 @@ it('keeps nested owner-shared documents in the private section under their paren
       ...mockTreeNodes['id-1'],
       title: 'Parent Doc',
       isExpanded: true,
-      hasChildren: true,
-      children: ['id-3'],
-    },
-    'id-3': {
-      ...mockTreeNodes['id-1'],
-      id: 'id-3',
-      title: 'Nested Shared Doc',
-      parentId: 'id-1',
-      orderKey: 'a0-1',
-      children: [],
       hasChildren: false,
+      children: [],
     },
   };
 
@@ -2285,19 +2496,17 @@ it('keeps nested owner-shared documents in the private section under their paren
         rootHasMore: false,
         rootPage: 0,
       },
-      // A nested page with collaborators is not a Shared-section entry: the
-      // server keeps it in the owner's private tree.
       documentList: documentListInitialState,
     },
   });
 
   render(<Sidebar />, store);
 
-  // The nested shared document stays in the Private section under its parent
-  // and must NOT be synthesized in the Shared section.
+  // The parent is not shared, so the nested page has no place in the Private tree
+  // and floats at the root of the Shared section exactly once.
   expect(screen.getAllByRole('button', { name: 'Nested Shared Doc' })).toHaveLength(1);
   expect(screen.getByRole('button', { name: 'Parent Doc' })).toBeInTheDocument();
-  expect(screen.getByText('No shared documents')).toBeInTheDocument();
+  expect(screen.queryByText('No shared documents')).not.toBeInTheDocument();
 });
 
 it('shows "Show More" in the private section only when more than 7 root documents exist', async () => {
@@ -2459,7 +2668,6 @@ it('does not show "Show More" in the shared section when at most 7 root document
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2515,7 +2723,6 @@ it('renders the "Add a document inside" button for a collaborator document with 
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2602,7 +2809,6 @@ it('does not render the "Add a document inside" button for a collaborator docume
       id: '1',
       email: 'a@b.com',
       avatarUrl: null,
-      emailVerified: false,
     },
     isAuthenticated: true,
     accessToken: 'token-1',
@@ -2915,4 +3121,129 @@ it('marks guest shared rows as non-draggable', () => {
     'aria-disabled',
     'true'
   );
+});
+
+it('renders the account menu outside the scrollable tree container', () => {
+  render(<Sidebar />);
+
+  const accountButton = screen.getByRole('button', { name: /Alice/i });
+  const accountFooter = accountButton.closest('div.border-t');
+  expect(accountFooter).toBeInTheDocument();
+
+  // The scrollable container is a preceding sibling, not an ancestor of the profile footer
+  const scrollContainer = accountFooter?.previousElementSibling;
+  expect(scrollContainer).toHaveClass('overflow-y-auto');
+  expect(scrollContainer?.contains(accountButton)).toBe(false);
+});
+
+describe('panel tree search filtering', () => {
+  it('skips ids that the loaded tree does not contain and keeps ancestors of matches', () => {
+    const nodes = {
+      root: {
+        id: 'root',
+        title: 'Root',
+        parentId: null,
+        children: ['child'],
+      },
+      child: {
+        id: 'child',
+        title: 'Matching child',
+        parentId: 'root',
+        children: [],
+      },
+    } as never;
+
+    const visible = collectMatchingTreeIds(nodes, ['missing', 'root'], 'matching');
+
+    expect([...visible]).toEqual(['child', 'root']);
+  });
+
+  it('visits every sibling instead of stopping at the first matching child', () => {
+    const nodes = {
+      root: {
+        id: 'root',
+        title: 'Root',
+        parentId: null,
+        children: ['match-1', 'match-2'],
+      },
+      'match-1': {
+        id: 'match-1',
+        title: 'Match one',
+        parentId: 'root',
+        children: [],
+      },
+      'match-2': {
+        id: 'match-2',
+        title: 'Match two',
+        parentId: 'root',
+        children: [],
+      },
+    } as never;
+
+    const visible = collectMatchingTreeIds(nodes, ['root'], 'match');
+
+    expect([...visible].sort()).toEqual(['match-1', 'match-2', 'root']);
+  });
+
+  it('matches an untitled node by its Untitled fallback', () => {
+    const nodes = {
+      root: {
+        id: 'root',
+        title: '',
+        parentId: null,
+        children: [],
+      },
+    } as never;
+
+    expect([...collectMatchingTreeIds(nodes, ['root'], 'untitled')]).toEqual(['root']);
+  });
+});
+
+describe('shared section row actions', () => {
+  it('trashes a local entry and leaves a collaborator', () => {
+    expect(resolveSharedRowAction({ id: 'local' } as never)).toBe('move-to-trash');
+    expect(resolveSharedRowAction({ relationship: 'collaborator' } as never)).toBe('leave-shared');
+  });
+
+  it('lets an owner trash only while they can still edit', () => {
+    expect(resolveSharedRowAction({ relationship: 'owner', accessLevel: 'OWNER' } as never)).toBe(
+      'move-to-trash'
+    );
+    expect(resolveSharedRowAction({ relationship: 'owner', accessLevel: 'EDIT' } as never)).toBe(
+      'move-to-trash'
+    );
+    expect(resolveSharedRowAction({ relationship: 'owner', accessLevel: 'VIEW' } as never)).toBe(
+      'leave-shared'
+    );
+  });
+
+  it('keeps a nested shared-node row in the trash action', () => {
+    expect(
+      resolveSharedPanelTreeAction(true, {
+        parentId: 'parent',
+        effectiveAccessLevel: 'EDIT',
+      } as never)
+    ).toBe('move-to-trash');
+    expect(
+      resolveSharedPanelTreeAction(true, {
+        parentId: null,
+        effectiveAccessLevel: 'OWNER',
+      } as never)
+    ).toBe('move-to-trash');
+    expect(
+      resolveSharedPanelTreeAction(true, {
+        parentId: null,
+        effectiveAccessLevel: 'VIEW',
+      } as never)
+    ).toBe('leave-shared');
+    expect(resolveSharedPanelTreeAction(false, undefined)).toBe('move-to-trash');
+  });
+
+  it('uses the shared row rule only in the shared panel', () => {
+    expect(resolveSharedPanelAction(false, { id: 'local' } as never)).toBe('move-to-trash');
+    expect(resolveSharedPanelAction(true, { id: 'local' } as never)).toBe('move-to-trash');
+    expect(resolveSharedPanelAction(true, { relationship: 'collaborator' } as never)).toBe(
+      'leave-shared'
+    );
+  });
 });

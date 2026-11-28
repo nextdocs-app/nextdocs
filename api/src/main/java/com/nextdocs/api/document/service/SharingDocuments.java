@@ -35,7 +35,7 @@ final class SharingDocuments {
         }
 
         Map<UUID, Document> byId = new HashMap<>();
-        for (Document ancestor : documentRepository.findAllWithUserByIdIn(ancestorIds)) {
+        for (Document ancestor : documentRepository.findAllForChainByIdIn(ancestorIds)) {
             byId.put(ancestor.getId(), ancestor);
         }
 

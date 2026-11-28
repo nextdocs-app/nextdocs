@@ -5,8 +5,6 @@ import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.service.AttachmentService;
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
@@ -35,6 +33,8 @@ import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
 import com.nextdocs.api.space.repository.UserSpaceOrderRepository;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
@@ -653,6 +653,9 @@ public class SpaceService {
      */
     @Transactional
     public void detachPage(UUID userId, UUID spaceId, UUID documentId) {
+        // Detaching a space page turns it into a standalone root; lock Workspace -> Space
+        // (matching deleteSpace) so member removal cannot drop a sole owner's grant mid-detach.
+        spaceRepository.findWorkspaceIdById(spaceId).ifPresent(this::lockWorkspace);
         Space space = lockSpace(spaceId);
         documentService.clearSpace(userId, documentId, spaceId);
         auditService.recordSpace(space, userId, AccessAuditAction.SPACE_PAGE_DETACH, "DOCUMENT", documentId, null);

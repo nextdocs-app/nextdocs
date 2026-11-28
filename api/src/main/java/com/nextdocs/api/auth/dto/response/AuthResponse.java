@@ -1,5 +1,6 @@
 package com.nextdocs.api.auth.dto.response;
 
+import com.nextdocs.api.user.dto.response.UserResponse;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "Successful authentication response. The refresh token is delivered via HTTP-only cookie.")

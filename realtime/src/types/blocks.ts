@@ -37,7 +37,17 @@ export interface Link {
   content: StyledText[];
 }
 
-export type InlineContent = StyledText | Link;
+// Source: https://www.blocknotejs.org/docs/features/custom-schemas/custom-inline-content
+/** A user mention. `label` is a display-name snapshot; `userId` is the authority. */
+export interface Mention {
+  type: 'mention';
+  props: {
+    userId: string;
+    label: string;
+  };
+}
+
+export type InlineContent = StyledText | Link | Mention;
 
 // Base properties for all blocks
 interface BaseBlock {
@@ -218,7 +228,6 @@ export interface DocumentMeta {
   cover?: DocumentCover;
   createdAt: string;
   updatedAt: string;
-  createdBy?: string;
   deletedAt?: string;
   purgeAt?: string;
 }

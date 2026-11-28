@@ -1,8 +1,7 @@
 package com.nextdocs.api.document.controller;
 
-import static com.nextdocs.api.auth.security.BearerTokens.rejectInvalidBearer;
+import static com.nextdocs.api.security.BearerTokens.rejectInvalidBearer;
 
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.dto.request.CollaboratorUpsertRequest;
@@ -14,6 +13,7 @@ import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.document.service.DocumentSharingSettingsService;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -72,6 +72,28 @@ public class DocumentSharingController {
     }
 
     @Operation(
+            summary = "Check for sharing sources the caller cannot view",
+            description = "True when the page inherits from an ancestor or space the caller cannot open. "
+                    + "The roster omits those sources instead of naming them, so the panel can warn that more "
+                    + "people may have access without disclosing where their access comes from.",
+            responses = {
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "200",
+                        description = "Hidden-source flag returned"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "401",
+                        description = "Authentication required"),
+                @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                        responseCode = "404",
+                        description = "Document not found or roster not visible")
+            })
+    @GetMapping("/{id}/collaborators/hidden-sources")
+    public ResponseEntity<ApiResponse<Boolean>> hasHiddenSharingSources(
+            @AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(sharingService.hasHiddenSharingSources(principal.getId(), id)));
+    }
+
+    @Operation(
             summary = "Add or update a collaborator",
             description = "Creates or updates collaborator access for the specified document by email "
                     + "and returns the recalculated collaborator list, so a client never has to "
@@ -103,7 +125,10 @@ public class DocumentSharingController {
     @Operation(
             summary = "Update collaborator access level",
             description = "Updates an existing collaborator's access level for the specified document or creates "
-                    + "an override, and returns the recalculated collaborator list.",
+                    + "an override, and returns the recalculated collaborator list. Ownership is a level like "
+                    + "any other: the page creator's row is updated the same way, any page owner may lower "
+                    + "their own level, and a standalone page must keep at least one owner. No access is refused "
+                    + "for yourself (leave the page instead), and for an owner whose access is inherited.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",
@@ -119,7 +144,8 @@ public class DocumentSharingController {
                         description = "Document or collaborator not found"),
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "409",
-                        description = "Self-lockout or owner access conflict")
+                        description =
+                                "Last owner on a standalone page, inherited owner at No access, " + "or self No access")
             })
     @PatchMapping("/{id}/collaborators/{userId}")
     public ResponseEntity<ApiResponse<List<CollaboratorResponse>>> updateCollaboratorAccess(
@@ -155,7 +181,9 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Leave a shared document",
-            description = "Removes the authenticated user from the collaborator list of the specified shared document.",
+            description = "Removes the authenticated user's grant from the specified shared document. "
+                    + "Ownership is a level like any other, so the creator leaves by the same route. The last "
+                    + "owner of a standalone page cannot leave.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "204",
@@ -176,7 +204,9 @@ public class DocumentSharingController {
 
     @Operation(
             summary = "Get sharing settings",
-            description = "Returns general access and link permissions for the specified document.",
+            description = "Returns general access and link permissions for the specified document. "
+                    + "Readable by anyone who can read the page and see its roster; updates remain "
+                    + "restricted to sharing administrators.",
             responses = {
                 @io.swagger.v3.oas.annotations.responses.ApiResponse(
                         responseCode = "200",

@@ -1,9 +1,9 @@
 package com.nextdocs.api.workspace.controller;
 
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.response.ApiResponse;
 import com.nextdocs.api.common.response.PagedResponse;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;

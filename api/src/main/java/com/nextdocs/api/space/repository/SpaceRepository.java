@@ -89,4 +89,7 @@ public interface SpaceRepository extends JpaRepository<Space, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM Space s WHERE s.id = :id")
     Optional<Space> findByIdForUpdate(@Param("id") UUID id);
+
+    @Query("SELECT s.workspace.id FROM Space s WHERE s.id = :id")
+    Optional<UUID> findWorkspaceIdById(@Param("id") UUID id);
 }

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef } from 'react';
 import { ChevronRight, Search, Restore, Trash } from '@/icons';
 import { DocRowIcon } from './DocRowIcon';
 import { DocumentsPanelSkeleton } from './DocumentsPanelSkeleton';
-import { DocumentActionsButton } from './DocumentActionsButton';
 import { SidebarTreeItem } from './SidebarTreeItem';
 import { SidebarTreeDndContext } from './SidebarTreeDndContext';
+import { useStickyRowMetrics } from './useStickyRowMetrics';
 import type { TreeApi } from './SidebarTreeDndContext';
 import type {
   DocumentsPanelMode,
@@ -49,7 +49,6 @@ export type DocumentsPanelProps = {
     documentId: string,
     actionType: DocActionType
   ) => void;
-  resolvePanelActionType: (doc: SidebarSectionDocument) => DocActionType;
   resolvePanelTreeActionType: (documentId: string) => DocActionType;
   setDocActionsAnchor: (anchor: DocActionsAnchor | null) => void;
   hasMore: boolean;
@@ -84,7 +83,6 @@ export function DocumentsPanel({
   onRequestPermanentDelete,
   docActionsAnchor,
   onToggleDocumentActions,
-  resolvePanelActionType,
   resolvePanelTreeActionType,
   setDocActionsAnchor,
   hasMore,
@@ -92,6 +90,7 @@ export function DocumentsPanel({
   onLoadMore,
 }: DocumentsPanelProps) {
   const documentsPanelScrollRef = useRef<HTMLDivElement>(null);
+  const setDocumentsPanelScrollRef = useStickyRowMetrics(documentsPanelScrollRef);
   const treeSentinelRef = useRef<HTMLLIElement>(null);
   const trashSentinelRef = useRef<HTMLLIElement>(null);
 
@@ -328,7 +327,11 @@ export function DocumentsPanel({
         </div>
       </div>
 
-      <div ref={documentsPanelScrollRef} className="flex-1 overflow-y-auto px-1.5 py-2">
+      <div
+        ref={setDocumentsPanelScrollRef}
+        className="flex-1 overflow-y-auto px-1.5 pt-2 pb-10"
+        style={{ '--nd-sticky-header': '0px' } as React.CSSProperties}
+      >
         {isLoadingInitial ? (
           <DocumentsPanelSkeleton rows={6} />
         ) : isTreePanel && treeApi ? (
@@ -336,7 +339,7 @@ export function DocumentsPanel({
             renderEmptyState()
           ) : (
             <SidebarTreeDndContext treeApi={treeApi}>
-              <ul className="flex flex-col gap-px">
+              <ul className="flex flex-col gap-px relative z-0">
                 {visibleRootIds.map((rootId) => (
                   <SidebarTreeItem
                     key={rootId}
@@ -382,7 +385,7 @@ export function DocumentsPanel({
                 isTrashPanel && doc.parentId != null && trashedDocIds.has(doc.parentId);
               return (
                 <li key={`all-doc-${doc.id}`} className="relative group/doc">
-                  {isTrashPanel ? (
+                  {
                     <div className="w-full relative group/doc" data-doc-actions-root={doc.id}>
                       <button
                         onClick={() => {
@@ -438,34 +441,7 @@ export function DocumentsPanel({
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => {
-                          setDocActionsAnchor(null);
-                          onSelectDocument(doc.id);
-                        }}
-                        className={`w-full flex items-center gap-2.5 px-2 pr-9 pointer-coarse:pr-12 py-1.5 pointer-coarse:py-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
-                          isActive
-                            ? 'bg-sidebar-accent/70 hover:bg-sidebar-accent group-hover/doc:bg-sidebar-accent text-sidebar-foreground'
-                            : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover/doc:bg-sidebar-accent group-hover/doc:text-sidebar-foreground'
-                        }`}
-                      >
-                        <DocRowIcon icon={doc.meta.icon} />
-                        <span className="text-[14px] truncate">{doc.meta.title || 'Untitled'}</span>
-                      </button>
-
-                      {isAuthenticated && accessToken && (
-                        <DocumentActionsButton
-                          documentId={doc.id}
-                          documentTitle={doc.meta.title || 'Untitled'}
-                          actionType={resolvePanelActionType(doc as SidebarSectionDocument)}
-                          isOpen={docActionsAnchor?.documentId === doc.id}
-                          onToggle={onToggleDocumentActions}
-                        />
-                      )}
-                    </>
-                  )}
+                  }
                 </li>
               );
             })}

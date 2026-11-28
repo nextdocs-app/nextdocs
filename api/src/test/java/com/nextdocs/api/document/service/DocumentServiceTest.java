@@ -18,8 +18,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.attachment.service.AttachmentService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.service.CommentCleanup;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
@@ -50,6 +48,8 @@ import com.nextdocs.api.realtime.repository.YhubPurgeOutboxRepository;
 import com.nextdocs.api.search.event.DocumentSearchTitleChangedEvent;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
 import com.nextdocs.api.workspace.service.WorkspaceService;
 import java.time.OffsetDateTime;
@@ -120,6 +120,9 @@ class DocumentServiceTest {
     private DocumentService documentService;
 
     @Mock
+    private AccessGrantSyncService accessGrantSyncService;
+
+    @Mock
     private YhubPurgeOutboxRepository yhubPurgeOutboxRepository;
 
     @Mock
@@ -137,6 +140,7 @@ class DocumentServiceTest {
                 accessGrantRepository,
                 userDocumentOrderRepository,
                 userSharedOrderRepository,
+                accessGrantSyncService,
                 sharedSectionService,
                 userRepository,
                 documentProperties,
@@ -163,6 +167,7 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -173,8 +178,7 @@ class DocumentServiceTest {
                 ApiException.class,
                 () -> documentService.insertDocument(
                         userId,
-                        new DocumentCreateRequest(
-                                documentId, "Doc", "AQID", null, null, null, null, null, null, null)));
+                        new DocumentCreateRequest(documentId, "Doc", "AQID", null, null, null, null, null, null)));
 
         // Yhub keeps a hard tombstone after a purge, so the id can never host a room
         // again. A conflict is permanent: the offline create queue stops retrying.
@@ -230,7 +234,7 @@ class DocumentServiceTest {
                     () -> documentService.create(
                             userId,
                             new DocumentCreateRequest(
-                                    UUID.fromString(id), "Doc", null, null, null, null, null, null, null, null)));
+                                    UUID.fromString(id), "Doc", null, null, null, null, null, null, null)));
             assertEquals(ErrorCode.VALIDATION_FAILED, error.getErrorCode());
         }
 
@@ -291,16 +295,17 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -333,10 +338,11 @@ class DocumentServiceTest {
     void delete_permanent_leafDocumentWithoutChildren_collectsOnlyItsOwnAttachments() {
         UUID ownerId = UUID.randomUUID();
         UUID leafId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document leaf = Document.builder()
                 .id(leafId)
-                .user(owner)
+                .creator(owner)
                 .title("Leaf")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -359,7 +365,8 @@ class DocumentServiceTest {
     @SuppressWarnings("unchecked")
     void delete_permanent_threeLevelNesting_collectsEveryLevelBeforeDeleting() {
         UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document root = trashedDoc(owner, UUID.randomUUID(), "Root", null);
         Document child = trashedDoc(owner, UUID.randomUUID(), "Child", root);
         Document grandchild = trashedDoc(owner, UUID.randomUUID(), "Grandchild", child);
@@ -387,10 +394,11 @@ class DocumentServiceTest {
     void delete_permanent_attachmentRowDeleteFails_abortsBeforeRemovingDocuments() {
         UUID ownerId = UUID.randomUUID();
         UUID leafId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document leaf = Document.builder()
                 .id(leafId)
-                .user(owner)
+                .creator(owner)
                 .title("Leaf")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -425,7 +433,7 @@ class DocumentServiceTest {
     private static Document trashedDoc(User owner, UUID id, String title, Document parent) {
         return Document.builder()
                 .id(id)
-                .user(owner)
+                .creator(owner)
                 .title(title)
                 .parent(parent)
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -440,9 +448,10 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -467,9 +476,10 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -492,20 +502,21 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document existing = Document.builder()
                 .id(documentId)
-                .user(user)
+                .creator(user)
                 .title("Existing")
-                .createdBy("Alice")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
+        when(permissionService.resolveAccess(userId, documentId)).thenReturn(DocumentAccessLevel.OWNER);
 
         DocumentService.CreateDocumentResult result = documentService.create(userId, request);
 
@@ -522,15 +533,16 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document existing = Document.builder()
                 .id(documentId)
-                .user(user)
+                .creator(user)
                 .title("Existing")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
@@ -548,9 +560,10 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(null, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(eq(userId), any()))
@@ -581,10 +594,11 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(user)
+                .creator(user)
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -610,10 +624,11 @@ class DocumentServiceTest {
     void restore_rethrowsNonRetryableDataIntegrityViolationWithoutRetrying() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(user)
+                .creator(user)
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -661,7 +676,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document document = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Frozen page")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -684,12 +699,13 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID privateParentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document privateParent =
-                Document.builder().id(privateParentId).user(owner).build();
+                Document.builder().id(privateParentId).creator(owner).build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Floated Doc")
                 .parent(privateParent)
                 .siblingOrderKey("owner-sibling-key")
@@ -715,10 +731,11 @@ class DocumentServiceTest {
         UUID requesterId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Root Shared Doc")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -740,10 +757,11 @@ class DocumentServiceTest {
     void get_ownedSharedRoot_returnsSharedOrderKeyAndSection() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Owned Shared Root")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -769,12 +787,13 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID privateParentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document privateParent =
-                Document.builder().id(privateParentId).user(owner).build();
+                Document.builder().id(privateParentId).creator(owner).build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Floated Doc")
                 .parent(privateParent)
                 .siblingOrderKey("owner-sibling-key")
@@ -800,12 +819,13 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         UUID sharedParentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document sharedParent =
-                Document.builder().id(sharedParentId).user(owner).build();
+                Document.builder().id(sharedParentId).creator(owner).build();
         Document document = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Nested Doc")
                 .parent(sharedParent)
                 .siblingOrderKey("sibling-key-1")
@@ -814,8 +834,7 @@ class DocumentServiceTest {
                 .build();
 
         when(permissionService.requireReadAccess(requesterId, documentId)).thenReturn(document);
-        // Parent IS accessible to requester
-        when(permissionService.resolveAccess(requesterId, sharedParentId)).thenReturn(DocumentAccessLevel.VIEW);
+        when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.VIEW);
 
         var response = documentService.get(requesterId, documentId, false);
 
@@ -830,15 +849,16 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         UUID sharedParentId = UUID.randomUUID();
         OffsetDateTime deletedAt = OffsetDateTime.now(ZoneOffset.UTC);
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document sharedParent = Document.builder()
                 .id(sharedParentId)
-                .user(owner)
+                .creator(owner)
                 .deletedAt(deletedAt)
                 .build();
         Document trashedChild = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Trashed Child")
                 .parent(sharedParent)
                 .siblingOrderKey("sibling-key-2")
@@ -849,7 +869,6 @@ class DocumentServiceTest {
 
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(trashedChild));
         when(permissionService.resolveTrashAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.VIEW);
-        when(permissionService.resolveTrashAccess(requesterId, sharedParentId)).thenReturn(DocumentAccessLevel.VIEW);
 
         var response = documentService.get(requesterId, documentId, true);
 
@@ -868,8 +887,8 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null));
+        var response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
 
         assertEquals("Updated title", response.title());
         verify(permissionService, atLeastOnce()).resolveAccess(requesterId, documentId);
@@ -887,7 +906,7 @@ class DocumentServiceTest {
         ApiException exception = assertThrows(
                 ApiException.class,
                 () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null)));
+                        requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null)));
 
         assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -903,7 +922,7 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null, null));
+        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("", null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -918,8 +937,7 @@ class DocumentServiceTest {
         when(permissionService.resolveAccess(requesterId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null, null));
+        var response = documentService.update(requesterId, documentId, new DocumentUpdateRequest("   ", null, null));
 
         assertEquals("Untitled", response.title());
     }
@@ -932,9 +950,10 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "My Doc", "AQID", "Alice", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "My Doc", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
@@ -959,10 +978,10 @@ class DocumentServiceTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Re-saving the same title must not rebuild the body vector.
-        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Shared doc", null, null, null));
+        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Shared doc", null, null));
         verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
 
-        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Renamed", null, null, null));
+        documentService.update(requesterId, documentId, new DocumentUpdateRequest("Renamed", null, null));
         verify(eventPublisher).publishEvent(any(DocumentSearchTitleChangedEvent.class));
     }
 
@@ -977,9 +996,7 @@ class DocumentServiceTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         documentService.update(
-                requesterId,
-                documentId,
-                new DocumentUpdateRequest(null, null, new PageIconRequest("EMOJI", "🔐"), null));
+                requesterId, documentId, new DocumentUpdateRequest(null, new PageIconRequest("EMOJI", "🔐"), null));
 
         verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
     }
@@ -991,30 +1008,31 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         Document root1 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Root 1")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document root2 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Root 2")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document parent = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Parent")
                 .build();
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Child")
                 .parent(parent)
                 .siblingOrderKey("b5")
@@ -1091,10 +1109,11 @@ class DocumentServiceTest {
     void delete_permanentDelete_inTrash_deletesDocument() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document trashedDoc = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Trashed doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1112,10 +1131,11 @@ class DocumentServiceTest {
     void delete_permanentDelete_notInTrash_throwsValidationFailed() {
         UUID ownerId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document activeDoc = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Active doc")
                 .deletedAt(null)
                 .build();
@@ -1130,17 +1150,19 @@ class DocumentServiceTest {
     }
 
     @Test
-    void create_nestedDocUnderForeignParent_assignsParentOwner() {
+    void create_nestedDocUnderForeignParent_recordsTheCreatorOnly() {
         UUID creatorId = UUID.randomUUID();
         UUID hostOwnerId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User host = User.builder().id(hostOwnerId).build();
-        Document parent = Document.builder().id(parentId).user(host).build();
+
+        User host = User.builder().id(hostOwnerId).passwordHash("$2a$12$hash").build();
+        Document parent = Document.builder().id(parentId).creator(host).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Jerry", parentId, null, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
-                .thenReturn(Optional.of(User.builder().id(creatorId).build()));
+                .thenReturn(Optional.of(
+                        User.builder().id(creatorId).passwordHash("$2a$12$hash").build()));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
         when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -1149,10 +1171,11 @@ class DocumentServiceTest {
         assertTrue(result.created());
         ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
         verify(documentRepository).saveAndFlush(captor.capture());
-        // Location authority: the nested doc belongs to the host tree's owner, not the creator.
-        assertEquals(hostOwnerId, captor.getValue().getUser().getId());
-        // Creator attribution is preserved separately.
-        assertEquals("Jerry", captor.getValue().getCreatedBy());
+        // Attribution is the real caller; access comes from the host tree's parent chain.
+        assertEquals(creatorId, captor.getValue().getCreator().getId());
+        assertEquals(hostOwnerId, parent.getCreator().getId());
+        // Only a standalone root writes an OWNER grant; a nested page inherits one.
+        verify(accessGrantSyncService, never()).upsertUserGrant(any(), any(), any(), any());
         // Nested docs get no personal navigation row.
         verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
     }
@@ -1161,10 +1184,11 @@ class DocumentServiceTest {
     void create_nestedUnderTooDeepParent_throwsValidationFailed() {
         UUID creatorId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User creator = User.builder().id(creatorId).build();
-        Document parent = Document.builder().id(parentId).user(creator).build();
+
+        User creator = User.builder().id(creatorId).passwordHash("$2a$12$hash").build();
+        Document parent = Document.builder().id(parentId).creator(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -1183,10 +1207,11 @@ class DocumentServiceTest {
     void create_nestedAtDepthLimit_succeeds() {
         UUID creatorId = UUID.randomUUID();
         UUID parentId = UUID.randomUUID();
-        User creator = User.builder().id(creatorId).build();
-        Document parent = Document.builder().id(parentId).user(creator).build();
+
+        User creator = User.builder().id(creatorId).passwordHash("$2a$12$hash").build();
+        Document parent = Document.builder().id(parentId).creator(creator).build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(null, "Nested", "AQID", "Alice", parentId, null, null, null, null, null);
+                new DocumentCreateRequest(null, "Nested", "AQID", parentId, null, null, null, null, null);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(permissionService.requireEditAccess(creatorId, parentId)).thenReturn(parent);
@@ -1206,16 +1231,20 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document existing = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(hostOwnerId).build())
+                .creator(User.builder()
+                        .id(hostOwnerId)
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .title("Hosted")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .updatedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Retry", "AQID", "Jerry", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "Retry", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
-                .thenReturn(Optional.of(User.builder().id(creatorId).build()));
+                .thenReturn(Optional.of(
+                        User.builder().id(creatorId).passwordHash("$2a$12$hash").build()));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
         when(permissionService.resolveAccess(creatorId, documentId)).thenReturn(DocumentAccessLevel.EDIT);
 
@@ -1233,14 +1262,20 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document existing = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(hostOwnerId).build())
+                .creator(User.builder()
+                        .id(hostOwnerId)
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .title("Hosted")
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Squat", "AQID", "Stranger", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "Squat", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(strangerId))
-                .thenReturn(Optional.of(User.builder().id(strangerId).build()));
+                .thenReturn(Optional.of(User.builder()
+                        .id(strangerId)
+                        .passwordHash("$2a$12$hash")
+                        .build()));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
         when(permissionService.resolveAccess(strangerId, documentId)).thenReturn(null);
 
@@ -1256,17 +1291,18 @@ class DocumentServiceTest {
         Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
         Document existing = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(creatorId).build())
+                .creator(
+                        User.builder().id(creatorId).passwordHash("$2a$12$hash").build())
                 .title("Space Spec")
                 .space(space)
                 .build();
         DocumentCreateRequest request =
-                new DocumentCreateRequest(documentId, "Retry", "AQID", "Author", null, null, null, null, null, null);
+                new DocumentCreateRequest(documentId, "Retry", "AQID", null, null, null, null, null, null);
 
         when(userRepository.findById(creatorId))
-                .thenReturn(Optional.of(User.builder().id(creatorId).build()));
+                .thenReturn(Optional.of(
+                        User.builder().id(creatorId).passwordHash("$2a$12$hash").build()));
         when(documentRepository.findById(documentId)).thenReturn(Optional.of(existing));
-        when(permissionService.resolveSpace(existing)).thenReturn(space);
         when(permissionService.resolveAccess(creatorId, documentId)).thenReturn(null);
 
         ApiException exception = assertThrows(ApiException.class, () -> documentService.create(creatorId, request));
@@ -1280,8 +1316,9 @@ class DocumentServiceTest {
         UUID parentId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
-        Document parent = Document.builder().id(parentId).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document parent = Document.builder().id(parentId).creator(user).build();
         Document prevSibling = Document.builder()
                 .id(prevSiblingId)
                 .parent(parent)
@@ -1293,7 +1330,7 @@ class DocumentServiceTest {
                 .siblingOrderKey("a0")
                 .build();
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Child", "AQID", "Alice", parentId, null, prevSiblingId, nextSiblingId, null, null);
+                null, "Child", "AQID", parentId, null, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(permissionService.requireEditAccess(userId, parentId)).thenReturn(parent);
@@ -1309,9 +1346,10 @@ class DocumentServiceTest {
         UUID userId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Root Doc", "AQID", "Alice", null, null, prevSiblingId, nextSiblingId, null, null);
+                null, "Root Doc", "AQID", null, null, prevSiblingId, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1332,9 +1370,10 @@ class DocumentServiceTest {
     void create_rootDocWithNestedPrevSibling_throwsValidationFailed() {
         UUID userId = UUID.randomUUID();
         UUID prevSiblingId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
-        DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Root Doc", "AQID", "Alice", null, null, prevSiblingId, null, null, null);
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Root Doc", "AQID", null, null, prevSiblingId, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(prevSiblingId))
@@ -1352,9 +1391,10 @@ class DocumentServiceTest {
     void create_rootDocWithNestedNextSibling_throwsValidationFailed() {
         UUID userId = UUID.randomUUID();
         UUID nextSiblingId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
-        DocumentCreateRequest request = new DocumentCreateRequest(
-                null, "Root Doc", "AQID", "Alice", null, null, null, nextSiblingId, null, null);
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(null, "Root Doc", "AQID", null, null, null, nextSiblingId, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(documentRepository.findByIdAndDeletedAtIsNull(nextSiblingId))
@@ -1373,16 +1413,17 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .siblingOrderKey("a5")
                 .title("Child Doc")
@@ -1418,16 +1459,17 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1447,15 +1489,16 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .siblingOrderKey("a5")
                 .title("Child Doc")
@@ -1481,24 +1524,25 @@ class DocumentServiceTest {
         UUID parentDocId = UUID.randomUUID();
         UUID alreadyTrashedChildId = UUID.randomUUID();
         UUID activeChildId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         OffsetDateTime originalDeletedAt = OffsetDateTime.of(2025, 1, 1, 10, 0, 0, 0, ZoneOffset.UTC);
 
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .build();
         Document alreadyTrashedChild = Document.builder()
                 .id(alreadyTrashedChildId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .title("Already Trashed Child")
                 .deletedAt(originalDeletedAt)
                 .build();
         Document activeChild = Document.builder()
                 .id(activeChildId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .title("Active Child")
                 .build();
@@ -1527,16 +1571,17 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1557,16 +1602,17 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .siblingOrderKey("a5")
                 .title("Child Doc")
@@ -1597,10 +1643,11 @@ class DocumentServiceTest {
     @Test
     void create_orderKeyCollisionWithExplicitId_retriesAndSucceeds() {
         UUID userId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         UUID explicitId = UUID.randomUUID();
-        DocumentCreateRequest request = new DocumentCreateRequest(
-                explicitId, "Retried Title", "eWFz", "Anonymous", null, null, null, null, null, null);
+        DocumentCreateRequest request =
+                new DocumentCreateRequest(explicitId, "Retried Title", "eWFz", null, null, null, null, null, null);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(userDocumentOrderRepository.findMinOrderKeyByUserId(userId, explicitId))
@@ -1627,13 +1674,139 @@ class DocumentServiceTest {
     }
 
     @Test
+    void restore_keepsAValidOwnerOrderRowAndUsesTheOwnerGrant() {
+        UUID ownerId = UUID.randomUUID();
+        UUID editorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .title("Restored")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        AccessGrant ownerGrant = AccessGrant.builder()
+                .document(trashed)
+                .user(owner)
+                .effect(AccessGrantEffect.ALLOW)
+                .accessLevel(DocumentAccessLevel.OWNER)
+                .build();
+        UserDocumentOrder existing = UserDocumentOrder.builder()
+                .user(owner)
+                .document(trashed)
+                .orderKey("a1")
+                .build();
+
+        when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of(ownerGrant));
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId))
+                .thenReturn(Optional.of(existing));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.restoreAndPersist(editorId, documentId, false);
+
+        // A restored root belongs to its first OWNER grant, and a valid personal key is
+        // kept instead of rebuilding it on every restore.
+        verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
+    }
+
+    @Test
+    void restore_regeneratesAnInvalidExistingOwnerOrderRow() {
+        UUID ownerId = UUID.randomUUID();
+        UUID editorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .creator(owner)
+                .title("Restored")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        UserDocumentOrder existing = UserDocumentOrder.builder()
+                .user(owner)
+                .document(trashed)
+                .orderKey("!!!")
+                .build();
+
+        when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId))
+                .thenReturn(Optional.of(existing));
+        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, documentId))
+                .thenReturn(Optional.of("a5"));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.restoreAndPersist(editorId, documentId, false);
+
+        ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
+        verify(userDocumentOrderRepository).saveAndFlush(captor.capture());
+        assertTrue(captor.getValue().getOrderKey().compareTo("a5") > 0);
+    }
+
+    @Test
+    void restore_rootWithoutAnOwnerOrCreator_skipsThePersonalOrderRow() {
+        UUID editorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .title("Ownerless")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+
+        when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
+        when(accessGrantRepository.findPositiveUserGrantsByDocumentId(documentId))
+                .thenReturn(List.of());
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.restoreAndPersist(editorId, documentId, false);
+
+        verify(userDocumentOrderRepository, never()).findByUser_IdAndDocument_Id(any(), any());
+        verify(userDocumentOrderRepository, never()).saveAndFlush(any(UserDocumentOrder.class));
+    }
+
+    @Test
+    void restore_forceRegenerate_rebuildsEvenAValidOwnerOrderRow() {
+        UUID ownerId = UUID.randomUUID();
+        UUID editorId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+        Document trashed = Document.builder()
+                .id(documentId)
+                .creator(owner)
+                .title("Restored")
+                .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                .build();
+        UserDocumentOrder existing = UserDocumentOrder.builder()
+                .user(owner)
+                .document(trashed)
+                .orderKey("a1")
+                .build();
+
+        when(permissionService.requireTrashEditAccess(editorId, documentId)).thenReturn(trashed);
+        when(userDocumentOrderRepository.findByUser_IdAndDocument_Id(ownerId, documentId))
+                .thenReturn(Optional.of(existing));
+        when(userDocumentOrderRepository.findMaxOrderKeyByUserId(ownerId, documentId))
+                .thenReturn(Optional.of("a5"));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        documentService.restoreAndPersist(editorId, documentId, true);
+
+        ArgumentCaptor<UserDocumentOrder> captor = ArgumentCaptor.forClass(UserDocumentOrder.class);
+        verify(userDocumentOrderRepository).saveAndFlush(captor.capture());
+        assertTrue(captor.getValue().getOrderKey().compareTo("a5") > 0);
+    }
+
+    @Test
     void restore_withEditAccess_restoresTrashedDocument() {
         UUID ownerId = UUID.randomUUID();
         UUID editorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1664,11 +1837,13 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID editorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
-        User editor = User.builder().id(editorId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
+
+        User editor = User.builder().id(editorId).passwordHash("$2a$12$hash").build();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1704,17 +1879,27 @@ class DocumentServiceTest {
         UUID ownerId = UUID.randomUUID();
         UUID editorId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         // ensureOrderRows locks one collaborator's namespace at a time, so the visit order has
         // to be the same in every transaction: two restores sharing collaborators would
         // otherwise be able to take those locks in opposite orders.
         UUID firstCollaboratorId = UUID.fromString("00000000-0000-0000-0000-000000000001");
         UUID secondCollaboratorId = UUID.fromString("00000000-0000-0000-0000-000000000002");
-        User secondCollaborator = User.builder().id(secondCollaboratorId).build();
-        User firstCollaborator = User.builder().id(firstCollaboratorId).build();
+
+        User secondCollaborator = User.builder()
+                .id(secondCollaboratorId)
+                .passwordHash("$2a$12$hash")
+                .build();
+
+        User firstCollaborator = User.builder()
+                .id(firstCollaboratorId)
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1784,7 +1969,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document active = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(userId).build())
+                .creator(User.builder().id(userId).passwordHash("$2a$12$hash").build())
                 .title("Active")
                 .build();
 
@@ -1802,22 +1987,25 @@ class DocumentServiceTest {
         UUID collaboratorId = UUID.randomUUID();
         UUID parentDocId = UUID.randomUUID();
         UUID childDocId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).build();
+
+        User owner = User.builder().id(ownerId).passwordHash("$2a$12$hash").build();
         Document parentDoc = Document.builder()
                 .id(parentDocId)
-                .user(owner)
+                .creator(owner)
                 .title("Parent Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
         Document childDoc = Document.builder()
                 .id(childDocId)
-                .user(owner)
+                .creator(owner)
                 .parent(parentDoc)
                 .siblingOrderKey("a5")
                 .title("Child Doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
-        User collaboratorUser = User.builder().id(collaboratorId).build();
+
+        User collaboratorUser =
+                User.builder().id(collaboratorId).passwordHash("$2a$12$hash").build();
         AccessGrant collaborator = AccessGrant.builder()
                 .document(childDoc)
                 .user(collaboratorUser)
@@ -1854,7 +2042,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document trashedDoc = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Trashed doc")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1891,7 +2079,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1915,7 +2103,7 @@ class DocumentServiceTest {
         OffsetDateTime deletedAt = OffsetDateTime.now(ZoneOffset.UTC);
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Shared Trashed")
                 .deletedAt(deletedAt)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1938,7 +2126,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Shared Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -1961,7 +2149,7 @@ class DocumentServiceTest {
         UUID documentId = UUID.randomUUID();
         Document trashed = Document.builder()
                 .id(documentId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -1971,8 +2159,7 @@ class DocumentServiceTest {
 
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.update(
-                        viewerId, documentId, new DocumentUpdateRequest("New title", null, null, null)));
+                () -> documentService.update(viewerId, documentId, new DocumentUpdateRequest("New title", null, null)));
 
         assertEquals(ErrorCode.CONFLICT, exception.getErrorCode());
     }
@@ -1983,7 +2170,7 @@ class DocumentServiceTest {
         UUID rootId = UUID.randomUUID();
         Document root = Document.builder()
                 .id(rootId)
-                .user(User.builder().id(ownerId).build())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
                 .title("Root")
                 .build();
 
@@ -1994,7 +2181,7 @@ class DocumentServiceTest {
             UUID parentId = parentIds.iterator().next();
             return List.of(Document.builder()
                     .id(UUID.randomUUID())
-                    .user(root.getUser())
+                    .creator(root.getCreator())
                     .parent(Document.builder().id(parentId).build())
                     .title("Child")
                     .build());
@@ -2012,10 +2199,11 @@ class DocumentServiceTest {
                 .id(userId)
                 .email("t@example.com")
                 .displayName("T")
+                .passwordHash("$2a$12$hash")
                 .build();
         Document trashed = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -2030,7 +2218,6 @@ class DocumentServiceTest {
                 false,
                 false,
                 DocumentAccessLevel.OWNER,
-                "T",
                 trashed.getCreatedAt(),
                 trashed.getUpdatedAt(),
                 trashed.getDeletedAt(),
@@ -2050,25 +2237,30 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_owner_returnsFullHierarchy() {
         UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("alice@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Root")
                 .parent(null)
                 .build();
 
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Child")
                 .parent(root)
                 .build();
 
         Document subChild = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("SubChild")
                 .parent(child)
                 .build();
@@ -2104,7 +2296,13 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_documentInSpace_includesSpace() {
         UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("alice@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Space space = Space.builder()
                 .id(UUID.randomUUID())
                 .name("Engineering")
@@ -2115,7 +2313,7 @@ class DocumentServiceTest {
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Root")
                 .parent(null)
                 .space(space)
@@ -2123,7 +2321,7 @@ class DocumentServiceTest {
 
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Child")
                 .parent(root)
                 .build();
@@ -2161,8 +2359,12 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_spaceTheCallerCannotSee_isNeverNamed() {
         UUID viewerId = UUID.randomUUID();
-        User owner =
-                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(UUID.randomUUID())
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         Space space = Space.builder()
                 .id(UUID.randomUUID())
                 .name("Internal Secret Space")
@@ -2173,7 +2375,7 @@ class DocumentServiceTest {
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Space Root")
                 .parent(null)
                 .space(space)
@@ -2181,7 +2383,7 @@ class DocumentServiceTest {
 
         Document sharedChild = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Shared Page")
                 .parent(root)
                 .build();
@@ -2207,18 +2409,23 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_trashedDocument_returnsBreadcrumbsForUserWithTrashAccess() {
         UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("alice@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Project Alpha")
                 .parent(null)
                 .build();
 
         Document trashedChild = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Deleted Spec")
                 .parent(root)
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC))
@@ -2247,26 +2454,29 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_collaboratorOnlyOnChild_stopsAtChildAndDoesNotExposePrivateParents() {
         UUID collaboratorId = UUID.randomUUID();
-        User owner =
-                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(UUID.randomUUID())
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Secret Root")
                 .parent(null)
                 .build();
 
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Secret Parent")
                 .parent(root)
                 .build();
 
         Document subChild = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Shared SubChild")
                 .parent(child)
                 .build();
@@ -2295,26 +2505,29 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_collaboratorOnParent_stopsAtParent() {
         UUID collaboratorId = UUID.randomUUID();
-        User owner =
-                User.builder().id(UUID.randomUUID()).email("owner@example.com").build();
+        User owner = User.builder()
+                .id(UUID.randomUUID())
+                .email("owner@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Secret Company Root")
                 .parent(null)
                 .build();
 
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Shared Project")
                 .parent(root)
                 .build();
 
         Document subChild = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("Tasks")
                 .parent(child)
                 .build();
@@ -2594,18 +2807,23 @@ class DocumentServiceTest {
     @Test
     void getBreadcrumbs_blankOrNullTitle_fallsBackToUntitled() {
         UUID ownerId = UUID.randomUUID();
-        User owner = User.builder().id(ownerId).email("alice@example.com").build();
+
+        User owner = User.builder()
+                .id(ownerId)
+                .email("alice@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
 
         Document root = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title("   ")
                 .parent(null)
                 .build();
 
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .title(null)
                 .parent(root)
                 .build();
@@ -2759,8 +2977,8 @@ class DocumentServiceTest {
         when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(accessGrantRepository.existsPositiveGrantByDocumentId(documentId)).thenReturn(true);
 
-        DocumentResponse response = documentService.update(
-                requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null, null));
+        DocumentResponse response =
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest("Updated title", null, null));
 
         assertTrue(response.hasCollaborators());
     }
@@ -2780,8 +2998,7 @@ class DocumentServiceTest {
         // VARCHAR(255) invariant for every other caller instead of failing at the column.
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.update(
-                        requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null, null)));
+                () -> documentService.update(requesterId, documentId, new DocumentUpdateRequest(tooLong, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any(Document.class));
@@ -2800,7 +3017,7 @@ class DocumentServiceTest {
         String longest = "t".repeat(DocumentService.MAX_TITLE_LENGTH);
 
         DocumentResponse response =
-                documentService.update(requesterId, documentId, new DocumentUpdateRequest(longest, null, null, null));
+                documentService.update(requesterId, documentId, new DocumentUpdateRequest(longest, null, null));
 
         assertEquals(longest, response.title());
     }
@@ -2817,7 +3034,7 @@ class DocumentServiceTest {
 
         ApiException exception = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest(tooLong, null, null)));
 
         assertEquals(ErrorCode.VALIDATION_FAILED, exception.getErrorCode());
         verify(documentRepository, never()).save(any());
@@ -2834,11 +3051,9 @@ class DocumentServiceTest {
         when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         DocumentResponse response =
-                documentService.updatePublic(docId, new DocumentUpdateRequest("Guest edit", "Guest", null, null));
+                documentService.updatePublic(docId, new DocumentUpdateRequest("Guest edit", null, null));
 
         assertEquals("Guest edit", response.title());
-        // Guest creator labels are not adopted for public saves.
-        assertNull(doc.getCreatedBy());
     }
 
     @Test
@@ -2852,11 +3067,11 @@ class DocumentServiceTest {
         when(documentRepository.countPublicChildrenByParentIds(any())).thenReturn(List.of());
 
         // Re-saving the current title must not rebuild the body vector...
-        documentService.updatePublic(docId, new DocumentUpdateRequest("Shared doc", null, null, null));
+        documentService.updatePublic(docId, new DocumentUpdateRequest("Shared doc", null, null));
         verify(eventPublisher, never()).publishEvent(any(DocumentSearchTitleChangedEvent.class));
 
         // ...but a guest rename has to reach the projection before the crawl does.
-        documentService.updatePublic(docId, new DocumentUpdateRequest("Guest rename", null, null, null));
+        documentService.updatePublic(docId, new DocumentUpdateRequest("Guest rename", null, null));
         verify(eventPublisher).publishEvent(any(DocumentSearchTitleChangedEvent.class));
     }
 
@@ -2870,7 +3085,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2884,7 +3099,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
         assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
     }
 
@@ -2898,7 +3113,7 @@ class DocumentServiceTest {
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null, null)));
+                () -> documentService.updatePublic(docId, new DocumentUpdateRequest("Nope", null, null)));
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
@@ -2961,16 +3176,45 @@ class DocumentServiceTest {
         assertEquals(ErrorCode.NOT_FOUND, ex.getErrorCode());
     }
 
+    @Test
+    void create_standaloneRoot_locksWorkspaceMembership() {
+        UUID userId = UUID.randomUUID();
+        User owner = User.builder()
+                .id(userId)
+                .email("owner@example.com")
+                .displayName("Owner")
+                .passwordHash("$2a$12$hash")
+                .build();
+        com.nextdocs.api.workspace.entity.Workspace workspace = com.nextdocs.api.workspace.entity.Workspace.builder()
+                .id(UUID.randomUUID())
+                .name("Team")
+                .build();
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(owner));
+        when(workspaceService.requireWorkspaceForStandaloneCreate(userId)).thenReturn(workspace);
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userDocumentOrderRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        documentService.create(
+                userId,
+                new com.nextdocs.api.document.dto.request.DocumentCreateRequest(
+                        null, "Standalone", null, null, null, null, null, null, null));
+
+        verify(workspaceService).requireWorkspaceForStandaloneCreate(userId);
+        verify(workspaceService, never()).requireWorkspace(any());
+    }
+
     private static Document createSharedDocument(UUID documentId, DocumentAccessLevel linkAccessLevel) {
         User owner = User.builder()
                 .id(UUID.randomUUID())
                 .email("owner@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         return Document.builder()
                 .id(documentId)
-                .user(owner)
+                .creator(owner)
                 .title("Shared doc")
                 .generalAccessMode(DocumentGeneralAccessMode.ANYONE_WITH_LINK)
                 .linkAccessLevel(linkAccessLevel)

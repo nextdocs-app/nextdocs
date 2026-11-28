@@ -2,8 +2,6 @@ package com.nextdocs.api.document.service;
 
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
@@ -26,6 +24,9 @@ import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.service.SpaceAccessService;
 import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
+import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,6 +49,11 @@ public class DocumentSharingService {
 
     private static final int MAX_ORDER_UPSERT_ATTEMPTS = 3;
 
+    private static final String LAST_OWNER_MESSAGE = "The page must keep at least one owner.";
+
+    private static final String LAST_OWNER_LEAVE_MESSAGE =
+            "Make another person a full-access collaborator before leaving this page.";
+
     private final DocumentRepository documentRepository;
     private final AccessGrantRepository accessGrantRepository;
     private final UserSharedOrderRepository userSharedOrderRepository;
@@ -56,9 +62,11 @@ public class DocumentSharingService {
     private final PermissionService permissionService;
     private final SpaceAccessService spaceAccessService;
     private final SpaceMemberRepository spaceMemberRepository;
+    private final DocumentOwnershipService ownershipService;
     private final AccessGrantSyncService accessGrantSyncService;
     private final AccessAuditService auditService;
     private final ApplicationEventPublisher eventPublisher;
+    private final WorkspaceRepository workspaceRepository;
 
     @Autowired
     @Lazy
@@ -67,40 +75,22 @@ public class DocumentSharingService {
     @Transactional(readOnly = true)
     public List<CollaboratorResponse> listCollaborators(UUID requesterId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
-        requireIdentityGrantForRoster(requesterId, doc);
+        permissionService.requireRosterAccess(requesterId, doc);
 
         Set<UUID> directUserIds = new HashSet<>();
         List<CollaboratorResponse> result = new ArrayList<>();
 
         Space space = permissionService.resolveSpace(doc);
-        if (space == null) {
-            // 1. Direct document owner (only standalone documents have an owner)
-            User owner = doc.getUser();
-            directUserIds.add(owner.getId());
-            result.add(new CollaboratorResponse(
-                    owner.getId(),
-                    owner.getEmail(),
-                    owner.getDisplayName(),
-                    DocumentAccessLevel.OWNER,
-                    doc.getCreatedAt(),
-                    true,
-                    false,
-                    null,
-                    null,
-                    null));
-        }
 
-        // 2. Direct page grants from the canonical store.
+        // 1. Direct page grants from the canonical store. Every person on the page is
+        // one of these, the creator included: ownership is a level, not a row identity.
         List<AccessGrant> directGrants = accessGrantRepository.findUserGrantsByDocumentId(documentId);
         for (AccessGrant grant : directGrants) {
-            if (space == null && grant.getUser().getId().equals(doc.getUser().getId())) {
-                continue;
-            }
             directUserIds.add(grant.getUser().getId());
         }
 
-        // 3. Inherited user grants from ancestors
-        AncestorContext ancestorContext = loadAncestorContext(doc);
+        // 2. Inherited user grants from ancestors
+        var ancestorContext = ownershipService.loadAncestorContext(doc);
         Map<UUID, AncestorGrantInfo> directAncestorGrants = new HashMap<>();
         Set<UUID> handledDirectUserIds = new HashSet<>();
         Set<UUID> handledAncestorUserIds = new HashSet<>();
@@ -108,40 +98,13 @@ public class DocumentSharingService {
 
         // Title masking needs the requester's access per ancestor: one batch
         // query for the whole chain instead of one recursive CTE per level.
-        Map<UUID, DocumentAccessLevel> ancestorAccessById = permissionService.resolveAccessBatch(
+        Map<UUID, DocumentAccessLevel> ancestorAccessById = permissionService.resolveIdentityAccessBatch(
                 requesterId,
                 ancestorContext.ancestors().stream().map(Document::getId).toList());
 
         for (Document ancestor : ancestorContext.ancestors()) {
-            String ancestorTitle;
-            if (requesterId.equals(ancestor.getUser().getId()) || ancestorAccessById.get(ancestor.getId()) != null) {
-                ancestorTitle = SharingDocuments.titleOrUntitled(ancestor);
-            } else {
-                ancestorTitle = "Parent document";
-            }
-
-            // Ancestor owner (only standalone trees carry ancestor owners)
-            if (space == null) {
-                User ancestorOwner = ancestor.getUser();
-                UUID ownerId = ancestorOwner.getId();
-                if (directUserIds.contains(ownerId) && handledDirectUserIds.add(ownerId)) {
-                    directAncestorGrants.put(
-                            ownerId, new AncestorGrantInfo(ancestor.getId(), ancestorTitle, DocumentAccessLevel.OWNER));
-                }
-                if (!directUserIds.contains(ownerId) && handledAncestorUserIds.add(ownerId)) {
-                    inheritedResponses.add(new CollaboratorResponse(
-                            ancestorOwner.getId(),
-                            ancestorOwner.getEmail(),
-                            ancestorOwner.getDisplayName(),
-                            DocumentAccessLevel.OWNER,
-                            ancestor.getCreatedAt(),
-                            false,
-                            true,
-                            ancestor.getId(),
-                            ancestorTitle,
-                            null));
-                }
-            }
+            boolean visible = ancestorAccessById.get(ancestor.getId()) != null;
+            String ancestorTitle = visible ? SharingDocuments.titleOrUntitled(ancestor) : null;
 
             // Ancestor user grants. The first row for a person wins, so a nearer
             // NO_ACCESS breakpoint blocks farther positive rows.
@@ -149,17 +112,17 @@ public class DocumentSharingService {
                 UUID uid = grant.getUser().getId();
                 DocumentAccessLevel level = levelOf(grant);
                 if (directUserIds.contains(uid)) {
-                    if (handledDirectUserIds.add(uid) && level != DocumentAccessLevel.NO_ACCESS) {
+                    if (handledDirectUserIds.add(uid) && level != DocumentAccessLevel.NO_ACCESS && visible) {
                         directAncestorGrants.put(uid, new AncestorGrantInfo(ancestor.getId(), ancestorTitle, level));
                     }
-                } else if (handledAncestorUserIds.add(uid) && level != DocumentAccessLevel.NO_ACCESS) {
+                } else if (handledAncestorUserIds.add(uid) && level != DocumentAccessLevel.NO_ACCESS && visible) {
                     inheritedResponses.add(new CollaboratorResponse(
                             grant.getUser().getId(),
                             grant.getUser().getEmail(),
                             grant.getUser().getDisplayName(),
+                            grant.getUser().getAvatarUrl(),
                             level,
                             grant.getCreatedAt(),
-                            false,
                             true,
                             ancestor.getId(),
                             ancestorTitle,
@@ -172,10 +135,9 @@ public class DocumentSharingService {
         if (space != null && canViewSpaceRoster(requesterId, space)) {
             String spaceTitle = space.getName();
             List<SpaceMember> spaceMembers = spaceMemberRepository.findAllBySpace_IdOrderByCreatedAtAsc(space.getId());
-            // Provenance reflects the stored grant origin on the SpaceMember row,
-            // not the resolver output. If a public space everyone baseline broadens
-            // effective capability, that appears in effectiveAccessLevel so admins
-            // still see what was explicitly configured.
+            // Provenance reflects the stored grant origin on the SpaceMember row, not the
+            // resolver output: the roster describes configured grants, while the viewer's
+            // own access summary names the independent sources that actually resolve.
             for (SpaceMember sm : spaceMembers) {
                 UUID uid = sm.getUser().getId();
                 if (directUserIds.contains(uid)) {
@@ -188,9 +150,9 @@ public class DocumentSharingService {
                             sm.getUser().getId(),
                             sm.getUser().getEmail(),
                             sm.getUser().getDisplayName(),
+                            sm.getUser().getAvatarUrl(),
                             sm.getAccessLevel(),
                             sm.getCreatedAt(),
-                            false,
                             true,
                             space.getId(),
                             spaceTitle,
@@ -202,7 +164,8 @@ public class DocumentSharingService {
                 for (UUID uid : directUserIds) {
                     if (handledDirectUserIds.add(uid)) {
                         directAncestorGrants.put(
-                                uid, new AncestorGrantInfo(space.getId(), spaceTitle, space.getEveryoneAccessLevel()));
+                                uid,
+                                new AncestorGrantInfo(space.getId(), spaceTitle, space.getEveryoneAccessLevel(), true));
                     }
                 }
             }
@@ -210,17 +173,21 @@ public class DocumentSharingService {
 
         for (AccessGrant grant : directGrants) {
             UUID uid = grant.getUser().getId();
-            if (space == null && uid.equals(doc.getUser().getId())) {
-                continue;
-            }
+            DocumentAccessLevel directLevel = levelOf(grant);
             AncestorGrantInfo grantInfo = directAncestorGrants.get(uid);
+            // Everyone-access is not a per-person grant, so a direct row never overrides
+            // it (nothing was granted to that person to begin with). Only a block names
+            // it, because a block is what actually removes access the page would carry.
+            if (grantInfo != null && grantInfo.everyoneAccess() && directLevel != DocumentAccessLevel.NO_ACCESS) {
+                grantInfo = null;
+            }
             result.add(new CollaboratorResponse(
                     uid,
                     grant.getUser().getEmail(),
                     grant.getUser().getDisplayName(),
-                    levelOf(grant),
+                    grant.getUser().getAvatarUrl(),
+                    directLevel,
                     grant.getCreatedAt(),
-                    false,
                     false,
                     grantInfo != null ? grantInfo.docId() : null,
                     grantInfo != null ? grantInfo.title() : null,
@@ -228,51 +195,21 @@ public class DocumentSharingService {
         }
 
         result.addAll(inheritedResponses);
-        attachEffectiveAccessLevels(doc, result);
         return result;
     }
 
-    /**
-     * Reports what each roster row can actually do here. The stored grant stays in
-     * {@code accessLevel} (that is what the dropdown edits); the effective level
-     * accounts for a space cap, the archive, or a NO_ACCESS breakpoint, so a page
-     * owner demoted by space membership no longer renders as "Full access".
-     */
-    private void attachEffectiveAccessLevels(Document doc, List<CollaboratorResponse> rows) {
-        if (rows.isEmpty()) {
-            return;
+    @Transactional(readOnly = true)
+    public boolean hasHiddenSharingSources(UUID requesterId, UUID documentId) {
+        Document doc = permissionService.requireReadAccessIncludingTrash(requesterId, documentId);
+        permissionService.requireRosterAccess(requesterId, doc);
+        var ancestors = ownershipService.loadAncestorContext(doc).ancestors();
+        Map<UUID, DocumentAccessLevel> access = permissionService.resolveIdentityAccessBatch(
+                requesterId, ancestors.stream().map(Document::getId).toList());
+        if (ancestors.stream().anyMatch(ancestor -> access.get(ancestor.getId()) == null)) {
+            return true;
         }
-        List<UUID> userIds =
-                rows.stream().map(CollaboratorResponse::userId).distinct().toList();
-        Map<UUID, DocumentAccessLevel> effective =
-                permissionService.resolveAccessForUsers(doc.getId(), userIds, doc.getDeletedAt() != null);
-        if (effective.isEmpty()) {
-            // A stubbed/older resolver answered nothing: keep the stored level
-            // rather than erasing every row's label.
-            return;
-        }
-        for (int i = 0; i < rows.size(); i++) {
-            CollaboratorResponse row = rows.get(i);
-            if (!effective.containsKey(row.userId())) {
-                continue;
-            }
-            rows.set(
-                    i,
-                    new CollaboratorResponse(
-                            row.userId(),
-                            row.email(),
-                            row.displayName(),
-                            row.accessLevel(),
-                            row.addedAt(),
-                            row.owner(),
-                            row.inherited(),
-                            row.inheritedFromId(),
-                            row.inheritedFromTitle(),
-                            row.inheritedAccessLevel(),
-                            effective.get(row.userId()) == null
-                                    ? DocumentAccessLevel.NO_ACCESS
-                                    : effective.get(row.userId())));
-        }
+        Space space = permissionService.resolveSpace(doc);
+        return space != null && !canViewSpaceRoster(requesterId, space);
     }
 
     public CollaboratorResponse upsertCollaborator(UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
@@ -300,6 +237,7 @@ public class DocumentSharingService {
     @Transactional
     public CollaboratorResponse upsertCollaboratorAndPersist(
             UUID actorId, UUID documentId, CollaboratorUpsertRequest request) {
+        lockForOwnershipChange(documentId);
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
         DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
         if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
@@ -310,19 +248,23 @@ public class DocumentSharingService {
                 .findByEmail(request.email().strip().toLowerCase())
                 .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "User not found for the provided email."));
 
-        Space space = permissionService.resolveSpace(doc);
-        if (space == null && targetUser.getId().equals(doc.getUser().getId())) {
-            throw new ApiException(ErrorCode.CONFLICT, "Document owner already has owner access.");
-        }
-
         if (targetUser.getId().equals(actorId)) {
             throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
         }
 
+        Space space = permissionService.resolveSpace(doc);
+        if (space == null
+                && requestedLevel != DocumentAccessLevel.OWNER
+                && currentLevel(doc, targetUser.getId()) == DocumentAccessLevel.OWNER) {
+            ownershipService.requireAnotherOwner(doc, targetUser.getId(), LAST_OWNER_MESSAGE);
+        }
+
         User actor = resolveActor(actorId, doc);
 
-        // Any inherited grant - including an ancestor owner's full access - is overridable
-        // on this document; a direct grant always wins over the ancestor walk.
+        // Any inherited grant - including an ancestor's OWNER grant - can be
+        // replaced with a positive level on this document; a direct grant always wins
+        // over the ancestor walk. No access is the exception: an inherited owner
+        // cannot be cut off from below (see updateCollaboratorAccess).
         AccessGrant saved = accessGrantSyncService.upsertUserGrant(doc, targetUser, requestedLevel, actor);
         auditService.recordDocument(
                 doc,
@@ -332,15 +274,13 @@ public class DocumentSharingService {
                 targetUser.getId(),
                 "level=" + requestedLevel);
 
-        // Ensure the viewer has a Shared-section order row so root documents and
-        // floated nested documents can be reordered.
+        // Ensure the new holder has a Shared-section order row so root documents and
+        // floated nested documents can be reordered. The actor gets one too when the
+        // page was private to them and this grant is what moves it to Shared.
         ensureSharedOrderRow(doc, targetUser);
-        // A standalone root gains an owner Shared entry; a space root is browsed
-        // through its space, so an owner row there would describe a listing that
-        // never renders. The Private row is deliberately kept either way:
-        // unsharing returns the page to it.
+        // The actor cannot be the target: inviting yourself is rejected above.
         if (doc.getParent() == null && doc.getSpace() == null) {
-            ensureSharedOrderRow(doc, doc.getUser());
+            ensureSharedOrderRow(doc, actor);
         }
         eventPublisher.publishEvent(new DocumentAccessChangedEvent(documentId, List.of(targetUser.getId())));
 
@@ -348,29 +288,51 @@ public class DocumentSharingService {
                 saved.getUser().getId(),
                 saved.getUser().getEmail(),
                 saved.getUser().getDisplayName(),
+                saved.getUser().getAvatarUrl(),
                 levelOf(saved),
-                saved.getCreatedAt(),
-                false);
+                saved.getCreatedAt());
     }
 
+    /**
+     * Changes a collaborator's level, including your own. Ownership is a level here, not a
+     * privilege of the creator row: the creator is editable by any sharing admin (and by
+     * themselves) exactly like another owner. Mirrors spaces, where an
+     * owner may step down while another owner remains.
+     *
+     * <p>Removing yourself stays on {@link #leaveSharedDocument}: a self NO_ACCESS row would
+     * be a breakpoint only an admin could undo, so it is refused here.
+     *
+     * <p>A No access row is also refused for someone who owns the scope they inherit from
+     * (their space, or an ancestor page). A private page is outside the workspace/space
+     * hierarchy, so the workspace role alone is not protected there. A page admin may edit
+     * levels, but ownership of the level above is not theirs to override.
+     */
     @Transactional
     public void updateCollaboratorAccess(
             UUID actorId, UUID documentId, UUID collaboratorUserId, CollaboratorAccessUpdateRequest request) {
+        lockForOwnershipChange(documentId);
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
-        if (actorId.equals(collaboratorUserId)) {
-            throw new ApiException(ErrorCode.CONFLICT, "Cannot modify own collaborator access.");
+        DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
+        if (actorId.equals(collaboratorUserId) && requestedLevel == DocumentAccessLevel.NO_ACCESS) {
+            throw new ApiException(ErrorCode.CONFLICT, "You cannot block yourself. Leave the page instead.");
         }
+        User actor = resolveActor(actorId, doc);
 
         Space space = permissionService.resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(collaboratorUserId)) {
-            // The document's own owner resolves as OWNER at depth 0, so an override row
-            // here would be inert; reject it instead of storing dead state.
-            throw new ApiException(ErrorCode.CONFLICT, "Owner access cannot be overridden or removed.");
+
+        if (requestedLevel == DocumentAccessLevel.NO_ACCESS) {
+            String ownerBlock = ownershipService.inheritedOwnerBlockMessage(doc, collaboratorUserId);
+            if (ownerBlock != null) {
+                throw new ApiException(ErrorCode.CONFLICT, ownerBlock);
+            }
         }
 
-        DocumentAccessLevel requestedLevel = normalizeCollaboratorAccess(request.accessLevel());
-        User actor = resolveActor(actorId, doc);
+        if (space == null
+                && requestedLevel != DocumentAccessLevel.OWNER
+                && currentLevel(doc, collaboratorUserId) == DocumentAccessLevel.OWNER) {
+            ownershipService.requireAnotherOwner(doc, collaboratorUserId, LAST_OWNER_MESSAGE);
+        }
 
         boolean hasIdentityGrant = accessGrantRepository.hasPositiveIdentityGrant(collaboratorUserId, documentId);
         Optional<AccessGrant> grantOpt =
@@ -416,6 +378,7 @@ public class DocumentSharingService {
 
     @Transactional
     public void removeCollaborator(UUID actorId, UUID documentId, UUID collaboratorUserId) {
+        lockForOwnershipChange(documentId);
         Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
 
         if (actorId.equals(collaboratorUserId)) {
@@ -423,8 +386,8 @@ public class DocumentSharingService {
         }
 
         Space space = permissionService.resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(collaboratorUserId)) {
-            throw new ApiException(ErrorCode.CONFLICT, "Owner cannot be removed from collaborators.");
+        if (space == null && currentLevel(doc, collaboratorUserId) == DocumentAccessLevel.OWNER) {
+            ownershipService.requireAnotherOwner(doc, collaboratorUserId, LAST_OWNER_MESSAGE);
         }
 
         boolean exists = accessGrantRepository.existsByDocument_IdAndUser_Id(documentId, collaboratorUserId);
@@ -448,12 +411,9 @@ public class DocumentSharingService {
     public void leaveSharedDocument(UUID userId, UUID documentId) {
         Document doc = permissionService.requireReadAccessIncludingTrash(userId, documentId);
         permissionService.requireActiveSpace(doc);
+        lockForOwnershipChange(documentId);
 
         Space space = permissionService.resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(userId)) {
-            throw new ApiException(ErrorCode.CONFLICT, "Owners cannot leave their own documents.");
-        }
-
         Optional<AccessGrant> grant = accessGrantRepository.findByDocument_IdAndUser_Id(documentId, userId);
         if (grant.isEmpty()) {
             throw new ApiException(
@@ -462,6 +422,9 @@ public class DocumentSharingService {
         }
         if (grant.get().getEffect() != AccessGrantEffect.ALLOW) {
             throw new ApiException(ErrorCode.CONFLICT, "A page-level No access rule can only be removed by an admin.");
+        }
+        if (space == null && currentLevel(doc, userId) == DocumentAccessLevel.OWNER) {
+            ownershipService.requireAnotherOwner(doc, userId, LAST_OWNER_LEAVE_MESSAGE);
         }
 
         accessGrantRepository.deleteByDocument_IdAndUser_Id(documentId, userId);
@@ -485,16 +448,14 @@ public class DocumentSharingService {
 
         // Trashed documents: report the caller's pre-trash access so the UI can offer a
         // read-only trash view (any level) versus manage actions (EDIT and above).
-        // `owner` means direct ownership only, matching the active path above — an
-        // OWNER-level collaborator reports accessLevel=OWNER with owner=false.
+        // `owner` mirrors the active path: the resolved level is OWNER.
         DocumentAccessLevel trashAccess = permissionService.resolveTrashAccess(userId, documentId);
         if (trashAccess == null) {
             return new DocumentAccessResponse(documentId, false, null, false, true, false, null);
         }
         Document trashed = documentRepository.findById(documentId).orElse(null);
         Space space = trashed != null ? permissionService.resolveSpace(trashed) : null;
-        boolean owner =
-                space == null && trashed != null && trashed.getUser().getId().equals(userId);
+        boolean owner = trashAccess == DocumentAccessLevel.OWNER;
         SharingContext sharing =
                 trashed != null ? resolveSharingContext(userId, trashed, trashAccess) : SharingContext.NONE;
         return new DocumentAccessResponse(
@@ -523,9 +484,29 @@ public class DocumentSharingService {
         sharedSectionService.ensureOrderRow(targetUser, doc);
     }
 
+    /**
+     * Serializes an owner-removing write with every other grant write on the page and with
+     * workspace member removal. Acquires the workspace lock before the document row lock
+     * (matching {@code WorkspaceService.removeMember}'s {@code Workspace -> Document} order)
+     * before authorization checks so those checks, the loaded document, and member
+     * removal all observe committed post-lock state.
+     */
+    private void lockForOwnershipChange(UUID documentId) {
+        // An absent id locks nothing and lets the subsequent gate throw NOT_FOUND.
+        documentRepository.findWorkspaceIdById(documentId).ifPresent(workspaceRepository::findByIdForUpdate);
+        documentRepository.findByIdForOwnershipUpdate(documentId);
+    }
+
+    private DocumentAccessLevel currentLevel(Document doc, UUID userId) {
+        return doc.getDeletedAt() != null
+                ? permissionService.resolveTrashAccess(userId, doc.getId())
+                : permissionService.resolveAccess(userId, doc.getId());
+    }
+
     private User resolveActor(UUID actorId, Document doc) {
-        if (actorId.equals(doc.getUser().getId())) {
-            return doc.getUser();
+        User creator = doc.getCreator();
+        if (creator != null && actorId.equals(creator.getId())) {
+            return creator;
         }
         return userRepository
                 .findById(actorId)
@@ -543,15 +524,14 @@ public class DocumentSharingService {
 
     private DocumentAccessResponse computeActiveAccess(
             UUID userId, UUID documentId, Document doc, boolean includeSharingContext) {
-        Space space = permissionService.resolveSpace(doc);
-        boolean isOwner = space == null && doc.getUser().getId().equals(userId);
-        // Resolve through SQL even for the owner: an archived space caps every level,
+        // Resolve through SQL even for an owner: an archived space caps every level,
         // ownership included, at VIEW. Realtime treats OWNER as a write grant, so a
         // short-circuit here would keep an archived space editable for page owners.
         DocumentAccessLevel level = permissionService.resolveAccess(userId, documentId);
         if (level == null) {
             return new DocumentAccessResponse(documentId, false, null, false, false, false, null);
         }
+        boolean isOwner = level == DocumentAccessLevel.OWNER;
         if (!includeSharingContext) {
             return new DocumentAccessResponse(documentId, true, level, isOwner, false);
         }
@@ -566,13 +546,19 @@ public class DocumentSharingService {
      * members row and the workspace-wide grant row. Sharing follows the same
      * closest-ancestor rule as content: an effective page OWNER may administer
      * sharing, and space administration (OWNER or workspace admin) remains the
-     * fallback even for a caller without a page grant. An archived space freezes
-     * sharing and caps every effective level at VIEW.
+     * fallback even for a caller without a page grant. A private page has no space,
+     * so only a page owner or an ancestor owner administers it; a workspace role is
+     * not a grant there. An archived space freezes sharing and caps every effective
+     * level at VIEW.
      */
     private SharingContext resolveSharingContext(UUID userId, Document doc, DocumentAccessLevel effectiveLevel) {
         Space space = permissionService.resolveSpace(doc);
         if (space == null) {
-            return new SharingContext(effectiveLevel == DocumentAccessLevel.OWNER, null);
+            // A private page keeps the workspace id but lives in its creator's personal
+            // section, outside the workspace/space hierarchy, so a workspace role is not
+            // a grant on it. Owning the page or an ancestor is the only sharing authority.
+            boolean manage = effectiveLevel == DocumentAccessLevel.OWNER || permissionService.ownsAncestor(userId, doc);
+            return new SharingContext(manage, null);
         }
 
         boolean pageOwner = effectiveLevel == DocumentAccessLevel.OWNER;
@@ -585,7 +571,8 @@ public class DocumentSharingService {
                 // A page OWNER need not be a space member (an explicit grant can
                 // share with anyone); they still get their sharing rights, just
                 // without a space summary to render.
-                return new SharingContext(!archived && pageOwner, null);
+                return new SharingContext(
+                        !archived && (pageOwner || permissionService.ownsAncestor(userId, doc)), null);
             }
             throw ex;
         }
@@ -599,7 +586,9 @@ public class DocumentSharingService {
                 myAccessLevel,
                 context.canAdminister(),
                 archived);
-        return new SharingContext(!archived && (pageOwner || context.canAdminister()), summary);
+        return new SharingContext(
+                !archived && (pageOwner || context.canAdminister() || permissionService.ownsAncestor(userId, doc)),
+                summary);
     }
 
     private static DocumentAccessLevel levelOf(AccessGrant grant) {
@@ -635,7 +624,7 @@ public class DocumentSharingService {
 
         // Decide first, mutate last: UserSharedOrder deletes clear the persistence context,
         // detaching the subtree documents loaded above. Touching a lazy association afterwards
-        // (doc.getParent().getUser()) would fail with LazyInitializationException, so every
+        // (doc.getParent().getCreator()) would fail with LazyInitializationException, so every
         // access resolution has to happen before the first order row is deleted.
         List<Document> documentsToFloat = new ArrayList<>();
         List<UUID> orderRowsToDelete = new ArrayList<>();
@@ -671,21 +660,16 @@ public class DocumentSharingService {
             }
         }
         Map<UUID, DocumentAccessLevel> accessById = permissionService.resolveIdentityAccessBatch(userId, loadIds);
-        Map<UUID, UUID> ownerById = new HashMap<>();
         List<Document> subtreeDocs = new ArrayList<>();
-        for (Document doc : documentRepository.findAllWithUserByIdIn(loadIds)) {
-            ownerById.put(doc.getId(), doc.getUser().getId());
+        for (Document doc : documentRepository.findAllForChainByIdIn(loadIds)) {
             if (chunkIds.contains(doc.getId())) {
                 subtreeDocs.add(doc);
             }
         }
 
         for (Document doc : subtreeDocs) {
-            if (userId.equals(ownerById.get(doc.getId()))) {
-                continue;
-            }
             DocumentAccessLevel access = accessById.get(doc.getId());
-            if (access != null && !hasAccessibleParent(userId, doc.getId(), parentById, ownerById, accessById)) {
+            if (access != null && !hasAccessibleParent(doc.getId(), parentById, accessById)) {
                 documentsToFloat.add(doc);
             } else {
                 orderRowsToDelete.add(doc.getId());
@@ -694,80 +678,9 @@ public class DocumentSharingService {
     }
 
     private boolean hasAccessibleParent(
-            UUID userId,
-            UUID documentId,
-            Map<UUID, UUID> parentById,
-            Map<UUID, UUID> ownerById,
-            Map<UUID, DocumentAccessLevel> accessById) {
+            UUID documentId, Map<UUID, UUID> parentById, Map<UUID, DocumentAccessLevel> accessById) {
         UUID parentId = parentById.get(documentId);
-        if (parentId == null) {
-            return false;
-        }
-        return userId.equals(ownerById.get(parentId)) || accessById.get(parentId) != null;
-    }
-
-    /**
-     * Hierarchical picture for one document, loaded in a fixed number of queries whatever
-     * the tree depth: the reachable ancestor chain and each ancestor's user grant rows.
-     */
-    private AncestorContext loadAncestorContext(Document doc) {
-        List<Document> ancestors = SharingDocuments.loadReachableAncestors(documentRepository, doc);
-        if (ancestors.isEmpty()) {
-            return new AncestorContext(List.of(), Map.of());
-        }
-
-        Map<UUID, List<AccessGrant>> rowsByDocument = new HashMap<>();
-        for (AccessGrant row : accessGrantRepository.findUserGrantsByDocumentIdIn(
-                ancestors.stream().map(Document::getId).toList())) {
-            rowsByDocument
-                    .computeIfAbsent(row.getDocument().getId(), key -> new ArrayList<>())
-                    .add(row);
-        }
-        return new AncestorContext(ancestors, rowsByDocument);
-    }
-
-    /**
-     * Roster visibility requires an identity grant (owner, user/group grant,
-     * space baseline, or workspace audience). Link-only readers can open the document but must
-     * not enumerate member emails and names. Masked as not found so link
-     * holders cannot distinguish a private document from a hidden roster.
-     */
-    private void requireIdentityGrantForRoster(UUID requesterId, Document doc) {
-        Space space = permissionService.resolveSpace(doc);
-        if (space == null && doc.getUser().getId().equals(requesterId)) {
-            return;
-        }
-        if (accessGrantRepository.hasPositiveIdentityGrant(requesterId, doc.getId())) {
-            return;
-        }
-        if (hasSpaceGrant(requesterId, doc)) {
-            return;
-        }
-        throw new ApiException(ErrorCode.NOT_FOUND);
-    }
-
-    /**
-     * A space grant is an identity grant: a space member already sees the space roster, so
-     * hiding this page's roster from them would be theatre. Space administrators count too,
-     * even without a content level, because sharing is their call. In a public space, workspace
-     * members pass here to inspect direct document collaborators (space rows are still filtered
-     * by {@code canViewSpaceRoster}). Anonymous or external link-only readers outside the workspace
-     * have no workspace identity and are masked as not found.
-     */
-    private boolean hasSpaceGrant(UUID userId, Document doc) {
-        Space space = permissionService.resolveSpace(doc);
-        if (space == null) {
-            return false;
-        }
-        try {
-            SpaceContext context = spaceAccessService.load(userId, space.getId());
-            return context != null && (context.accessLevel() != null || context.canAdminister());
-        } catch (ApiException ex) {
-            if (ex.getErrorCode() == ErrorCode.NOT_FOUND) {
-                return false;
-            }
-            throw ex;
-        }
+        return parentId != null && accessById.get(parentId) != null;
     }
 
     private boolean canViewSpaceRoster(UUID requesterId, Space space) {
@@ -788,9 +701,16 @@ public class DocumentSharingService {
         }
     }
 
-    private record AncestorContext(List<Document> ancestors, Map<UUID, List<AccessGrant>> grantsByDocument) {}
-
-    private record AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level) {}
+    /**
+     * Where an inherited grant comes from. {@code everyoneAccess} marks the space's
+     * everyone-else baseline, which no row can override: it grants a level to the whole
+     * workspace, not to one person.
+     */
+    private record AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level, boolean everyoneAccess) {
+        AncestorGrantInfo(UUID docId, String title, DocumentAccessLevel level) {
+            this(docId, title, level, false);
+        }
+    }
 
     private record SharingContext(boolean canManageSharing, DocumentSpaceResponse space) {
         private static final SharingContext NONE = new SharingContext(false, null);

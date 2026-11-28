@@ -78,9 +78,8 @@ interface ApiDocument {
   hasChildren?: boolean;
   hasCollaborators?: boolean;
   accessLevel?: DocumentAccessLevel | null;
-  /** Direct ownership by the caller; an OWNER-level grant to a collaborator is not this. */
+  /** The OWNER level is `accessLevel`; this flag is that level, never a creator row. */
   owner?: boolean | null;
-  createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null;
@@ -91,6 +90,8 @@ export type DocumentAccessLevel = 'VIEW' | 'COMMENT' | 'EDIT' | 'OWNER';
 export type CollaboratorAccessLevel = DocumentAccessLevel | 'NO_ACCESS';
 export type DocumentGeneralAccessMode = 'RESTRICTED' | 'ANYONE_WITH_LINK';
 export type DocumentWorkspaceAccessMode = 'RESTRICTED' | 'WORKSPACE_MEMBERS';
+/** What supplies an inherited general-access setting: an ancestor page or the space. */
+export type SharingSourceKind = 'PAGE' | 'SPACE';
 const DOCUMENT_ACCESS_LEVELS: readonly string[] = ['VIEW', 'COMMENT', 'EDIT', 'OWNER'];
 const COLLABORATOR_ACCESS_LEVELS: readonly string[] = [
   'VIEW',
@@ -159,6 +160,10 @@ function sanitizeWorkspaceAccessMode(
   return isValidWorkspaceAccessMode(value) ? value : fallback;
 }
 
+function sanitizeSharingSourceKind(value: unknown): SharingSourceKind | null {
+  return value === 'PAGE' || value === 'SPACE' ? value : null;
+}
+
 function sanitizeDocumentSpace(
   space: ApiDocumentSpace | null | undefined
 ): DocumentSpaceSummary | null {
@@ -204,14 +209,21 @@ interface ApiCollaborator {
   userId: string;
   email: string;
   displayName: string;
+  avatarUrl?: string | null;
   accessLevel: CollaboratorAccessLevel;
   addedAt: string;
-  owner?: boolean;
   inherited?: boolean;
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   inheritedAccessLevel?: DocumentAccessLevel | null;
-  effectiveAccessLevel?: CollaboratorAccessLevel | null;
+}
+
+/** One person who opened the document, from the view-history endpoint. */
+interface ApiDocumentViewer {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  lastViewedAt?: string | null;
 }
 
 interface ApiBreadcrumbSpace {
@@ -238,6 +250,7 @@ interface ApiSharingSettings {
   workspaceAccessLevel?: DocumentAccessLevel;
   workspaceInheritBlocked?: boolean;
   workspaceInherited?: boolean;
+  workspaceInheritedFromKind?: SharingSourceKind | null;
   workspaceInheritedFromId?: string | null;
   workspaceInheritedFromTitle?: string | null;
 }
@@ -251,7 +264,7 @@ export interface CloudDocumentsPage {
     hasChildren?: boolean;
     hasCollaborators?: boolean;
     accessLevel?: DocumentAccessLevel | null;
-    /** Direct ownership by the caller. Only the Shared-section listing answers it. */
+    /** Whether the viewer resolves OWNER here. Only the Shared listing answers it. */
     owner?: boolean;
   }[];
   page: number;
@@ -296,15 +309,26 @@ export interface Collaborator {
   userId: string;
   email: string;
   displayName: string;
+  /** Uploaded photo, or `null` for generated initials. Same projection as member rows. */
+  avatarUrl?: string | null;
   accessLevel: CollaboratorAccessLevel;
   addedAt: string;
-  owner: boolean;
   inherited?: boolean;
   inheritedFromId?: string | null;
   inheritedFromTitle?: string | null;
   inheritedAccessLevel?: DocumentAccessLevel | null;
-  /** What the person can actually do after space/archive resolution. */
-  effectiveAccessLevel?: CollaboratorAccessLevel;
+}
+
+/**
+ * View history for the toolbar's reader group: who opened this document, newest
+ * visit first. Not sharing — no access level and no email, because a visit is a
+ * fact about the past rather than a permission.
+ */
+export interface DocumentViewerRow {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  lastViewedAt: string | null;
 }
 
 export interface SharingSettings {
@@ -324,6 +348,8 @@ export interface SharingSettings {
   /** Own block on inherited workspace-member access. */
   workspaceInheritBlocked?: boolean;
   workspaceInherited?: boolean;
+  /** Whether the inherited setting comes from an ancestor page or the anchoring space. */
+  workspaceInheritedFromKind?: SharingSourceKind | null;
   workspaceInheritedFromId?: string | null;
   workspaceInheritedFromTitle?: string | null;
 }
@@ -985,18 +1011,39 @@ class DocumentService {
       userId: item.userId,
       email: item.email,
       displayName: item.displayName,
+      avatarUrl: item.avatarUrl ?? null,
       accessLevel: sanitizeCollaboratorAccessLevel(item.accessLevel),
       addedAt: item.addedAt,
-      owner: item.owner ?? false,
       inherited: item.inherited ?? false,
       inheritedFromId: item.inheritedFromId ?? null,
       inheritedFromTitle: item.inheritedFromTitle ?? null,
       inheritedAccessLevel: sanitizeNullableAccessLevel(item.inheritedAccessLevel),
-      effectiveAccessLevel:
-        item.effectiveAccessLevel === undefined
-          ? undefined
-          : sanitizeCollaboratorAccessLevel(item.effectiveAccessLevel, 'NO_ACCESS'),
     };
+  }
+
+  public async recordView(documentId: string, accessToken: string): Promise<void> {
+    await this.fetchApi<void>(`/api/v1/documents/${encodeURIComponent(documentId)}/view`, {
+      method: 'POST',
+      accessToken,
+      allowEmptyData: true,
+    });
+  }
+
+  public async listViewers(documentId: string, accessToken: string): Promise<DocumentViewerRow[]> {
+    const body = await this.fetchApi<ApiDocumentViewer[]>(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/viewers`,
+      {
+        method: 'GET',
+        accessToken,
+      }
+    );
+
+    return body.map((item) => ({
+      userId: item.userId,
+      displayName: item.displayName,
+      avatarUrl: item.avatarUrl ?? null,
+      lastViewedAt: item.lastViewedAt ?? null,
+    }));
   }
 
   public async listCollaborators(documentId: string, accessToken: string): Promise<Collaborator[]> {
@@ -1009,6 +1056,13 @@ class DocumentService {
     );
 
     return body.map((item) => this.toCollaborator(item));
+  }
+
+  public async hasHiddenSharingSources(documentId: string, accessToken: string): Promise<boolean> {
+    return this.fetchApi<boolean>(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/collaborators/hidden-sources`,
+      { method: 'GET', accessToken }
+    );
   }
 
   /**
@@ -1113,6 +1167,7 @@ class DocumentService {
       workspaceAccessLevel: sanitizeDocumentAccessLevel(body.workspaceAccessLevel),
       workspaceInheritBlocked: body.workspaceInheritBlocked ?? false,
       workspaceInherited: body.workspaceInherited ?? false,
+      workspaceInheritedFromKind: sanitizeSharingSourceKind(body.workspaceInheritedFromKind),
       workspaceInheritedFromId: body.workspaceInheritedFromId ?? null,
       workspaceInheritedFromTitle: body.workspaceInheritedFromTitle ?? null,
     };
@@ -1154,6 +1209,7 @@ class DocumentService {
       workspaceAccessLevel: sanitizeDocumentAccessLevel(body.workspaceAccessLevel),
       workspaceInheritBlocked: body.workspaceInheritBlocked ?? false,
       workspaceInherited: body.workspaceInherited ?? false,
+      workspaceInheritedFromKind: sanitizeSharingSourceKind(body.workspaceInheritedFromKind),
       workspaceInheritedFromId: body.workspaceInheritedFromId ?? null,
       workspaceInheritedFromTitle: body.workspaceInheritedFromTitle ?? null,
     };
@@ -1164,7 +1220,6 @@ class DocumentService {
     id: string,
     title = 'Untitled',
     ydoc?: Y.Doc,
-    createdBy?: string | null,
     parentId?: string | null,
     prevSiblingId?: string | null,
     nextSiblingId?: string | null,
@@ -1175,7 +1230,6 @@ class DocumentService {
       id,
       title,
       yjsState: this.uint8ArrayToBase64(encodeYjsState(documentYDoc)),
-      createdBy: createdBy ?? 'NextDocs User',
       parentId: parentId ?? null,
       prevSiblingId: prevSiblingId ?? null,
       nextSiblingId: nextSiblingId ?? null,
@@ -1218,10 +1272,7 @@ class DocumentService {
     await this.fetchApi<ApiDocument>(`/api/v1/documents/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       accessToken,
-      body: JSON.stringify({
-        title,
-        createdBy: updates.createdBy,
-      }),
+      body: JSON.stringify({ title }),
     });
   }
 
@@ -1388,7 +1439,6 @@ class DocumentService {
       // "no icon" rather than reach an `<img src>` or a CSS mask URL.
       icon: sanitizeDocumentIcon(doc.icon),
       cover: sanitizeDocumentCover(doc.cover),
-      createdBy: doc.createdBy ?? undefined,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt ?? undefined,

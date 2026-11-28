@@ -2,8 +2,8 @@ package com.nextdocs.api.attachment.entity;
 
 import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.AttachmentVisibility;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.Document;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.entity.Workspace;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;

@@ -4,13 +4,12 @@ import com.nextdocs.api.attachment.AttachmentScope;
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
 import com.nextdocs.api.attachment.entity.Attachment;
 import com.nextdocs.api.attachment.service.AttachmentService;
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.auth.repository.RefreshTokenRepository;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
+import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
 import com.nextdocs.api.pageicon.validation.PageIconValidator;
@@ -19,6 +18,8 @@ import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.entity.SpaceMember;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceMemberRoleUpdateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceBrandingResponse;
@@ -35,6 +36,7 @@ import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import com.nextdocs.api.workspace.service.WorkspaceAccessService.Membership;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -70,6 +72,7 @@ public class WorkspaceService {
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository memberRepository;
     private final AccessGrantRepository accessGrantRepository;
+    private final DocumentRepository documentRepository;
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final WorkspaceAccessService accessService;
@@ -153,6 +156,18 @@ public class WorkspaceService {
     @Transactional(readOnly = true)
     public Workspace requireWorkspace(UUID userId) {
         return accessService.requireMember(userId).workspace();
+    }
+
+    /**
+     * Resolves and row-locks the caller's membership when creating a standalone root so
+     * concurrent member removal cannot delete the new OWNER grant before seeing the root.
+     */
+    @Transactional
+    public Workspace requireWorkspaceForStandaloneCreate(UUID userId) {
+        return memberRepository
+                .findByUserIdForUpdate(userId)
+                .map(WorkspaceMember::getWorkspace)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
     }
 
     @Transactional(readOnly = true)
@@ -331,7 +346,9 @@ public class WorkspaceService {
         if (!actor.member().getRole().canManageMembers()) {
             throw new ApiException(ErrorCode.FORBIDDEN);
         }
-        WorkspaceMember target = requireTarget(workspaceId, targetUserId);
+        WorkspaceMember target = memberRepository
+                .findByWorkspaceIdAndUserIdForUpdate(workspaceId, targetUserId)
+                .orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND));
         accessService.refreshForLock(target);
 
         if (target.getUser().getId().equals(actorId)) {
@@ -343,6 +360,24 @@ public class WorkspaceService {
         }
         if (target.getRole() == WorkspaceRole.OWNER && ownerCount(workspaceId) <= 1) {
             throw new ApiException(ErrorCode.CONFLICT, LAST_OWNER_MESSAGE);
+        }
+        // Lock every standalone root the target owns in canonical id order before counting
+        // sole ownership so a concurrent leave/demotion on one of those pages cannot drop
+        // the last other owner before grant deletion runs. Workspace -> Document (ascending
+        // id) matches the sharing/order lock hierarchy and avoids deadlocks.
+        for (UUID rootId : accessGrantRepository.findOwnedStandaloneRootIds(workspaceId, targetUserId).stream()
+                .distinct()
+                .sorted(Comparator.comparing(UUID::toString))
+                .toList()) {
+            documentRepository.findByIdForOwnershipUpdate(rootId);
+        }
+
+        // A standalone page has no ancestor or space to inherit ownership from, so the
+        // grant deletion below must not remove its only OWNER. There is no workspace-wide
+        // override for such a page; the member's pages have to be handed over first.
+        if (accessGrantRepository.countSolelyOwnedStandaloneRoots(workspaceId, targetUserId) > 0) {
+            throw new ApiException(
+                    ErrorCode.CONFLICT, "Transfer ownership of this member's standalone pages before removing them.");
         }
 
         User targetUser = target.getUser();

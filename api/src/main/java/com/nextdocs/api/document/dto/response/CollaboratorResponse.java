@@ -10,13 +10,12 @@ public record CollaboratorResponse(
         @Schema(description = "User ID") UUID userId,
         @Schema(description = "User email") String email,
         @Schema(description = "Display name") String displayName,
+
+        @Schema(description = "Avatar URL, when set") String avatarUrl,
         @Schema(description = "Access level") DocumentAccessLevel accessLevel,
 
         @Schema(description = "Collaborator grant timestamp")
         OffsetDateTime addedAt,
-
-        @Schema(description = "Whether this is the direct document owner")
-        boolean owner,
 
         @Schema(description = "Whether access is inherited from an ancestor document")
         boolean inherited,
@@ -28,45 +27,15 @@ public record CollaboratorResponse(
         String inheritedFromTitle,
 
         @Schema(description = "Access level granted on the ancestor document")
-        DocumentAccessLevel inheritedAccessLevel,
-
-        @Schema(
-                description = "What this person can actually do on this document after space, link, and archive "
-                        + "resolution; NO_ACCESS when blocked")
-        DocumentAccessLevel effectiveAccessLevel) {
+        DocumentAccessLevel inheritedAccessLevel) {
 
     public CollaboratorResponse(
             UUID userId,
             String email,
             String displayName,
+            String avatarUrl,
             DocumentAccessLevel accessLevel,
-            OffsetDateTime addedAt,
-            boolean owner) {
-        this(userId, email, displayName, accessLevel, addedAt, owner, false, null, null, null, accessLevel);
-    }
-
-    public CollaboratorResponse(
-            UUID userId,
-            String email,
-            String displayName,
-            DocumentAccessLevel accessLevel,
-            OffsetDateTime addedAt,
-            boolean owner,
-            boolean inherited,
-            UUID inheritedFromId,
-            String inheritedFromTitle,
-            DocumentAccessLevel inheritedAccessLevel) {
-        this(
-                userId,
-                email,
-                displayName,
-                accessLevel,
-                addedAt,
-                owner,
-                inherited,
-                inheritedFromId,
-                inheritedFromTitle,
-                inheritedAccessLevel,
-                accessLevel);
+            OffsetDateTime addedAt) {
+        this(userId, email, displayName, avatarUrl, accessLevel, addedAt, false, null, null, null);
     }
 }

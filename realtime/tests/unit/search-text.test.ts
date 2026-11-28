@@ -1,6 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
 import * as Y from '@y/y';
-import { extractDocumentText, MAX_TEXT_BYTES } from '../../src/search-text.js';
+import {
+  extractDocument,
+  extractDocumentText,
+  MAX_MENTIONS,
+  MAX_TEXT_BYTES,
+} from '../../src/search-text.js';
 
 function encode(build: (root: Y.Node) => void): Uint8Array {
   const doc = new Y.Doc();
@@ -34,6 +39,9 @@ function addBlock(root: Y.Node, blockNode: Y.Node): void {
   root.insert(root.length, [blockNode]);
 }
 
+const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+const BOB_ID = '22222222-2222-4222-8222-222222222222';
+
 describe('extractDocumentText', () => {
   it('joins block text with newlines and keeps headings', () => {
     const update = encode((root) => {
@@ -50,6 +58,19 @@ describe('extractDocumentText', () => {
     expect(extractDocumentText(update).text).toBe(
       'Getting started\nInstall the app.\nThen sign in.'
     );
+  });
+
+  it('keeps text a root-level delta stored as a plain string', () => {
+    // Older deltas can put the run directly on the root instead of inside a block.
+    const update = encode((root) => {
+      root.insert(0, 'raw root text');
+    });
+
+    expect(extractDocument(update)).toEqual({
+      text: 'raw root text',
+      truncated: false,
+      mentions: [],
+    });
   });
 
   it('keeps text from an unknown custom block instead of dropping it', () => {
@@ -97,6 +118,80 @@ describe('extractDocumentText', () => {
     });
 
     expect(extractDocumentText(update).text).toBe('ask Alice');
+  });
+
+  it('extracts mention user ids in the same walk as the search text', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      const alice = element('mention');
+      alice.setAttr('userId', ALICE_ID);
+      alice.setAttr('label', 'Alice');
+      const bob = element('mention');
+      bob.setAttr('userId', BOB_ID);
+      bob.setAttr('label', 'Bob');
+      paragraph.insert(0, 'ping ');
+      paragraph.insert(5, [alice]);
+      paragraph.insert(6, ' and ');
+      paragraph.insert(11, [bob]);
+    });
+
+    const extracted = extractDocument(update);
+
+    expect(extracted.mentions).toEqual([{ userId: ALICE_ID }, { userId: BOB_ID }]);
+    expect(extracted.text).toBe('ping Alice and Bob');
+  });
+
+  it('ignores malformed mention ids so one bad node cannot reject the notification', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      const malformed = element('mention');
+      malformed.setAttr('userId', 'not-a-uuid');
+      malformed.setAttr('label', 'Nobody');
+      paragraph.insert(0, [malformed]);
+    });
+
+    expect(extractDocument(update).mentions).toEqual([]);
+    expect(extractDocumentText(update).text).toBe('Nobody');
+  });
+
+  it('deduplicates repeated mentions and ignores mentions without a user id', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      const first = element('mention');
+      first.setAttr('userId', ALICE_ID);
+      first.setAttr('label', 'Alice');
+      const again = element('mention');
+      again.setAttr('userId', ALICE_ID);
+      again.setAttr('label', 'Alice again');
+      const malformed = element('mention');
+      malformed.setAttr('label', 'Nobody');
+      paragraph.insert(0, [first, again, malformed]);
+    });
+
+    expect(extractDocument(update).mentions).toEqual([{ userId: ALICE_ID }]);
+    expect(extractDocumentText(update).text).toBe('AliceAlice againNobody');
+  });
+
+  it('caps the indexed mention set so a runaway document cannot flood the queue', () => {
+    const update = encode((root) => {
+      const paragraph = element('paragraph');
+      addBlock(root, paragraph);
+      const mentions = Array.from({ length: MAX_MENTIONS + 1 }, (_, index) => {
+        const mention = element('mention');
+        mention.setAttr(
+          'userId',
+          `${String(index + 1).padStart(8, '0')}-0000-4000-8000-000000000000`
+        );
+        mention.setAttr('label', `Person ${index + 1}`);
+        return mention;
+      });
+      paragraph.insert(0, mentions);
+    });
+
+    expect(extractDocument(update).mentions).toHaveLength(MAX_MENTIONS);
   });
 
   it('indexes formatted text without mark attributes or link targets', () => {

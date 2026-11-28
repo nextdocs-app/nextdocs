@@ -64,6 +64,14 @@ function compareSharedRoots(
   return byCreation !== 0 ? byCreation : compareOrderKeys(aId, bId);
 }
 
+function sortChildrenByOrderKey(nodes: Record<string, SidebarTreeNode>, childIds: string[]): void {
+  childIds.sort((aId, bId) => {
+    const keyA = nodes[aId]?.orderKey ?? '';
+    const keyB = nodes[bId]?.orderKey ?? '';
+    return compareOrderKeys(keyA, keyB);
+  });
+}
+
 export interface MoveDocumentArgs {
   documentId: string;
   newParentId: string | null;
@@ -189,6 +197,15 @@ const sharedTreeSlice = createSlice({
       }
     },
 
+    /** Restores a remembered expansion without depending on the current flag. */
+    setNodeExpanded(state, action: PayloadAction<{ id: string; expanded: boolean }>) {
+      const { id, expanded } = action.payload;
+      const node = state.nodes[id];
+      if (node) {
+        node.isExpanded = expanded;
+      }
+    },
+
     /**
      * Adds a page the caller just grafted into a Shared parent from their Private tree.
      * The parent is already in this tree (it hosted the drop), so the node belongs under
@@ -225,11 +242,7 @@ const sharedTreeSlice = createSlice({
       if (!parent.children.includes(node.id)) {
         parent.children.push(node.id);
       }
-      parent.children.sort((aId, bId) => {
-        const keyA = state.nodes[aId]?.orderKey ?? '';
-        const keyB = state.nodes[bId]?.orderKey ?? '';
-        return compareOrderKeys(keyA, keyB);
-      });
+      sortChildrenByOrderKey(state.nodes, parent.children);
     },
 
     removeNode(state, action: PayloadAction<string>) {
@@ -330,44 +343,17 @@ const sharedTreeSlice = createSlice({
 
     /**
      * Rebuilds the root list from the shared-documents list.
-     * A document appears in the Shared section only when it is BOTH truly
-     * root-level (real `parentId` is null) AND has active collaborators —
-     * except shared-with-me documents, which have no position in the user's
-     * own tree and therefore float at the root of the Shared section when
-     * their real parent is not also shared with the user.
-     * Nested documents owned by the user (real `parentId` set) are NOT
-     * synthesized here: they stay in the Private tree under their actual
-     * parent. This guarantees that reordering inside the Shared section can
-     * never detach a nested document from its real parent.
-     *
-     * `relationship` is ownership, never the access level: a collaborator can
-     * hold an OWNER-level grant, and such a page is a Shared entry that must
-     * float here rather than be dropped as the caller's own nested page.
+     * A page floats at the root when its real parent is not in this listing,
+     * regardless of its resolved access level.
      */
     syncSharedRoots(state, action: PayloadAction<SharedDocumentEntry[]>) {
       const entries = action.payload;
       const entryIds = new Set(entries.map((entry) => entry.id));
-      const entryById = new Map(entries.map((entry) => [entry.id, entry]));
-
       const rootEntryIds = new Set<string>();
       const entryNodes: Record<string, SidebarTreeNode> = {};
 
       for (const entry of entries) {
-        // Only the caller's own nested page belongs to the Private tree, and the
-        // section listing never returns one (it excludes owned pages with a
-        // parent), so this guard only catches a server regression.
-        if (entry.relationship === 'owner' && entry.parentId != null) {
-          continue;
-        }
-
-        const parentEntry = entry.parentId ? entryById.get(entry.parentId) : undefined;
-        const parentIsPrivateNested =
-          !!parentEntry && parentEntry.relationship === 'owner' && parentEntry.parentId != null;
-        const isChild =
-          entry.relationship === 'collaborator' &&
-          entry.parentId != null &&
-          entryIds.has(entry.parentId) &&
-          !parentIsPrivateNested;
+        const isChild = entry.parentId != null && entryIds.has(entry.parentId);
 
         entryNodes[entry.id] = {
           id: entry.id,
@@ -426,19 +412,21 @@ const sharedTreeSlice = createSlice({
         };
       }
 
+      // A listed entry's place comes from this listing, not from a child array kept
+      // from an earlier sync. Drop those ids first so a page moved to another parent
+      // no longer appears under its old one; unlisted lazy-loaded children stay.
+      for (const id of Object.keys(entryNodes)) {
+        entryNodes[id].children = entryNodes[id].children.filter(
+          (childId) => !entryIds.has(childId)
+        );
+      }
+
       // Link nested shared-with-me entries under their shared parent so the
       // tree reflects the documents' real parent-child relationships.
       // Two-pass: all nodes are created before linking so child-before-parent
       // ordering (pagination) does not matter.
       for (const entry of entries) {
-        if (entry.relationship !== 'collaborator' || entry.parentId == null) {
-          continue;
-        }
-        if (!entryIds.has(entry.parentId)) {
-          continue;
-        }
-        const parentEntry = entryById.get(entry.parentId);
-        if (parentEntry?.relationship === 'owner' && parentEntry.parentId != null) {
+        if (entry.parentId == null || !entryIds.has(entry.parentId)) {
           continue;
         }
         const parentNode = entryNodes[entry.parentId];
@@ -452,6 +440,13 @@ const sharedTreeSlice = createSlice({
       }
 
       Object.assign(state.nodes, entryNodes);
+
+      for (const id of Object.keys(entryNodes)) {
+        const parentNode = state.nodes[id];
+        if (parentNode && parentNode.children.length > 1) {
+          sortChildrenByOrderKey(state.nodes, parentNode.children);
+        }
+      }
 
       // Prune nodes that are no longer reachable from the roots (unshared
       // documents, nested owned documents, removed parents, ...).
@@ -553,11 +548,7 @@ const sharedTreeSlice = createSlice({
           newParent.children.push(updatedNode.id);
         }
         newParent.isExpanded = true;
-        newParent.children.sort((aId, bId) => {
-          const keyA = state.nodes[aId]?.orderKey ?? '';
-          const keyB = state.nodes[bId]?.orderKey ?? '';
-          return compareOrderKeys(keyA, keyB);
-        });
+        sortChildrenByOrderKey(state.nodes, newParent.children);
       } else {
         // Root-level move or floated nested document (whose parent is external):
         // place the node at the root of the Shared tree and sort by personal orderKey.
@@ -572,6 +563,7 @@ const sharedTreeSlice = createSlice({
 
 export const {
   toggleExpanded,
+  setNodeExpanded,
   syncSharedRoots,
   syncPublicRoots,
   insertSharedNode,

@@ -115,7 +115,6 @@ jobs:
             -e SPRING_DATASOURCE_PASSWORD=nextdocs \
             -e SPRING_JPA_HIBERNATE_DDL_AUTO=validate \
             -e JWT_SECRET=api-ci-jwt-secret-0123456789abcdef0123456789abcdef \
-            -e OAUTH_TOKEN_ENCRYPTION_KEY_BASE64=dGVzdGtleTB0ZXN0a2V5MHRlc3RrZXkwdGVzdGtleTA= \
             -e YHUB_SERVICE_TOKEN=api-ci-service-token-0123456789abcdef \
             -e SEARCH_ENABLED=false \
             -e YHUB_PURGE_ENABLED=false \

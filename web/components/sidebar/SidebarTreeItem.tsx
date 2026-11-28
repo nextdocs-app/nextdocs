@@ -136,6 +136,9 @@ export function SidebarTreeItem({
   const showEmptyLine = lineInEmptyOf === node.id;
   const actionType = resolveActionType ? resolveActionType(node.id) : 'move-to-trash';
   const showChildren = forceShowChildren || node.isExpanded;
+  const hasExpandedChildren = showChildren && visibleChildren.length > 0;
+  const isSticky = hasExpandedChildren && depth < 3;
+  const stickyZIndex = 10;
   const isMenuOpen = docActionsAnchor?.documentId === node.id;
   const hasTwoActions = canCreate && isActionsEnabled;
   // Mobile always shows the row actions (no hover), so the title must
@@ -147,6 +150,18 @@ export function SidebarTreeItem({
     : canCreate || isActionsEnabled
       ? 'pointer-coarse:pr-8'
       : 'pointer-coarse:pr-0';
+
+  const rowStyle: React.CSSProperties = {
+    paddingLeft: `${indentPx}px`,
+    ...(isSticky
+      ? {
+          // Every level of a stuck stack sits one rendered row pitch below its
+          // parent, so the multiplier has to be the measured pitch, not 32px.
+          top: `calc(var(--nd-sticky-base, var(--nd-sticky-header, 30px)) + var(--nd-sticky-row-pitch, 34px) * ${depth})`,
+          zIndex: stickyZIndex,
+        }
+      : undefined),
+  };
 
   return (
     <li
@@ -160,14 +175,23 @@ export function SidebarTreeItem({
         {...listeners}
         role="button"
         tabIndex={0}
+        data-sidebar-row=""
         className={`group/tree-item-row relative w-full flex items-center gap-2 py-1.5 pointer-coarse:py-2.5 px-2.5 rounded-sm text-left transition-colors duration-100 cursor-pointer ${
+          // The 1px flex gap below a stuck row is part of the stack pitch, so it
+          // has to be painted over or the rows sliding underneath show through it.
+          isSticky ? 'sticky [box-shadow:0_1px_0_0_var(--color-sidebar)]' : ''
+        } ${
           isDropTarget
             ? 'nd-tree-drop-highlight'
             : isActive
-              ? 'bg-sidebar-accent/70 text-sidebar-foreground font-medium hover:bg-sidebar-accent hover:text-sidebar-foreground'
-              : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+              ? isSticky
+                ? 'bg-sidebar-accent text-sidebar-foreground font-medium hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                : 'bg-sidebar-accent/70 text-sidebar-foreground font-medium hover:bg-sidebar-accent hover:text-sidebar-foreground'
+              : isSticky
+                ? 'bg-sidebar text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground'
         }`}
-        style={{ paddingLeft: `${indentPx}px` }}
+        style={rowStyle}
         onClick={() => onSelectDocument(node.id)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -292,7 +316,7 @@ export function SidebarTreeItem({
 
       {/* Recursive Child List */}
       {showChildren && (
-        <ul className="flex flex-col gap-px">
+        <ul className="flex flex-col gap-px relative z-0">
           {node.isLoading ? (
             <div
               className="flex items-center gap-2 py-1"

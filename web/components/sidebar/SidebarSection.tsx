@@ -56,7 +56,14 @@ export function SidebarSection({
   const showMore = rootCount > SIDEBAR_VISIBLE_COUNT || Boolean(hasMore);
 
   return (
-    <div className={`group flex flex-col ${className ?? ''}`.trim()}>
+    <div
+      // Sticky rows can only stay put if their resting offset already equals the
+      // offset they pin at: the header has to be exactly `--nd-sticky-header`
+      // tall, and nothing may sit between it and the first row. The row pitch
+      // is measured once on the scroll container (useStickyRowMetrics), so this
+      // wrapper must not shadow it with a constant.
+      className={`group flex flex-col [--nd-sticky-header:30px] pointer-coarse:[--nd-sticky-header:36px] ${className ?? ''}`.trim()}
+    >
       {/* Full-width clickable header; the chevron is purely decorative */}
       <div
         role="button"
@@ -69,7 +76,7 @@ export function SidebarSection({
             onToggle();
           }
         }}
-        className="group/header flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] pointer-coarse:py-2 text-[13.5px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
+        className="group/header sticky top-0 z-30 bg-sidebar flex items-center justify-between mx-1.5 pl-2 pr-2 py-[5px] pointer-coarse:py-2 text-[13.5px] leading-[20px] text-muted-foreground rounded-sm hover:bg-sidebar-accent transition-colors duration-100 cursor-pointer select-none"
       >
         <span className="flex items-center gap-1 min-w-0">
           <SectionHeading
@@ -89,7 +96,7 @@ export function SidebarSection({
       </div>
 
       {isOpen && (
-        <nav className="px-1.5 pt-px pb-2">
+        <nav className="px-1.5 pb-2 relative z-10">
           {isLoading && isEmpty ? (
             <div className="flex flex-col gap-1 px-1">
               {[1, 2, 3].map((i) => (

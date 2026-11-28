@@ -48,10 +48,16 @@ public record SharingSettingsResponse(
         @Schema(description = "Whether workspace-member access is inherited from an ancestor")
         boolean workspaceInherited,
 
-        @Schema(description = "ID of the ancestor that provides workspace-member access")
+        @Schema(
+                description = "What supplies the inherited workspace-member access: an ancestor page,"
+                        + " or the space that anchors the page. Null when nothing is inherited or the"
+                        + " caller may not see the source.")
+        SharingSourceKind workspaceInheritedFromKind,
+
+        @Schema(description = "ID of the ancestor page or space that provides workspace-member access")
         UUID workspaceInheritedFromId,
 
-        @Schema(description = "Title of the ancestor that provides workspace-member access")
+        @Schema(description = "Title of the ancestor page or name of the space that provides workspace-member access")
         String workspaceInheritedFromTitle) {
 
     public SharingSettingsResponse(
@@ -69,6 +75,7 @@ public record SharingSettingsResponse(
                 null,
                 false,
                 false,
+                null,
                 null,
                 null);
     }
@@ -94,6 +101,7 @@ public record SharingSettingsResponse(
                 null,
                 false,
                 false,
+                null,
                 null,
                 null);
     }

@@ -1,5 +1,6 @@
 package com.nextdocs.api.auth.entity;
 
+import com.nextdocs.api.user.entity.User;
 import jakarta.persistence.*;
 import java.net.InetAddress;
 import java.time.OffsetDateTime;

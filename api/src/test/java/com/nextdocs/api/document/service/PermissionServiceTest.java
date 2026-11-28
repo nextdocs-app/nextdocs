@@ -3,7 +3,6 @@ package com.nextdocs.api.document.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.AccessExplainResponse;
@@ -13,6 +12,13 @@ import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.space.service.SpaceAccessService.SpaceContext;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.workspace.entity.Workspace;
+import com.nextdocs.api.workspace.entity.WorkspaceMember;
+import com.nextdocs.api.workspace.entity.WorkspaceRole;
+import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
+import com.nextdocs.api.workspace.service.WorkspaceAccessService;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -35,20 +41,22 @@ class PermissionServiceTest {
     @Mock
     private SpaceAccessService spaceAccessService;
 
+    @Mock
+    private WorkspaceAccessService workspaceAccessService;
+
+    @Mock
+    private WorkspaceMemberRepository workspaceMemberRepository;
+
     private PermissionService permissionService;
 
     @BeforeEach
     void setUp() {
-        permissionService = new PermissionService(documentRepository, accessGrantRepository, spaceAccessService);
-    }
-
-    @Test
-    void removeSpaceAudienceRules_delegatesToTheSubtreeDelete() {
-        UUID rootId = UUID.randomUUID();
-
-        permissionService.removeSpaceAudienceRules(rootId);
-
-        verify(accessGrantRepository).deleteSpaceAudienceGrantsInSubtree(rootId);
+        permissionService = new PermissionService(
+                documentRepository,
+                accessGrantRepository,
+                spaceAccessService,
+                workspaceAccessService,
+                workspaceMemberRepository);
     }
 
     @Test
@@ -274,34 +282,6 @@ class PermissionServiceTest {
     }
 
     @Test
-    void requireOwnerAccess_notOwner_throwsNotFound() {
-        UUID userId = UUID.randomUUID();
-        UUID documentId = UUID.randomUUID();
-
-        when(documentRepository.findByIdAndUser_IdAndDeletedAtIsNull(documentId, userId))
-                .thenReturn(Optional.empty());
-
-        ApiException exception =
-                assertThrows(ApiException.class, () -> permissionService.requireOwnerAccess(userId, documentId));
-        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
-    }
-
-    @Test
-    void requireOwnerAccess_isOwner_returnsDocument() {
-        UUID userId = UUID.randomUUID();
-        UUID documentId = UUID.randomUUID();
-        User owner = User.builder().id(userId).build();
-        Document doc = Document.builder().id(documentId).user(owner).build();
-
-        when(documentRepository.findByIdAndUser_IdAndDeletedAtIsNull(documentId, userId))
-                .thenReturn(Optional.of(doc));
-
-        Document result = permissionService.requireOwnerAccess(userId, documentId);
-
-        assertEquals(doc, result);
-    }
-
-    @Test
     void resolveTrashAccess_collaboratorWithEdit_returnsEdit() {
         UUID userId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
@@ -427,6 +407,223 @@ class PermissionServiceTest {
         Document result = permissionService.requireSharingAdminAccess(userId, documentId);
 
         assertEquals(doc, result);
+    }
+
+    @Test
+    void isWorkspaceOwner_distinguishesOwnerFromAdmin() {
+        UUID user = UUID.randomUUID();
+        Workspace workspace = Workspace.builder().id(UUID.randomUUID()).build();
+        Document doc =
+                Document.builder().id(UUID.randomUUID()).workspace(workspace).build();
+        WorkspaceMember member =
+                WorkspaceMember.builder().role(WorkspaceRole.ADMIN).build();
+        when(workspaceAccessService.findMember(user))
+                .thenReturn(Optional.of(new WorkspaceAccessService.Membership(workspace, member)));
+        assertFalse(permissionService.isWorkspaceOwner(user, doc));
+        member.setRole(WorkspaceRole.OWNER);
+        assertTrue(permissionService.isWorkspaceOwner(user, doc));
+    }
+
+    @Test
+    void requireSharingAdminAccess_privatePageWorkspaceAdmin_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Workspace workspace =
+                Workspace.builder().id(UUID.randomUUID()).name("Acme").build();
+        Document doc = Document.builder().id(documentId).workspace(workspace).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+        // A private page belongs to its creator's personal section; the workspace
+        // role must not even be consulted as a sharing authority.
+        verifyNoInteractions(workspaceAccessService);
+    }
+
+    @Test
+    void requireSharingAdminAccess_privatePageWorkspaceOwner_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Workspace workspace =
+                Workspace.builder().id(UUID.randomUUID()).name("Acme").build();
+        Document doc = Document.builder().id(documentId).workspace(workspace).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+        verifyNoInteractions(workspaceAccessService);
+    }
+
+    @Test
+    void requireSharingAdminAccess_privatePagePlainViewer_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Workspace workspace =
+                Workspace.builder().id(UUID.randomUUID()).name("Acme").build();
+        Document doc = Document.builder().id(documentId).workspace(workspace).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+    }
+
+    @Test
+    void requireSharingAdminAccess_privatePageOtherWorkspaceViewer_throwsForbidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(documentId)
+                .workspace(
+                        Workspace.builder().id(UUID.randomUUID()).name("Acme").build())
+                .build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("VIEW");
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
+    }
+
+    @Test
+    void requireSharingAdminAccess_workspaceAdminWithoutPageAccess_staysHidden() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Workspace workspace =
+                Workspace.builder().id(UUID.randomUUID()).name("Acme").build();
+        Document doc = Document.builder().id(documentId).workspace(workspace).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn(null);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireSharingAdminAccess(userId, documentId));
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+        verifyNoInteractions(workspaceAccessService);
+    }
+
+    @Test
+    void requireSharingAdminAccess_standalonePageAncestorOwner_returnsDocument() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("EDIT");
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of(parentId));
+        when(documentRepository.resolveEffectiveAccessBatch(userId, parentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {parentId, "OWNER"}));
+
+        Document result = permissionService.requireSharingAdminAccess(userId, documentId);
+
+        assertEquals(doc, result);
+    }
+
+    @Test
+    void ownsAncestor_ancestorResolvesOwner_returnsTrue() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of(parentId));
+        when(documentRepository.resolveEffectiveAccessBatch(userId, parentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {parentId, "OWNER"}));
+
+        assertTrue(permissionService.ownsAncestor(userId, doc));
+    }
+
+    @Test
+    void ownsAncestor_ancestorResolvesLower_returnsFalse() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of(parentId));
+        when(documentRepository.resolveEffectiveAccessBatch(userId, parentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {parentId, "EDIT"}));
+
+        assertFalse(permissionService.ownsAncestor(userId, doc));
+    }
+
+    @Test
+    void ownsAncestor_noAncestors_returnsFalse() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        Document doc = Document.builder().id(documentId).build();
+
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of());
+
+        assertFalse(permissionService.ownsAncestor(userId, doc));
+    }
+
+    @Test
+    void ownsAncestor_trashedDocument_usesTheTrashResolver() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(documentId)
+                .deletedAt(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC))
+                .build();
+
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of(parentId));
+        when(documentRepository.resolveTrashAccessBatch(userId, parentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {parentId, "OWNER"}));
+
+        assertTrue(permissionService.ownsAncestor(userId, doc));
+        verify(documentRepository, never()).resolveEffectiveAccessBatch(userId, parentId.toString());
+    }
+
+    @Test
+    void requireSharingAdminAccess_spacePageAncestorOwner_returnsDocument() {
+        UUID userId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID parentId = UUID.randomUUID();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document doc = Document.builder().id(documentId).space(space).build();
+
+        when(documentRepository.findByIdAndDeletedAtIsNull(documentId)).thenReturn(Optional.of(doc));
+        when(documentRepository.resolveEffectiveAccess(userId, documentId)).thenReturn("EDIT");
+        when(documentRepository.findAncestorChainIds(documentId)).thenReturn(List.of(parentId));
+        when(documentRepository.resolveEffectiveAccessBatch(userId, parentId.toString()))
+                .thenReturn(List.<Object[]>of(new Object[] {parentId, "OWNER"}));
+
+        assertEquals(doc, permissionService.requireSharingAdminAccess(userId, documentId));
+        verify(spaceAccessService, never()).requireActiveAdministration(any(), any());
+    }
+
+    @Test
+    void isWorkspaceOwner_documentWithoutWorkspace_returnsFalse() {
+        UUID userId = UUID.randomUUID();
+        Document doc = Document.builder().id(UUID.randomUUID()).build();
+
+        assertFalse(permissionService.isWorkspaceOwner(userId, doc));
+        verifyNoInteractions(workspaceAccessService);
+    }
+
+    private static WorkspaceAccessService.Membership membership(Workspace workspace, WorkspaceRole role) {
+        return new WorkspaceAccessService.Membership(
+                workspace,
+                WorkspaceMember.builder()
+                        .id(UUID.randomUUID())
+                        .workspace(workspace)
+                        .user(User.builder().id(UUID.randomUUID()).build())
+                        .role(role)
+                        .build());
     }
 
     @Test
@@ -728,6 +925,219 @@ class PermissionServiceTest {
         ApiException exception =
                 assertThrows(ApiException.class, () -> permissionService.requireCommentAccess(userId, documentId));
         assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireRosterAccess_creatorWithDirectOwnerGrant_passes() {
+        UUID ownerId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(User.builder().id(ownerId).passwordHash("$2a$12$hash").build())
+                .build();
+        // Creator attribution alone is not authority; the OWNER grant row is.
+        when(accessGrantRepository.hasPositiveIdentityGrant(ownerId, doc.getId()))
+                .thenReturn(true);
+
+        permissionService.requireRosterAccess(ownerId, doc);
+
+        verify(accessGrantRepository).hasPositiveIdentityGrant(ownerId, doc.getId());
+        verifyNoInteractions(spaceAccessService);
+        verifyNoInteractions(workspaceMemberRepository);
+    }
+
+    @Test
+    void requireRosterAccess_identityGrantedReader_passes() {
+        UUID memberId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(true);
+
+        permissionService.requireRosterAccess(memberId, doc);
+    }
+
+    @Test
+    void requireRosterAccess_linkOnlyOutsider_throwsNotFound() {
+        UUID linkOnlyId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(linkOnlyId, doc.getId()))
+                .thenReturn(false);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireRosterAccess(linkOnlyId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireRosterAccess_workspaceMemberWithOnlyLinkAccess_passes() {
+        UUID memberId = UUID.randomUUID();
+        UUID workspaceId = UUID.randomUUID();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .workspace(Workspace.builder().id(workspaceId).build())
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(false);
+        when(workspaceMemberRepository.existsByWorkspaceIdAndUserId(workspaceId, memberId))
+                .thenReturn(true);
+
+        permissionService.requireRosterAccess(memberId, doc);
+    }
+
+    @Test
+    void requireRosterAccess_spaceMemberWithoutPageGrant_passes() {
+        UUID memberId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(false);
+        when(spaceAccessService.load(memberId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, DocumentAccessLevel.VIEW));
+
+        permissionService.requireRosterAccess(memberId, doc);
+    }
+
+    @Test
+    void requireRosterAccess_spaceAdminWithoutContentAccess_passes() {
+        UUID adminId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(adminId, doc.getId()))
+                .thenReturn(false);
+        // Sharing is an administrator's call, so an admin with no content level still
+        // sees the roster.
+        when(spaceAccessService.load(adminId, spaceId)).thenReturn(new SpaceContext(space, WorkspaceRole.ADMIN, null));
+
+        permissionService.requireRosterAccess(adminId, doc);
+    }
+
+    @Test
+    void requireRosterAccess_inaccessibleSpace_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        // No membership and no content level: the space grants nothing.
+        when(spaceAccessService.load(outsiderId, spaceId))
+                .thenReturn(new SpaceContext(space, WorkspaceRole.MEMBER, null));
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireRosterAccess(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireRosterAccess_missingSpaceMembership_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        // A vanished space membership is "no grant", not a server fault.
+        when(spaceAccessService.load(outsiderId, spaceId)).thenThrow(new ApiException(ErrorCode.NOT_FOUND));
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireRosterAccess(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireRosterAccess_unresolvableSpace_throwsNotFound() {
+        UUID outsiderId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(outsiderId, doc.getId()))
+                .thenReturn(false);
+        when(spaceAccessService.load(outsiderId, spaceId)).thenReturn(null);
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireRosterAccess(outsiderId, doc));
+
+        assertEquals(ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    void requireRosterAccess_spaceLookupFailureOtherThanNotFound_propagates() {
+        UUID memberId = UUID.randomUUID();
+        UUID spaceId = UUID.randomUUID();
+        Space space = Space.builder().id(spaceId).name("Engineering").build();
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .space(space)
+                .creator(User.builder()
+                        .id(UUID.randomUUID())
+                        .passwordHash("$2a$12$hash")
+                        .build())
+                .build();
+        when(accessGrantRepository.hasPositiveIdentityGrant(memberId, doc.getId()))
+                .thenReturn(false);
+        // Only NOT_FOUND means "no space grant"; other failures are real faults and must
+        // not be masked as a hidden roster.
+        when(spaceAccessService.load(memberId, spaceId)).thenThrow(new ApiException(ErrorCode.FORBIDDEN));
+
+        ApiException exception =
+                assertThrows(ApiException.class, () -> permissionService.requireRosterAccess(memberId, doc));
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.getErrorCode());
     }
 
     @Test

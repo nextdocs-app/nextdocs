@@ -66,6 +66,41 @@ public interface AccessGrantRepository extends JpaRepository<AccessGrant, UUID> 
 
     void deleteByDocument_IdAndUser_Id(UUID documentId, UUID userId);
 
+    /**
+     * Standalone roots in one workspace where {@code userId} is the only OWNER-level
+     * holder (including trashed roots, because {@link #deleteUserGrantsByWorkspace}
+     * removes grants on them too). Removing the member deletes every grant they hold in
+     * that workspace, so a non-zero count means the removal would leave a root that no one
+     * can administer. A root has no ancestor to inherit ownership from, so a direct OWNER
+     * row is the only way to keep the invariant.
+     *
+     * <p>Scoped to the workspace being administered: the same account can hold grants in
+     * another workspace as an external collaborator, and removing it here does not touch
+     * those rows or the pages they own.
+     */
+    @Query("SELECT COUNT(d) FROM Document d WHERE d.workspace.id = :workspaceId "
+            + "AND d.parent IS NULL AND d.space IS NULL "
+            + "AND EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id "
+            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW "
+            + "AND g.accessLevel = com.nextdocs.api.document.entity.DocumentAccessLevel.OWNER) "
+            + "AND NOT EXISTS (SELECT 1 FROM AccessGrant other WHERE other.document.id = d.id "
+            + "AND other.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW "
+            + "AND other.accessLevel = com.nextdocs.api.document.entity.DocumentAccessLevel.OWNER "
+            + "AND (other.groupId IS NOT NULL OR (other.user IS NOT NULL AND other.user.id <> :userId)))")
+    long countSolelyOwnedStandaloneRoots(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
+    /**
+     * Standalone roots in {@code workspaceId} where {@code userId} holds a direct OWNER
+     * grant, ordered by document id for deadlock-free locking during member removal.
+     */
+    @Query("SELECT d.id FROM Document d WHERE d.workspace.id = :workspaceId "
+            + "AND d.parent IS NULL AND d.space IS NULL "
+            + "AND EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id "
+            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW "
+            + "AND g.accessLevel = com.nextdocs.api.document.entity.DocumentAccessLevel.OWNER) "
+            + "ORDER BY d.id ASC")
+    List<UUID> findOwnedStandaloneRootIds(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
     @Modifying(flushAutomatically = true)
     @Query("DELETE FROM AccessGrant g WHERE g.workspace.id = :workspaceId AND g.user.id = :userId")
     int deleteUserGrantsByWorkspace(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
@@ -129,24 +164,4 @@ public interface AccessGrantRepository extends JpaRepository<AccessGrant, UUID> 
     @Modifying(flushAutomatically = true)
     @Query(value = DELETE_DENY_IN_SUBTREE_FOR_USER_SQL, nativeQuery = true)
     int deleteDenyInSubtreeForUser(@Param("subtreeRootId") UUID subtreeRootId, @Param("userId") UUID userId);
-
-    /**
-     * Removes page audience rules from a subtree that is leaving its space. The rules
-     * replace a space baseline, so carrying them into another container would apply a
-     * setting nobody made there. Identity, group, and user grants are untouched.
-     */
-    @Modifying(flushAutomatically = true)
-    @Query(
-            value = "DELETE FROM access_grants "
-                    + "WHERE audience IN ('SPACE_MEMBERS', 'SPACE_EVERYONE') "
-                    + "AND document_id IN ("
-                    + "  WITH RECURSIVE subtree AS ("
-                    + "    SELECT id, 0 AS depth FROM documents WHERE id = :rootId"
-                    + "    UNION ALL "
-                    + "    SELECT d.id, s.depth + 1 FROM documents d "
-                    + "    JOIN subtree s ON d.parent_id = s.id WHERE s.depth < 100"
-                    + "  ) SELECT id FROM subtree"
-                    + ")",
-            nativeQuery = true)
-    int deleteSpaceAudienceGrantsInSubtree(@Param("rootId") UUID rootId);
 }

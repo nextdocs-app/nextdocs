@@ -15,12 +15,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.document.dto.response.DocumentResponse;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
 import com.nextdocs.api.space.dto.request.SpaceCreateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberAccessUpdateRequest;
 import com.nextdocs.api.space.dto.request.SpaceMemberCreateRequest;
@@ -30,6 +29,7 @@ import com.nextdocs.api.space.dto.response.SpaceMemberResponse;
 import com.nextdocs.api.space.dto.response.SpaceResponse;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.service.SpaceService;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -47,9 +47,9 @@ import org.springframework.test.web.servlet.request.AbstractMockHttpServletReque
 
 @WebMvcTest(SpaceController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class SpaceControllerTest {
 
@@ -76,6 +76,7 @@ class SpaceControllerTest {
                 .displayName("Owner")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);
@@ -325,7 +326,6 @@ class SpaceControllerTest {
                 false,
                 false,
                 DocumentAccessLevel.OWNER,
-                "Owner",
                 OffsetDateTime.now(),
                 OffsetDateTime.now(),
                 null,

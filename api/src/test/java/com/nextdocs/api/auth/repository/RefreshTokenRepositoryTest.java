@@ -3,7 +3,8 @@ package com.nextdocs.api.auth.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nextdocs.api.auth.entity.RefreshToken;
-import com.nextdocs.api.auth.entity.User;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -39,6 +40,7 @@ class RefreshTokenRepositoryTest {
         user = userRepository.saveAndFlush(User.builder()
                 .email("token-owner@example.com")
                 .displayName("Token Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
     }
 

@@ -16,12 +16,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nextdocs.api.attachment.dto.response.AttachmentResponse;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.pageicon.dto.response.PageIconResponse;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.dto.request.WorkspaceInviteCreateRequest;
 import com.nextdocs.api.workspace.dto.request.WorkspaceUpdateRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceInviteCreatedResponse;
@@ -52,9 +52,9 @@ import org.springframework.test.web.servlet.request.AbstractMockHttpServletReque
 
 @WebMvcTest(WorkspaceController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class WorkspaceControllerTest {
 
@@ -84,6 +84,7 @@ class WorkspaceControllerTest {
                 .displayName("Owner")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);

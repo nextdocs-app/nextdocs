@@ -16,9 +16,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.security.JwtTokenProvider;
-import com.nextdocs.api.auth.security.UserPrincipal;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.AccessExplainResponse;
 import com.nextdocs.api.document.dto.response.CollaboratorResponse;
@@ -30,6 +27,9 @@ import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
 import com.nextdocs.api.document.service.DocumentSharingService;
 import com.nextdocs.api.document.service.DocumentSharingSettingsService;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.security.JwtTokenProvider;
+import com.nextdocs.api.security.UserPrincipal;
+import com.nextdocs.api.user.entity.User;
 import com.nextdocs.api.workspace.repository.WorkspaceMemberRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -47,9 +47,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(DocumentSharingController.class)
 @Import({
-    com.nextdocs.api.auth.security.SecurityConfig.class,
+    com.nextdocs.api.security.SecurityConfig.class,
     com.nextdocs.api.common.cache.CaffeineCacheStore.class,
-    com.nextdocs.api.auth.security.ratelimit.InMemoryRateLimiter.class
+    com.nextdocs.api.security.ratelimit.InMemoryRateLimiter.class
 })
 class DocumentSharingControllerTest {
 
@@ -83,6 +83,7 @@ class DocumentSharingControllerTest {
                 .displayName("Owner")
                 .passwordHash("$2a$12$hash")
                 .build();
+
         userId = UUID.randomUUID();
         user.setId(userId);
         principal = UserPrincipal.from(user);
@@ -93,15 +94,19 @@ class DocumentSharingControllerTest {
     @Test
     void listCollaborators_success_returns200() throws Exception {
         List<CollaboratorResponse> response = List.of(new CollaboratorResponse(
-                userId, "owner@example.com", "Owner", DocumentAccessLevel.OWNER, OffsetDateTime.now(), true));
+                userId,
+                "owner@example.com",
+                "Owner",
+                "/api/v1/users/" + userId + "/avatar?v=" + userId,
+                DocumentAccessLevel.OWNER,
+                OffsetDateTime.now()));
 
         when(sharingService.listCollaborators(userId, documentId)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/documents/{id}/collaborators", documentId).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
-                .andExpect(jsonPath("$.data[0].owner").value(true));
+                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"));
     }
 
     @Test
@@ -122,14 +127,34 @@ class DocumentSharingControllerTest {
     }
 
     @Test
+    void hasHiddenSharingSources_returnsTheFlag() throws Exception {
+        when(sharingService.hasHiddenSharingSources(userId, documentId)).thenReturn(true);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/collaborators/hidden-sources", documentId)
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data").value(true));
+    }
+
+    @Test
+    void myAccess_authenticated_returnsMyAccess() throws Exception {
+        DocumentAccessResponse response = new DocumentAccessResponse(documentId, true, DocumentAccessLevel.OWNER, true);
+
+        when(sharingService.getMyAccess(userId, documentId)).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/documents/{id}/my-access", documentId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessLevel").value("OWNER"))
+                .andExpect(jsonPath("$.data.owner").value(true));
+
+        verify(sharingService).getMyAccess(userId, documentId);
+    }
+
+    @Test
     void upsertCollaborator_success_returns201WithRecalculatedList() throws Exception {
         CollaboratorResponse saved = new CollaboratorResponse(
-                collaboratorUserId,
-                "alice@example.com",
-                "Alice",
-                DocumentAccessLevel.EDIT,
-                OffsetDateTime.now(),
-                false);
+                collaboratorUserId, "alice@example.com", "Alice", null, DocumentAccessLevel.EDIT, OffsetDateTime.now());
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
                 .thenReturn(saved);
@@ -152,7 +177,7 @@ class DocumentSharingControllerTest {
     @Test
     void upsertCollaborator_ownerPayload_success_returns201() throws Exception {
         CollaboratorResponse saved = new CollaboratorResponse(
-                collaboratorUserId, "bob@example.com", "Bob", DocumentAccessLevel.OWNER, OffsetDateTime.now(), false);
+                collaboratorUserId, "bob@example.com", "Bob", null, DocumentAccessLevel.OWNER, OffsetDateTime.now());
 
         when(sharingService.upsertCollaborator(eq(userId), eq(documentId), any()))
                 .thenReturn(saved);
@@ -170,8 +195,7 @@ class DocumentSharingControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data[0].email").value("bob@example.com"))
-                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"))
-                .andExpect(jsonPath("$.data[0].owner").value(false));
+                .andExpect(jsonPath("$.data[0].accessLevel").value("OWNER"));
     }
 
     @Test
@@ -180,12 +204,7 @@ class DocumentSharingControllerTest {
                 .when(sharingService)
                 .updateCollaboratorAccess(eq(userId), eq(documentId), eq(collaboratorUserId), any());
         CollaboratorResponse updated = new CollaboratorResponse(
-                collaboratorUserId,
-                "alice@example.com",
-                "Alice",
-                DocumentAccessLevel.VIEW,
-                OffsetDateTime.now(),
-                false);
+                collaboratorUserId, "alice@example.com", "Alice", null, DocumentAccessLevel.VIEW, OffsetDateTime.now());
         when(sharingService.listCollaborators(userId, documentId)).thenReturn(List.of(updated));
 
         mockMvc.perform(patch(
@@ -222,9 +241,9 @@ class DocumentSharingControllerTest {
                 collaboratorUserId,
                 "alice@example.com",
                 "Alice",
+                null,
                 DocumentAccessLevel.VIEW,
                 OffsetDateTime.now(),
-                false,
                 true,
                 UUID.randomUUID(),
                 "Parent Wiki",

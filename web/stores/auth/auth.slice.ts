@@ -1,7 +1,8 @@
 import { createSlice, createAsyncThunk, createListenerMiddleware } from '@reduxjs/toolkit';
 import type { AuthState } from './auth.types';
-import type { AuthApiResponse } from '@/types/auth.types';
+import type { AuthApiResponse, AuthUser } from '@/types/auth.types';
 import { authApiService, ApiError } from '@/services/auth.service';
+import { profileApiService } from '@/services/profile.service';
 import { attachmentService } from '@/services/attachment.service';
 import { clearLocalUserData } from '@/lib/idb-isolation.util';
 import { indexedDBService } from '@/services/indexed-db.service';
@@ -104,28 +105,50 @@ const initialState: AuthState = {
 // instead of being aborted while it is in flight. The identity is part of the
 // share: a rotation that outlives a logout belongs to the account that asked
 // for it, and its response must never be applied to the next session.
-let inFlightRefresh: {
+interface InFlightRefresh {
   userId: string | null;
   sessionId: number;
+  /** `profileWriteCountFor` when this request was sent; every waiter shares it. */
+  writesAtStart: number;
   promise: Promise<AuthApiResponse>;
-} | null = null;
+}
+
+let inFlightRefresh: InFlightRefresh | null = null;
+
+/**
+ * Bumped on every completed profile write, so a refresh can tell whose snapshot is
+ * newer. Keyed by account and login: a write that outlives its session belongs to
+ * the account that sent it, and must not make the next account's answer look stale.
+ */
+const profileWriteCounts = new Map<string, number>();
+
+function profileWriteCountFor(userId: string | null, sessionId: number): number {
+  return profileWriteCounts.get(`${userId ?? ''}:${sessionId}`) ?? 0;
+}
+
+function recordProfileWrite(userId: string, sessionId: number): void {
+  const key = `${userId}:${sessionId}`;
+  profileWriteCounts.set(key, profileWriteCountFor(userId, sessionId) + 1);
+}
 
 function requestSessionRefresh(
   userId: string | null,
   sessionId: number,
   isCurrent: () => boolean
-): Promise<AuthApiResponse> {
+): InFlightRefresh {
   if (inFlightRefresh?.userId === userId && inFlightRefresh.sessionId === sessionId) {
-    return inFlightRefresh.promise;
+    return inFlightRefresh;
   }
 
+  const writesAtStart = profileWriteCountFor(userId, sessionId);
   const promise = refreshWithRotationRetry(isCurrent, userId !== null).finally(() => {
     if (inFlightRefresh?.promise === promise) {
       inFlightRefresh = null;
     }
   });
-  inFlightRefresh = { userId, sessionId, promise };
-  return promise;
+  const shared: InFlightRefresh = { userId, sessionId, writesAtStart, promise };
+  inFlightRefresh = shared;
+  return shared;
 }
 
 /**
@@ -169,11 +192,16 @@ export const refreshSessionThunk = createAsyncThunk<
     const { user, sessionId } = getState().auth;
     const sessionUserId = user?.id ?? null;
     try {
-      const response = await requestSessionRefresh(
+      // The baseline travels with the shared request, not with this dispatch: a
+      // waiter that joined a request sent before a profile write must judge the
+      // answer by that request's start, or it would accept a snapshot its own
+      // start already predates and undo the rename the first waiter preserved.
+      const { promise, writesAtStart } = requestSessionRefresh(
         sessionUserId,
         sessionId,
         () => !isStaleSession(getState().auth, sessionUserId, sessionId)
       );
+      const response = await promise;
       // A logout, account switch, or a fresh sign-in may have completed while
       // the request was in flight. Applying the response now would restore the
       // previous identity (and re-point IndexedDB at it) after its local data
@@ -183,6 +211,20 @@ export const refreshSessionThunk = createAsyncThunk<
         return rejectWithValue('stale');
       }
       indexedDBService.setUserId(response.user.id);
+      // A profile write that committed while this request was in flight makes the
+      // answer's account snapshot older than the store. Keep the store's profile and
+      // let the rotated token through; with no local write, the answer is the one that
+      // carries another tab's changes. Only the same account may keep its local
+      // profile: sibling tabs share one refresh cookie, so this answer can belong to
+      // an account that signed in elsewhere, and its token must never be paired with
+      // the profile of the account this tab was showing.
+      if (
+        current.user &&
+        current.user.id === response.user.id &&
+        profileWriteCountFor(current.user.id, sessionId) !== writesAtStart
+      ) {
+        return { ...response, user: current.user };
+      }
       return response;
     } catch (err: unknown) {
       // The failure may belong to a session that was replaced while the request
@@ -217,6 +259,83 @@ export const refreshSessionThunk = createAsyncThunk<
     },
   }
 );
+
+export type ProfileUpdate = { displayName: string } | { avatar: File } | { removeAvatar: true };
+
+/** Thrown inside the write queue when the login that queued the write is gone. */
+class SessionChangedError extends Error {}
+
+interface ProfileMutationResult {
+  user: AuthUser;
+  /** The session that dispatched the mutation, so a later login cannot receive it. */
+  sessionId: number;
+}
+
+/**
+ * Each answer carries the whole account, so two writes in flight can answer out of
+ * order and the older answer would restore the other field's previous value. One at a
+ * time; the queue lives here so a closed dialog cannot leave a second write unqueued.
+ */
+let profileWriteQueue: Promise<unknown> = Promise.resolve();
+
+function serializeProfileWrite<T>(write: () => Promise<T>): Promise<T> {
+  const result = profileWriteQueue.then(write);
+  profileWriteQueue = result.catch(() => undefined);
+  return result;
+}
+
+/**
+ * Every profile mutation answers with the whole account, so the store, the session
+ * snapshot and therefore the sidebar chip, comment avatars and member rows all move
+ * together from one place.
+ */
+export const updateProfileThunk = createAsyncThunk<
+  ProfileMutationResult,
+  ProfileUpdate,
+  { state: { auth: AuthState }; rejectValue: string }
+>('auth/updateProfile', async (update, { getState, rejectWithValue }) => {
+  const { accessToken, user, sessionId } = getState().auth;
+  if (!accessToken || !user) {
+    return rejectWithValue('You need to be signed in to change your profile.');
+  }
+  const userId = user.id;
+
+  try {
+    const updated = await serializeProfileWrite(() => {
+      // A write can wait a while behind another one. Sending it with the token
+      // captured before that wait would still change this browser's previous
+      // account after a logout, and would present a token a rotation has
+      // already replaced. The session guard in the reducer only discards the
+      // answer; the request itself must not go out.
+      const current = getState().auth;
+      if (
+        current.sessionId !== sessionId ||
+        (current.user?.id ?? null) !== userId ||
+        !current.accessToken
+      ) {
+        throw new SessionChangedError();
+      }
+      const token = current.accessToken;
+      if ('displayName' in update) {
+        return profileApiService.updateDisplayName(token, update.displayName);
+      }
+      if ('avatar' in update) {
+        return profileApiService.uploadAvatar(token, update.avatar);
+      }
+      return profileApiService.removeAvatar(token);
+    });
+    recordProfileWrite(userId, sessionId);
+    return { user: updated, sessionId };
+  } catch (err) {
+    if (err instanceof SessionChangedError) {
+      return rejectWithValue('You need to be signed in to change your profile.');
+    }
+    // The API's message is the one worth showing: it says why a photo was refused.
+    return rejectWithValue(
+      err instanceof Error && err.message ? err.message : 'Could not update your profile.'
+    );
+  }
+});
 
 export const logoutThunk = createAsyncThunk<void, void, { state: { auth: AuthState } }>(
   'auth/logout',
@@ -277,6 +396,24 @@ const authSlice = createSlice({
         }
       });
 
+    builder.addCase(updateProfileThunk.fulfilled, (state, action) => {
+      // A profile answer that lands after the session changed belongs to the account
+      // and login that asked for it, not to the one looking at the dialog now — and a
+      // signed-out store must stay signed out: the token is gone, so there is nobody to
+      // show. The id alone is not enough: signing out and back in to the same account
+      // is a different session.
+      const { user, sessionId } = action.payload;
+      if (
+        !state.user ||
+        !state.accessToken ||
+        state.user.id !== user.id ||
+        state.sessionId !== sessionId
+      ) {
+        return;
+      }
+      state.user = user;
+    });
+
     builder.addCase(logoutThunk.fulfilled, (state) => {
       state.user = null;
       state.accessToken = null;
@@ -303,6 +440,14 @@ authListenerMiddleware.startListening({
       attachmentService.resetAttachmentUrlCache();
     }
     documentService.clearSessionRegistries();
+    persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
+  },
+});
+authListenerMiddleware.startListening({
+  actionCreator: updateProfileThunk.fulfilled,
+  // A rename or a new photo has to survive a reload, and the snapshot is the only
+  // place that identity is kept between sessions.
+  effect: async (_action, listenerApi) => {
     persistAuthSnapshot((listenerApi.getState() as { auth: AuthState }).auth);
   },
 });

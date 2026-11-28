@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
+import { SIDEBAR_WIDTH_BOOTSTRAP_SCRIPT } from '@/lib/sidebar-width.util';
+import { SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT } from '@/lib/sidebar-preferences.util';
 import '@/styles/globals.css';
 
 const inter = Inter({
@@ -82,6 +84,17 @@ export default function RootLayout({
             __html: `(function(){try{var t=localStorage.getItem('theme')||'system';var d=document.documentElement;var dark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(dark)d.classList.add('dark');d.setAttribute('data-theme',t);}catch(e){}})();`,
           }}
         />
+        {/* The rail's stored width has the same problem as the theme: React
+            cannot know it until it runs, and by then the shell has painted the
+            CSS default and the rail animates out to the stored width. Both
+            scripts must stay blocking and in `<head>` so the first paint is
+            already the final size. */}
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_WIDTH_BOOTSTRAP_SCRIPT }} />
+        {/* The rail's collapsed state has the same problem: React unmounts the
+            rail, but the server's expanded markup paints first. Resolving it
+            into `data-nd-sidebar` lets CSS hide it on the first frame, and the
+            store follows in an effect without moving what is on screen. */}
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_PREFERENCES_BOOTSTRAP_SCRIPT }} />
       </head>
       <body>{children}</body>
     </html>

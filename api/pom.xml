@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.1.2</version>
+		<version>4.2.0</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.nextdocs</groupId>
@@ -170,15 +170,6 @@
 		for Docker builds, avoiding version-dependent paths. -->
 		<finalName>app</finalName>
 		<plugins>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-surefire-plugin</artifactId>
-				<configuration>
-					<systemPropertyVariables>
-						<oauth.token.encryption.key-base64>dGVzdGtleTB0ZXN0a2V5MHRlc3RrZXkwdGVzdGtleTA=</oauth.token.encryption.key-base64>
-					</systemPropertyVariables>
-				</configuration>
-			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>

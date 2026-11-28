@@ -3,6 +3,7 @@ package com.nextdocs.api.document.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nextdocs.api.PostgresTestSupport;
+import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -33,16 +34,19 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
  *
  * | Scenario                   | Setup / Context                                  | Resolved    | Rule / Why                                         |
  * |----------------------------|--------------------------------------------------|-------------|----------------------------------------------------|
- * | Standalone page creator    | Doc outside space (space_id is null)             | OWNER       | Creator is implicit owner on standalone pages.     |
+ * | Standalone page creator    | Doc outside space, no direct page grant          | OWNER       | Creator's implicit owner grant.                    |
+ * | Creator with page grant    | Doc outside space, direct page grant (EDIT)      | EDIT        | A direct grant replaces the implicit creator grant.|
  * | Space page creator         | Doc in space, creator has no space membership    | NULL        | In spaces, creator is attribution only.            |
- * | Public space default       | Public space (VIEW), workspace member            | VIEW        | Public space baseline applies to workspace members.|
- * | Space member vs default    | Public space (EDIT), member role set to VIEW     | EDIT        | Highest level wins across space sources.           |
- * | Page grant raises space    | Space baseline (VIEW), page user grant (EDIT)    | EDIT        | Nearest page grant overrides space baseline.       |
+ * | Public space audience      | Public space (VIEW), workspace member            | VIEW        | A space audience is the page's outermost ancestor. |
+ * | Space member vs audience   | Public space (EDIT), member role set to VIEW     | EDIT        | Highest level wins across space sources.           |
+ * | Space has no link channel  | Public space (EDIT), anonymous reader            | NULL        | A space never holds an Anyone-with-the-link grant. |
+ * | Page grant raises space    | Space audience (VIEW), page user grant (EDIT)    | EDIT        | Nearest page grant overrides the space grant.      |
  * | Lower grant on child page  | Parent grant (EDIT), child page grant (VIEW)     | VIEW        | Nearest page grant overrides ancestor grant.       |
  * | Page block (NO_ACCESS)     | Parent grant (EDIT), child set to NO_ACCESS      | NO_ACCESS   | Nearest DENY shadows all inherited grants.         |
  * | Grant re-opens below block | Ancestor (NO_ACCESS), child page grant (EDIT)    | EDIT        | Nearer grant re-opens access below a barrier.      |
  * | User grant vs group grant  | Group grant (EDIT) + User grant (VIEW) at page   | EDIT        | Highest level wins across multiple sources.        |
- * | Workspace vs space access  | Space (EDIT) + Page workspace audience (VIEW)    | EDIT        | Highest level wins across multiple sources.        |
+ * | Page overrides space       | Space audience (EDIT), page audience (VIEW)      | VIEW        | The space audience is the workspace channel's own. |
+ * | Page blocks space          | Space audience (EDIT), page workspace block      | NULL        | A page shadows the space audience; members keep.   |
  * | User ALLOW vs group DENY   | Group (DENY) + User grant (VIEW) at same page    | VIEW        | Specific user grant survives group deny at page.   |
  * | Public link + page DENY    | Identity (NO_ACCESS) + Live public link (VIEW)   | VIEW        | Broadest wins: public link is independent channel. |
  * | Expired public link        | Child link expired + Parent link active (VIEW)   | VIEW        | Expired link is ignored; ancestor link applies.    |
@@ -50,8 +54,10 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
  * | Trashed document           | Trashed doc with pre-trash EDIT + live link VIEW | EDIT (Trash)| Trash scope keeps pre-trash identity; link ignored.|
  * </pre>
  *
- * <p>Effective access: Highest level wins across multiple sources (Group, Member, Space,
- * Workspace Audience, Public Link). Inheritance vs override: Nearest scope wins (depth ASC).
+ * <p>Effective access: within one channel the nearest scope wins (depth ASC), and a
+ * space's audience is the outermost ancestor of the page's workspace audience channel.
+ * Across independent channels (page grant, space membership, workspace audience, public
+ * link) the strongest level wins.
  */
 class PermissionGoldenMatrixPostgresTest {
 
@@ -124,7 +130,7 @@ class PermissionGoldenMatrixPostgresTest {
         UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
 
         assertThat(resolveAccess(member, page)).isEqualTo("VIEW");
-        // user_id is attribution inside a space (V37), so the baseline applies to the creator too.
+        // created_by is attribution inside a space, so the baseline applies to the creator too.
         assertThat(resolveAccess(ownerId, page)).isEqualTo("VIEW");
         // A PUBLIC space is workspace-public, never internet-public.
         assertThat(resolveAccess(outsider, page)).isNull();
@@ -319,11 +325,21 @@ class PermissionGoldenMatrixPostgresTest {
     // ─── Cases 20-21: creator attribution inside a space vs ownership outside one ────
 
     @Test
+    void standaloneCreator_withAPageGrant_holdsThatLevelInsteadOfOwner() throws SQLException {
+        UUID page = insertDoc(ownerId, null, null, null, null, false, false);
+        assertThat(resolveAccess(ownerId, page)).isEqualTo("OWNER");
+
+        insertCollaborator(page, ownerId, "EDIT");
+
+        assertThat(resolveAccess(ownerId, page)).isEqualTo("EDIT");
+    }
+
+    @Test
     void pageInSpace_treatsCreatorAsAttributionOnly() throws SQLException {
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
         UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
 
-        // The creator is not a space member, so user_id grants nothing inside the space.
+        // The creator is not a space member, so attribution grants nothing inside the space.
         assertThat(resolveAccess(ownerId, page)).isNull();
 
         insertSpaceMember(spaceId, ownerId, "EDIT");
@@ -337,6 +353,18 @@ class PermissionGoldenMatrixPostgresTest {
 
         assertThat(resolveAccess(ownerId, page)).isEqualTo("OWNER");
         assertThat(resolveAccess(stranger, page)).isNull();
+    }
+
+    @Test
+    void privateDescendantsInheritCreatorsParentOverride() throws SQLException {
+        UUID root = insertDoc(ownerId, null, null, null, null, false, false);
+        UUID parent = insertDoc(ownerId, root, null, null, null, false, false);
+        UUID child = insertDoc(ownerId, parent, null, null, null, false, false);
+        insertCollaborator(parent, ownerId, "EDIT");
+
+        assertThat(resolveAccess(ownerId, root)).isEqualTo("OWNER");
+        assertThat(resolveAccess(ownerId, parent)).isEqualTo("EDIT");
+        assertThat(resolveAccess(ownerId, child)).isEqualTo("EDIT");
     }
 
     // ─── Invariant: one grant wins, and batch resolution agrees with single checks ────
@@ -370,33 +398,118 @@ class PermissionGoldenMatrixPostgresTest {
         assertThat(batch.get(linkPage)).isEqualTo("COMMENT");
     }
 
-    // ─── Page audience rules and the grant store ─────────────────────────────────────
+    // ─── A space is a permission container: its audience is overridable ──────────────
 
     @Test
-    void pageAudienceNoAccess_blocksInheritedGrantAndExplicitShareReopens() throws SQLException {
+    void spaceAudience_isOverriddenByAPageWorkspaceAudience() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("PUBLIC", "EDIT");
+        UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
+
+        // The page narrows the space audience for everyone who is not a listed member.
+        setWorkspaceAccess(page, "WORKSPACE_MEMBERS", "VIEW", false);
+        assertThat(resolveAccess(member, page)).isEqualTo("VIEW");
+
+        // And it can widen it again, exactly like an ancestor page's audience.
+        setWorkspaceAccess(page, "WORKSPACE_MEMBERS", "COMMENT", false);
+        assertThat(resolveAccess(member, page)).isEqualTo("COMMENT");
+    }
+
+    @Test
+    void spaceAudience_isBlockedByAPageBlock() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("PUBLIC", "EDIT");
+        UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
+
+        setWorkspaceAccess(page, "RESTRICTED", "VIEW", true);
+
+        // The page is no longer workspace-readable, but its space members keep their grant.
+        assertThat(resolveAccess(member, page)).isNull();
+
+        UUID spaceMember = insertMember("MEMBER");
+        insertSpaceMember(spaceId, spaceMember, "EDIT");
+        assertThat(resolveAccess(spaceMember, page)).isEqualTo("EDIT");
+    }
+
+    @Test
+    void spaceAudience_blockOnASpaceChildShadowsTheSpaceGrant() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("PUBLIC", "VIEW");
+        UUID root = insertDoc(ownerId, null, spaceId, null, null, false, false);
+        UUID child = insertDoc(ownerId, root, null, null, null, false, false);
+
+        assertThat(resolveAccess(member, child)).isEqualTo("VIEW");
+
+        setWorkspaceAccess(child, "RESTRICTED", "VIEW", true);
+
+        assertThat(resolveAccess(member, root)).isEqualTo("VIEW");
+        assertThat(resolveAccess(member, child)).isNull();
+        assertThat(hasPositiveIdentityGrant(member, child)).isFalse();
+    }
+
+    @Test
+    void spaceAudience_isNotAWorkspaceShareInTrash() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("PUBLIC", "EDIT");
+        UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
+        UUID spaceMember = insertMember("MEMBER");
+        insertSpaceMember(spaceId, spaceMember, "EDIT");
+
+        assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
+        // Trash keeps a listed member's grant, and excludes the everyone audience, like
+        // a page's own workspace audience.
+        assertThat(resolveTrashAccess(spaceMember, page)).isEqualTo("EDIT");
+        assertThat(resolveTrashAccess(member, page)).isNull();
+    }
+
+    @Test
+    void spaceAudience_canBeCombinedWithAnOwnLinkOnTheSamePage() throws SQLException {
+        UUID outsider = insertUser();
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("CUSTOM", "VIEW");
+        UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
+
+        setWorkspaceAccess(page, "RESTRICTED", "VIEW", true);
+
+        // A space never holds a link grant, but a page inside one may.
+        UUID linked = insertDoc(ownerId, null, spaceId, "ANYONE_WITH_LINK", "VIEW", false, false);
+        // A block on the workspace channel must not shadow the independent link channel.
+        setWorkspaceAccess(linked, "RESTRICTED", "VIEW", true);
+        assertThat(resolvePublicAccess(linked)).isEqualTo("VIEW");
+        assertThat(resolveAccess(outsider, linked)).isEqualTo("VIEW");
+        assertThat(resolveAccess(member, linked)).isEqualTo("VIEW");
+        assertThat(resolveAccess(member, page)).isNull();
+    }
+
+    // ─── Page grants and the grant store ─────────────────────────────────────────────
+
+    @Test
+    void pageDeny_blocksInheritedGrantAndExplicitShareReopens() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
         insertSpaceMember(spaceId, member, "EDIT");
         UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
 
-        insertAccessGrant(page, null, null, "SPACE_MEMBERS", "DENY", null);
+        insertCollaborator(page, member, "NO_ACCESS");
         assertThat(resolveAccess(member, page)).isEqualTo("NO_ACCESS");
 
-        insertAccessGrant(page, member, null, null, "ALLOW", "EDIT");
+        insertCollaborator(page, member, "EDIT");
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
     }
 
     @Test
-    void pageAudienceAllow_replacesTheSpaceBaseline() throws SQLException {
+    void lowerPageGrant_doesNotDemoteHigherSpaceMembership() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
         insertSpaceMember(spaceId, member, "EDIT");
         UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
 
-        insertAccessGrant(page, null, null, "SPACE_MEMBERS", "ALLOW", "VIEW");
-        assertThat(resolveAccess(member, page)).isEqualTo("VIEW");
+        insertCollaborator(page, member, "VIEW");
+        // Page grants and space membership are independent: a lower page row doesn't
+        // override the higher membership, it only supplies another (weaker) source.
+        assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
 
-        insertAccessGrant(page, member, null, null, "ALLOW", "EDIT");
+        insertCollaborator(page, member, "EDIT");
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
     }
 
@@ -405,7 +518,7 @@ class PermissionGoldenMatrixPostgresTest {
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
         insertSpaceMember(spaceId, ownerId, "OWNER");
         UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
-        insertAccessGrant(page, ownerId, null, null, "DENY", null);
+        insertAccessGrant(page, ownerId, null, "DENY", null);
 
         assertThat(resolveAccess(ownerId, page)).isEqualTo("NO_ACCESS");
         assertThat(resolveTrashAccess(ownerId, page)).isEqualTo("NO_ACCESS");
@@ -416,7 +529,7 @@ class PermissionGoldenMatrixPostgresTest {
     }
 
     @Test
-    void spaceOwner_childOverrideCanBeChangedAndRemoved() throws SQLException {
+    void spaceOwner_pageGrantDoesNotDemoteInheritedOwnership() throws SQLException {
         UUID spaceOwner = insertMember("MEMBER");
         UUID spaceId = insertSpace("CUSTOM", "VIEW");
         insertSpaceMember(spaceId, spaceOwner, "OWNER");
@@ -426,9 +539,11 @@ class PermissionGoldenMatrixPostgresTest {
         insertCollaborator(child, spaceOwner, "VIEW");
 
         assertThat(resolveAccess(spaceOwner, root)).isEqualTo("OWNER");
-        assertThat(resolveAccess(spaceOwner, child)).isEqualTo("VIEW");
-        assertThat(resolveAccess(spaceOwner, grandchild)).isEqualTo("VIEW");
-        assertThat(resolveTrashAccess(spaceOwner, child)).isEqualTo("VIEW");
+        // The page row is resolved inside the page-grant source, but space OWNER is a
+        // higher independent source, so the combined level stays OWNER here.
+        assertThat(resolveAccess(spaceOwner, child)).isEqualTo("OWNER");
+        assertThat(resolveAccess(spaceOwner, grandchild)).isEqualTo("OWNER");
+        assertThat(resolveTrashAccess(spaceOwner, child)).isEqualTo("OWNER");
 
         for (String level : List.of("COMMENT", "EDIT", "VIEW")) {
             jdbc().update(
@@ -436,11 +551,11 @@ class PermissionGoldenMatrixPostgresTest {
                             new MapSqlParameterSource("id", child)
                                     .addValue("userId", spaceOwner)
                                     .addValue("level", level));
-            assertThat(resolveAccess(spaceOwner, child)).isEqualTo(level);
-            assertThat(resolveAccess(spaceOwner, grandchild)).isEqualTo(level);
+            assertThat(resolveAccess(spaceOwner, child)).isEqualTo("OWNER");
+            assertThat(resolveAccess(spaceOwner, grandchild)).isEqualTo("OWNER");
             assertThat(resolveIdentityAccessBatch(spaceOwner, List.of(child, grandchild)))
-                    .containsEntry(child, level)
-                    .containsEntry(grandchild, level);
+                    .containsEntry(child, "OWNER")
+                    .containsEntry(grandchild, "OWNER");
         }
 
         jdbc().update("DELETE FROM access_grants WHERE document_id = :id", new MapSqlParameterSource("id", child));
@@ -450,13 +565,106 @@ class PermissionGoldenMatrixPostgresTest {
     }
 
     @Test
+    void ancestorPageOwner_beatsChildWorkspaceAudienceView() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID root = insertDoc(ownerId, null, null, null, null, false, false);
+        UUID child = insertDoc(ownerId, root, null, null, null, false, false);
+        insertCollaborator(root, member, "OWNER");
+        setWorkspaceAccess(child, "WORKSPACE_MEMBERS", "VIEW", false);
+
+        // Regression: the child audience is nearest, but it is an independent source.
+        // Depth across sources is not a ranking; OWNER wins.
+        assertThat(resolveAccess(member, child)).isEqualTo("OWNER");
+    }
+
+    @Test
+    void pageAudienceOverride_stillWinsInsideItsOwnChannel() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID root = insertDoc(ownerId, null, null, null, null, false, false);
+        setWorkspaceAccess(root, "WORKSPACE_MEMBERS", "EDIT", false);
+        UUID child = insertDoc(ownerId, root, null, null, null, false, false);
+        setWorkspaceAccess(child, "WORKSPACE_MEMBERS", "VIEW", false);
+
+        // No other source: the child's audience is the nearest rule in that channel.
+        assertThat(resolveAccess(member, child)).isEqualTo("VIEW");
+        // And its own child inherits that nearest rule, never the stronger ancestor.
+        UUID grandchild = insertDoc(ownerId, child, null, null, null, false, false);
+        assertThat(resolveAccess(member, grandchild)).isEqualTo("VIEW");
+    }
+
+    @Test
+    void combinedLevel_isTheMaximumIndependentSource() throws SQLException {
+        UUID member = insertMember("MEMBER");
+        UUID spaceId = insertSpace("CUSTOM", "VIEW");
+        insertSpaceMember(spaceId, member, "COMMENT");
+        UUID page = insertDoc(ownerId, null, spaceId, "ANYONE_WITH_LINK", "EDIT", false, false);
+        insertCollaborator(page, member, "VIEW");
+        setWorkspaceAccess(page, "WORKSPACE_MEMBERS", "VIEW", false);
+
+        // page VIEW, space COMMENT, audience VIEW, link EDIT -> EDIT
+        assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
+
+        // Removing the highest source falls back to the next highest, never lower.
+        jdbc().update(
+                        "UPDATE documents SET general_access_mode = 'RESTRICTED' WHERE id = :id",
+                        new MapSqlParameterSource("id", page));
+        assertThat(resolveAccess(member, page)).isEqualTo("COMMENT");
+
+        insertCollaborator(page, member, "COMMENT");
+        assertThat(resolveAccess(member, page)).isEqualTo("COMMENT");
+    }
+
+    @Test
+    void sourceCombinations_areAlwaysTheMaximumOfTheirOwnRules() throws SQLException {
+        record Case(String space, String page, String audience, String link, String expected) {}
+
+        List<Case> cases = List.of(
+                new Case(null, "VIEW", "COMMENT", null, "COMMENT"),
+                new Case(null, "EDIT", "VIEW", null, "EDIT"),
+                new Case(null, null, "VIEW", "COMMENT", "COMMENT"),
+                new Case("EDIT", "VIEW", "COMMENT", null, "EDIT"),
+                new Case("VIEW", "COMMENT", "EDIT", null, "EDIT"),
+                new Case("EDIT", "OWNER", "VIEW", "COMMENT", "OWNER"),
+                new Case("COMMENT", null, "VIEW", "EDIT", "EDIT"));
+
+        for (Case testCase : cases) {
+            UUID member = insertMember("MEMBER");
+            UUID spaceId = null;
+            if (testCase.space() != null) {
+                spaceId = insertSpace("CUSTOM", "VIEW");
+                insertSpaceMember(spaceId, member, testCase.space());
+            }
+            UUID page = insertDoc(
+                    ownerId,
+                    null,
+                    spaceId,
+                    testCase.link() == null ? null : "ANYONE_WITH_LINK",
+                    testCase.link(),
+                    false,
+                    false);
+            if (testCase.page() != null) {
+                insertCollaborator(page, member, testCase.page());
+            }
+            if (testCase.audience() != null) {
+                setWorkspaceAccess(page, "WORKSPACE_MEMBERS", testCase.audience(), false);
+            }
+
+            assertThat(resolveAccess(member, page))
+                    .as(
+                            "space=%s page=%s audience=%s link=%s",
+                            testCase.space(), testCase.page(), testCase.audience(), testCase.link())
+                    .isEqualTo(testCase.expected());
+        }
+    }
+
+    @Test
     void groupDenyAtTheSamePage_doesNotBeatAUserAllow() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID groupId = insertGroup("Page group");
         insertGroupMember(groupId, member);
         UUID page = insertDoc(ownerId, null, null, null, null, false, false);
 
-        insertAccessGrant(page, null, groupId, null, "DENY", null);
+        insertAccessGrant(page, null, groupId, "DENY", null);
         assertThat(resolveAccess(member, page)).isEqualTo("NO_ACCESS");
 
         // The user row is more specific than a group deny at the same page.
@@ -472,20 +680,20 @@ class PermissionGoldenMatrixPostgresTest {
         UUID page = insertDoc(ownerId, null, null, null, null, false, false);
 
         // Group EDIT + Direct user NO_ACCESS at same page -> EDIT
-        insertAccessGrant(page, null, groupId, null, "ALLOW", "EDIT");
-        insertAccessGrant(page, member, null, null, "DENY", null);
+        insertAccessGrant(page, null, groupId, "ALLOW", "EDIT");
+        insertAccessGrant(page, member, null, "DENY", null);
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
 
         // Group VIEW + Direct user NO_ACCESS at same page -> VIEW
         UUID page2 = insertDoc(ownerId, null, null, null, null, false, false);
-        insertAccessGrant(page2, null, groupId, null, "ALLOW", "VIEW");
-        insertAccessGrant(page2, member, null, null, "DENY", null);
+        insertAccessGrant(page2, null, groupId, "ALLOW", "VIEW");
+        insertAccessGrant(page2, member, null, "DENY", null);
         assertThat(resolveAccess(member, page2)).isEqualTo("VIEW");
 
         // Group NO_ACCESS + Direct user NO_ACCESS at same page -> NO_ACCESS
         UUID page3 = insertDoc(ownerId, null, null, null, null, false, false);
-        insertAccessGrant(page3, null, groupId, null, "DENY", null);
-        insertAccessGrant(page3, member, null, null, "DENY", null);
+        insertAccessGrant(page3, null, groupId, "DENY", null);
+        insertAccessGrant(page3, member, null, "DENY", null);
         assertThat(resolveAccess(member, page3)).isEqualTo("NO_ACCESS");
     }
 
@@ -497,8 +705,8 @@ class PermissionGoldenMatrixPostgresTest {
         UUID parent = insertDoc(ownerId, null, null, null, null, false, false);
         UUID child = insertDoc(ownerId, parent, null, null, null, false, false);
 
-        insertAccessGrant(parent, null, groupId, null, "ALLOW", "EDIT");
-        insertAccessGrant(child, member, null, null, "DENY", null);
+        insertAccessGrant(parent, null, groupId, "ALLOW", "EDIT");
+        insertAccessGrant(child, member, null, "DENY", null);
 
         assertThat(resolveAccess(member, parent)).isEqualTo("EDIT");
         assertThat(resolveAccess(member, child)).isEqualTo("NO_ACCESS");
@@ -681,7 +889,7 @@ class PermissionGoldenMatrixPostgresTest {
 
         UUID standaloneRoot = insertDoc(ownerId, null, null, null, null, false, false);
         UUID standaloneChild = insertDoc(ownerId, standaloneRoot, null, null, null, false, false);
-        insertAccessGrant(standaloneRoot, member, null, null, "ALLOW", "EDIT");
+        insertAccessGrant(standaloneRoot, member, null, "ALLOW", "EDIT");
 
         assertThat(hasPositiveIdentityGrant(member, standaloneChild)).isTrue();
         assertThat(hasPositiveIdentityGrant(ownerId, standaloneChild)).isTrue();
@@ -689,12 +897,12 @@ class PermissionGoldenMatrixPostgresTest {
         UUID group = insertGroup("Roster editors");
         UUID groupMember = insertMember("MEMBER");
         insertGroupMember(group, groupMember);
-        insertAccessGrant(standaloneRoot, null, group, null, "ALLOW", "EDIT");
+        insertAccessGrant(standaloneRoot, null, group, "ALLOW", "EDIT");
 
         assertThat(hasPositiveIdentityGrant(groupMember, standaloneChild)).isTrue();
 
         UUID denyOnly = insertMember("MEMBER");
-        insertAccessGrant(standaloneChild, denyOnly, null, null, "DENY", null);
+        insertAccessGrant(standaloneChild, denyOnly, null, "DENY", null);
         assertThat(hasPositiveIdentityGrant(denyOnly, standaloneChild)).isFalse();
 
         UUID linkOnly = insertDoc(ownerId, null, null, "ANYONE_WITH_LINK", "VIEW", false, false);
@@ -713,12 +921,33 @@ class PermissionGoldenMatrixPostgresTest {
     }
 
     @Test
+    void creatorPageGrantIsTheRosterIdentitySourceThatReplacesImplicitOwnership() throws SQLException {
+        boolean rosterVisible =
+                hasPositiveIdentityGrant(ownerId, insertDoc(ownerId, null, null, null, null, false, false));
+        assertThat(rosterVisible).as("the creator OWNER row qualifies").isTrue();
+
+        // A direct page grant replaces the implicit creator grant, so the roster gate
+        // has to read that grant instead of the creator identity.
+        UUID granted = insertDoc(ownerId, null, null, null, null, false, false);
+        insertCollaborator(granted, ownerId, "EDIT");
+        assertThat(resolveAccess(ownerId, granted)).isEqualTo("EDIT");
+        assertThat(hasPositiveIdentityGrant(ownerId, granted)).isTrue();
+
+        // The API refuses to block the creator, but the SQL contract is still
+        // "a direct row replaces the implicit grant" for every level.
+        UUID blocked = insertDoc(ownerId, null, null, null, null, false, false);
+        insertCollaborator(blocked, ownerId, "NO_ACCESS");
+        assertThat(resolveAccess(ownerId, blocked)).isEqualTo("NO_ACCESS");
+        assertThat(hasPositiveIdentityGrant(ownerId, blocked)).isFalse();
+    }
+
+    @Test
     void ancestorAllowAndPageDenyStillQualifyWhenLiveLinkWinsBroadestAccess() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID root = insertDoc(ownerId, null, null, null, null, false, false);
         UUID child = insertDoc(ownerId, root, null, "ANYONE_WITH_LINK", "VIEW", false, false);
-        insertAccessGrant(root, member, null, null, "ALLOW", "EDIT");
-        insertAccessGrant(child, member, null, null, "DENY", null);
+        insertAccessGrant(root, member, null, "ALLOW", "EDIT");
+        insertAccessGrant(child, member, null, "DENY", null);
 
         // The independent link grants access; the inherited identity source still
         // qualifies for the roster gate even though its access is blocked here.
@@ -743,7 +972,7 @@ class PermissionGoldenMatrixPostgresTest {
         UUID group = insertGroup("Former member group");
         insertGroupMember(group, removedMember);
         UUID page = insertDoc(ownerId, null, null, null, null, false, false);
-        insertAccessGrant(page, null, group, null, "ALLOW", "EDIT");
+        insertAccessGrant(page, null, group, "ALLOW", "EDIT");
 
         assertThat(resolveAccess(removedMember, page)).isNull();
         assertThat(hasPositiveIdentityGrant(removedMember, page)).isFalse();
@@ -755,10 +984,10 @@ class PermissionGoldenMatrixPostgresTest {
         UUID group = insertGroup("Shared listing group");
         insertGroupMember(group, member);
         UUID page = insertDoc(ownerId, null, null, null, null, false, false);
-        insertAccessGrant(page, null, group, null, "ALLOW", "VIEW");
+        insertAccessGrant(page, null, group, "ALLOW", "VIEW");
 
         List<UUID> sharedIds = jdbc().queryForList(
-                        "SELECT d.id FROM documents d WHERE d.user_id <> :userId AND d.deleted_at IS NULL "
+                        "SELECT d.id FROM documents d WHERE d.deleted_at IS NULL "
                                 + "AND resolve_identity_access(:userId, d.id, 'ACTIVE') IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER')",
                         new MapSqlParameterSource("userId", member),
                         UUID.class);
@@ -773,9 +1002,9 @@ class PermissionGoldenMatrixPostgresTest {
         UUID root = insertDoc(ownerId, null, spaceId, null, null, false, false);
         UUID child = insertDoc(ownerId, root, null, null, null, false, false);
         UUID standalone = insertDoc(ownerId, null, null, null, null, false, false);
-        insertAccessGrant(root, member, null, null, "ALLOW", "VIEW");
-        insertAccessGrant(child, member, null, null, "DENY", null);
-        insertAccessGrant(standalone, member, null, null, "ALLOW", "EDIT");
+        insertAccessGrant(root, member, null, "ALLOW", "VIEW");
+        insertAccessGrant(child, member, null, "DENY", null);
+        insertAccessGrant(standalone, member, null, "ALLOW", "EDIT");
 
         MapSqlParameterSource params =
                 new MapSqlParameterSource().addValue("spaceId", spaceId).addValue("userId", member);
@@ -820,7 +1049,9 @@ class PermissionGoldenMatrixPostgresTest {
         insertCollaborator(page, member, "COMMENT");
 
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
-        assertThat(resolveTrashAccess(member, page)).isEqualTo("COMMENT");
+        // Trash drops the audience but keeps the independent space membership, so the
+        // lower page row still cannot demote the higher EDIT grant.
+        assertThat(resolveTrashAccess(member, page)).isEqualTo("EDIT");
 
         jdbc().update("DELETE FROM access_grants WHERE document_id = :id", new MapSqlParameterSource("id", page));
 
@@ -836,33 +1067,28 @@ class PermissionGoldenMatrixPostgresTest {
 
         assertThat(resolveAccess(ownerId, root)).isEqualTo("OWNER");
         assertThat(resolveAccess(ownerId, child)).isEqualTo("VIEW");
-        assertThat(resolveAccess(childOwner, child)).isEqualTo("OWNER");
+        assertThat(resolveAccess(childOwner, child)).isNull();
     }
 
     @Test
-    void groupAndAudienceGrant_highestLevelWinsOverLowerUserGrantAtSamePage() throws SQLException {
+    void groupGrant_highestLevelWinsOverLowerUserGrantAtSamePage() throws SQLException {
         UUID member = insertMember("MEMBER");
         UUID group = insertGroup("Editors");
         insertGroupMember(group, member);
-        UUID spaceId = insertSpace("CUSTOM", "VIEW");
-        insertSpaceMember(spaceId, member, "EDIT");
-        UUID page = insertDoc(ownerId, null, spaceId, null, null, false, false);
-        insertAccessGrant(page, null, group, null, "ALLOW", "EDIT");
-        insertAccessGrant(page, null, null, "SPACE_MEMBERS", "ALLOW", "EDIT");
+        UUID page = insertDoc(ownerId, null, null, null, null, false, false);
+        insertAccessGrant(page, null, group, "ALLOW", "EDIT");
         insertCollaborator(page, member, "VIEW");
 
         assertThat(resolveAccess(member, page)).isEqualTo("EDIT");
     }
 
     @Test
-    void nearerAudienceOverride_replacesStrongerAncestorUserGrant() throws SQLException {
+    void nearerPageGrant_replacesStrongerAncestorUserGrant() throws SQLException {
         UUID member = insertMember("MEMBER");
-        UUID spaceId = insertSpace("CUSTOM", "VIEW");
-        insertSpaceMember(spaceId, member, "EDIT");
-        UUID root = insertDoc(ownerId, null, spaceId, null, null, false, false);
+        UUID root = insertDoc(ownerId, null, null, null, null, false, false);
         UUID child = insertDoc(ownerId, root, null, null, null, false, false);
         insertCollaborator(root, member, "EDIT");
-        insertAccessGrant(child, null, null, "SPACE_MEMBERS", "ALLOW", "VIEW");
+        insertCollaborator(child, member, "VIEW");
 
         assertThat(resolveAccess(member, child)).isEqualTo("VIEW");
     }
@@ -907,6 +1133,17 @@ class PermissionGoldenMatrixPostgresTest {
     }
 
     // ─── Fixtures ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void javaAccessRank_matchesTheSqlRankFunction() throws SQLException {
+        for (DocumentAccessLevel level : DocumentAccessLevel.values()) {
+            int sqlRank = jdbc().queryForObject(
+                            "SELECT access_level_rank(:level)",
+                            new MapSqlParameterSource("level", level.name()),
+                            Integer.class);
+            assertThat(sqlRank).as("rank of %s", level).isEqualTo(level.rank());
+        }
+    }
 
     private UUID insertWorkspace() throws SQLException {
         UUID id = UUID.randomUUID();
@@ -977,7 +1214,7 @@ class PermissionGoldenMatrixPostgresTest {
             boolean trashed)
             throws SQLException {
         UUID id = UUID.randomUUID();
-        String sql = "INSERT INTO documents (id, user_id, workspace_id, parent_id, space_id, title, "
+        String sql = "INSERT INTO documents (id, created_by, workspace_id, parent_id, space_id, title, "
                 + "general_access_mode, link_access_level, link_inherit_blocked, sibling_order_key, deleted_at, "
                 + "created_at, updated_at) "
                 + "VALUES (?, ?, (SELECT workspace_id FROM workspace_members ORDER BY created_at LIMIT 1), "
@@ -999,6 +1236,11 @@ class PermissionGoldenMatrixPostgresTest {
                             : null);
             stmt.setTimestamp(10, trashed ? Timestamp.from(Instant.now()) : null);
             stmt.executeUpdate();
+        }
+        // V50 gives every standalone root a real OWNER row for its creator; a raw fixture
+        // insert has to do the same or the creator resolves no access at all.
+        if (parentId == null && spaceId == null) {
+            insertCollaborator(id, creatorId, "OWNER");
         }
         return id;
     }
@@ -1046,29 +1288,36 @@ class PermissionGoldenMatrixPostgresTest {
         }
     }
 
-    private void insertAccessGrant(
-            UUID documentId, UUID userId, UUID groupId, String audience, String effect, String accessLevel)
+    private void insertAccessGrant(UUID documentId, UUID userId, UUID groupId, String effect, String accessLevel)
             throws SQLException {
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO access_grants (workspace_id, document_id, user_id, group_id, audience, effect, "
+                "INSERT INTO access_grants (workspace_id, document_id, user_id, group_id, effect, "
                         + "access_level, created_at, updated_at) "
-                        + "VALUES ((SELECT workspace_id FROM documents WHERE id = ?), ?, ?, ?, ?, ?, ?, now(), now())")) {
+                        + "VALUES ((SELECT workspace_id FROM documents WHERE id = ?), ?, ?, ?, ?, ?, now(), now())")) {
             stmt.setObject(1, documentId);
             stmt.setObject(2, documentId);
             stmt.setObject(3, userId);
             stmt.setObject(4, groupId);
-            stmt.setString(5, audience);
-            stmt.setString(6, effect);
-            stmt.setString(7, accessLevel);
+            stmt.setString(5, effect);
+            stmt.setString(6, accessLevel);
             stmt.executeUpdate();
         }
     }
 
     private void insertCollaborator(UUID documentId, UUID userId, String accessLevel) throws SQLException {
-        if ("NO_ACCESS".equals(accessLevel)) {
-            insertAccessGrant(documentId, userId, null, null, "DENY", null);
-        } else {
-            insertAccessGrant(documentId, userId, null, null, "ALLOW", accessLevel);
+        String effect = "NO_ACCESS".equals(accessLevel) ? "DENY" : "ALLOW";
+        String level = "NO_ACCESS".equals(accessLevel) ? null : accessLevel;
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO access_grants (workspace_id, document_id, user_id, effect, access_level, created_at, updated_at) "
+                        + "VALUES ((SELECT workspace_id FROM documents WHERE id = ?), ?, ?, ?, ?, now(), now()) "
+                        + "ON CONFLICT (document_id, user_id) WHERE user_id IS NOT NULL "
+                        + "DO UPDATE SET effect = EXCLUDED.effect, access_level = EXCLUDED.access_level")) {
+            stmt.setObject(1, documentId);
+            stmt.setObject(2, documentId);
+            stmt.setObject(3, userId);
+            stmt.setString(4, effect);
+            stmt.setString(5, level);
+            stmt.executeUpdate();
         }
     }
 

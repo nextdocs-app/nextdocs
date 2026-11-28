@@ -6,8 +6,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.document.dto.request.CollaboratorAccessUpdateRequest;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
@@ -15,6 +13,8 @@ import com.nextdocs.api.document.entity.UserSharedOrder;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.UserSharedOrderRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.repository.WorkspaceRepository;
 import jakarta.persistence.EntityManager;
@@ -68,30 +68,32 @@ class DocumentSharingReconcilePersistenceTest {
         User owner = userRepository.saveAndFlush(User.builder()
                 .email("owner-reconcile@example.com")
                 .displayName("Owner")
+                .passwordHash("$2a$12$hash")
                 .build());
         User bob = userRepository.saveAndFlush(User.builder()
                 .email("bob-reconcile@example.com")
                 .displayName("Bob")
+                .passwordHash("$2a$12$hash")
                 .build());
         Workspace workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("Reconcile workspace").build());
 
         Document grandparent = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .title("Grandparent")
                 .build());
         Document root = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .parent(grandparent)
                 .title("Root")
                 .build());
         Document child = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .parent(root)
                 .title("Child")
@@ -133,7 +135,7 @@ class DocumentSharingReconcilePersistenceTest {
                             .toList();
                 })
                 .when(documentRepository)
-                .findAllWithUserByIdIn(any());
+                .findAllForChainByIdIn(any());
         doAnswer(inv -> {
                     java.util.Collection<UUID> ids = inv.getArgument(0);
                     return ids.stream()

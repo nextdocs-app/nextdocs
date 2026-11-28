@@ -7,7 +7,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.config.DocumentProperties;
@@ -17,10 +16,10 @@ import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
-import com.nextdocs.api.document.repository.SharedDocumentCandidate;
 import com.nextdocs.api.document.repository.UserDocumentOrderRepository;
-import com.nextdocs.api.document.repository.UserSharedOrderRepository;
+import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.service.SpaceAccessService;
+import com.nextdocs.api.user.entity.User;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -49,9 +48,6 @@ class DocumentListQueryHelperTest {
     private UserDocumentOrderRepository userDocumentOrderRepository;
 
     @Mock
-    private UserSharedOrderRepository userSharedOrderRepository;
-
-    @Mock
     private SharedSectionService sharedSectionService;
 
     @Mock
@@ -76,6 +72,7 @@ class DocumentListQueryHelperTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
     }
 
@@ -83,7 +80,7 @@ class DocumentListQueryHelperTest {
     void list_rootPrivate_returnsPrivateRootsWithComputedFields() {
         Document root1 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Private Root")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -108,11 +105,46 @@ class DocumentListQueryHelperTest {
     }
 
     @Test
+    void list_rootAll_usesResolvedAccessInsteadOfCreatorOwnership() {
+        Document root = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Shared")
+                .build();
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(documentRepository.findAllRootDocuments(userId, pageable))
+                .thenReturn(new PageImpl<>(List.<Object[]>of(new Object[] {root, "a0"})));
+        when(permissionService.resolveAccessBatch(userId, List.of(root.getId())))
+                .thenReturn(java.util.Map.of(root.getId(), DocumentAccessLevel.VIEW));
+        assertEquals(
+                DocumentAccessLevel.VIEW,
+                queryHelper
+                        .list(userId, "root", "all", null, null, pageable)
+                        .getContent()
+                        .get(0)
+                        .accessLevel());
+    }
+
+    @Test
+    void list_flatShared_throwsValidationError() {
+        ApiException ex = assertThrows(
+                ApiException.class, () -> queryHelper.list(userId, null, "shared", null, null, PageRequest.of(0, 20)));
+
+        assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("scope=shared is only supported for root documents"));
+        verify(sharedSectionService, never()).list(any());
+        verify(documentRepository, never()).findSharedSectionCandidates(any());
+        verify(documentRepository, never()).findReachableDocuments(any(), any());
+    }
+
+    @Test
     void list_rootShared_returnsSharedRootsWithBatchPermissions() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document sharedWithMe = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Shared with me")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -120,7 +152,7 @@ class DocumentListQueryHelperTest {
 
         Document ownerShared = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Shared by me")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -173,14 +205,16 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_rootShared_reportsAnOwnerLevelGrantAsNotOwned() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         UUID unreadableParentId = UUID.randomUUID();
         Document ownerLevelGrant = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .parent(Document.builder()
                         .id(unreadableParentId)
-                        .user(otherOwner)
+                        .creator(otherOwner)
                         .build())
                 .title("Granted at OWNER")
                 .createdAt(OffsetDateTime.now())
@@ -204,151 +238,6 @@ class DocumentListQueryHelperTest {
     }
 
     @Test
-    void list_flatShared_returnsUserDocumentOrderForNestedFloatedSharedDocuments() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        UUID privateParentId = UUID.randomUUID();
-        Document privateParent = Document.builder()
-                .id(privateParentId)
-                .user(otherOwner)
-                .title("Private Parent")
-                .build();
-
-        Document floatedChild = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Floated Child")
-                .parent(privateParent)
-                .siblingOrderKey("sibling-0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 20);
-        when(documentRepository.findSharedWithUserId(userId))
-                .thenReturn(List.of(new SharedDocumentCandidate(
-                        floatedChild.getId(),
-                        privateParentId,
-                        "sibling-0",
-                        "Floated Child",
-                        floatedChild.getCreatedAt(),
-                        floatedChild.getUpdatedAt())));
-        when(documentRepository.findAllById(any())).thenReturn(List.of(floatedChild));
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
-        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
-                .thenReturn(List.<Object[]>of(new Object[] {floatedChild.getId(), "user-order-1"}));
-
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
-
-        assertEquals(1, result.getContent().size());
-        DocumentResponse doc = result.getContent().get(0);
-        assertEquals("Floated Child", doc.title());
-        assertEquals(privateParentId, doc.parentId());
-        // Should return the user's personal UserDocumentOrder key, not the owner's siblingOrderKey
-        assertEquals("user-order-1", doc.orderKey());
-        assertEquals(DocumentAccessLevel.VIEW, doc.accessLevel());
-    }
-
-    @Test
-    void list_flatShared_returnsNullOrderKeyForFloatedDocumentWithoutUserDocumentOrder() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        UUID privateParentId = UUID.randomUUID();
-        Document privateParent = Document.builder()
-                .id(privateParentId)
-                .user(otherOwner)
-                .title("Private Parent")
-                .build();
-
-        Document floatedChild = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Floated Child")
-                .parent(privateParent)
-                .siblingOrderKey("sibling-0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 20);
-        when(documentRepository.findSharedWithUserId(userId))
-                .thenReturn(List.of(new SharedDocumentCandidate(
-                        floatedChild.getId(),
-                        privateParentId,
-                        "sibling-0",
-                        "Floated Child",
-                        floatedChild.getCreatedAt(),
-                        floatedChild.getUpdatedAt())));
-        when(documentRepository.findAllById(any())).thenReturn(List.of(floatedChild));
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        // Parent is inaccessible: the batch resolves nothing for it, so the child floats.
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(floatedChild.getId(), DocumentAccessLevel.VIEW));
-        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
-                .thenReturn(List.of());
-
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
-
-        assertEquals(1, result.getContent().size());
-        DocumentResponse doc = result.getContent().get(0);
-        assertEquals("Floated Child", doc.title());
-        assertEquals(privateParentId, doc.parentId());
-        // Should return null (not the owner's siblingOrderKey) when no personal Shared order exists
-        assertNull(doc.orderKey());
-        assertEquals(DocumentAccessLevel.VIEW, doc.accessLevel());
-    }
-
-    @Test
-    void list_flatShared_returnsSiblingOrderKeyForChildOfAccessibleSharedParent() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        UUID sharedParentId = UUID.randomUUID();
-        Document sharedParent = Document.builder()
-                .id(sharedParentId)
-                .user(otherOwner)
-                .title("Shared Parent")
-                .build();
-
-        Document sharedChild = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Shared Child")
-                .parent(sharedParent)
-                .siblingOrderKey("sibling-0")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        PageRequest pageable = PageRequest.of(0, 20);
-        when(documentRepository.findSharedWithUserId(userId))
-                .thenReturn(List.of(new SharedDocumentCandidate(
-                        sharedChild.getId(),
-                        sharedParentId,
-                        "sibling-0",
-                        "Shared Child",
-                        sharedChild.getCreatedAt(),
-                        sharedChild.getUpdatedAt())));
-        when(documentRepository.findAllById(any())).thenReturn(List.of(sharedChild));
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        // Parent IS accessible, so the child keeps its owner's sibling order key.
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(
-                        sharedChild.getId(), DocumentAccessLevel.VIEW, sharedParentId, DocumentAccessLevel.VIEW));
-
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, pageable);
-
-        assertEquals(1, result.getContent().size());
-        DocumentResponse doc = result.getContent().get(0);
-        assertEquals("Shared Child", doc.title());
-        assertEquals(sharedParentId, doc.parentId());
-        // Should keep siblingOrderKey since its parent is accessible/shared
-        assertEquals("sibling-0", doc.orderKey());
-    }
-
-    @Test
     void list_emptyPagePreservesTotalElements() {
         PageRequest pageable = PageRequest.of(2, 10);
         Page<Object[]> emptyPageWithTotals = new PageImpl<>(List.of(), pageable, 25);
@@ -367,7 +256,7 @@ class DocumentListQueryHelperTest {
         UUID parentId = UUID.randomUUID();
         Document child1 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Child 1")
                 .siblingOrderKey("a0")
                 .createdAt(OffsetDateTime.now())
@@ -404,7 +293,7 @@ class DocumentListQueryHelperTest {
         UUID parentId = UUID.randomUUID();
         Document child = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Frozen Child")
                 .siblingOrderKey("a0")
                 .createdAt(OffsetDateTime.now())
@@ -433,13 +322,13 @@ class DocumentListQueryHelperTest {
         UUID parentId = UUID.randomUUID();
         Document visible = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Visible")
                 .siblingOrderKey("a0")
                 .build();
         Document denied = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Denied")
                 .siblingOrderKey("a1")
                 .build();
@@ -470,24 +359,79 @@ class DocumentListQueryHelperTest {
     void list_flatAll_ownerPageInAnArchivedSpace_reportsView() {
         Document page = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Frozen Root")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
 
         PageRequest pageable = PageRequest.of(0, 20);
-        when(documentRepository.findAllByUser_IdAndDeletedAtIsNull(eq(userId), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(page)));
+        when(documentRepository.findReachableDocuments(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(java.util.Collections.singletonList(new Object[] {page.getId(), "VIEW"})));
+        when(documentRepository.findAllById(List.of(page.getId()))).thenReturn(List.of(page));
         when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
         when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(page.getId(), DocumentAccessLevel.VIEW));
 
         Page<DocumentResponse> result = queryHelper.list(userId, null, "all", null, null, pageable);
 
         assertEquals(1, result.getContent().size());
         assertEquals(DocumentAccessLevel.VIEW, result.getContent().get(0).accessLevel());
+    }
+
+    @Test
+    void list_flatAll_countsAndPagesOnlyReadableCandidates() {
+        Document first = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("First")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        Document blocked = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Blocked by a page rule")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        Document third = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Third")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        PageRequest pageable = PageRequest.of(0, 2);
+        when(documentRepository.findReachableDocuments(eq(userId), any(Pageable.class)))
+                .thenAnswer(invocation -> {
+                    Pageable requested = invocation.getArgument(1);
+                    return new PageImpl<>(
+                            requested.getPageNumber() == 0
+                                    ? List.of(
+                                            new Object[] {first.getId(), "VIEW"},
+                                            new Object[] {third.getId(), "COMMENT"})
+                                    : List.of(),
+                            requested,
+                            2);
+                });
+        // findById order is not guaranteed; the readable id order decides the page.
+        when(documentRepository.findAllById(List.of(first.getId(), third.getId())))
+                .thenReturn(List.of(third, first));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
+        Page<DocumentResponse> result = queryHelper.list(userId, null, "all", null, null, pageable);
+
+        // The blocked candidate is neither counted nor allowed to leave a hole: the page
+        // still holds two readable rows, in the order the id query returned them.
+        assertEquals(
+                List.of(first.getId(), third.getId()),
+                result.getContent().stream().map(DocumentResponse::id).toList());
+        assertEquals(2, result.getTotalElements());
+
+        Page<DocumentResponse> pageOne = queryHelper.list(userId, null, "all", null, null, PageRequest.of(1, 2));
+        assertTrue(pageOne.getContent().isEmpty());
+        assertEquals(2, pageOne.getTotalElements());
     }
 
     @Test
@@ -504,6 +448,107 @@ class DocumentListQueryHelperTest {
                 ApiException.class, () -> queryHelper.list(userId, null, "private", null, null, PageRequest.of(0, 20)));
         assertEquals(ErrorCode.VALIDATION_FAILED, ex.getErrorCode());
         assertTrue(ex.getMessage().contains("scope=private is only supported for root documents"));
+    }
+
+    @Test
+    void list_flatAll_unsupportedSortFallsBackToTheNativeDefault() {
+        Document page = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Page")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+        PageRequest pageable = PageRequest.of(0, 20, Sort.by("deletedAt"));
+
+        when(documentRepository.findReachableDocuments(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.<Object[]>of(new Object[] {page.getId(), "VIEW"})));
+        when(documentRepository.findAllById(List.of(page.getId()))).thenReturn(List.of(page));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
+
+        queryHelper.list(userId, null, "all", null, null, pageable);
+
+        // A sort the native query cannot map is dropped as a whole, not partially applied.
+        verify(documentRepository).findReachableDocuments(eq(userId), any(Pageable.class));
+        org.mockito.ArgumentCaptor<Pageable> captor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        verify(documentRepository).findReachableDocuments(eq(userId), captor.capture());
+        assertEquals(
+                Sort.by(Sort.Order.desc("updated_at"), Sort.Order.desc("created_at"), Sort.Order.asc("id")),
+                captor.getValue().getSort());
+    }
+
+    @Test
+    void list_flatAll_fillsParentSpaceAndPersonalOrderKeys() {
+        UUID parentId = UUID.randomUUID();
+        Document parent = Document.builder().id(parentId).creator(user).build();
+        Space space = Space.builder().id(UUID.randomUUID()).name("Engineering").build();
+        Document child = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Child")
+                .parent(parent)
+                .siblingOrderKey("a1")
+                .build();
+        Document spaceRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Space root")
+                .space(space)
+                .siblingOrderKey("a2")
+                .build();
+        Document privateRoot = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Private root")
+                .build();
+        List<Object[]> rows =
+                List.of(new Object[] {child.getId(), "VIEW"}, new Object[] {spaceRoot.getId(), "EDIT"}, new Object[] {
+                    privateRoot.getId(), "OWNER"
+                });
+        PageRequest pageable = PageRequest.of(0, 20);
+
+        when(documentRepository.findReachableDocuments(eq(userId), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(rows, pageable, rows.size()));
+        when(documentRepository.findAllById(List.of(child.getId(), spaceRoot.getId(), privateRoot.getId())))
+                .thenReturn(List.of(child, spaceRoot, privateRoot));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any()))
+                .thenReturn(List.<Object[]>of(new Object[] {child.getId(), 1L}));
+        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
+        when(userDocumentOrderRepository.findOrderKeysByUserIdAndDocumentIds(userId, List.of(privateRoot.getId())))
+                .thenReturn(List.<Object[]>of(new Object[] {privateRoot.getId(), "a9"}));
+
+        List<DocumentResponse> result =
+                queryHelper.list(userId, null, "all", null, null, pageable).getContent();
+
+        DocumentResponse childResponse = result.get(0);
+        assertEquals(parentId, childResponse.parentId());
+        assertEquals("a1", childResponse.orderKey());
+        assertTrue(childResponse.hasChildren());
+        assertEquals("a2", result.get(1).orderKey());
+        assertNull(result.get(1).parentId());
+        assertEquals("a9", result.get(2).orderKey());
+    }
+
+    @Test
+    void list_sharedScope_unpaged_returnsTheWholeSection() {
+        Document doc = Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Shared")
+                .createdAt(OffsetDateTime.now())
+                .updatedAt(OffsetDateTime.now())
+                .build();
+
+        when(sharedSectionService.list(userId)).thenReturn(List.of(sharedEntry(doc, "a0", DocumentAccessLevel.VIEW)));
+        when(documentRepository.findAllById(List.of(doc.getId()))).thenReturn(List.of(doc));
+        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
+        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
+
+        Page<DocumentResponse> result = queryHelper.list(userId, "root", "shared", null, null, Pageable.unpaged());
+
+        assertEquals(1, result.getContent().size());
+        assertEquals("Shared", result.getContent().get(0).title());
     }
 
     private static SharedEntry sharedEntry(Document document, String orderKey, DocumentAccessLevel accessLevel) {
@@ -526,17 +571,19 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_sharedScope_paginatesServiceEntriesAndLoadsOnlyThePage() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document allowedDoc1 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Allowed 1")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
         Document allowedDoc2 = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Allowed 2")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -568,17 +615,19 @@ class DocumentListQueryHelperTest {
 
     @Test
     void list_sharedScope_keepsPersonalOrderRegardlessOfRequestedSort() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
+
+        User otherOwner =
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build();
         Document docB = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Bravo")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
         Document docA = Document.builder()
                 .id(UUID.randomUUID())
-                .user(otherOwner)
+                .creator(otherOwner)
                 .title("Alpha")
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
@@ -599,88 +648,6 @@ class DocumentListQueryHelperTest {
         assertEquals(2, result.getContent().size());
         assertEquals("Bravo", result.getContent().get(0).title());
         assertEquals("Alpha", result.getContent().get(1).title());
-    }
-
-    @Test
-    void list_flatShared_appliesSortOrderToFilteredCandidates() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        Document docB = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Bravo")
-                .createdAt(OffsetDateTime.now().minusDays(1))
-                .updatedAt(OffsetDateTime.now())
-                .build();
-        Document docA = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Alpha")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-
-        when(documentRepository.findSharedWithUserId(userId))
-                .thenReturn(List.of(
-                        new SharedDocumentCandidate(
-                                docB.getId(), null, null, "Bravo", docB.getCreatedAt(), docB.getUpdatedAt()),
-                        new SharedDocumentCandidate(
-                                docA.getId(), null, null, "Alpha", docA.getCreatedAt(), docA.getUpdatedAt())));
-        when(documentRepository.findAllById(any())).thenReturn(List.of(docB, docA));
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(
-                        docB.getId(), DocumentAccessLevel.VIEW,
-                        docA.getId(), DocumentAccessLevel.VIEW));
-
-        Page<DocumentResponse> result = queryHelper.list(
-                userId, null, "shared", null, null, PageRequest.of(0, 10, Sort.by(Sort.Order.asc("title"))));
-
-        assertEquals(2, result.getContent().size());
-        assertEquals("Alpha", result.getContent().get(0).title());
-        assertEquals("Bravo", result.getContent().get(1).title());
-    }
-
-    @Test
-    void list_flatShared_loadsOnlyTheRequestedPageOfEntities() {
-        User otherOwner = User.builder().id(UUID.randomUUID()).build();
-        Document newest = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Newest")
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .build();
-        Document older = Document.builder()
-                .id(UUID.randomUUID())
-                .user(otherOwner)
-                .title("Older")
-                .createdAt(OffsetDateTime.now().minusDays(1))
-                .updatedAt(OffsetDateTime.now().minusDays(1))
-                .build();
-
-        when(documentRepository.findSharedWithUserId(userId))
-                .thenReturn(List.of(
-                        new SharedDocumentCandidate(
-                                newest.getId(), null, null, "Newest", newest.getCreatedAt(), newest.getUpdatedAt()),
-                        new SharedDocumentCandidate(
-                                older.getId(), null, null, "Older", older.getCreatedAt(), older.getUpdatedAt())));
-        when(permissionService.resolveAccessBatch(eq(userId), any()))
-                .thenReturn(java.util.Map.of(
-                        newest.getId(), DocumentAccessLevel.VIEW, older.getId(), DocumentAccessLevel.VIEW));
-        when(userSharedOrderRepository.findOrderKeysByUserIdAndDocumentIds(eq(userId), any()))
-                .thenReturn(List.of());
-        when(documentRepository.findAllById(any())).thenReturn(List.of(newest, older));
-        when(documentRepository.countNonTrashedChildrenByParentIds(any())).thenReturn(List.of());
-        when(accessGrantRepository.findDocumentIdsWithPositiveGrants(any())).thenReturn(List.of());
-
-        Page<DocumentResponse> result = queryHelper.list(userId, null, "shared", null, null, PageRequest.of(0, 1));
-
-        assertEquals(1, result.getContent().size());
-        assertEquals("Newest", result.getContent().get(0).title());
-        assertEquals(2, result.getTotalElements());
-        // The second candidate must not reach the entity loader on the first page.
-        verify(documentRepository).findAllById(List.of(newest.getId()));
     }
 
     @Test
@@ -732,7 +699,7 @@ class DocumentListQueryHelperTest {
     void list_trashed_returnsAccessibleTrashedDocuments() {
         Document trashedDoc = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Trashed Doc")
                 .deletedAt(OffsetDateTime.now().minusDays(2))
                 .createdAt(OffsetDateTime.now().minusDays(10))
@@ -771,7 +738,7 @@ class DocumentListQueryHelperTest {
         UUID spaceId = UUID.randomUUID();
         Document page = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Space Page")
                 .space(spaceWith(spaceId))
                 .siblingOrderKey("a1")
@@ -808,7 +775,7 @@ class DocumentListQueryHelperTest {
         UUID spaceId = UUID.randomUUID();
         Document page = Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Frozen Page")
                 .space(spaceWith(spaceId))
                 .createdAt(OffsetDateTime.now())

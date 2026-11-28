@@ -12,10 +12,10 @@ import static org.mockito.Mockito.when;
 
 import com.nextdocs.api.audit.entity.AccessAuditAction;
 import com.nextdocs.api.audit.service.AccessAuditService;
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.dto.request.WorkspaceGroupRequest;
 import com.nextdocs.api.workspace.dto.response.WorkspaceGroupResponse;
 import com.nextdocs.api.workspace.entity.Workspace;
@@ -84,6 +84,7 @@ class WorkspaceGroupServiceTest {
                 .id(memberId)
                 .email("member@example.com")
                 .displayName("Member")
+                .passwordHash("$2a$12$hash")
                 .build();
 
         when(accessService.requireAdmin(actorId)).thenReturn(membership());
@@ -170,8 +171,12 @@ class WorkspaceGroupServiceTest {
     void update_renamesGroupReplacesMembersAndRecordsAudit() {
         UUID groupId = UUID.randomUUID();
         UUID newMemberId = UUID.randomUUID();
-        User memberUser =
-                User.builder().id(newMemberId).email("new@example.com").build();
+        User memberUser = User.builder()
+                .id(newMemberId)
+                .email("new@example.com")
+                .passwordHash("$2a$12$hash")
+                .build();
+
         WorkspaceGroup group = WorkspaceGroup.builder()
                 .id(groupId)
                 .workspace(Workspace.builder().id(workspaceId).name("Workspace").build())
@@ -276,7 +281,7 @@ class WorkspaceGroupServiceTest {
         WorkspaceMember member = WorkspaceMember.builder()
                 .id(UUID.randomUUID())
                 .workspace(workspace)
-                .user(User.builder().id(actorId).build())
+                .user(User.builder().id(actorId).passwordHash("$2a$12$hash").build())
                 .role(WorkspaceRole.ADMIN)
                 .build();
         return new Membership(workspace, member);

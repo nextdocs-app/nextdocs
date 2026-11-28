@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -36,6 +36,7 @@ import { documentService } from '@/services/document.service';
 import { spaceApiService } from '@/services/space.service';
 import { addToast } from '@/stores/toasts/toasts.slice';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
+import { setSpaceExpanded as setSpaceExpandedAction } from '@/stores/sidebar/sidebar.slice';
 import {
   fetchSpaceChildrenThunk,
   fetchSpaceRootsThunk,
@@ -196,9 +197,10 @@ export function SpacesSection({
   const dispatch = useAppDispatch();
   const spaceTrees = useAppSelector((state) => state.spaceTree.trees);
   const [spaces, setSpaces] = useState<Space[] | null>(null);
-  const [expandedSpaceIds, setExpandedSpaceIds] = useState<ReadonlySet<string>>(
-    () => new Set<string>()
-  );
+  // Kept in the store rather than in this component: the rail remembers which
+  // spaces the reader left unfolded, and one subscriber persists that list.
+  const expandedSpaceIdList = useAppSelector((state) => state.sidebar.expandedSpaceIds);
+  const expandedSpaceIds = useMemo(() => new Set(expandedSpaceIdList), [expandedSpaceIdList]);
   const [menuAnchor, setMenuAnchor] = useState<SpaceActionsAnchor | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [settingsView, setSettingsView] = useState<{
@@ -353,17 +355,12 @@ export function SpacesSection({
 
   useTreeMetaSync(dispatch, updateNodeMeta);
 
-  const setSpaceExpanded = useCallback((spaceId: string, isExpanded: boolean) => {
-    setExpandedSpaceIds((previous) => {
-      const next = new Set(previous);
-      if (isExpanded) {
-        next.add(spaceId);
-      } else {
-        next.delete(spaceId);
-      }
-      return next;
-    });
-  }, []);
+  const setSpaceExpanded = useCallback(
+    (spaceId: string, isExpanded: boolean) => {
+      dispatch(setSpaceExpandedAction({ spaceId, expanded: isExpanded }));
+    },
+    [dispatch]
+  );
 
   const toggleSpace = useCallback(
     (spaceId: string) => {
@@ -420,7 +417,6 @@ export function SpacesSection({
           newId,
           draft.meta.title || 'Untitled',
           draft.ydoc,
-          draft.meta.createdBy ?? null,
           parentId ?? null,
           null,
           null,
@@ -541,11 +537,7 @@ export function SpacesSection({
 
       // An archived or unjoined space must not keep a tree (or an expansion) around.
       if (next.archivedAt || next.myAccessLevel == null) {
-        setExpandedSpaceIds((previous) => {
-          const remaining = new Set(previous);
-          remaining.delete(next.id);
-          return remaining;
-        });
+        dispatch(setSpaceExpandedAction({ spaceId: next.id, expanded: false }));
         dispatch(resetTree(next.id));
       }
     },
@@ -555,11 +547,7 @@ export function SpacesSection({
   const handleSpaceRemoved = useCallback(
     (spaceId: string) => {
       setSpaces((previous) => previous?.filter((space) => space.id !== spaceId) ?? previous);
-      setExpandedSpaceIds((previous) => {
-        const next = new Set(previous);
-        next.delete(spaceId);
-        return next;
-      });
+      dispatch(setSpaceExpandedAction({ spaceId, expanded: false }));
       setSettingsView((previous) => (previous?.space.id === spaceId ? null : previous));
       dispatch(resetTree(spaceId));
     },
@@ -613,7 +601,14 @@ export function SpacesSection({
     : null;
 
   return (
-    <div className={`group flex flex-col ${className ?? ''}`.trim()}>
+    <div
+      // Sticky rows can only stay put if their resting offset already equals the
+      // offset they pin at: the header has to be exactly `--nd-sticky-header`
+      // tall, and nothing may sit between it and the first row. The row pitch
+      // is measured once on the scroll container (useStickyRowMetrics), so this
+      // wrapper must not shadow it with a constant.
+      className={`group flex flex-col [--nd-sticky-header:30px] ${className ?? ''}`.trim()}
+    >
       {/* Same shell as the document sections, minus a trailing action. */}
       <div
         role="button"
@@ -627,7 +622,7 @@ export function SpacesSection({
             onToggle();
           }
         }}
-        className="group/header mx-1.5 flex items-center justify-between rounded-sm py-[5px] pl-2 pr-2 text-[13.5px] text-muted-foreground transition-colors duration-100 hover:bg-sidebar-accent cursor-pointer select-none"
+        className="group/header sticky top-0 z-30 bg-sidebar mx-1.5 flex items-center justify-between rounded-sm py-[5px] pl-2 pr-2 text-[13.5px] leading-[20px] text-muted-foreground transition-colors duration-100 hover:bg-sidebar-accent cursor-pointer select-none"
       >
         <span className="flex min-w-0 items-center gap-1">
           <SectionHeading
@@ -646,7 +641,7 @@ export function SpacesSection({
       </div>
 
       {isOpen && (
-        <nav className="px-1.5 pt-px pb-2">
+        <nav className="px-1.5 pb-2">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -682,6 +677,7 @@ export function SpacesSection({
                             tabIndex={0}
                             aria-expanded={isExpanded}
                             aria-label={`${space.name} space`}
+                            data-sidebar-space-row=""
                             onClick={() => toggleSpace(space.id)}
                             onKeyDown={(event) => {
                               // The row is its own button, but the hover actions inside
@@ -694,7 +690,14 @@ export function SpacesSection({
                                 toggleSpace(space.id);
                               }
                             }}
-                            className="group/space relative flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sidebar-foreground/90 transition-colors duration-100 hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer"
+                            className={`w-full group/space relative flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-sidebar-foreground/90 transition-colors duration-100 hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer ${
+                              isExpanded
+                                ? 'sticky z-20 bg-sidebar [box-shadow:0_1px_0_0_var(--color-sidebar)]'
+                                : ''
+                            }`}
+                            style={
+                              isExpanded ? { top: 'var(--nd-sticky-header, 30px)' } : undefined
+                            }
                           >
                             <span
                               style={tile.style}
@@ -772,7 +775,7 @@ export function SpacesSection({
                           </div>
 
                           {isExpanded && (
-                            <div className="relative flex flex-col">
+                            <div className="relative flex flex-col z-10">
                               {/* Spine from the space glyph down through its documents: the
                           visual mark that separates a container from a document. */}
                               <span
@@ -781,7 +784,18 @@ export function SpacesSection({
                                 className="pointer-events-none absolute top-0 bottom-1 left-[20px] z-[1] w-px bg-sidebar-border"
                               />
 
-                              <div className="pb-1 pl-6">
+                              <div
+                                className="pb-1 pl-6"
+                                style={
+                                  {
+                                    // A space row is 33px tall on a mouse and does not
+                                    // take the coarse-pointer padding its documents do,
+                                    // so its height -- not the doc pitch -- sets the base.
+                                    '--nd-sticky-base':
+                                      'calc(var(--nd-sticky-header, 30px) + var(--nd-sticky-row-height, 33px))',
+                                  } as React.CSSProperties
+                                }
+                              >
                                 {showSkeleton ? (
                                   <ul className="flex flex-col gap-px">
                                     {[0, 1].map((index) => (

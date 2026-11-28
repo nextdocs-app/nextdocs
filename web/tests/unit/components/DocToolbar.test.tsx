@@ -9,6 +9,7 @@ import sidebarTreeReducer from '../../../stores/sidebarTree/sidebarTree.slice';
 import sharedTreeReducer from '../../../stores/sharedTree/sharedTree.slice';
 import spaceTreeReducer from '../../../stores/spaceTree/spaceTree.slice';
 import authReducer from '../../../stores/auth/auth.slice';
+import themeReducer from '../../../stores/theme/theme.slice';
 import { documentService } from '../../../services/document.service';
 import { OFFLINE_DOCUMENT_SELECT_EVENT } from '../../../lib/offline-navigation.util';
 
@@ -34,10 +35,35 @@ jest.mock('../../../components/SharePanel', () => ({
 }));
 
 jest.mock('../../../services/document.service', () => ({
+  DocumentServiceApiError: class DocumentServiceApiError extends Error {
+    status: number;
+
+    constructor(message: string, status: number) {
+      super(message);
+      this.status = status;
+    }
+  },
   documentService: {
     getDocumentBreadcrumbs: jest.fn().mockResolvedValue([]),
+    listViewers: jest.fn().mockResolvedValue([]),
+    recordView: jest.fn().mockResolvedValue(undefined),
   },
 }));
+
+// The toolbar reads the resolved theme for its menu surface.
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+});
 
 const testReducers = {
   sidebar: sidebarReducer,
@@ -45,6 +71,7 @@ const testReducers = {
   sharedTree: sharedTreeReducer,
   spaceTree: spaceTreeReducer,
   auth: authReducer,
+  theme: themeReducer,
 };
 
 const testRootReducer = combineReducers(testReducers);
@@ -392,6 +419,34 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     expect(onNavigateDocument).toHaveBeenCalledWith('doc-3');
   });
 
+  it('closes the collapsed ancestor menu on Escape', async () => {
+    const user = userEvent.setup();
+
+    (documentService.getDocumentBreadcrumbs as jest.Mock).mockResolvedValue([
+      { id: 'doc-1', title: 'Workspace Root', parentId: null },
+      { id: 'doc-2', title: 'Department', parentId: 'doc-1' },
+      { id: 'doc-3', title: 'Project X', parentId: 'doc-2' },
+      { id: 'doc-4', title: 'Specifications', parentId: 'doc-3' },
+      { id: 'doc-5', title: 'Current Page', parentId: 'doc-4' },
+    ]);
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-5"
+        documentTitle="Current Page"
+        isShareEnabled={false}
+        isOffline={false}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('Workspace Root')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Show intermediate parent documents' }));
+    expect(screen.getByRole('menuitem', { name: /Department/i })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menuitem', { name: /Department/i })).not.toBeInTheDocument();
+  });
+
   it('updates the active document title reactively in breadcrumbs', () => {
     const { rerender } = renderWithStore(
       <DocToolbar
@@ -635,12 +690,12 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
     const store = createTestStore({
       sidebar: {
         isCollapsed: true,
-        sidebarWidth: 256,
         panelMode: null,
         searchQuery: '',
         isPrivateOpen: true,
         isSharedOpen: true,
         isSpacesOpen: false,
+        expandedSpaceIds: [],
         docActionsAnchor: null,
         isMobileNavOpen: false,
       },
@@ -690,12 +745,12 @@ describe('DocToolbar hierarchy breadcrumbs (Notion-style)', () => {
 describe('DocToolbar sidebar toggle', () => {
   const closedSidebarState = {
     isCollapsed: true,
-    sidebarWidth: 256,
     panelMode: null,
     searchQuery: '',
     isPrivateOpen: true,
     isSharedOpen: true,
     isSpacesOpen: true,
+    expandedSpaceIds: [],
     docActionsAnchor: null,
     isMobileNavOpen: false,
   };
@@ -744,5 +799,240 @@ describe('DocToolbar share panel integration', () => {
 
     const sharePanel = screen.getByTestId('share-panel');
     expect(sharePanel).toHaveAttribute('data-can-manage-sharing', 'false');
+  });
+});
+
+describe('DocToolbar document actions menu', () => {
+  it('opens from the top-right and offers version history only', async () => {
+    const user = userEvent.setup();
+    const onVersionHistoryToggle = jest.fn();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        onVersionHistoryToggle={onVersionHistoryToggle}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+
+    const menu = screen.getByRole('menu', { name: 'Document actions' });
+    expect(menu).toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+
+    await user.click(screen.getByRole('menuitem', { name: /Version history/ }));
+    expect(onVersionHistoryToggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu', { name: 'Document actions' })).not.toBeInTheDocument();
+  });
+
+  it('keeps version history disabled when history cannot open', async () => {
+    const user = userEvent.setup();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory={false}
+        onVersionHistoryToggle={jest.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    expect(screen.getByRole('menuitem', { name: /Version history/ })).toBeDisabled();
+  });
+
+  it('replaces the actions menu with the history controls slot', () => {
+    const versionHistoryActionsRef = jest.fn();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        isVersionHistoryOpen
+        onVersionHistoryToggle={jest.fn()}
+        versionHistoryActionsRef={versionHistoryActionsRef}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'More document actions' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('version-history-toolbar-actions')).toBeInTheDocument();
+    expect(versionHistoryActionsRef).toHaveBeenCalledWith(expect.any(HTMLDivElement));
+  });
+
+  it('closes the actions menu on Escape', async () => {
+    const user = userEvent.setup();
+
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-version-history"
+        isShareEnabled={false}
+        isOffline={false}
+        canViewVersionHistory
+        onVersionHistoryToggle={jest.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More document actions' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Document actions' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DocToolbar reader stack', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('shows the viewer group beside Share when someone else has read it', async () => {
+    (documentService.listViewers as jest.Mock).mockResolvedValue([
+      {
+        userId: 'user-2',
+        displayName: 'Bob',
+        avatarUrl: null,
+        lastViewedAt: '2026-01-02T00:00:00Z',
+      },
+    ]);
+
+    renderWithStore(<DocToolbar documentId="doc-readers" isShareEnabled isOffline={false} />, {
+      auth: {
+        user: {
+          id: 'user-1',
+          email: 'ada@example.com',
+          displayName: 'Ada',
+          avatarUrl: null,
+        },
+        accessToken: 'access-token',
+        expiresAt: Date.now() + 60_000,
+        lastSilentRefreshAt: null,
+        sessionId: 0,
+        isInitializing: false,
+      },
+    });
+
+    expect(
+      await screen.findByRole('group', { name: 'People who accessed this document' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: "View Bob's profile" })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Document hierarchy' })).toHaveClass(
+      'max-w-[calc(100vw-17rem)]'
+    );
+  });
+});
+
+describe('DocToolbar last edited label', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('reads a recent edit relatively', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-edited"
+        isShareEnabled={false}
+        isOffline={false}
+        updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()}
+      />
+    );
+
+    expect(screen.getByText('Edited 5 mins ago')).toBeInTheDocument();
+  });
+
+  it('reads an older edit as a calendar date', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-15T12:00:00.000Z'));
+    try {
+      const updatedAt = '2026-01-05T00:00:00.000Z';
+      renderWithStore(
+        <DocToolbar
+          documentId="doc-edited"
+          isShareEnabled={false}
+          isOffline={false}
+          updatedAt={updatedAt}
+        />
+      );
+
+      const expected = new Date(updatedAt).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      });
+      expect(screen.getByText(`Edited ${expected}`)).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows no label without an edit timestamp', () => {
+    renderWithStore(
+      <DocToolbar documentId="doc-edited" isShareEnabled={false} isOffline={false} />
+    );
+
+    expect(screen.queryByText(/^Edited /)).not.toBeInTheDocument();
+  });
+});
+
+describe('DocToolbar comments toggle', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens the sidebar from the resting control', () => {
+    const onCommentsToggle = jest.fn();
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+        onCommentsToggle={onCommentsToggle}
+      />
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'Open comments sidebar. No open threads.',
+    });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(button);
+    expect(onCommentsToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes an open sidebar and counts its threads', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+        isCommentsSidebarOpen
+        openCommentsCount={1}
+        onCommentsToggle={jest.fn()}
+      />
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'Close comments sidebar. 1 open thread.',
+    });
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('disables the control when the page has no comment handler', () => {
+    renderWithStore(
+      <DocToolbar
+        documentId="doc-comments"
+        isShareEnabled={false}
+        isOffline={false}
+        showCommentsButton
+      />
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Open comments sidebar. No open threads.' })
+    ).toBeDisabled();
   });
 });

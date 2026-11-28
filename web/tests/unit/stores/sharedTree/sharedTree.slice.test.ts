@@ -5,6 +5,7 @@ import sharedTreeReducer, {
   fetchPublicChildrenThunk,
   insertSharedNode,
   moveDocumentThunk,
+  setNodeExpanded,
   syncSharedRoots,
   syncPublicRoots,
   updateNodeMeta,
@@ -24,6 +25,34 @@ const entry = (
   parentId,
   accessLevel,
   meta: { title, updatedAt: '2024-01-01T11:00:00Z', createdAt: '2024-01-01T10:00:00Z' },
+});
+
+describe('sharedTree.slice setNodeExpanded', () => {
+  const initialState: SharedTreeState = { nodes: {}, rootIds: [] };
+
+  it('restores an expansion without flipping it, and ignores an unknown page', () => {
+    const loaded = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([entry('shared-1', 'collaborator', null)])
+    );
+    expect(loaded.nodes['shared-1'].isExpanded).toBe(false);
+
+    const restored = sharedTreeReducer(loaded, setNodeExpanded({ id: 'shared-1', expanded: true }));
+    expect(restored.nodes['shared-1'].isExpanded).toBe(true);
+    // A second restore pass must not toggle the branch the reader just opened.
+    expect(
+      sharedTreeReducer(restored, setNodeExpanded({ id: 'shared-1', expanded: true })).nodes[
+        'shared-1'
+      ].isExpanded
+    ).toBe(true);
+
+    const unknown = sharedTreeReducer(
+      restored,
+      setNodeExpanded({ id: 'not-loaded', expanded: true })
+    );
+    expect(unknown.nodes['not-loaded']).toBeUndefined();
+    expect(unknown.rootIds).toEqual(restored.rootIds);
+  });
 });
 
 describe('sharedTree.slice insertSharedNode', () => {
@@ -123,17 +152,20 @@ describe('sharedTree.slice syncSharedRoots', () => {
     });
   });
 
-  it('does NOT synthesize nested owner-shared documents (they stay in the private tree)', () => {
+  it('floats nested OWNER entries when their parent is unreadable', () => {
     const state = sharedTreeReducer(
       initialState,
       syncSharedRoots([entry('nested-shared', 'owner', 'private-parent')])
     );
 
-    expect(state.rootIds).toEqual([]);
-    expect(state.nodes['nested-shared']).toBeUndefined();
+    expect(state.rootIds).toEqual(['nested-shared']);
+    expect(state.nodes['nested-shared']).toMatchObject({
+      parentId: null,
+      effectiveAccessLevel: 'OWNER',
+    });
   });
 
-  it('prunes a nested owner-shared document that was previously synthesized as a root', () => {
+  it('preserves a floated nested OWNER entry on refresh', () => {
     const previous: SharedTreeState = {
       nodes: {
         'nested-shared': {
@@ -159,8 +191,8 @@ describe('sharedTree.slice syncSharedRoots', () => {
       syncSharedRoots([entry('nested-shared', 'owner', 'private-parent')])
     );
 
-    expect(state.rootIds).toEqual([]);
-    expect(state.nodes['nested-shared']).toBeUndefined();
+    expect(state.rootIds).toEqual(['nested-shared']);
+    expect(state.nodes['nested-shared']).toBeDefined();
   });
 
   it('nests a shared-with-me document under its parent when the parent is also shared with me', () => {
@@ -182,9 +214,7 @@ describe('sharedTree.slice syncSharedRoots', () => {
     // page: dropping it as "the caller's own nested page" would hide it from Shared.
     const state = sharedTreeReducer(
       initialState,
-      syncSharedRoots([
-        entry('granted-owner', 'collaborator', 'unreadable-parent', 'Granted', 'OWNER'),
-      ])
+      syncSharedRoots([entry('granted-owner', 'owner', 'unreadable-parent', 'Granted', 'OWNER')])
     );
 
     expect(state.rootIds).toEqual(['granted-owner']);
@@ -192,6 +222,50 @@ describe('sharedTree.slice syncSharedRoots', () => {
       parentId: null,
       effectiveAccessLevel: 'OWNER',
     });
+  });
+
+  it('moves a listed entry under its current parent instead of keeping the old link', () => {
+    const node = (
+      id: string,
+      parentId: string | null,
+      children: string[]
+    ): SharedTreeState['nodes'][string] => ({
+      id,
+      title: id,
+      parentId,
+      orderKey: `shared:${id}`,
+      hasChildren: children.length > 0,
+      effectiveAccessLevel: 'EDIT',
+      isExpanded: true,
+      isLoading: false,
+      children,
+      childrenLoaded: true,
+      createdAt: '2024-01-01T10:00:00Z',
+      updatedAt: '2024-01-01T11:00:00Z',
+    });
+
+    const previous: SharedTreeState = {
+      nodes: {
+        'parent-a': node('parent-a', null, ['moved']),
+        'parent-b': node('parent-b', null, []),
+        moved: node('moved', 'parent-a', []),
+      },
+      rootIds: ['parent-a', 'parent-b'],
+    };
+
+    const state = sharedTreeReducer(
+      previous,
+      syncSharedRoots([
+        entry('parent-a', 'collaborator', null),
+        entry('parent-b', 'collaborator', null),
+        entry('moved', 'collaborator', 'parent-b'),
+      ])
+    );
+
+    expect(state.nodes['parent-a'].children).toEqual([]);
+    expect(state.nodes['parent-b'].children).toEqual(['moved']);
+    expect(state.nodes['moved'].parentId).toBe('parent-b');
+    expect(state.nodes['parent-b'].isExpanded).toBe(true);
   });
 
   it('floats a shared-with-me document at the root when its parent is not shared with me', () => {
@@ -392,6 +466,32 @@ describe('sharedTree.slice syncSharedRoots', () => {
     expect(state.rootIds).toEqual(['doc-b', 'doc-a']);
     expect(state.nodes['doc-b'].orderKey).toBe('Zz');
     expect(state.nodes['doc-a'].orderKey).toBe('a0');
+  });
+
+  it('sorts relinked children under their shared parent by orderKey', () => {
+    const withKey = (
+      id: string,
+      parentId: string | null,
+      orderKey: string
+    ): SharedDocumentEntry => ({
+      id,
+      relationship: 'collaborator',
+      parentId,
+      orderKey,
+      meta: { title: id, updatedAt: '2024-01-01T11:00:00Z', createdAt: '2024-01-01T10:00:00Z' },
+    });
+
+    const state = sharedTreeReducer(
+      initialState,
+      syncSharedRoots([
+        withKey('parent', null, 'a0'),
+        withKey('child-z', 'parent', 'a2'),
+        withKey('child-a', 'parent', 'a0'),
+        withKey('child-m', 'parent', 'a1'),
+      ])
+    );
+
+    expect(state.nodes['parent'].children).toEqual(['child-a', 'child-m', 'child-z']);
   });
 });
 

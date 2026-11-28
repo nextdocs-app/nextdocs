@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { AccessDropdown } from '@/components/share/AccessDropdown';
-import { ShareAvatar } from '@/components/share/CollaboratorRow';
+import { UserAvatar } from '@/components/UserAvatar';
 import { Search, Users } from '@/icons';
 import { ApiError } from '@/services/api-client';
 import { spaceApiService } from '@/services/space.service';
@@ -23,24 +23,6 @@ function displayName(member: { displayName?: string | null; email: string }): st
 
 function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function MemberAvatar({ member }: { member: SpaceMember }) {
-  if (member.avatarUrl) {
-    return (
-      // Avatars are user-provided URLs; a 32px crop does not need an optimizer
-      // hop. `no-referrer` keeps this host out of their logs.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={member.avatarUrl}
-        alt=""
-        referrerPolicy="no-referrer"
-        className="h-8 w-8 flex-shrink-0 rounded-full object-cover"
-      />
-    );
-  }
-
-  return <ShareAvatar seed={member.userId} label={displayName(member)} />;
 }
 
 /**
@@ -319,7 +301,7 @@ export function SpaceMembersTab({
                       <tr key={member.userId} className="transition-colors hover:bg-muted/30">
                         <td className="py-2.5 pl-1 pr-4 align-middle">
                           <div className="flex items-center gap-3">
-                            <MemberAvatar member={member} />
+                            <UserAvatar seed={member.userId} name={name} src={member.avatarUrl} />
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5">
                                 <span className="truncate text-[13.5px] font-medium leading-snug">

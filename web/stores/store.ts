@@ -26,7 +26,9 @@ export const store = configureStore({
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {
-        ignoredActionPaths: ['meta.arg.cacheSyncInFlight'],
+        // The profile photo travels as a File because the upload is one round trip;
+        // serializing a Blob through the store would only copy it.
+        ignoredActionPaths: ['meta.arg.cacheSyncInFlight', 'meta.arg.avatar'],
       },
     }).prepend(authListenerMiddleware.middleware),
 });

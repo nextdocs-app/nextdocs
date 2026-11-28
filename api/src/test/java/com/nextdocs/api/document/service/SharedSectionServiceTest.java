@@ -13,8 +13,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.response.SharedEntry;
@@ -25,6 +23,8 @@ import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.repository.SharedSectionCandidate;
 import com.nextdocs.api.document.repository.UserSharedOrderRepository;
 import com.nextdocs.api.document.util.FractionalIndex;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -162,11 +162,12 @@ class SharedSectionServiceTest {
         UUID keyedId = UUID.randomUUID();
         UUID movedId = UUID.randomUUID();
         UUID siblingId = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document moved =
-                Document.builder().id(movedId).user(user).title("Moved").build();
+                Document.builder().id(movedId).creator(user).title("Moved").build();
         Document sibling =
-                Document.builder().id(siblingId).user(user).title("Sibling").build();
+                Document.builder().id(siblingId).creator(user).title("Sibling").build();
 
         when(documentRepository.findSharedSectionCandidates(userId))
                 .thenReturn(List.of(
@@ -233,7 +234,8 @@ class SharedSectionServiceTest {
                 .thenReturn(List.of())
                 .thenReturn(List.<Object[]>of(new Object[] {docId, "a1"}));
         when(userRepository.findById(userId))
-                .thenReturn(Optional.of(User.builder().id(userId).build()));
+                .thenReturn(Optional.of(
+                        User.builder().id(userId).passwordHash("$2a$12$hash").build()));
 
         List<SharedEntry> result = service.ensureOrders(userId, docId, null, null);
 
@@ -243,8 +245,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowIsIdempotent() {
-        User user = User.builder().id(userId).build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(true);
 
@@ -259,8 +263,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowPlacesTheNewSharedRootBeforeItsFirstSibling() {
-        User user = User.builder().id(userId).build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(false);
         when(userSharedOrderRepository.findMinOrderKeyByUserId(userId, document.getId()))
@@ -276,8 +282,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowSerializesTheKeyCalculationPerUserAfterThePageLock() {
-        User user = User.builder().id(userId).build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(false);
         when(userSharedOrderRepository.findMinOrderKeyByUserId(userId, document.getId()))
@@ -295,8 +303,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowReusesARowAnotherTabInsertedWhileItWaitedForTheLock() {
-        User user = User.builder().id(userId).build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         // Missing before the lock, present after it: the other transaction committed
         // while this one waited, so inserting again would be the 500 this test guards.
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
@@ -311,12 +321,14 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowsInsertsOnlyTheMissingPagesUnderOnePairOfLocks() {
-        User user = User.builder().id(userId).build();
-        Document existing = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document existing =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         Document firstMissing =
-                Document.builder().id(UUID.randomUUID()).user(user).build();
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         Document secondMissing =
-                Document.builder().id(UUID.randomUUID()).user(user).build();
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         List<UUID> missingIds = List.of(firstMissing.getId(), secondMissing.getId()).stream()
                 .sorted()
                 .toList();
@@ -350,9 +362,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowsSkipsRowsAnotherTabInsertedWhileItWaitedForTheLock() {
-        User user = User.builder().id(userId).build();
-        Document first = Document.builder().id(UUID.randomUUID()).user(user).build();
-        Document second = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document first = Document.builder().id(UUID.randomUUID()).creator(user).build();
+        Document second = Document.builder().id(UUID.randomUUID()).creator(user).build();
         List<UUID> ids =
                 List.of(first.getId(), second.getId()).stream().sorted().toList();
 
@@ -370,8 +383,10 @@ class SharedSectionServiceTest {
 
     @Test
     void ensureOrderRowsSkipsTheLocksWhenEveryPageAlreadyHasARow() {
-        User user = User.builder().id(userId).build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.findExistingDocumentIdsByUserIdAndDocumentIds(userId, List.of(document.getId())))
                 .thenReturn(List.of(document.getId()));
 
@@ -440,7 +455,8 @@ class SharedSectionServiceTest {
     @Test
     void ensureOrdersRepairsAStoredKeyNoIntervalAccepts() {
         UUID legacyKeyDoc = UUID.randomUUID();
-        User user = User.builder().id(userId).build();
+
+        User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         // A timestamp left by the pre-fractional backfill: it sorts, but no interval can
         // be computed around it, so it would answer CONFLICT on every later reorder.
         String legacyKey = "2024-01-01T10:00:00.000000Z";

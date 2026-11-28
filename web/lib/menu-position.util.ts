@@ -11,6 +11,9 @@
  *     than any menu, so the clamp pulls the menu back until it no longer crosses
  *     the screen edge - which means it overlaps the drawer's right-hand stretch.
  *     Trimming the menu down to the gutter is the only way to avoid that overlap.
+ *   - `before-edge` (right-aligned triggers): the menu ends at the trigger's
+ *     right edge and grows leftwards, so it stays over the page instead of
+ *     straddling into a panel docked on the right.
  *
  * Both axes are clamped into the viewport, and the vertical side flips when the
  * trigger sits too close to the bottom.
@@ -31,7 +34,7 @@ export interface MenuRect {
 export type MenuPlacement = 'above' | 'below';
 
 /** How the menu uses the space next to the sidebar's right edge. */
-export type MenuAlignment = 'straddle' | 'after-edge';
+export type MenuAlignment = 'straddle' | 'after-edge' | 'before-edge';
 
 export interface MenuPosition {
   left: number;
@@ -76,7 +79,12 @@ export function computeMenuPosition({
   margin = MENU_VIEWPORT_MARGIN_PX,
 }: MenuPositionInput): MenuPosition {
   const anchorX = anchorEdgeX ?? trigger.right;
-  const preferredLeft = alignment === 'straddle' ? anchorX - menu.width / 2 : anchorX + gap;
+  const preferredLeft =
+    alignment === 'straddle'
+      ? anchorX - menu.width / 2
+      : alignment === 'before-edge'
+        ? anchorX - menu.width
+        : anchorX + gap;
   // Clamping is what keeps `after-edge` on screen: the drawer leaves a gutter
   // narrower than the menu, so the menu ends up flush with the right margin and
   // overlapping the drawer's edge instead of running off the screen.

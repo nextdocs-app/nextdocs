@@ -12,8 +12,6 @@ env:
   # rejects a one-sided token, so both services share this value.
   JWT_SECRET: e2e-ci-jwt-secret-0123456789abcdef
   YHUB_SERVICE_TOKEN: e2e-ci-service-token-0123456789abcdef
-  # Test-only AES-256 key; the API rejects only the shipped placeholder value.
-  OAUTH_TOKEN_ENCRYPTION_KEY_BASE64: IdjyIdChmW8Yv4AMcT+nYw7HPFaSQcKj2iK+47mkVVo=
   POSTGRES: postgres://nextdocs:nextdocs@127.0.0.1:5432/nextdocs_e2e_yhub
   # Keep the suite's Yhub queues out of any shared local `yhub` prefix. CI's Redis
   # is fresh, but the same env is the documented local recipe.
@@ -112,7 +110,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}

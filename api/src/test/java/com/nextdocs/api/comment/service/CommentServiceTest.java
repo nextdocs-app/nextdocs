@@ -12,8 +12,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.comment.dto.request.CommentBodyRequest;
 import com.nextdocs.api.comment.dto.response.CommentResponse;
 import com.nextdocs.api.comment.dto.response.ThreadResponse;
@@ -28,6 +26,9 @@ import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.service.PermissionService;
+import com.nextdocs.api.mention.service.MentionService;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -78,6 +79,9 @@ class CommentServiceTest {
     @Mock
     private PermissionService permissionService;
 
+    @Mock
+    private MentionService mentionService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private CommentService commentService;
@@ -97,6 +101,7 @@ class CommentServiceTest {
                 reactionRepository,
                 userRepository,
                 permissionService,
+                mentionService,
                 objectMapper);
         userId = UUID.randomUUID();
         documentId = UUID.randomUUID();
@@ -106,6 +111,7 @@ class CommentServiceTest {
                 .id(userId)
                 .email("alice@example.com")
                 .displayName("Alice")
+                .passwordHash("$2a$12$hash")
                 .build();
         document = Document.builder().id(documentId).title("Doc").build();
     }
@@ -130,7 +136,11 @@ class CommentServiceTest {
         Comment other = comment(
                 UUID.randomUUID(),
                 thread,
-                User.builder().id(otherId).displayName("Bob").build(),
+                User.builder()
+                        .id(otherId)
+                        .displayName("Bob")
+                        .passwordHash("$2a$12$hash")
+                        .build(),
                 otherId,
                 "Bob",
                 "[]");
@@ -260,14 +270,19 @@ class CommentServiceTest {
         stubIdentity(DocumentAccessLevel.COMMENT);
         CommentThread thread = thread(threadId, false);
         Comment other = comment(
-                commentId, thread, User.builder().id(UUID.randomUUID()).build(), UUID.randomUUID(), "Bob", "[]");
+                commentId,
+                thread,
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build(),
+                UUID.randomUUID(),
+                "Bob",
+                "[]");
         when(threadRepository.findByIdAndDocument_Id(threadId, documentId)).thenReturn(Optional.of(thread));
         when(commentRepository.findByIdAndThread_Id(commentId, threadId)).thenReturn(Optional.of(other));
 
         assertThrows(
                 ApiException.class,
                 () -> commentService.updateComment(userId, documentId, threadId, commentId, body("[]")));
-        verify(commentRepository, never()).save(any());
+        verify(commentRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -282,7 +297,7 @@ class CommentServiceTest {
                 userId, documentId, threadId, commentId, body("[{\"type\":\"paragraph\",\"content\":\"edited\"}]"));
 
         assertTrue(mine.getBody().contains("edited"));
-        verify(commentRepository).save(mine);
+        verify(commentRepository).saveAndFlush(mine);
         verify(threadRepository).save(thread);
     }
 
@@ -306,7 +321,12 @@ class CommentServiceTest {
         stubIdentity(DocumentAccessLevel.EDIT);
         CommentThread thread = thread(threadId, false);
         Comment other = comment(
-                commentId, thread, User.builder().id(UUID.randomUUID()).build(), UUID.randomUUID(), "Bob", "[]");
+                commentId,
+                thread,
+                User.builder().id(UUID.randomUUID()).passwordHash("$2a$12$hash").build(),
+                UUID.randomUUID(),
+                "Bob",
+                "[]");
         when(threadRepository.findByIdAndDocument_Id(threadId, documentId)).thenReturn(Optional.of(thread));
         when(commentRepository.findByIdAndThread_Id(commentId, threadId)).thenReturn(Optional.of(other));
         when(commentRepository.countByThread_Id(threadId)).thenReturn(2L);
@@ -501,7 +521,11 @@ class CommentServiceTest {
                 .build();
         CommentReaction second = CommentReaction.builder()
                 .comment(deletedAuthor)
-                .user(User.builder().id(UUID.randomUUID()).displayName("Bob").build())
+                .user(User.builder()
+                        .id(UUID.randomUUID())
+                        .displayName("Bob")
+                        .passwordHash("$2a$12$hash")
+                        .build())
                 .emoji("👍")
                 .createdAt(now().plusSeconds(1))
                 .build();

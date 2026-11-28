@@ -1,7 +1,7 @@
 package com.nextdocs.api.comment.entity;
 
-import com.nextdocs.api.auth.entity.User;
 import com.nextdocs.api.document.entity.Document;
+import com.nextdocs.api.user.entity.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;

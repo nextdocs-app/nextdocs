@@ -3,8 +3,6 @@ package com.nextdocs.api.space.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doAnswer;
 
-import com.nextdocs.api.auth.entity.User;
-import com.nextdocs.api.auth.repository.UserRepository;
 import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.Document;
@@ -15,6 +13,8 @@ import com.nextdocs.api.space.entity.Space;
 import com.nextdocs.api.space.entity.SpaceAccessMode;
 import com.nextdocs.api.space.repository.SpaceMemberRepository;
 import com.nextdocs.api.space.repository.SpaceRepository;
+import com.nextdocs.api.user.entity.User;
+import com.nextdocs.api.user.repository.UserRepository;
 import com.nextdocs.api.workspace.entity.Workspace;
 import com.nextdocs.api.workspace.entity.WorkspaceMember;
 import com.nextdocs.api.workspace.entity.WorkspaceRole;
@@ -86,10 +86,12 @@ class SpaceArchiveConcurrencyTest {
         actor = userRepository.saveAndFlush(User.builder()
                 .email("space-race-actor@example.com")
                 .displayName("Actor")
+                .passwordHash("$2a$12$hash")
                 .build());
         target = userRepository.saveAndFlush(User.builder()
                 .email("space-race-target@example.com")
                 .displayName("Target")
+                .passwordHash("$2a$12$hash")
                 .build());
         workspace = workspaceRepository.saveAndFlush(
                 Workspace.builder().name("Race").build());
@@ -102,7 +104,7 @@ class SpaceArchiveConcurrencyTest {
                 .build());
         page = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(actor)
+                .creator(actor)
                 .title("Page")
                 .build());
     }

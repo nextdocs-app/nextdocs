@@ -1,5 +1,4 @@
 import type { Collaborator } from '@/services/document.service';
-import type { DocumentIcon } from '@/types/document.types';
 import { normalizeTitle } from './shareOptions';
 
 export type PeopleGroupKind = 'document' | 'space' | 'blocked';
@@ -11,7 +10,6 @@ export interface PeopleGroup {
   title: string;
   sourceId: string | null;
   sourceTitle: string | null;
-  icon?: DocumentIcon | null;
   people: Collaborator[];
 }
 
@@ -46,20 +44,16 @@ export function getPeopleGroups(
   options: {
     spaceId?: string | null;
     pinnedUserId?: string | null;
-    resolveIcon?: (
-      sourceId: string | null,
-      kind: PeopleGroupKind
-    ) => DocumentIcon | null | undefined;
   } = {}
 ): PeopleGrouping {
-  const { spaceId = null, pinnedUserId = null, resolveIcon } = options;
+  const { spaceId = null, pinnedUserId = null } = options;
   const pinned =
     (pinnedUserId
       ? collaborators.find(
           (collab) => collab.userId === pinnedUserId && collab.accessLevel !== 'NO_ACCESS'
         )
       : undefined) ??
-    collaborators.find((collab) => collab.owner) ??
+    collaborators.find((collab) => collab.accessLevel === 'OWNER') ??
     null;
 
   const buckets = new Map<
@@ -127,7 +121,6 @@ export function getPeopleGroups(
       title: `From “${bucket.title}”`,
       sourceId: bucket.sourceId,
       sourceTitle: bucket.title,
-      icon: resolveIcon ? (resolveIcon(bucket.sourceId, bucket.kind) ?? null) : undefined,
       people: bucket.people,
     });
   }
@@ -140,7 +133,6 @@ export function getPeopleGroups(
       title: 'Blocked',
       sourceId: null,
       sourceTitle: null,
-      icon: null,
       people: blocked,
     });
   }
@@ -161,8 +153,6 @@ export function getPersonDetail(
   } = {}
 ): string | null {
   const { recentlyAddedUserIds = new Set<string>() } = options;
-
-  if (collab.owner) return null;
 
   const source = normalizeTitle(collab.inheritedFromTitle, '');
 
