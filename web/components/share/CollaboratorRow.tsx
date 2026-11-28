@@ -6,25 +6,84 @@ import type { Collaborator } from '@/services/document.service';
 import { AccessDropdown } from './AccessDropdown';
 import {
   ACCESS_LABELS,
+  LEAVE_LABEL,
   normalizeTitle,
+  INVITE_ACCESS_OPTIONS,
   type CollaboratorDropdownValue,
   type DropdownOption,
 } from './shareOptions';
 
+/**
+ * The row's menu. Exactly one revoke entry per row:
+ *
+ * - `NO_ACCESS` is the API's single revoke verb for other people. It writes a DENY
+ *   breakpoint when an inherited channel exists to shadow (space membership, an
+ *   ancestor grant, a workspace audience the roster does not render) and deletes the
+ *   direct grant when nothing does, so a second "Remove" entry would only ever repeat
+ *   that one write under another name.
+ * - `LEAVE` is the self path (`DELETE /collaborators/me`): a self No access row is
+ *   refused, and it would be a breakpoint only an admin could undo.
+ * - `INHERIT` undoes an override by deleting the direct row, which is the same DELETE
+ *   as a remove but a different promise, so it is labelled for its outcome.
+ *
+ * A row with no options is not editable at all: the caller does not administer
+ * sharing and this is not their own removable membership. A single option means
+ * "no action to offer", so the caller renders a plain label instead of a dead
+ * dropdown — the same rule `spaceMemberOptions` follows.
+ *
+ * The creator is an ordinary OWNER row: their level is editable and removable like
+ * any other owner's, and the API guards the page's last owner for all of them.
+ */
 export function getCollaboratorRowOptions(
-  collab: Collaborator
+  collab: Collaborator,
+  {
+    isSelf = false,
+    canManageSharing = true,
+    spaceArchived = false,
+  }: {
+    isSelf?: boolean;
+    canManageSharing?: boolean;
+    spaceArchived?: boolean;
+  } = {}
 ): DropdownOption<CollaboratorDropdownValue>[] {
-  const options: DropdownOption<CollaboratorDropdownValue>[] = [
-    { value: 'OWNER' as const, label: 'Full access' },
-    { value: 'EDIT', label: 'Can edit' },
-    { value: 'COMMENT', label: 'Can comment' },
-    { value: 'VIEW', label: 'Can view' },
-  ];
+  const options: DropdownOption<CollaboratorDropdownValue>[] = [];
 
-  // An override (own level over an ancestor grant) offers its way back via
-  // an explicit Inherit option. We append it rather than mutating the
-  // matching access level option in place, which would break the selected
-  // state when the override matches that level.
+  if (canManageSharing) {
+    options.push(...INVITE_ACCESS_OPTIONS);
+  } else if (isSelf) {
+    // A non-admin may not write a level, so their own row shows the configured grant
+    // as a read-only entry. The viewer-level summary explains what actually resolves.
+    options.push({
+      value: collab.accessLevel,
+      label: ACCESS_LABELS[collab.accessLevel] ?? collab.accessLevel,
+    });
+  }
+
+  if (isSelf) {
+    // Leave needs a direct ALLOW row (an inherited membership cannot be left; the API
+    // answers 404).
+    const canLeave = !spaceArchived && collab.accessLevel !== 'NO_ACCESS' && !collab.inherited;
+    if (canLeave) {
+      options.push({
+        value: 'LEAVE',
+        label: LEAVE_LABEL,
+        dividerBefore: true,
+        isDestructive: true,
+      });
+    }
+    // An inherited owner's leave stays hidden: the API refuses it, and the level
+    // arrives from a scope this row does not administer.
+    return options;
+  }
+
+  if (!canManageSharing) {
+    return options;
+  }
+
+  // An override (own level over an ancestor grant) offers its way back via an
+  // explicit Inherit option. We append it rather than mutating the matching
+  // access level option in place, which would break the selected state when the
+  // override matches that level.
   const hasInheritOption = !collab.inherited && Boolean(collab.inheritedFromId);
   if (hasInheritOption) {
     const parentTitle = normalizeTitle(collab.inheritedFromTitle, '') || 'parent page';
@@ -47,22 +106,14 @@ export function getCollaboratorRowOptions(
     isDestructive: true,
   });
 
-  if (!collab.inherited && !hasInheritOption && !collab.owner) {
-    options.push({
-      value: 'REMOVE',
-      label: 'Remove',
-      dividerBefore: false,
-      isDestructive: true,
-    });
-  }
-
   return options;
 }
 
 export function CollaboratorRow({
   collab,
   isSelf,
-  canEditRow,
+  canManageSharing,
+  spaceArchived = false,
   detail = null,
   onDetailClick,
   hasEffectivePublicLink,
@@ -71,17 +122,24 @@ export function CollaboratorRow({
 }: {
   collab: Collaborator;
   isSelf: boolean;
-  canEditRow: boolean;
+  canManageSharing: boolean;
+  spaceArchived?: boolean;
   detail?: string | null;
   onDetailClick?: () => void;
   hasEffectivePublicLink: boolean;
   effectiveLinkAction: string;
   onAccessSelect: (value: CollaboratorDropdownValue) => void;
 }) {
-  // The dropdown edits the stored grant; the effective level is shown only read-only.
-  // An archived space caps even an explicit page owner at VIEW, so displayLevel
-  // drives the badge and blocked note while collab.accessLevel drives the dropdown.
-  const displayLevel = collab.effectiveAccessLevel ?? collab.accessLevel;
+  const options = getCollaboratorRowOptions(collab, {
+    isSelf,
+    canManageSharing,
+    spaceArchived,
+  });
+  // Rows describe configured grants. The viewer-level summary is the only place that
+  // combines independent sources; an admin cannot infer a person's effective level from
+  // one row, and a lower direct grant no longer demotes a higher independent source.
+  const displayLevel = collab.accessLevel;
+  const selectedLevel = collab.accessLevel;
   // "comment this document" is ungrammatical; every other action reads fine.
   const linkActionPhrase = effectiveLinkAction === 'comment' ? 'comment on' : effectiveLinkAction;
 
@@ -119,11 +177,11 @@ export function CollaboratorRow({
           </p>
         </div>
 
-        {canEditRow ? (
+        {options.length > 1 ? (
           <div className="flex items-center gap-1 flex-shrink-0">
             <AccessDropdown
-              value={collab.accessLevel}
-              options={getCollaboratorRowOptions(collab)}
+              value={selectedLevel}
+              options={options}
               onChange={onAccessSelect}
               align="right"
               muted

@@ -21,6 +21,7 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.repository.AccessGrantRepository;
+import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.document.validation.IconCatalog;
 import com.nextdocs.api.pageicon.PageIconType;
 import com.nextdocs.api.pageicon.dto.request.PageIconRequest;
@@ -72,6 +73,9 @@ class WorkspaceServiceTest {
     private AccessGrantRepository accessGrantRepository;
 
     @Mock
+    private DocumentRepository documentRepository;
+
+    @Mock
     private UserRepository userRepository;
 
     @Mock
@@ -117,6 +121,7 @@ class WorkspaceServiceTest {
                 workspaceRepository,
                 memberRepository,
                 accessGrantRepository,
+                documentRepository,
                 userRepository,
                 refreshTokenRepository,
                 accessService,
@@ -921,7 +926,7 @@ class WorkspaceServiceTest {
     void removeMember_deletesMembershipDeactivatesAccountAndRevokesTokens() {
         givenAdmin(WorkspaceRole.OWNER);
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
                 .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
         when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
                 .thenReturn(List.of(member(owner, WorkspaceRole.OWNER)));
@@ -949,7 +954,7 @@ class WorkspaceServiceTest {
     void removeMember_rejectsSelfRemoval() {
         givenAdmin(WorkspaceRole.OWNER);
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, owner.getId()))
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, owner.getId()))
                 .thenReturn(Optional.of(member(owner, WorkspaceRole.OWNER)));
 
         assertThatThrownBy(() -> workspaceService.removeMember(actorId, owner.getId()))
@@ -962,7 +967,7 @@ class WorkspaceServiceTest {
     void removeMember_adminCanOnlyRemovePlainMembers() {
         givenAdmin(WorkspaceRole.ADMIN);
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
                 .thenReturn(Optional.of(member(target, WorkspaceRole.ADMIN)));
 
         assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
@@ -975,7 +980,7 @@ class WorkspaceServiceTest {
     void removeMember_ownerCanRemoveAnotherOwner() {
         givenAdmin(WorkspaceRole.OWNER);
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
                 .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
         when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
                 .thenReturn(2L);
@@ -988,10 +993,74 @@ class WorkspaceServiceTest {
     }
 
     @Test
+    void removeMember_rejectsAMemberWhoSolelyOwnsAStandalonePage() {
+        givenAdmin(WorkspaceRole.OWNER);
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+        // The grant deletion below would leave this root without any OWNER.
+        when(accessGrantRepository.countSolelyOwnedStandaloneRoots(workspaceId, target.getId()))
+                .thenReturn(1L);
+
+        assertThatThrownBy(() -> workspaceService.removeMember(actorId, target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT));
+
+        verify(accessGrantRepository, never()).deleteUserGrantsByWorkspace(any(), any());
+        verify(memberRepository, never()).delete(any());
+    }
+
+    @Test
+    void removeMember_locksOwnedStandaloneRootsInCanonicalOrderBeforeCheckingSoleOwnership() {
+        givenAdmin(WorkspaceRole.OWNER);
+        UUID firstRootId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID secondRootId = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+        when(accessGrantRepository.findOwnedStandaloneRootIds(workspaceId, target.getId()))
+                .thenReturn(List.of(secondRootId, firstRootId));
+        when(accessGrantRepository.countSolelyOwnedStandaloneRoots(workspaceId, target.getId()))
+                .thenReturn(0L);
+        when(memberRepository.findAllByWorkspaceIdOrderByCreatedAtAsc(workspaceId))
+                .thenReturn(List.of(member(owner, WorkspaceRole.OWNER)));
+
+        workspaceService.removeMember(actorId, target.getId());
+
+        var inOrder = org.mockito.Mockito.inOrder(
+                workspaceRepository, memberRepository, documentRepository, accessGrantRepository);
+        inOrder.verify(workspaceRepository).findByIdForUpdate(workspaceId);
+        inOrder.verify(memberRepository).findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId());
+        inOrder.verify(documentRepository).findByIdForOwnershipUpdate(firstRootId);
+        inOrder.verify(documentRepository).findByIdForOwnershipUpdate(secondRootId);
+        inOrder.verify(accessGrantRepository).countSolelyOwnedStandaloneRoots(workspaceId, target.getId());
+        inOrder.verify(accessGrantRepository).deleteUserGrantsByWorkspace(workspaceId, target.getId());
+    }
+
+    @Test
+    void requireWorkspaceForStandaloneCreate_locksCallerMembership() {
+        when(memberRepository.findByUserIdForUpdate(target.getId()))
+                .thenReturn(Optional.of(member(target, WorkspaceRole.MEMBER)));
+
+        assertThat(workspaceService.requireWorkspaceForStandaloneCreate(target.getId()))
+                .isSameAs(workspace);
+        verify(memberRepository).findByUserIdForUpdate(target.getId());
+    }
+
+    @Test
+    void requireWorkspaceForStandaloneCreate_throwsNotFoundWhenMembershipWasRemoved() {
+        when(memberRepository.findByUserIdForUpdate(target.getId())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> workspaceService.requireWorkspaceForStandaloneCreate(target.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    @Test
     void removeMember_rejectsRemovingTheLastOwner() {
         givenAdmin(WorkspaceRole.OWNER);
         when(workspaceRepository.findByIdForUpdate(workspaceId)).thenReturn(Optional.of(workspace));
-        when(memberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId()))
+        when(memberRepository.findByWorkspaceIdAndUserIdForUpdate(workspaceId, target.getId()))
                 .thenReturn(Optional.of(member(target, WorkspaceRole.OWNER)));
         when(memberRepository.countByWorkspaceIdAndRole(workspaceId, WorkspaceRole.OWNER))
                 .thenReturn(1L);

@@ -24,10 +24,6 @@ public record DocumentCreateRequest(
         @Size(max = 10_485_760, message = "yjsState must be at most 10485760 characters (~10 MB Base64 payload)")
         String yjsState,
 
-        @Schema(description = "Optional creator label", example = "Anonymous")
-        @Size(max = 255, message = "createdBy must be at most 255 characters")
-        String createdBy,
-
         @Schema(description = "Parent document ID. Null creates the document at root level.")
         UUID parentId,
 

@@ -67,7 +67,7 @@ class CommentPersistenceTest {
 
         document = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Document")
                 .build());
     }

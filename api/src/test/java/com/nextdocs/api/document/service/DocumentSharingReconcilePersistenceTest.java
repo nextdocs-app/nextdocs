@@ -80,20 +80,20 @@ class DocumentSharingReconcilePersistenceTest {
 
         Document grandparent = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .title("Grandparent")
                 .build());
         Document root = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .parent(grandparent)
                 .title("Root")
                 .build());
         Document child = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(owner)
+                .creator(owner)
                 .workspace(workspace)
                 .parent(root)
                 .title("Child")
@@ -135,7 +135,7 @@ class DocumentSharingReconcilePersistenceTest {
                             .toList();
                 })
                 .when(documentRepository)
-                .findAllWithUserByIdIn(any());
+                .findAllForChainByIdIn(any());
         doAnswer(inv -> {
                     java.util.Collection<UUID> ids = inv.getArgument(0);
                     return ids.stream()

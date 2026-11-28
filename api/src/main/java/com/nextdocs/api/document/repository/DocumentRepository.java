@@ -21,36 +21,18 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
-    Page<Document> findAllByUser_IdAndDeletedAtIsNull(UUID userId, Pageable pageable);
+    // Resolve before SQL pagination so DENY rows neither inflate the count nor leave holes.
+    String REACHABLE_LISTING_FROM_SQL = " FROM documents d WHERE d.deleted_at IS NULL "
+            + "AND has_positive_identity_grant(:userId, d.id) "
+            + "AND resolve_effective_access(:userId, d.id) IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER')";
 
-    Optional<Document> findByIdAndUser_IdAndDeletedAtIsNull(UUID id, UUID userId);
-
-    Optional<Document> findByIdAndUser_Id(UUID id, UUID userId);
+    @Query(
+            value = "SELECT d.id, resolve_effective_access(:userId, d.id) AS access_level" + REACHABLE_LISTING_FROM_SQL,
+            countQuery = "SELECT count(*)" + REACHABLE_LISTING_FROM_SQL,
+            nativeQuery = true)
+    Page<Object[]> findReachableDocuments(@Param("userId") UUID userId, Pageable pageable);
 
     Optional<Document> findByIdAndDeletedAtIsNull(UUID id);
-
-    // Lean candidates for the flat Shared view (search and offline cache), which is not
-    // the Shared section: it also carries nested pages under a readable parent. A space
-    // page never appears here (d.space IS NULL below); SHARED_SECTION_CANDIDATES_SQL is
-    // the section, with the single-home rule applied. Effective access, parent
-    // inheritance and the caller's personal order have to resolve for every candidate
-    // before the listing can paginate, so this cannot be a paged entity query: loading
-    // Document here would pull each candidate row into heap. The page's full rows are
-    // loaded by id after filtering and pagination in DocumentListQueryHelper.
-    @Query("SELECT new com.nextdocs.api.document.repository.SharedDocumentCandidate("
-            + "d.id, d.parent.id, d.siblingOrderKey, d.title, d.createdAt, d.updatedAt) "
-            + "FROM Document d "
-            + "WHERE d.user.id <> :userId AND d.deletedAt IS NULL AND d.space IS NULL "
-            + "AND (EXISTS (SELECT g.id FROM AccessGrant g WHERE g.document.id = d.id "
-            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-            + "OR EXISTS (SELECT g.id FROM AccessGrant g, WorkspaceGroupMember gm, WorkspaceMember wm "
-            + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
-            + "AND wm.workspace.id = d.workspace.id AND wm.user.id = :userId "
-            + "AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
-            + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
-            + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId))) "
-            + "ORDER BY d.updatedAt DESC, d.createdAt DESC, d.id ASC")
-    List<SharedDocumentCandidate> findSharedWithUserId(@Param("userId") UUID userId);
 
     // All direct children of a given parent, non-trashed only; Pageable should sort by siblingOrderKey.
     Page<Document> findAllByParent_IdAndDeletedAtIsNull(UUID parentId, Pageable pageable);
@@ -81,28 +63,67 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query("SELECT d FROM Document d WHERE d.id IN :ids ORDER BY d.id")
     List<Document> findAllForOrderInsert(@Param("ids") Collection<UUID> ids);
 
-    // Private root documents owned by userId without positive page grants or workspace sharing.
-    // Space pages are excluded: a page filed into a space is listed under that space, not in
-    // the Private section, and the predicate is what keeps existing pages where they are
-    // (space_id stays null unless a page was explicitly created in or attached to a space).
+    /**
+     * Row-locks one page for an ownership-changing grant write. The lock serializes the
+     * last-owner checks with the write itself, so two concurrent removals cannot both
+     * observe another owner and together leave a standalone page ownerless. Distinct from
+     * {@link #findAllForOrderInsert}, whose ordering and locking contract belongs to
+     * Shared-order inserts.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM Document d WHERE d.id = :id")
+    Optional<Document> findByIdForOwnershipUpdate(@Param("id") UUID id);
+
+    @Query("SELECT d.workspace.id FROM Document d WHERE d.id = :id")
+    Optional<UUID> findWorkspaceIdById(@Param("id") UUID id);
+
+    /**
+     * The caller's Private section: standalone roots where they hold OWNER and nobody
+     * else holds a positive grant. Membership is derived, never stored, so a page somebody else
+     * can read is a Shared entry for every holder, and it returns here only when it drops
+     * back to a single holder. Space pages are listed under their space, and a root with
+     * a workspace audience is shared by definition (mode is RESTRICTED here).
+     */
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
+            + "WHERE d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
             + "AND d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.RESTRICTED "
-            + "AND NOT EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "AND EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id "
+            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW "
+            + "AND g.accessLevel = com.nextdocs.api.document.entity.DocumentAccessLevel.OWNER) "
+            + "AND NOT EXISTS (SELECT 1 FROM AccessGrant other WHERE other.document.id = d.id "
+            + "AND other.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW "
+            + "AND ((other.user IS NOT NULL AND other.user.id <> :userId) OR other.groupId IS NOT NULL)) "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findPrivateRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
-    // All owned root documents (private + owner-shared) with personal navigation order
+    /**
+     * Every standalone root the caller can reach (Private and Shared) with personal order.
+     *
+     * <p>Candidate branches mirror the identity channels: a direct page grant, a
+     * workspace-qualified group grant, or the page's workspace audience. The workspace
+     * audience alone is not enough: a page-level No access row shadows it, and a listing
+     * that still returned the root would advertise a page that answers 404. The effective
+     * level is therefore resolved in SQL before pagination, so denied rows neither inflate
+     * the count nor leave holes.
+     */
     @Query("SELECT d, udo.orderKey FROM Document d "
             + "LEFT JOIN UserDocumentOrder udo ON udo.document.id = d.id AND udo.user.id = :userId "
-            + "WHERE d.user.id = :userId AND d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
+            + "WHERE d.parent IS NULL AND d.deletedAt IS NULL AND d.space IS NULL "
+            + "AND (EXISTS (SELECT 1 FROM AccessGrant g WHERE g.document.id = d.id "
+            + "AND g.user.id = :userId AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "OR EXISTS (SELECT 1 FROM AccessGrant g, WorkspaceGroupMember gm "
+            + "WHERE g.document.id = d.id AND g.groupId = gm.id.groupId AND gm.id.userId = :userId "
+            + "AND g.workspace.id = d.workspace.id AND g.effect = com.nextdocs.api.document.entity.AccessGrantEffect.ALLOW) "
+            + "OR (d.workspaceAccessMode = com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS "
+            + "AND EXISTS (SELECT wm.id FROM WorkspaceMember wm WHERE wm.workspace.id = d.workspace.id AND wm.user.id = :userId))) "
+            + "AND FUNCTION('resolve_effective_access', :userId, d.id) IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER') "
             + "ORDER BY udo.orderKey ASC NULLS LAST, d.createdAt ASC, d.id ASC")
     Page<Object[]> findAllRootDocuments(@Param("userId") UUID userId, Pageable pageable);
 
     // Candidates for the signed-in Shared section: everything the caller reaches through a
-    // page grant, plus owned roots that carry an audience, plus space pages included on
-    // purpose because a root shared to someone outside its space has no other listing.
+    // page grant or the workspace audience, plus space pages included on purpose because a
+    // root shared to someone outside its space has no other listing.
     //
     // The query starts from the caller's grants instead of scanning documents: a workspace
     // can hold far more pages than one person can reach, so an all-documents candidate scan
@@ -112,9 +133,9 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // rather than once per distinct parent (see SHARED_SECTION_VISIBILITY_SQL).
     //
     // The trashed filter is repeated inside the branches that read documents directly, not
-    // left to the candidate_pages CTE: idx_documents_workspace_audience and
-    // idx_documents_active_owned_roots (V45) are partial on deleted_at IS NULL, and a
-    // planner can only use a partial index when the branch's own predicate proves it.
+    // left to the candidate_pages CTE: idx_documents_workspace_audience is partial on
+    // deleted_at IS NULL, and a planner can only use a partial index when the branch's own
+    // predicate proves it.
     //
     // Both queries below splice in SHARED_SECTION_VISIBILITY_SQL, which is written against a
     // relation aliased {@code c} that exposes (parent_id, space_id, access_level). A child's
@@ -126,7 +147,12 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "WHEN c.parent_id IS NOT NULL THEN "
             + "COALESCE(resolve_effective_access(:userId, c.parent_id), 'NO_ACCESS') "
             + "NOT IN ('VIEW', 'COMMENT', 'EDIT', 'OWNER') "
-            + "WHEN c.space_id IS NULL THEN TRUE "
+            + "WHEN c.space_id IS NULL THEN ("
+            // A root only leaves the Private section once someone else can reach it.
+            + "EXISTS (SELECT 1 FROM documents d WHERE d.id = c.id "
+            + "AND d.workspace_access_mode = 'WORKSPACE_MEMBERS') "
+            + "OR EXISTS (SELECT 1 FROM access_grants g2 WHERE g2.document_id = c.id AND g2.effect = 'ALLOW' "
+            + "AND ((g2.user_id IS NOT NULL AND g2.user_id <> :userId) OR g2.group_id IS NOT NULL))) "
             + "ELSE NOT EXISTS ("
             + "SELECT 1 FROM spaces s "
             + "JOIN workspace_members wm ON wm.workspace_id = s.workspace_id AND wm.user_id = :userId "
@@ -149,22 +175,16 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
             + "UNION "
             + "SELECT d.id FROM documents d "
             + "JOIN workspace_members wm ON wm.workspace_id = d.workspace_id AND wm.user_id = :userId "
-            + "WHERE d.workspace_access_mode = 'WORKSPACE_MEMBERS' AND d.deleted_at IS NULL "
-            + "UNION "
-            + "SELECT d.id FROM documents d "
-            + "WHERE d.user_id = :userId AND d.parent_id IS NULL AND d.deleted_at IS NULL "
-            + "AND (d.workspace_access_mode = 'WORKSPACE_MEMBERS' "
-            + "OR EXISTS (SELECT 1 FROM access_grants g "
-            + "            WHERE g.document_id = d.id AND g.effect = 'ALLOW'))"
+            + "WHERE d.workspace_access_mode = 'WORKSPACE_MEMBERS' AND d.deleted_at IS NULL"
             + "), candidate_pages AS MATERIALIZED ("
             + " SELECT d.id, d.parent_id, d.space_id, d.title, d.created_at, d.updated_at, "
-            + "resolve_effective_access(:userId, d.id) AS access_level, d.user_id = :userId AS owner "
+            + "resolve_effective_access(:userId, d.id) AS access_level "
             + "FROM documents d "
             + "JOIN granted_documents g ON g.id = d.id "
-            + "WHERE d.deleted_at IS NULL "
-            + "AND (d.user_id <> :userId OR d.parent_id IS NULL)"
+            + "WHERE d.deleted_at IS NULL"
             + ") "
-            + "SELECT c.id, c.parent_id, c.space_id, c.title, c.created_at, c.updated_at, c.access_level, c.owner "
+            + "SELECT c.id, c.parent_id, c.space_id, c.title, c.created_at, c.updated_at, c.access_level, "
+            + "c.access_level = 'OWNER' AS owner "
             + "FROM candidate_pages c WHERE "
             + SHARED_SECTION_VISIBILITY_SQL
             + " ORDER BY c.updated_at DESC, c.created_at DESC, c.id ASC";
@@ -173,32 +193,27 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     // answer "is this in the caller's Shared section?" without scanning the whole section.
     String SHARED_SECTION_CANDIDATE_SQL = "WITH candidate AS MATERIALIZED ("
             + " SELECT d.id, d.parent_id, d.space_id, d.title, d.created_at, d.updated_at, "
-            + "resolve_effective_access(:userId, d.id) AS access_level, d.user_id = :userId AS owner "
+            + "resolve_effective_access(:userId, d.id) AS access_level "
             + "FROM documents d "
             + "WHERE d.id = :documentId AND d.deleted_at IS NULL "
-            + "AND (d.user_id <> :userId OR d.parent_id IS NULL) "
             + "AND ("
-            + " (d.user_id = :userId AND d.parent_id IS NULL AND ("
-            + "     d.workspace_access_mode = 'WORKSPACE_MEMBERS' "
-            + "     OR EXISTS (SELECT 1 FROM access_grants g "
-            + "                WHERE g.document_id = d.id AND g.effect = 'ALLOW'))) "
-            + " OR (d.user_id <> :userId AND ("
-            + "     EXISTS (SELECT 1 FROM access_grants g "
-            + "             WHERE g.document_id = d.id AND g.user_id = :userId AND g.effect = 'ALLOW') "
-            + "     OR EXISTS ("
-            + "         SELECT 1 FROM workspace_group_members gm "
-            + "         JOIN workspace_groups wg ON wg.id = gm.group_id AND wg.workspace_id = d.workspace_id "
-            + "         JOIN access_grants g ON g.group_id = gm.group_id "
-            + "                            AND g.document_id = d.id AND g.effect = 'ALLOW' "
-            + "         JOIN workspace_members wm ON wm.workspace_id = d.workspace_id "
-            + "                                 AND wm.user_id = gm.user_id "
-            + "         WHERE gm.user_id = :userId) "
-            + "     OR (d.workspace_access_mode = 'WORKSPACE_MEMBERS' "
-            + "         AND EXISTS (SELECT 1 FROM workspace_members wm "
-            + "                     WHERE wm.workspace_id = d.workspace_id AND wm.user_id = :userId)))) "
+            + " EXISTS (SELECT 1 FROM access_grants g "
+            + "         WHERE g.document_id = d.id AND g.user_id = :userId AND g.effect = 'ALLOW') "
+            + " OR EXISTS ("
+            + "     SELECT 1 FROM workspace_group_members gm "
+            + "     JOIN workspace_groups wg ON wg.id = gm.group_id AND wg.workspace_id = d.workspace_id "
+            + "     JOIN access_grants g ON g.group_id = gm.group_id "
+            + "                        AND g.document_id = d.id AND g.effect = 'ALLOW' "
+            + "     JOIN workspace_members wm ON wm.workspace_id = d.workspace_id "
+            + "                             AND wm.user_id = gm.user_id "
+            + "     WHERE gm.user_id = :userId) "
+            + " OR (d.workspace_access_mode = 'WORKSPACE_MEMBERS' "
+            + "     AND EXISTS (SELECT 1 FROM workspace_members wm "
+            + "                 WHERE wm.workspace_id = d.workspace_id AND wm.user_id = :userId))"
             + ")"
             + ") "
-            + "SELECT c.id, c.parent_id, c.space_id, c.title, c.created_at, c.updated_at, c.access_level, c.owner "
+            + "SELECT c.id, c.parent_id, c.space_id, c.title, c.created_at, c.updated_at, c.access_level, "
+            + "c.access_level = 'OWNER' AS owner "
             + "FROM candidate c WHERE "
             + SHARED_SECTION_VISIBILITY_SQL;
 
@@ -531,9 +546,9 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     @Query(value = ANCESTOR_CHAIN_SQL, nativeQuery = true)
     List<UUID> findAncestorChainIds(@Param("documentId") UUID documentId);
 
-    /** Batch load for chain/subtree walks: owners are fetched eagerly, parents are not. */
-    @Query("SELECT d FROM Document d JOIN FETCH d.user WHERE d.id IN :documentIds")
-    List<Document> findAllWithUserByIdIn(@Param("documentIds") Collection<UUID> documentIds);
+    /** Batch load for chain/subtree walks; attribution is not fetched eagerly. */
+    @Query("SELECT d FROM Document d WHERE d.id IN :documentIds")
+    List<Document> findAllForChainByIdIn(@Param("documentIds") Collection<UUID> documentIds);
 
     /**
      * Parent link per document without loading entities: lets subtree walks answer

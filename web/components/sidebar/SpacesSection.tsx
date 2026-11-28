@@ -417,7 +417,6 @@ export function SpacesSection({
           newId,
           draft.meta.title || 'Untitled',
           draft.ydoc,
-          draft.meta.createdBy ?? null,
           parentId ?? null,
           null,
           null,

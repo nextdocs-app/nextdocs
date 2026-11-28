@@ -312,6 +312,8 @@ jest.mock('../../../components/editor/codeBlockHighlighter', () => ({
 jest.mock('../../../services/document.service', () => ({
   documentService: {
     listCollaborators: jest.fn().mockResolvedValue([]),
+    listViewers: jest.fn().mockResolvedValue([]),
+    recordView: jest.fn().mockResolvedValue(undefined),
     getDocumentBreadcrumbs: jest.fn().mockResolvedValue([]),
   },
 }));

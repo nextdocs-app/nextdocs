@@ -149,7 +149,7 @@ class DocumentMentionVersionPostgresTest {
         }
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, general_access_mode, link_access_level, "
+                "INSERT INTO documents (id, created_by, workspace_id, title, general_access_mode, link_access_level, "
                         + "link_inherit_blocked, deleted_at, created_at, updated_at) "
                         + "VALUES (?, ?, ?, 'Doc', 'RESTRICTED', 'VIEW', FALSE, NULL, now(), now())")) {
             stmt.setObject(1, id);

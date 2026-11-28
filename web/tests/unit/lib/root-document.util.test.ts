@@ -73,8 +73,7 @@ describe('resolveRootDocumentId', () => {
       'token-1',
       'generated-local-id',
       'Untitled',
-      expect.any(Y.Doc),
-      null
+      expect.any(Y.Doc)
     );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
       'generated-local-id',
@@ -147,8 +146,7 @@ describe('resolveRootDocumentId', () => {
       'token-2',
       'generated-local-id',
       'Project kickoff',
-      expect.any(Y.Doc),
-      null
+      expect.any(Y.Doc)
     );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
       'generated-local-id',
@@ -171,8 +169,7 @@ describe('resolveRootDocumentId', () => {
       'token-3',
       'generated-local-id',
       'Untitled',
-      expect.any(Y.Doc),
-      null
+      expect.any(Y.Doc)
     );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
       'generated-local-id',

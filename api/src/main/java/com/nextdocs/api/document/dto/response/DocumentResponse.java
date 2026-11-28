@@ -39,12 +39,10 @@ public record DocumentResponse(
         DocumentAccessLevel accessLevel,
 
         @Schema(
-                description = "Whether the requesting user owns this document; an OWNER-level grant to a "
-                        + "collaborator reports accessLevel=OWNER with owner=false. Only Shared-section "
+                description = "Whether the requesting user holds the OWNER level here. Only Shared-section "
                         + "responses populate it, so it is absent from the other listings.")
         Boolean owner,
 
-        @Schema(description = "Creator label") String createdBy,
         @Schema(description = "Creation timestamp") OffsetDateTime createdAt,
         @Schema(description = "Last update timestamp") OffsetDateTime updatedAt,
 
@@ -80,7 +78,6 @@ public record DocumentResponse(
             boolean hasChildren,
             boolean hasCollaborators,
             DocumentAccessLevel accessLevel,
-            String createdBy,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             OffsetDateTime deletedAt,
@@ -95,7 +92,6 @@ public record DocumentResponse(
                 hasChildren,
                 hasCollaborators,
                 accessLevel,
-                createdBy,
                 createdAt,
                 updatedAt,
                 deletedAt,
@@ -114,7 +110,6 @@ public record DocumentResponse(
             boolean hasChildren,
             boolean hasCollaborators,
             DocumentAccessLevel accessLevel,
-            String createdBy,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             OffsetDateTime deletedAt,
@@ -130,7 +125,6 @@ public record DocumentResponse(
                 hasChildren,
                 hasCollaborators,
                 accessLevel,
-                createdBy,
                 createdAt,
                 updatedAt,
                 deletedAt,
@@ -150,7 +144,6 @@ public record DocumentResponse(
             boolean hasChildren,
             boolean hasCollaborators,
             DocumentAccessLevel accessLevel,
-            String createdBy,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             OffsetDateTime deletedAt,
@@ -167,7 +160,6 @@ public record DocumentResponse(
                 hasChildren,
                 hasCollaborators,
                 accessLevel,
-                createdBy,
                 createdAt,
                 updatedAt,
                 deletedAt,
@@ -180,9 +172,8 @@ public record DocumentResponse(
     }
 
     /**
-     * As above, reporting direct ownership. Only the Shared section answers it, because
-     * classifying an entry as the caller's own page versus a shared one is the one
-     * question an access level cannot answer: a collaborator may hold OWNER.
+     * As above, reporting the OWNER level. Only the Shared section answers it: the same
+     * flag is true for every owner of a shared page, not just for the creator.
      */
     public static DocumentResponse withoutBranding(
             UUID id,
@@ -192,7 +183,6 @@ public record DocumentResponse(
             boolean hasChildren,
             boolean hasCollaborators,
             DocumentAccessLevel accessLevel,
-            String createdBy,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             OffsetDateTime deletedAt,
@@ -213,7 +203,6 @@ public record DocumentResponse(
                 hasCollaborators,
                 accessLevel,
                 owner,
-                createdBy,
                 createdAt,
                 updatedAt,
                 deletedAt,

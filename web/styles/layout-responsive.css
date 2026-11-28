@@ -33,6 +33,44 @@ html:has(.nd-app-scroll) {
   transition: right 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* The toolbar floats over the document (see AppShell), so the document has to
+   end at this row: covering it in the page's own background and thinning the
+   content out over about a line below it means a scrolling title disappears
+   behind the breadcrumbs instead of colliding with them. Nothing is drawn on
+   the boundary itself — no shadow, no border, no blur — so light and dark need
+   no separate treatment.
+
+   Always on, and transparent to the pointer: at rest the row is over empty
+   space, and whatever reaches into the fade has to stay clickable, or a caret
+   would land in text the reader cannot see. `left`/`right` follow the rails;
+   the toolbar (z-40) stays above it. */
+.nd-doc-toolbar-fade {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  /* The toolbar row, plus a fade about one line tall below it: shorter washes
+     out whichever line sits on it, longer pushes the dissolve into the page. */
+  height: 4.5rem;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--background) 3rem, transparent);
+}
+
+@media (min-width: 768px) {
+  .nd-doc-toolbar-fade {
+    left: var(--nd-sidebar-width, 256px);
+  }
+
+  html[data-nd-sidebar='collapsed'] .nd-doc-toolbar-fade {
+    left: 0;
+  }
+
+  body[data-comments-sidebar-open='true'] .nd-doc-toolbar-fade {
+    right: var(--nd-comments-rail-width);
+  }
+}
+
 .nd-doc-toolbar-left {
   transition: left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }

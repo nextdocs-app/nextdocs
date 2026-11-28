@@ -264,8 +264,7 @@ describe('RootDocumentResolver', () => {
       'token-2',
       'local-recent',
       'Recent local',
-      localYDoc,
-      null
+      localYDoc
     );
     expect(documentService.saveDocument).toHaveBeenCalledWith(
       'local-recent',

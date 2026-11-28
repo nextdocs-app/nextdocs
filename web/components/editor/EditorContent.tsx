@@ -740,6 +740,14 @@ export function EditorContent({
   // Single writer for presence user info (useDocument must not also write to
   // the same awareness field to avoid last-render-wins nondeterminism).
   // Keeps awareness updated without recreating the editor.
+  //
+  // This field is also the toolbar's presence source: Yhub hands every peer's state
+  // to every client, so carrying the avatar here is what lets the viewer group draw
+  // someone the moment they connect, without a roster request. The value stays the
+  // API's own relative path - every peer resolves it against its own API origin, and
+  // the reader of the field can check it names this very user before loading it.
+  // Nothing here is authenticated: a peer can claim any of it, so the toolbar treats
+  // presence as advisory and the server's view-history row as the identity.
   useEffect(() => {
     const awarenessInstance = awareness ?? realtimeProvider?.awareness;
     if (awarenessInstance && activeCommentUser.username) {
@@ -750,7 +758,9 @@ export function EditorContent({
           ? activeCommentUser.id
           : `${documentId}:${ydoc.clientID}:${activeCommentUser.username}`;
       awarenessInstance.setLocalStateField('user', {
+        id: activeCommentUser.id !== 'anonymous' ? activeCommentUser.id : undefined,
         name: activeCommentUser.username,
+        avatarUrl: user?.avatarUrl ?? null,
         color: getAvatarBackground(colorSeed),
       });
     }
@@ -759,6 +769,7 @@ export function EditorContent({
     realtimeProvider,
     activeCommentUser.username,
     activeCommentUser.id,
+    user?.avatarUrl,
     documentId,
     ydoc,
   ]);

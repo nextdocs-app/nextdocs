@@ -166,20 +166,22 @@ class SharedSectionCandidatePostgresTest {
     }
 
     @Test
-    void candidateQueryKeepsOwnershipApartFromAnOwnerLevelGrant() throws SQLException {
+    void candidateQueryReportsOwnershipFromTheResolvedLevel() throws SQLException {
         UUID owner = insertUser();
         UUID viewer = insertUser();
         UUID workspaceId = insertWorkspaceAndMember(owner);
         insertWorkspaceMember(workspaceId, viewer);
 
-        // The case an access level cannot describe: the viewer holds OWNER on a page they do
-        // not own, and its parent is unreadable, so the page floats in their Shared section.
-        // Reading the level as ownership would classify it as their own page and drop it.
+        // The viewer holds OWNER on a page they do not own, and its parent is
+        // unreadable, so the page floats in their Shared section.
         UUID unreadableParent = insertDoc(owner, workspaceId, null, null, "RESTRICTED", null);
         UUID ownerLevelFloatedChild = insertDoc(owner, workspaceId, unreadableParent, null, "RESTRICTED", null);
         insertGrant(workspaceId, ownerLevelFloatedChild, viewer, null, "ALLOW", "OWNER");
 
-        // The same level on a page the viewer does own: OWNER access, and ownership too.
+        UUID ownerLevelSharedRoot = insertDoc(owner, workspaceId, null, null, "RESTRICTED", null);
+        insertGrant(workspaceId, ownerLevelSharedRoot, viewer, null, "ALLOW", "OWNER");
+
+        // The creator's own root at the same level reads the same way.
         UUID ownedRoot = insertDoc(viewer, workspaceId, null, null, "RESTRICTED", null);
         insertGrant(workspaceId, ownedRoot, owner, null, "ALLOW", "OWNER");
 
@@ -187,7 +189,12 @@ class SharedSectionCandidatePostgresTest {
         assertThat(floated).isNotNull();
         assertThat(floated.accessLevel()).isEqualTo("OWNER");
         assertThat(floated.parentId()).isEqualTo(unreadableParent);
-        assertThat(floated.owner()).as("an OWNER-level grant is not ownership").isFalse();
+        assertThat(floated.owner()).as("OWNER is a level now").isTrue();
+
+        CandidateRow sharedRoot = singleCandidateRow(viewer, ownerLevelSharedRoot);
+        assertThat(sharedRoot).isNotNull();
+        assertThat(sharedRoot.accessLevel()).isEqualTo("OWNER");
+        assertThat(sharedRoot.owner()).as("OWNER is a level now").isTrue();
 
         CandidateRow owned = singleCandidateRow(viewer, ownedRoot);
         assertThat(owned).isNotNull();
@@ -195,13 +202,14 @@ class SharedSectionCandidatePostgresTest {
         assertThat(owned.owner()).isTrue();
 
         assertThat(listCandidateRows(viewer))
-                .containsEntry(ownerLevelFloatedChild, new CandidateRow(unreadableParent, "OWNER", false))
+                .containsEntry(ownerLevelFloatedChild, new CandidateRow(unreadableParent, "OWNER", true))
+                .containsEntry(ownerLevelSharedRoot, new CandidateRow(null, "OWNER", true))
                 .containsEntry(ownedRoot, new CandidateRow(null, "OWNER", true));
 
         // DocumentRepository maps these rows by position, so the order is part of the contract.
         Object[] raw = rawCandidateRow(viewer, ownerLevelFloatedChild);
         assertThat(raw[6]).as("access_level rides at index 6").isEqualTo("OWNER");
-        assertThat(raw[7]).as("owner rides at index 7").isEqualTo(false);
+        assertThat(raw[7]).as("ownership rides at index 7").isEqualTo(true);
     }
 
     private Object[] rawCandidateRow(UUID userId, UUID documentId) {
@@ -255,9 +263,9 @@ class SharedSectionCandidatePostgresTest {
         insertDoc(viewer, workspaceId, null, null, "WORKSPACE_MEMBERS", null);
 
         try (Statement stmt = connection.createStatement()) {
-            // idx_documents_workspace_audience and idx_documents_active_owned_roots are
-            // partial on deleted_at IS NULL, so a branch only reaches them when it repeats
-            // that predicate itself; the candidate_pages CTE filter is applied too late.
+            // idx_documents_workspace_audience is partial on deleted_at IS NULL, so a
+            // branch only reaches it when it repeats that predicate itself; the
+            // candidate_pages CTE filter is applied too late.
             stmt.execute("SET enable_seqscan = OFF");
         }
         var params = new MapSqlParameterSource().addValue("userId", viewer);
@@ -267,7 +275,7 @@ class SharedSectionCandidatePostgresTest {
                 "\n",
                 jdbc.queryForList("EXPLAIN " + DocumentRepository.SHARED_SECTION_CANDIDATES_SQL, params, String.class));
 
-        assertThat(plan).contains("idx_documents_workspace_audience").contains("idx_documents_active_owned_roots");
+        assertThat(plan).contains("idx_documents_workspace_audience");
     }
 
     private void assertDocumentScansStayNarrow(JsonNode node) {
@@ -447,7 +455,7 @@ class SharedSectionCandidatePostgresTest {
             throws SQLException {
         UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, parent_id, space_id, title, "
+                "INSERT INTO documents (id, created_by, workspace_id, parent_id, space_id, title, "
                         + "workspace_access_mode, general_access_mode, link_access_level, sibling_order_key, "
                         + "deleted_at, created_at, updated_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, 'RESTRICTED', 'VIEW', ?, ?, now(), now())")) {
@@ -464,6 +472,10 @@ class SharedSectionCandidatePostgresTest {
             stmt.setTimestamp(9, trashed ? java.sql.Timestamp.from(java.time.Instant.now()) : null);
             stmt.executeUpdate();
         }
+        // V50: a standalone root's creator owns it through a real grant row.
+        if (parentId == null && spaceId == null) {
+            insertGrant(workspaceId, id, ownerId, null, "ALLOW", "OWNER");
+        }
         return id;
     }
 
@@ -471,7 +483,7 @@ class SharedSectionCandidatePostgresTest {
         boolean autoCommit = connection.getAutoCommit();
         connection.setAutoCommit(false);
         try (PreparedStatement stmt = connection.prepareStatement(
-                "INSERT INTO documents (id, user_id, workspace_id, title, workspace_access_mode, "
+                "INSERT INTO documents (id, created_by, workspace_id, title, workspace_access_mode, "
                         + "general_access_mode, link_access_level, created_at, updated_at) "
                         + "VALUES (?, ?, ?, ?, 'RESTRICTED', 'RESTRICTED', 'VIEW', now(), now())")) {
             for (int i = 0; i < count; i++) {

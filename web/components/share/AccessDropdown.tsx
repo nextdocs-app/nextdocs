@@ -17,6 +17,7 @@ export function AccessDropdown<T extends string>({
   align = 'right',
   ariaLabel,
   muted = false,
+  readOnly = false,
 }: {
   value: T;
   options: DropdownOption<T>[];
@@ -25,6 +26,8 @@ export function AccessDropdown<T extends string>({
   align?: 'left' | 'right';
   ariaLabel?: string;
   muted?: boolean;
+  /** Render the selected value as text; the viewer can read but not change it. */
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0, right: 0 });
@@ -101,6 +104,26 @@ export function AccessDropdown<T extends string>({
   }, [open]);
 
   const isDestructive = value === 'NO_ACCESS';
+
+  if (readOnly) {
+    return (
+      <span
+        className={`
+          inline-flex items-center rounded-md px-2 py-1
+          text-[13px] font-medium select-none
+          ${
+            isDestructive
+              ? 'text-destructive dark:text-red-400'
+              : muted
+                ? 'text-muted-foreground/80'
+                : 'text-foreground'
+          }
+        `}
+      >
+        {selected?.label ?? ACCESS_LABELS[value] ?? value}
+      </span>
+    );
+  }
 
   return (
     <div className="relative inline-block">

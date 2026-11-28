@@ -165,9 +165,9 @@ class SharedSectionServiceTest {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
         Document moved =
-                Document.builder().id(movedId).user(user).title("Moved").build();
+                Document.builder().id(movedId).creator(user).title("Moved").build();
         Document sibling =
-                Document.builder().id(siblingId).user(user).title("Sibling").build();
+                Document.builder().id(siblingId).creator(user).title("Sibling").build();
 
         when(documentRepository.findSharedSectionCandidates(userId))
                 .thenReturn(List.of(
@@ -247,7 +247,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowIsIdempotent() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(true);
 
@@ -264,7 +265,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowPlacesTheNewSharedRootBeforeItsFirstSibling() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(false);
         when(userSharedOrderRepository.findMinOrderKeyByUserId(userId, document.getId()))
@@ -282,7 +284,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowSerializesTheKeyCalculationPerUserAfterThePageLock() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
                 .thenReturn(false);
         when(userSharedOrderRepository.findMinOrderKeyByUserId(userId, document.getId()))
@@ -302,7 +305,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowReusesARowAnotherTabInsertedWhileItWaitedForTheLock() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         // Missing before the lock, present after it: the other transaction committed
         // while this one waited, so inserting again would be the 500 this test guards.
         when(userSharedOrderRepository.existsByUser_IdAndDocument_Id(userId, document.getId()))
@@ -319,11 +323,12 @@ class SharedSectionServiceTest {
     void ensureOrderRowsInsertsOnlyTheMissingPagesUnderOnePairOfLocks() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document existing = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document existing =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         Document firstMissing =
-                Document.builder().id(UUID.randomUUID()).user(user).build();
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         Document secondMissing =
-                Document.builder().id(UUID.randomUUID()).user(user).build();
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         List<UUID> missingIds = List.of(firstMissing.getId(), secondMissing.getId()).stream()
                 .sorted()
                 .toList();
@@ -359,8 +364,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowsSkipsRowsAnotherTabInsertedWhileItWaitedForTheLock() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document first = Document.builder().id(UUID.randomUUID()).user(user).build();
-        Document second = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document first = Document.builder().id(UUID.randomUUID()).creator(user).build();
+        Document second = Document.builder().id(UUID.randomUUID()).creator(user).build();
         List<UUID> ids =
                 List.of(first.getId(), second.getId()).stream().sorted().toList();
 
@@ -380,7 +385,8 @@ class SharedSectionServiceTest {
     void ensureOrderRowsSkipsTheLocksWhenEveryPageAlreadyHasARow() {
 
         User user = User.builder().id(userId).passwordHash("$2a$12$hash").build();
-        Document document = Document.builder().id(UUID.randomUUID()).user(user).build();
+        Document document =
+                Document.builder().id(UUID.randomUUID()).creator(user).build();
         when(userSharedOrderRepository.findExistingDocumentIdsByUserIdAndDocumentIds(userId, List.of(document.getId())))
                 .thenReturn(List.of(document.getId()));
 

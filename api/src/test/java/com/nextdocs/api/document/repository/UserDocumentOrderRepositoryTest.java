@@ -37,13 +37,13 @@ class UserDocumentOrderRepositoryTest {
 
         Document active = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Active")
                 .build());
 
         Document trashed = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now())
                 .build());
@@ -81,11 +81,14 @@ class UserDocumentOrderRepositoryTest {
                 .passwordHash("$2a$12$hash")
                 .build());
 
-        Document userDoc = documentRepository.saveAndFlush(
-                Document.builder().id(UUID.randomUUID()).user(user).title("Doc").build());
+        Document userDoc = documentRepository.saveAndFlush(Document.builder()
+                .id(UUID.randomUUID())
+                .creator(user)
+                .title("Doc")
+                .build());
         Document otherDoc = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(other)
+                .creator(other)
                 .title("Other")
                 .build());
 

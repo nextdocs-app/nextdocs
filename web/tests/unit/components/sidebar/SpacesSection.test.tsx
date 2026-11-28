@@ -111,7 +111,6 @@ function renderSection(spaceOrSpaces: Space | Space[] = makeSpace()) {
       title: 'Untitled',
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
-      createdBy: null,
     },
   } as never);
   mockedDocumentService.createCloudDocument.mockImplementation(
@@ -208,8 +207,8 @@ describe('SpacesSection', () => {
 
     await waitFor(() => expect(mockedDocumentService.createCloudDocument).toHaveBeenCalled());
     const args = mockedDocumentService.createCloudDocument.mock.calls[0];
-    expect(args[5]).toBeNull();
-    expect(args[8]).toBe('space-1');
+    expect(args[4]).toBeNull();
+    expect(args[7]).toBe('space-1');
     expect(onSelectDocument).toHaveBeenCalledWith(args[1]);
   });
 
@@ -235,8 +234,8 @@ describe('SpacesSection', () => {
 
     await waitFor(() => expect(mockedDocumentService.createCloudDocument).toHaveBeenCalled());
     const args = mockedDocumentService.createCloudDocument.mock.calls[0];
-    expect(args[5]).toBe('doc-1');
-    expect(args[8]).toBeNull();
+    expect(args[4]).toBe('doc-1');
+    expect(args[7]).toBeNull();
     expect(onSelectDocument).toHaveBeenCalledWith(args[1]);
   });
 

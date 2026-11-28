@@ -57,12 +57,12 @@ class AttachmentRepositoryTest {
 
         active = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Active")
                 .build());
         trashed = documentRepository.saveAndFlush(Document.builder()
                 .id(UUID.randomUUID())
-                .user(user)
+                .creator(user)
                 .title("Trashed")
                 .deletedAt(OffsetDateTime.now(ZoneOffset.UTC).minusDays(60))
                 .build());

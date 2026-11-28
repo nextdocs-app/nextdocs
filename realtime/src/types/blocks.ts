@@ -228,7 +228,6 @@ export interface DocumentMeta {
   cover?: DocumentCover;
   createdAt: string;
   updatedAt: string;
-  createdBy?: string;
   deletedAt?: string;
   purgeAt?: string;
 }

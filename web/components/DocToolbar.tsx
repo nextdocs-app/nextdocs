@@ -1,9 +1,13 @@
 'use client';
 
-import { useRef, useState, useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import type { Awareness } from '@y/protocols/awareness';
 import { SharePanel } from '@/components/SharePanel';
 import { Comments, MoreHorizontal, Share } from '@/icons/index';
+import { ViewerStack } from '@/components/ViewerStack';
+import { useDocumentViewers } from '@/hooks/useDocumentViewers.hook';
+import { formatRelativeTime } from '@/lib/relative-time.util';
 import { useAppDispatch, useAppSelector } from '@/stores/hooks';
 import { setCollapsed, toggleSpacesOpen } from '@/stores/sidebar/sidebar.slice';
 import { useIsMobileLayout } from '@/hooks/useMediaQuery.hook';
@@ -19,28 +23,10 @@ import {
 import type { DocumentBreadcrumbItem, DocumentSpaceSummary } from '@/services/document.service';
 import type { DocumentIcon } from '@/types/document.types';
 
+/** "Edited 5 mins ago"; anything older than yesterday reads as a calendar date. */
 function formatLastEdited(dateStr: string | undefined | null): string {
-  if (!dateStr) return '';
-
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return '';
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.round(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHr = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHr / 24);
-
-  if (diffSec < 30) return 'Edited just now';
-  if (diffMin < 1) return 'Edited seconds ago';
-  if (diffMin === 1) return 'Edited 1 min ago';
-  if (diffMin < 60) return `Edited ${diffMin} mins ago`;
-  if (diffHr === 1) return 'Edited 1 hour ago';
-  if (diffHr < 24) return `Edited ${diffHr} hours ago`;
-  if (diffDay === 1) return 'Edited yesterday';
-
-  return `Edited ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  const relative = formatRelativeTime(dateStr, { maxRelativeDays: 1 });
+  return relative ? `Edited ${relative}` : '';
 }
 
 interface DocToolbarProps {
@@ -76,7 +62,7 @@ interface DocToolbarProps {
   showTrashNotice?: boolean;
   /** Whether the viewer may restore/purge the trashed document (EDIT access or owner) */
   canManageTrash?: boolean;
-  /** Whether the viewer may manage sharing settings (OWNER access or full-access collaborator) */
+  /** Whether the viewer may manage sharing settings (OWNER access, directly or inherited) */
   canManageSharing?: boolean;
   /** Space context for the share panel when the page lives in a space */
   documentSpace?: DocumentSpaceSummary | null;
@@ -90,6 +76,8 @@ interface DocToolbarProps {
   onVersionHistoryToggle?: () => void;
   /** Receives the element where the history panel mounts Restore/Close. */
   versionHistoryActionsRef?: (node: HTMLDivElement | null) => void;
+  /** Yjs awareness instance for live peer presence */
+  awareness?: Awareness | null;
 }
 
 export function DocToolbar({
@@ -116,12 +104,19 @@ export function DocToolbar({
   isVersionHistoryOpen = false,
   onVersionHistoryToggle,
   versionHistoryActionsRef,
+  awareness,
 }: DocToolbarProps) {
   const router = useRouter();
   const isMobileLayout = useIsMobileLayout();
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [showOfflineTooltip, setShowOfflineTooltip] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
+  // Presence is not a sharing feature: Yhub awareness carries who is here now, and
+  // `/viewers` carries who has been here. The hook decides both on its own.
+  const viewers = useDocumentViewers({ documentId, awareness });
+  const hasOtherViewers = viewers.some((viewer) => !viewer.isCurrentUser);
+  const showViewerStack = isShareEnabled && !isVersionHistoryOpen && hasOtherViewers;
+
   const shareButtonRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
 
@@ -218,12 +213,16 @@ export function DocToolbar({
 
   return (
     <>
+      {/* Where the page ends under this row: the document scrolls beneath the
+          toolbar, so its own background has to take over here. */}
+      <div aria-hidden="true" className="nd-doc-toolbar-fade" />
+
       {/* ── Left most toolbar: Document Hierarchy Breadcrumbs (Notion-style) ── */}
       <div
         className={`
           nd-doc-toolbar-left fixed top-2 z-40
           flex items-center gap-0.5 min-w-0
-          max-w-[calc(100vw-6.5rem)]
+          ${showViewerStack ? 'max-w-[calc(100vw-17rem)]' : 'max-w-[calc(100vw-6.5rem)]'}
           ${
             showsExpandedLeftRail
               ? 'md:max-w-[calc(100vw-var(--nd-sidebar-width,256px)-260px)]'
@@ -551,7 +550,7 @@ export function DocToolbar({
         single row of controls with the notices wrapped underneath, instead of a
         notice pushing the controls off the screen edge.
       */}
-      <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5 h-7">
+      <div className="nd-doc-toolbar fixed top-2 right-2 z-40 flex items-center gap-1.5 h-9 md:h-[30px]">
         {!isVersionHistoryOpen && showTrashNotice && canManageTrash && (
           <div
             className="
@@ -643,36 +642,20 @@ export function DocToolbar({
           </div>
         )}
 
-        <div className="order-1 md:order-2 flex items-center gap-0.5 md:gap-1.5 shrink-0">
+        {/* One gap for the whole cluster: every control is a 30px-tall box with
+            its glyph inked edge to edge (see MoreHorizontal), and the Share pill
+            keeps a sliver of its own air outside its outline (md:mx-0.5). */}
+        <div className="order-1 md:order-2 flex items-center gap-1.5 md:gap-2 shrink-0">
           {/* Last edited: history previews a frozen version, so the live
-              "edited" timestamp would describe the wrong content. */}
+              "edited" timestamp would describe the wrong content. It carries the
+              same horizontal padding as the Share button below it. */}
           {!isVersionHistoryOpen && lastEditedLabel && (
-            <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block">
+            <span className="text-[13.5px] text-muted-foreground/80 select-none hidden sm:block md:px-1">
               {lastEditedLabel}
             </span>
           )}
 
-          {showCommentsButton && (
-            <button
-              id="doc-comments-btn"
-              type="button"
-              onClick={onCommentsToggle}
-              disabled={isCommentsButtonDisabled}
-              aria-pressed={isCommentsSidebarOpen}
-              aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
-              className={[
-                // 36px on touch, 30px under a mouse.
-                'inline-flex items-center justify-center rounded-sm transition-colors duration-150 h-9 w-9 md:h-[30px] md:w-auto md:px-2 md:py-[5px]',
-                isCommentsButtonDisabled
-                  ? 'text-muted-foreground opacity-60 cursor-not-allowed'
-                  : isCommentsSidebarOpen
-                    ? 'text-primary bg-[var(--nd-toolbar-hover-bg)] cursor-pointer'
-                    : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)] cursor-pointer',
-              ].join(' ')}
-            >
-              <Comments />
-            </button>
-          )}
+          {showViewerStack && <ViewerStack viewers={viewers} />}
 
           {/* Share button (history owns the toolbar's right side) */}
           {isShareEnabled && !isVersionHistoryOpen && (
@@ -686,10 +669,11 @@ export function DocToolbar({
               aria-label="Share document"
               className="
                 inline-flex items-center justify-center rounded-sm
-                h-9 w-9
+                h-9 w-8
                 md:w-auto md:gap-1.5
+                md:mx-0.5
                 md:border md:border-border md:bg-background
-                md:px-2.5 md:h-[30px] md:py-[5px]
+                md:px-2 md:h-[30px] md:py-[5px]
                 text-[13.5px] font-medium leading-none text-foreground
                 transition-colors duration-150
                 hover:bg-[var(--nd-toolbar-hover-bg)]
@@ -698,6 +682,30 @@ export function DocToolbar({
             >
               <Share />
               <span className="hidden md:inline">Share</span>
+            </button>
+          )}
+
+          {/* Comments toggle sits after Share so the reading actions cluster. */}
+          {showCommentsButton && (
+            <button
+              id="doc-comments-btn"
+              type="button"
+              onClick={onCommentsToggle}
+              disabled={isCommentsButtonDisabled}
+              aria-pressed={isCommentsSidebarOpen}
+              aria-label={`${isCommentsSidebarOpen ? 'Close' : 'Open'} comments sidebar. ${commentsSummary}.`}
+              className={[
+                // 36px on touch, 30px under a mouse. Same box as the actions
+                // menu, which is what keeps the cluster's gaps even.
+                'inline-flex items-center justify-center rounded-sm transition-colors duration-150 h-9 w-8 md:h-[30px] md:w-[30px] md:px-0 md:py-0',
+                isCommentsButtonDisabled
+                  ? 'text-muted-foreground opacity-60 cursor-not-allowed'
+                  : isCommentsSidebarOpen
+                    ? 'text-primary bg-[var(--nd-toolbar-hover-bg)] cursor-pointer'
+                    : 'text-foreground hover:text-primary hover:bg-[var(--nd-toolbar-hover-bg)] cursor-pointer',
+              ].join(' ')}
+            >
+              <Comments />
             </button>
           )}
 

@@ -21,11 +21,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Entity
 @Table(
         name = "documents",
-        indexes = {
-            @Index(name = "idx_documents_user_created", columnList = "user_id,created_at"),
-            @Index(name = "idx_documents_user_updated", columnList = "user_id,updated_at"),
-            @Index(name = "idx_documents_parent_sibling_order", columnList = "parent_id,sibling_order_key")
-        })
+        indexes = {@Index(name = "idx_documents_parent_sibling_order", columnList = "parent_id,sibling_order_key")})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -36,15 +32,16 @@ public class Document {
     @Id
     private UUID id;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "user_id", nullable = false)
-    private User user;
+    /**
+     * Creator attribution only: set by the server from the authenticated caller, never
+     * used to resolve access. Nullable so an anonymous create has no attribution.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "created_by")
+    private User creator;
 
     @Column(nullable = false, length = 255)
     private String title;
-
-    @Column(name = "created_by", length = 255)
-    private String createdBy;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "icon_type", length = 16)
@@ -99,6 +96,12 @@ public class Document {
      * General access for signed-in workspace members. This is deliberately a separate
      * channel from the anonymous link: workspace membership must not be inferred from a
      * link grant, and a link block must not silently change signed-in access.
+     *
+     * <p>It is one channel with one rule, nearest first: this page's own setting, then an
+     * ancestor page's, then the everyone level of a PUBLIC space anchoring the tree. A
+     * space is a permission container, so a page inside it overrides or blocks the space
+     * audience exactly like an ancestor page's. A space membership is a separate per-person
+     * grant and is never demoted by a page audience setting.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "workspace_access_mode", nullable = false, length = 32)

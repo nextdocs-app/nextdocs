@@ -6,13 +6,20 @@ import com.nextdocs.api.common.exception.ApiException;
 import com.nextdocs.api.common.exception.ErrorCode;
 import com.nextdocs.api.document.dto.request.SharingSettingsUpdateRequest;
 import com.nextdocs.api.document.dto.response.SharingSettingsResponse;
+import com.nextdocs.api.document.dto.response.SharingSourceKind;
 import com.nextdocs.api.document.entity.Document;
 import com.nextdocs.api.document.entity.DocumentAccessLevel;
 import com.nextdocs.api.document.entity.DocumentGeneralAccessMode;
 import com.nextdocs.api.document.entity.DocumentWorkspaceAccessMode;
+import com.nextdocs.api.document.repository.AccessGrantRepository;
 import com.nextdocs.api.document.repository.DocumentRepository;
 import com.nextdocs.api.realtime.event.DocumentAccessChangedEvent;
+import com.nextdocs.api.space.entity.Space;
+import com.nextdocs.api.space.entity.SpaceAccessMode;
+import com.nextdocs.api.space.service.SpaceAccessService;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -33,14 +40,25 @@ import org.springframework.transaction.annotation.Transactional;
 public class DocumentSharingSettingsService {
 
     private final DocumentRepository documentRepository;
+    private final AccessGrantRepository accessGrantRepository;
     private final PermissionService permissionService;
     private final AccessAuditService auditService;
     private final SharedSectionService sharedSectionService;
+    private final SpaceAccessService spaceAccessService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public SharingSettingsResponse getSharingSettings(UUID actorId, UUID documentId) {
-        Document doc = permissionService.requireSharingAdminAccess(actorId, documentId);
+        // Settings are readable by anyone who may see the page's roster. The panel shows
+        // the resolved audiences read-only to those readers; writes still require
+        // requireSharingAdminAccess in updateSharingSettings.
+        Document doc = permissionService.requireReadAccessIncludingTrash(actorId, documentId);
+        permissionService.requireRosterAccess(actorId, doc);
+        return projectSharingSettings(actorId, doc);
+    }
+
+    /** The settings projection for a document whose caller has already been authorized. */
+    private SharingSettingsResponse projectSharingSettings(UUID actorId, Document doc) {
         boolean hasActiveLink = isLiveLink(doc);
 
         // The nearest reachable ancestor link grant drives every case below, including
@@ -48,7 +66,14 @@ public class DocumentSharingSettingsService {
         Optional<LinkGrant> nearestGrant = findNearestLinkGrant(doc);
         UUID grantDocumentId = nearestGrant.map(LinkGrant::docId).orElse(null);
         String grantTitle = nearestGrant.map(LinkGrant::title).orElse(null);
-        WorkspaceGrantView workspace = workspaceGrantView(doc);
+        if (grantDocumentId != null
+                && !permissionService
+                        .resolveIdentityAccessBatch(actorId, List.of(grantDocumentId))
+                        .containsKey(grantDocumentId)) {
+            grantDocumentId = null;
+            grantTitle = null;
+        }
+        WorkspaceGrantView workspace = workspaceGrantView(actorId, doc);
 
         if (hasActiveLink) {
             // Own link overrides ancestor grants (closest-ancestor-wins), and wins
@@ -121,6 +146,7 @@ public class DocumentSharingSettingsService {
                 workspace.level(),
                 workspace.blocked(),
                 workspace.inherited(),
+                workspace.inheritedFromKind(),
                 workspace.inheritedFromId(),
                 workspace.inheritedFromTitle());
     }
@@ -157,17 +183,38 @@ public class DocumentSharingSettingsService {
      * own WORKSPACE_MEMBERS setting overrides them; otherwise the nearest ancestor grant
      * is the effective one. The stored level is returned when nothing applies so the
      * panel can render the setting the page would use if enabled.
+     *
+     * <p>A public space is that ancestor for the pages it anchors. The space is a
+     * permission container, so its everyone level inherits and is overridden exactly like
+     * an ancestor page's audience; only the source it names differs.
+     *
+     * <p>The source is named only when the caller can see it, mirroring the link panel: a
+     * page they cannot open, or a space they cannot find, must not be confirmed here.
      */
-    private WorkspaceGrantView workspaceGrantView(Document doc) {
-        // Mirror the link panel: even a blocked page surfaces the shadowed ancestor so
-        // the UI can offer "Inherit from X" instead of just "Blocked".
+    private WorkspaceGrantView workspaceGrantView(UUID actorId, Document doc) {
         Optional<WorkspaceGrant> nearest = findNearestWorkspaceGrant(doc);
+        WorkspaceGrantView view = workspaceGrantState(doc, nearest);
+        if (nearest.isPresent() && !canSeeSource(actorId, nearest.get())) {
+            // Keep the state and the level: what the page inherits is not a secret, only
+            // which page or space supplies it is.
+            return new WorkspaceGrantView(view.level(), view.blocked(), view.inherited(), null, null, null);
+        }
+        return view;
+    }
+
+    /**
+     * Mode, block and nearest source turned into the panel's view. A block and an own
+     * setting still name the source they shadow or override, so the UI can offer
+     * "Inherit from X" instead of a dead "Blocked" row.
+     */
+    private static WorkspaceGrantView workspaceGrantState(Document doc, Optional<WorkspaceGrant> nearest) {
         if (doc.isWorkspaceInheritBlocked()) {
             return new WorkspaceGrantView(
                     doc.getWorkspaceAccessLevel(),
                     true,
                     false,
-                    nearest.map(WorkspaceGrant::docId).orElse(null),
+                    nearest.map(WorkspaceGrant::kind).orElse(null),
+                    nearest.map(WorkspaceGrant::id).orElse(null),
                     nearest.map(WorkspaceGrant::title).orElse(null));
         }
         if (doc.getWorkspaceAccessMode() == DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS) {
@@ -175,7 +222,8 @@ public class DocumentSharingSettingsService {
                     doc.getWorkspaceAccessLevel(),
                     false,
                     false,
-                    nearest.map(WorkspaceGrant::docId).orElse(null),
+                    nearest.map(WorkspaceGrant::kind).orElse(null),
+                    nearest.map(WorkspaceGrant::id).orElse(null),
                     nearest.map(WorkspaceGrant::title).orElse(null));
         }
         if (nearest.isPresent()) {
@@ -183,24 +231,64 @@ public class DocumentSharingSettingsService {
                     nearest.get().level(),
                     false,
                     true,
-                    nearest.get().docId(),
+                    nearest.get().kind(),
+                    nearest.get().id(),
                     nearest.get().title());
         }
-        return new WorkspaceGrantView(doc.getWorkspaceAccessLevel(), false, false, null, null);
+        return new WorkspaceGrantView(doc.getWorkspaceAccessLevel(), false, false, null, null, null);
     }
 
-    /** Nearest reachable ancestor with workspace general access, stopping at a block. */
+    /**
+     * Whether the caller may be told which page or space supplies their workspace access.
+     * A page answers through the identity resolver; a space answers through the same
+     * "can this caller find it in navigation" rule the breadcrumb uses.
+     */
+    private boolean canSeeSource(UUID actorId, WorkspaceGrant grant) {
+        if (grant.kind() == SharingSourceKind.SPACE) {
+            return spaceAccessService
+                    .visibleSpaceIds(actorId, List.of(grant.space()))
+                    .contains(grant.id());
+        }
+        return permissionService
+                .resolveIdentityAccessBatch(actorId, List.of(grant.id()))
+                .containsKey(grant.id());
+    }
+
+    /**
+     * Nearest reachable ancestor with workspace general access, stopping at a block. A
+     * public space's everyone level is the outermost such ancestor, above the space root,
+     * so every page in the chain can override or block it.
+     */
     private Optional<WorkspaceGrant> findNearestWorkspaceGrant(Document doc) {
-        for (Document ancestor : SharingDocuments.loadReachableAncestors(documentRepository, doc)) {
+        List<Document> ancestors = SharingDocuments.loadReachableAncestors(documentRepository, doc);
+        for (Document ancestor : ancestors) {
             if (ancestor.isWorkspaceInheritBlocked()) {
                 return Optional.empty();
             }
             if (ancestor.getWorkspaceAccessMode() == DocumentWorkspaceAccessMode.WORKSPACE_MEMBERS) {
                 return Optional.of(new WorkspaceGrant(
+                        SharingSourceKind.PAGE,
                         ancestor.getId(),
                         SharingDocuments.titleOrUntitled(ancestor),
-                        ancestor.getWorkspaceAccessLevel()));
+                        ancestor.getWorkspaceAccessLevel(),
+                        null));
             }
+        }
+        // Only the page or the reachable ancestors can supply the space: resolveSpace(doc)
+        // walks parents without the trash stop, so it could reach a space above a trashed
+        // bundle whose audience no longer governs this page.
+        Space space = doc.getSpace() != null
+                ? doc.getSpace()
+                : ancestors.stream()
+                        .map(Document::getSpace)
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+        if (space != null
+                && space.getAccessMode() == SpaceAccessMode.PUBLIC
+                && space.getEveryoneAccessLevel() != null) {
+            return Optional.of(new WorkspaceGrant(
+                    SharingSourceKind.SPACE, space.getId(), space.getName(), space.getEveryoneAccessLevel(), space));
         }
         return Optional.empty();
     }
@@ -292,7 +380,7 @@ public class DocumentSharingSettingsService {
                         + ",workspaceLevel=" + doc.getWorkspaceAccessLevel());
         // Return full provenance (inherited / Overrides) so the UI can
         // immediately show override badges without a reload.
-        return getSharingSettings(actorId, documentId);
+        return projectSharingSettings(actorId, doc);
     }
 
     /**
@@ -303,8 +391,14 @@ public class DocumentSharingSettingsService {
      * so re-sharing returns the page to the position it had.
      */
     private void ensureOwnerSharedPosition(Document doc) {
-        if (doc.getParent() == null && doc.getSpace() == null) {
-            sharedSectionService.ensureOrderRow(doc.getUser(), doc);
+        if (doc.getParent() != null || doc.getSpace() != null) {
+            return;
+        }
+        // Every owner gets a position, not just the creator: ownership is a grant row.
+        for (var grant : accessGrantRepository.findPositiveUserGrantsByDocumentId(doc.getId())) {
+            if (grant.getAccessLevel() == DocumentAccessLevel.OWNER) {
+                sharedSectionService.ensureOrderRow(grant.getUser(), doc);
+            }
         }
     }
 
@@ -360,7 +454,8 @@ public class DocumentSharingSettingsService {
                 && findNearestWorkspaceGrant(doc).isEmpty()) {
             // Same normalization as the link block: a block with no ancestor grant
             // shadows nothing and would misreport the page as restricted from an
-            // ancestor that never shared.
+            // ancestor that never shared. A public space counts as such an ancestor, so
+            // a page in one keeps the block that turns the space audience off.
             doc.setWorkspaceInheritBlocked(false);
         }
     }
@@ -390,12 +485,18 @@ public class DocumentSharingSettingsService {
 
     private record LinkGrant(UUID docId, String title, DocumentAccessLevel linkAccessLevel) {}
 
-    private record WorkspaceGrant(UUID docId, String title, DocumentAccessLevel level) {}
+    /**
+     * One workspace-audience source. {@code space} is only set for
+     * {@link SharingSourceKind#SPACE}, where the visibility check needs the container.
+     */
+    private record WorkspaceGrant(
+            SharingSourceKind kind, UUID id, String title, DocumentAccessLevel level, Space space) {}
 
     private record WorkspaceGrantView(
             DocumentAccessLevel level,
             boolean blocked,
             boolean inherited,
+            SharingSourceKind inheritedFromKind,
             UUID inheritedFromId,
             String inheritedFromTitle) {}
 }

@@ -43,7 +43,6 @@ function renderTrashPanel(
       onRequestPermanentDelete={jest.fn()}
       docActionsAnchor={null}
       onToggleDocumentActions={jest.fn()}
-      resolvePanelActionType={() => 'trash' as never}
       resolvePanelTreeActionType={() => 'trash' as never}
       setDocActionsAnchor={jest.fn()}
       hasMore

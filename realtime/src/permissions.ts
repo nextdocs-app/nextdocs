@@ -22,7 +22,10 @@ export function documentPermissions(level: AccessLevel | string): DocumentPermis
     return {
       type: 'permissions:document:v1',
       ydoc: '-r--',
-      awareness: '-r--',
+      // Awareness is ephemeral presence, not content: a reader who may watch the
+      // document may also say "I am here", or their avatar could never appear in
+      // the toolbar's viewer group. Nothing they write reaches the Y.Doc.
+      awareness: '-ru-',
       // `from: 0` grants the whole recorded history; named versions are read-only.
       // No rollback: restoring is a document write, which a viewer cannot perform.
       history: { from: 0, version: '-r--' },

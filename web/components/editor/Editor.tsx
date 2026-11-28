@@ -296,6 +296,7 @@ export default function Editor({ documentId: fixedDocumentId }: { documentId?: s
         isVersionHistoryOpen={isVersionHistoryOpen}
         onVersionHistoryToggle={handleVersionHistoryToggle}
         versionHistoryActionsRef={setVersionHistoryActionsTarget}
+        awareness={awareness ?? realtimeProvider?.awareness}
       />
       <EditorErrorBoundary key={documentId} documentId={documentId}>
         <EditorContent

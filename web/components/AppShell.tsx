@@ -241,12 +241,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Hamburger size={19} />
           </button>
         )}
-        {/* By using a nested flex-1 overflow-y-auto child, we are effectively telling
-        the browser that the scrollable region starts below the toolbar's height.*/}
-        <div className="h-12 w-full shrink-0 z-30 pointer-events-none" aria-hidden="true" />
+        {/* The toolbar floats over the document instead of sitting above it:
+            the scrollport reaches the top of the viewport and pads its content
+            down by the toolbar's height, so scrolled content passes underneath
+            the breadcrumbs and the controls. */}
         <div
           ref={setScroller}
-          className="nd-app-scroll flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full"
+          className="nd-app-scroll flex-1 overflow-y-auto overflow-x-clip overscroll-contain w-full pt-12 scroll-pt-12"
         >
           {/*
             No global max-w here: each route centers its own column
