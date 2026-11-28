@@ -81,7 +81,7 @@ pnpm exec turbo run test --filter=realtime -- tests/unit/config.test.ts
 cd api && ./mvnw test -Dtest=ApiExceptionTest        # single Java test class
 ```
 
-- Use Node 24.14.1 (`nvm use`); `engines` require `>=24.14.1`. A host default of Node 20 still runs tests but is below the required version.
+- Use Node 26.13.1 (`nvm use`); `engines` require `>=26.13.1`. A host default of Node 20 still runs tests but is below the required version.
 - `realtime` tests are ESM ts-jest and its `test` script sets `NODE_OPTIONS=--experimental-vm-modules`; run them via `pnpm`/`turbo`, never bare `jest`.
 - No `.env` is needed for local dev: web/realtime fall back to localhost URLs, the API defaults to postgres on `localhost:5433`. The root `.env.example` is for containerized/API runs only. `./nd dev` generates ephemeral `JWT_SECRET` / OAuth keys per session, so sessions do not survive a restart unless you export them.
 
